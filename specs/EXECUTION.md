@@ -1,0 +1,56 @@
+# EXECUTION — how programs run in the browser
+
+- **Status:** accepted
+- **Date:** 2026-07-02
+- **Refines:** [SCOPE.md](SCOPE.md)
+
+## Context
+
+WASM on the browser's main thread cannot block, but Java console input
+(`Scanner.nextLine()`, `System.in.read()`) is blocking by nature, and student
+programs routinely run long loops. We need real blocking input and a responsive
+page without making the engine itself asynchronous.
+
+## Decision
+
+**The Rust engine stays synchronous; the browser host runs it in a dedicated Web
+Worker, and blocking stdin is implemented with `SharedArrayBuffer` + `Atomics`.**
+
+- The engine-side contract is unchanged: `ConsoleIo::read_line()` blocks from
+  Rust's point of view. In the worker, the JavaScript stdin callback performs
+  `Atomics.wait` on a `SharedArrayBuffer` until the main thread supplies a line
+  (or EOF), so the "block" happens in worker JS, never on the main thread.
+- `@jvmjs/core` ships two API layers:
+  - `JvmSession` — the direct, synchronous wrapper around the WASM module. Used
+    in Node (Vitest), in the worker itself, and by advanced embedders.
+  - `JvmWorkerSession` — the **primary browser API**: async, spawns the worker,
+    streams stdout/stderr as events, forwards stdin requests to a host-supplied
+    source (array of lines or an async function).
+- Serving requirement: `SharedArrayBuffer` needs cross-origin isolation, so any
+  page embedding the worker session must send
+  `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp`. The playground's Vite config
+  does this for dev and preview. If a page is not isolated, the worker session
+  still works but stdin reads return EOF (with a console warning).
+- Runaway-program protection stays in the engine: the interpreter enforces
+  `VmOptions::max_instructions` per run. The worker can additionally be
+  terminated from the main thread (`session.terminate()`) as a hard stop.
+
+## Alternatives rejected
+
+- **Main-thread v1, worker later** — cheaper now, but the async API break and
+  the stdin story would land eventually anyway; decided to pay once, up front.
+- **Resumable/asyncified interpreter** — avoids workers and SAB but infects the
+  entire interpreter with suspension points (or doubles the WASM via asyncify);
+  the heaviest option with the least educational payoff.
+
+## Consequences
+
+- Deployers of jvmjs-based pages must set COOP/COEP headers to get interactive
+  console input; this goes in the README.
+- The WASM module is loaded inside the worker only; the main thread never
+  instantiates the engine (version queries etc. go through the message
+  protocol).
+- stdout/stderr arrive on the main thread as message events, so output ordering
+  relative to program completion is preserved by the protocol (result message
+  is sent after all output messages).

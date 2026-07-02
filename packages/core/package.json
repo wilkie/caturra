@@ -1,0 +1,22 @@
+{
+  "name": "@jvmjs/core",
+  "version": "0.1.0",
+  "description": "TypeScript wrapper around the jvmjs WASM engine: javac, java, virtual filesystem, and console IO for the browser",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

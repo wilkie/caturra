@@ -1,0 +1,263 @@
+//! The WebAssembly boundary.
+//!
+//! Everything JavaScript can see lives here: a [`JvmSession`] that owns a
+//! virtual filesystem and a set of compiled classes, with methods that
+//! mirror the CLI tools they replace — [`JvmSession::compile`] is
+//! `javac`, [`JvmSession::run`] is `java`.
+//!
+//! Data crosses the boundary as serde-serialized plain objects (via
+//! `serde-wasm-bindgen`), and console IO crosses as JavaScript callbacks
+//! so the host page can stream output as it happens.
+
+use jvmjs_compiler::{Severity, SourceFile};
+use jvmjs_vm::{ConsoleIo, VirtualFileSystem, Vm, VmOptions};
+use serde::{Deserialize, Serialize};
+use wasm_bindgen::prelude::*;
+
+/// Mirrors [`jvmjs_compiler::SourceFile`] across the JS boundary.
+#[derive(Debug, Deserialize)]
+struct JsSourceFile {
+    path: String,
+    text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct JsPosition {
+    line: u32,
+    column: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct JsDiagnostic {
+    severity: &'static str,
+    message: String,
+    path: String,
+    start: Option<JsPosition>,
+    end: Option<JsPosition>,
+}
+
+#[derive(Debug, Serialize)]
+struct JsCompileResult {
+    success: bool,
+    /// Binary names of the classes produced, e.g. `["Main"]`.
+    #[serde(rename = "classNames")]
+    class_names: Vec<String>,
+    diagnostics: Vec<JsDiagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+struct JsRunResult {
+    /// `"completed"`, `"exited"`, or `"error"`.
+    status: &'static str,
+    #[serde(rename = "exitCode")]
+    exit_code: i32,
+    /// Present when `status` is `"error"`.
+    error: Option<String>,
+}
+
+/// Console IO that forwards to JavaScript callbacks.
+struct JsConsole<'a> {
+    stdout: &'a js_sys::Function,
+    stderr: &'a js_sys::Function,
+    stdin: Option<&'a js_sys::Function>,
+}
+
+impl ConsoleIo for JsConsole<'_> {
+    fn stdout(&mut self, bytes: &[u8]) {
+        let text = JsValue::from_str(&String::from_utf8_lossy(bytes));
+        let _ = self.stdout.call1(&JsValue::NULL, &text);
+    }
+
+    fn stderr(&mut self, bytes: &[u8]) {
+        let text = JsValue::from_str(&String::from_utf8_lossy(bytes));
+        let _ = self.stderr.call1(&JsValue::NULL, &text);
+    }
+
+    fn read_line(&mut self) -> Option<String> {
+        let result = self.stdin?.call0(&JsValue::NULL).ok()?;
+        result.as_string()
+    }
+}
+
+/// One JVM sandbox: a virtual filesystem plus the classes compiled into
+/// it. A page can create several sessions and they share nothing.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct JvmSession {
+    vfs: VirtualFileSystem,
+    classes: Vec<jvmjs_compiler::CompiledClass>,
+}
+
+impl Default for JvmSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+impl JvmSession {
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new() -> Self {
+        console_error_panic_hook::set_once();
+        Self {
+            vfs: VirtualFileSystem::new(),
+            classes: Vec::new(),
+        }
+    }
+
+    /// `javac`: compile Java source files.
+    ///
+    /// `sources` is an array of `{ path, text }`. Returns
+    /// `{ success, classNames, diagnostics }`. On success the compiled
+    /// classes are retained in the session for [`JvmSession::run`].
+    pub fn compile(&mut self, sources: JsValue) -> Result<JsValue, JsValue> {
+        let sources: Vec<JsSourceFile> = serde_wasm_bindgen::from_value(sources)
+            .map_err(|e| JsValue::from_str(&format!("invalid sources argument: {e}")))?;
+        let sources: Vec<SourceFile> = sources
+            .into_iter()
+            .map(|s| SourceFile {
+                path: s.path,
+                text: s.text,
+            })
+            .collect();
+
+        let compilation = jvmjs_compiler::compile(&sources);
+
+        let result = JsCompileResult {
+            success: compilation.success(),
+            class_names: compilation
+                .classes
+                .iter()
+                .map(|c| c.binary_name.clone())
+                .collect(),
+            diagnostics: compilation
+                .diagnostics
+                .iter()
+                .map(|d| JsDiagnostic {
+                    severity: match d.severity {
+                        Severity::Error => "error",
+                        Severity::Warning => "warning",
+                    },
+                    message: d.message.clone(),
+                    path: d.path.clone(),
+                    start: d.span.map(|s| JsPosition {
+                        line: s.start.line,
+                        column: s.start.column,
+                    }),
+                    end: d.span.map(|s| JsPosition {
+                        line: s.end.line,
+                        column: s.end.column,
+                    }),
+                })
+                .collect(),
+        };
+
+        if result.success {
+            self.classes = compilation.classes;
+        }
+
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// `java`: run `public static void main(String[] args)` of a
+    /// previously compiled class.
+    ///
+    /// `stdout` and `stderr` receive string chunks as the program
+    /// writes them. `stdin`, if provided, is called when the program
+    /// reads a line and should return a string or `null` for EOF.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn run(
+        &mut self,
+        main_class: &str,
+        args: Vec<String>,
+        stdout: &js_sys::Function,
+        stderr: &js_sys::Function,
+        stdin: Option<js_sys::Function>,
+    ) -> Result<JsValue, JsValue> {
+        let mut console = JsConsole {
+            stdout,
+            stderr,
+            stdin: stdin.as_ref(),
+        };
+        let mut vm = Vm::new(VmOptions::default(), &mut self.vfs, &mut console);
+        for compiled in &self.classes {
+            vm.load_class(compiled.class_file.clone())
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        }
+
+        let result = match vm.run_main(main_class, &args) {
+            Ok(jvmjs_vm::vm::ExitStatus::Completed) => JsRunResult {
+                status: "completed",
+                exit_code: 0,
+                error: None,
+            },
+            Ok(jvmjs_vm::vm::ExitStatus::Exited(code)) => JsRunResult {
+                status: "exited",
+                exit_code: code,
+                error: None,
+            },
+            Err(e) => JsRunResult {
+                status: "error",
+                exit_code: 1,
+                error: Some(e.to_string()),
+            },
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    // ----- Virtual filesystem, exposed so the host page can seed
+    // ----- inputs and inspect outputs of java.io.File operations.
+
+    /// Write a file into the session's virtual filesystem.
+    #[wasm_bindgen(js_name = writeFile)]
+    pub fn write_file(&mut self, path: &str, contents: &[u8]) -> Result<(), JsValue> {
+        self.vfs
+            .write_file(path, contents.to_vec())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Read a file from the session's virtual filesystem.
+    #[wasm_bindgen(js_name = readFile)]
+    pub fn read_file(&self, path: &str) -> Result<Vec<u8>, JsValue> {
+        self.vfs
+            .read_file(path)
+            .map(<[u8]>::to_vec)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// List the immediate children of a directory (absolute paths).
+    #[wasm_bindgen(js_name = listDir)]
+    pub fn list_dir(&self, path: &str) -> Result<Vec<String>, JsValue> {
+        self.vfs
+            .list_dir(path)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Whether a file or directory exists.
+    #[must_use]
+    pub fn exists(&self, path: &str) -> bool {
+        self.vfs.exists(path)
+    }
+
+    /// Create a directory (and missing parents).
+    pub fn mkdir(&mut self, path: &str) -> Result<(), JsValue> {
+        self.vfs
+            .mkdir(path)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Delete a file or empty directory.
+    pub fn remove(&mut self, path: &str) -> Result<(), JsValue> {
+        self.vfs
+            .remove(path)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+/// Version of the jvmjs engine, for display in the host page.
+#[wasm_bindgen]
+#[must_use]
+pub fn version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}

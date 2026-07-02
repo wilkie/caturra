@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>jvmjs playground</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>jvmjs playground</h1>
+      <span id="engine-version" data-testid="engine-version"></span>
+    </header>
+    <main>
+      <section class="editor-pane">
+        <label for="source">Main.java</label>
+        <textarea id="source" data-testid="source" spellcheck="false"></textarea>
+        <label for="stdin">Program input (one line per Scanner read)</label>
+        <textarea id="stdin" data-testid="stdin" rows="3" spellcheck="false"></textarea>
+        <button id="run" data-testid="run" disabled>Compile &amp; Run</button>
+      </section>
+      <section class="console-pane">
+        <label for="console">Console</label>
+        <pre id="console" data-testid="console"></pre>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

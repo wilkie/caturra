@@ -1,0 +1,33 @@
+{
+  "name": "jvmjs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A JVM (compiler + runtime) for the CSA subset of Java 11, in Rust compiled to WASM, for backend-free use in the browser",
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:wasm": "wasm-pack build crates/jvmjs-wasm --target web --out-dir ../../packages/core/src/wasm/generated --out-name jvmjs --no-pack",
+    "build": "pnpm build:wasm && pnpm -r build",
+    "dev": "pnpm --filter @jvmjs/playground dev",
+    "test": "pnpm -r test",
+    "test:rust": "cargo test --workspace",
+    "test:e2e": "playwright test",
+    "lint": "eslint . && prettier --check .",
+    "lint:fix": "eslint --fix . && prettier --write .",
+    "lint:rust": "cargo clippy --workspace --all-targets && cargo fmt --check"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "wasm-pack": "catalog:"
+  }
+}

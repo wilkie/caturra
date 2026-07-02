@@ -1,0 +1,20 @@
+{
+  "name": "@jvmjs/playground",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vite demo app: write Java in the browser, compile and run it on the jvmjs engine",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "echo \"covered by root test:e2e (Playwright)\""
+  },
+  "dependencies": {
+    "@jvmjs/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}
