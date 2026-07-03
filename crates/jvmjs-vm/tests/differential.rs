@@ -1095,6 +1095,151 @@ public class DiffStrFull {
 );
 
 differential_test!(
+    diff_math_full_api,
+    "DiffMathFull",
+    r#"
+public class DiffMathFull {
+    public static void main(String[] args) {
+        // Exact-friendly inputs: transcendental implementations may
+        // differ by 1 ulp between libms on irrational results.
+        System.out.println(Math.sin(0.0) + " " + Math.cos(0.0) + " " + Math.tan(0.0));
+        System.out.println(Math.asin(0.0) + " " + Math.acos(1.0) + " " + Math.atan(0.0));
+        System.out.println(Math.atan2(0.0, 1.0) + " " + Math.atan2(1.0, 0.0));
+        System.out.println(Math.sinh(0.0) + " " + Math.cosh(0.0) + " " + Math.tanh(0.0));
+        System.out.println(Math.exp(0.0) + " " + Math.expm1(0.0));
+        System.out.println(Math.log(1.0) + " " + Math.log10(100.0) + " " + Math.log1p(0.0));
+        System.out.println(Math.cbrt(27.0) + " " + Math.cbrt(-8.0));
+        System.out.println(Math.hypot(3.0, 4.0));
+        System.out.println(Math.rint(2.5) + " " + Math.rint(3.5) + " " + Math.rint(-2.5));
+        System.out.println(Math.signum(-7.5) + " " + Math.signum(0.0) + " " + Math.signum(3.0));
+        System.out.println(Math.toDegrees(Math.PI) + " " + Math.toRadians(180.0) / Math.PI);
+        System.out.println(Math.copySign(3.0, -1.0) + " " + Math.ulp(1.0));
+        System.out.println(Math.nextUp(1.0) + " " + Math.nextDown(1.0) + " " + Math.nextAfter(1.0, 2.0));
+        System.out.println(Math.fma(2.0, 3.0, 4.0));
+        System.out.println(Math.IEEEremainder(5.0, 3.0) + " " + Math.IEEEremainder(-5.0, 3.0));
+        System.out.println(Math.getExponent(8.0) + " " + Math.getExponent(1.0) + " " + Math.getExponent(0.5));
+        System.out.println(Math.floorDiv(7, 2) + " " + Math.floorDiv(-7, 2) + " " + Math.floorDiv(7, -2));
+        System.out.println(Math.floorMod(7, 2) + " " + Math.floorMod(-7, 2) + " " + Math.floorMod(7, -2));
+        System.out.println(Math.addExact(1, 2) + " " + Math.multiplyExact(6, 7));
+        try {
+            Math.addExact(Integer.MAX_VALUE, 1);
+        } catch (ArithmeticException e) {
+            System.out.println("overflow: " + e.getMessage());
+        }
+        try {
+            Math.negateExact(Integer.MIN_VALUE);
+        } catch (ArithmeticException e) {
+            System.out.println("negate: " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_wrappers_full_api,
+    "DiffWrapFull",
+    r#"
+public class DiffWrapFull {
+    public static void main(String[] args) {
+        System.out.println(Integer.parseInt("ff", 16) + " " + Integer.parseInt("-101", 2));
+        System.out.println(Integer.toString(255, 16) + " " + Integer.toString(-42, 2));
+        System.out.println(Integer.toBinaryString(10) + " " + Integer.toOctalString(64) + " " + Integer.toHexString(-1));
+        System.out.println(Integer.valueOf(7) + Integer.valueOf("35"));
+        System.out.println(Integer.compare(3, 9) + " " + Integer.compare(9, 3) + " " + Integer.compare(4, 4));
+        System.out.println(Integer.max(3, 9) + " " + Integer.min(3, 9) + " " + Integer.sum(3, 9));
+        System.out.println(Integer.hashCode(42) + " " + Integer.signum(-5));
+        System.out.println(Integer.bitCount(255) + " " + Integer.highestOneBit(100) + " " + Integer.lowestOneBit(12));
+        System.out.println(Integer.numberOfLeadingZeros(1) + " " + Integer.numberOfTrailingZeros(8));
+        System.out.println(Integer.reverse(1) + " " + Integer.reverseBytes(1));
+        System.out.println(Integer.rotateLeft(1, 4) + " " + Integer.rotateRight(16, 4));
+        System.out.println(Integer.parseUnsignedInt("4294967295") + " " + Integer.toUnsignedString(-1));
+        System.out.println(Integer.toUnsignedString(-1, 16));
+        System.out.println(Integer.divideUnsigned(-2, 3) + " " + Integer.remainderUnsigned(-2, 3));
+        System.out.println(Integer.compareUnsigned(-1, 1));
+        System.out.println(Integer.SIZE + " " + Integer.BYTES);
+
+        System.out.println(Double.MAX_VALUE + " " + Double.MIN_VALUE + " " + Double.MIN_NORMAL);
+        System.out.println(Double.POSITIVE_INFINITY + " " + Double.NEGATIVE_INFINITY + " " + Double.NaN);
+        System.out.println(Double.isNaN(0.0 / 0.0) + " " + Double.isInfinite(1.0 / 0.0) + " " + Double.isFinite(1.0));
+        System.out.println(Double.compare(1.0, 2.0) + " " + Double.compare(0.0, -0.0) + " " + Double.compare(Double.NaN, 1.0));
+        System.out.println(Double.max(-0.0, 0.0) + " " + Double.min(1.5, 2.5) + " " + Double.sum(1.25, 2.5));
+        System.out.println(Double.hashCode(1.5) + " " + Double.hashCode(0.0));
+        System.out.println(Double.toHexString(1.0) + " " + Double.toHexString(-2.5) + " " + Double.toHexString(0.0));
+        System.out.println(Double.valueOf("2.5") + Double.valueOf(0.25));
+
+        System.out.println(Character.isAlphabetic('x') + " " + Character.isWhitespace('\t') + " " + Character.isSpaceChar('\t'));
+        System.out.println(Character.isJavaIdentifierStart('_') + " " + Character.isJavaIdentifierPart('7'));
+        System.out.println(Character.isISOControl('\n') + " " + Character.isDefined('a'));
+        System.out.println(Character.getNumericValue('7') + " " + Character.getNumericValue('f') + " " + Character.getNumericValue('!'));
+        System.out.println(Character.digit('f', 16) + " " + Character.digit('9', 8) + " " + Character.forDigit(11, 16));
+        System.out.println(Character.compare('a', 'b') + " " + Character.hashCode('A'));
+        System.out.println(Character.toString('q') + Character.valueOf('!'));
+        System.out.println(Character.isHighSurrogate('a') + " " + Character.charCount(65) + " " + Character.charCount(128512));
+        System.out.println(Character.MIN_RADIX + " " + Character.MAX_RADIX);
+
+        System.out.println(Boolean.parseBoolean("TRUE") + " " + Boolean.parseBoolean("nope"));
+        System.out.println(Boolean.toString(true) + " " + Boolean.valueOf(false));
+        System.out.println(Boolean.compare(true, false) + " " + Boolean.compare(false, false));
+        System.out.println(Boolean.hashCode(true) + " " + Boolean.hashCode(false));
+        System.out.println(Boolean.logicalAnd(true, false) + " " + Boolean.logicalOr(true, false) + " " + Boolean.logicalXor(true, true));
+        System.out.println(Boolean.TRUE + " " + Boolean.FALSE);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_list_full_api,
+    "DiffListFull",
+    r#"
+import java.util.ArrayList;
+
+public class DiffListFull {
+    public static void main(String[] args) {
+        ArrayList<String> names = new ArrayList<>();
+        names.add("ada");
+        names.add("alan");
+        names.add("grace");
+        names.add("alan");
+
+        System.out.println(names.contains("alan") + " " + names.contains("linus"));
+        System.out.println(names.indexOf("alan") + " " + names.lastIndexOf("alan") + " " + names.indexOf("x"));
+        System.out.println(names.remove("alan") + " " + names + " " + names.remove("nobody"));
+
+        ArrayList<String> more = new ArrayList<>();
+        more.add("edsger");
+        more.add("barbara");
+        System.out.println(names.addAll(more) + " " + names);
+        ArrayList<String> insert = new ArrayList<>();
+        insert.add("X");
+        names.addAll(1, insert);
+        System.out.println(names);
+
+        ArrayList<String> copy = new ArrayList<>();
+        copy.addAll(names);
+        System.out.println(names.equals(copy) + " " + names.hashCode() + " " + copy.hashCode());
+        copy.set(0, "zzz");
+        System.out.println(names.equals(copy));
+
+        System.out.println(names.toString());
+        names.ensureCapacity(100);
+        names.trimToSize();
+        names.clear();
+        System.out.println(names.isEmpty() + " " + names.size() + " " + names);
+
+        ArrayList<Integer> nums = new ArrayList<>();
+        nums.add(5);
+        nums.add(7);
+        nums.add(5);
+        System.out.println(nums.contains(7) + " " + nums.indexOf(5) + " " + nums.lastIndexOf(5));
+        System.out.println(nums.hashCode());
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

@@ -3023,6 +3023,22 @@ fn try_catch_compile_errors_match_javac() {
             r#"class M { static void f() { "abc".lines(); } }"#,
             "String.lines exists in Java, but streams are not supported by jvmjs",
         ),
+        (
+            "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.sort(null); } }",
+            "ArrayList.sort exists in Java, but comparators are not supported by jvmjs",
+        ),
+        (
+            "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.iterator(); } }",
+            "ArrayList.iterator exists in Java, but iterators are not supported by jvmjs (use for-each or an index loop)",
+        ),
+        (
+            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextLong(); } }",
+            "Scanner.nextLong exists in Java, but the long type is not supported by jvmjs",
+        ),
+        (
+            "class M { static void f() { double d = Double.doubleToLongBits(1.0); } }",
+            "Double.doubleToLongBits exists in Java, but the long type is not supported by jvmjs",
+        ),
     ];
     for (source, expected) in cases {
         let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
@@ -3277,6 +3293,69 @@ fn user_exception_uncaught_and_hierarchy_errors() {
         "{:?}",
         compilation.diagnostics
     );
+}
+
+#[test]
+fn transcendental_functions_behave_sanely() {
+    // Property checks (irrational results can differ by 1 ulp from
+    // Java between libm implementations, so the differential suite
+    // sticks to exact inputs and these guard the rest).
+    let out = run_stdout(
+        r"
+        public class Trig {
+            public static void main(String[] args) {
+                double x = 0.7;
+                System.out.println(Math.abs(Math.sin(x) * Math.sin(x)
+                    + Math.cos(x) * Math.cos(x) - 1.0) < 1e-15);
+                System.out.println(Math.abs(Math.log(Math.exp(2.0)) - 2.0) < 1e-15);
+                System.out.println(Math.abs(Math.atan(Math.tan(0.5)) - 0.5) < 1e-15);
+                System.out.println(Math.abs(Math.hypot(5.0, 12.0) - 13.0) < 1e-15);
+                System.out.println(Math.ulp(1.0) > 0.0 && Math.ulp(1.0) < 1e-15);
+                boolean inRange = true;
+                for (int i = 0; i < 100; i++) {
+                    double r = Math.random();
+                    if (r < 0.0 || r >= 1.0) {
+                        inRange = false;
+                    }
+                }
+                System.out.println(inRange);
+            }
+        }
+        ",
+        "Trig",
+    );
+    assert_eq!(out, "true\ntrue\ntrue\ntrue\ntrue\ntrue\n");
+}
+
+#[test]
+fn scanner_boolean_and_close() {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "B.java".into(),
+        text: r#"
+        import java.util.Scanner;
+        public class B {
+            public static void main(String[] args) {
+                Scanner in = new Scanner(System.in);
+                System.out.println(in.hasNextBoolean());
+                boolean first = in.nextBoolean();
+                boolean second = in.nextBoolean();
+                System.out.println(first + " " + second);
+                System.out.println(in.hasNextBoolean());
+                in.close();
+            }
+        }
+        "#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::with_input(["TRUE false 42"]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    vm.run_main("B", &[]).unwrap();
+    assert_eq!(console.stdout_text(), "true\ntrue false\nfalse\n");
 }
 
 #[test]

@@ -1718,6 +1718,8 @@ enum BParam {
     Str,
     /// `char[]`.
     CharArray,
+    /// The receiver's own list type (`addAll(otherList)`).
+    SelfList,
     /// The list's element type (autoboxed at the boundary).
     Elem,
 }
@@ -1746,6 +1748,27 @@ struct BuiltinMethod {
     ret: BRet,
     descriptor: &'static str,
 }
+
+/// Compact [`BuiltinMethod`] constructor for the big tables.
+const fn bm(
+    name: &'static str,
+    params: &'static [BParam],
+    ret: BRet,
+    descriptor: &'static str,
+) -> BuiltinMethod {
+    BuiltinMethod {
+        name,
+        params,
+        ret,
+        descriptor,
+    }
+}
+
+const D: BParam = BParam::Double;
+const I: BParam = BParam::Int;
+const C: BParam = BParam::Char;
+const Z: BParam = BParam::Boolean;
+const S: BParam = BParam::Str;
 
 const STRING_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
@@ -2060,30 +2083,61 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
-/// Real Java 11 `String` members jvmjs cannot model, with the honest
+/// Real Java 11 members jvmjs cannot model, per class, with the honest
 /// reason — students find these in documentation, and "cannot find
 /// symbol" would read as a bug.
-const UNSUPPORTED_STRING_METHODS: &[(&str, &str)] = &[
-    ("matches", "regular expressions are not supported by jvmjs"),
-    (
-        "replaceAll",
-        "regular expressions are not supported by jvmjs",
-    ),
-    (
-        "replaceFirst",
-        "regular expressions are not supported by jvmjs",
-    ),
-    ("getBytes", "byte arrays are not supported by jvmjs"),
-    ("chars", "streams are not supported by jvmjs"),
-    ("codePoints", "streams are not supported by jvmjs"),
-    ("lines", "streams are not supported by jvmjs"),
+#[rustfmt::skip]
+const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
+    ("String", "matches", "regular expressions are not supported by jvmjs"),
+    ("String", "replaceAll", "regular expressions are not supported by jvmjs"),
+    ("String", "replaceFirst", "regular expressions are not supported by jvmjs"),
+    ("String", "getBytes", "byte arrays are not supported by jvmjs"),
+    ("String", "chars", "streams are not supported by jvmjs"),
+    ("String", "codePoints", "streams are not supported by jvmjs"),
+    ("String", "lines", "streams are not supported by jvmjs"),
+    ("String", "format", "varargs are not supported by jvmjs"),
+    ("String", "join", "varargs are not supported by jvmjs"),
+    ("Math", "toIntExact", "the long type is not supported by jvmjs"),
+    ("Math", "multiplyHigh", "the long type is not supported by jvmjs"),
+    ("Integer", "decode", "system properties are not supported by jvmjs"),
+    ("Integer", "getInteger", "system properties are not supported by jvmjs"),
+    ("Double", "doubleToLongBits", "the long type is not supported by jvmjs"),
+    ("Double", "doubleToRawLongBits", "the long type is not supported by jvmjs"),
+    ("Double", "longBitsToDouble", "the long type is not supported by jvmjs"),
+    ("ArrayList", "iterator", "iterators are not supported by jvmjs (use for-each or an index loop)"),
+    ("ArrayList", "listIterator", "iterators are not supported by jvmjs (use for-each or an index loop)"),
+    ("ArrayList", "forEach", "lambdas are not supported by jvmjs"),
+    ("ArrayList", "removeIf", "lambdas are not supported by jvmjs"),
+    ("ArrayList", "replaceAll", "lambdas are not supported by jvmjs"),
+    ("ArrayList", "sort", "comparators are not supported by jvmjs"),
+    ("ArrayList", "stream", "streams are not supported by jvmjs"),
+    ("ArrayList", "parallelStream", "streams are not supported by jvmjs"),
+    ("ArrayList", "toArray", "Object arrays are not supported by jvmjs"),
+    ("ArrayList", "subList", "list views are not supported by jvmjs"),
+    ("ArrayList", "clone", "clone is not supported by jvmjs"),
+    ("Scanner", "useDelimiter", "regular expressions are not supported by jvmjs"),
+    ("Scanner", "findInLine", "regular expressions are not supported by jvmjs"),
+    ("Scanner", "findWithinHorizon", "regular expressions are not supported by jvmjs"),
+    ("Scanner", "skip", "regular expressions are not supported by jvmjs"),
+    ("Scanner", "tokens", "streams are not supported by jvmjs"),
+    ("Scanner", "findAll", "streams are not supported by jvmjs"),
+    ("Scanner", "nextLong", "the long type is not supported by jvmjs"),
+    ("Scanner", "hasNextLong", "the long type is not supported by jvmjs"),
+    ("Scanner", "nextFloat", "the float type is not supported by jvmjs"),
+    ("Scanner", "hasNextFloat", "the float type is not supported by jvmjs"),
+    ("Scanner", "nextShort", "the short type is not supported by jvmjs"),
+    ("Scanner", "nextByte", "the byte type is not supported by jvmjs"),
+    ("Scanner", "nextBigInteger", "BigInteger is not supported by jvmjs"),
+    ("Scanner", "nextBigDecimal", "BigDecimal is not supported by jvmjs"),
 ];
 
-/// Unsupported `String` statics (varargs-based).
-const UNSUPPORTED_STRING_STATICS: &[(&str, &str)] = &[
-    ("format", "varargs are not supported by jvmjs"),
-    ("join", "varargs are not supported by jvmjs"),
-];
+/// The honest not-supported reason for a class member, if known.
+fn unsupported_member(class: &str, method: &str) -> Option<&'static str> {
+    UNSUPPORTED_MEMBERS
+        .iter()
+        .find(|(c, m, _)| *c == class && *m == method)
+        .map(|(_, _, reason)| *reason)
+}
 
 const SCANNER_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
@@ -2134,6 +2188,9 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Boolean,
         descriptor: "()Z",
     },
+    bm("nextBoolean", &[], BRet::Boolean, "()Z"),
+    bm("hasNextBoolean", &[], BRet::Boolean, "()Z"),
+    bm("close", &[], BRet::Void, "()V"),
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
@@ -2179,6 +2236,54 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Elem,
         descriptor: "(I)Ljava/lang/Object;",
     },
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "contains",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "indexOf",
+        &[BParam::Elem],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "lastIndexOf",
+        &[BParam::Elem],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "remove",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "addAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "addAll",
+        &[I, BParam::SelfList],
+        BRet::Boolean,
+        "(ILjava/util/Collection;)Z",
+    ),
+    bm(
+        "equals",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    // Capacity hints: real methods, observable-free in this VM.
+    bm("ensureCapacity", &[I], BRet::Void, "(I)V"),
+    bm("trimToSize", &[], BRet::Void, "()V"),
 ];
 
 const FILE_METHODS: &[BuiltinMethod] = &[
@@ -2411,6 +2516,44 @@ const MATH_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Double,
         descriptor: "(DD)D",
     },
+    bm("sin", &[D], BRet::Double, "(D)D"),
+    bm("cos", &[D], BRet::Double, "(D)D"),
+    bm("tan", &[D], BRet::Double, "(D)D"),
+    bm("asin", &[D], BRet::Double, "(D)D"),
+    bm("acos", &[D], BRet::Double, "(D)D"),
+    bm("atan", &[D], BRet::Double, "(D)D"),
+    bm("atan2", &[D, D], BRet::Double, "(DD)D"),
+    bm("sinh", &[D], BRet::Double, "(D)D"),
+    bm("cosh", &[D], BRet::Double, "(D)D"),
+    bm("tanh", &[D], BRet::Double, "(D)D"),
+    bm("exp", &[D], BRet::Double, "(D)D"),
+    bm("expm1", &[D], BRet::Double, "(D)D"),
+    bm("log", &[D], BRet::Double, "(D)D"),
+    bm("log10", &[D], BRet::Double, "(D)D"),
+    bm("log1p", &[D], BRet::Double, "(D)D"),
+    bm("cbrt", &[D], BRet::Double, "(D)D"),
+    bm("hypot", &[D, D], BRet::Double, "(DD)D"),
+    bm("rint", &[D], BRet::Double, "(D)D"),
+    bm("signum", &[D], BRet::Double, "(D)D"),
+    bm("toDegrees", &[D], BRet::Double, "(D)D"),
+    bm("toRadians", &[D], BRet::Double, "(D)D"),
+    bm("copySign", &[D, D], BRet::Double, "(DD)D"),
+    bm("ulp", &[D], BRet::Double, "(D)D"),
+    bm("nextUp", &[D], BRet::Double, "(D)D"),
+    bm("nextDown", &[D], BRet::Double, "(D)D"),
+    bm("nextAfter", &[D, D], BRet::Double, "(DD)D"),
+    bm("fma", &[D, D, D], BRet::Double, "(DDD)D"),
+    bm("IEEEremainder", &[D, D], BRet::Double, "(DD)D"),
+    bm("getExponent", &[D], BRet::Int, "(D)I"),
+    bm("floorDiv", &[I, I], BRet::Int, "(II)I"),
+    bm("floorMod", &[I, I], BRet::Int, "(II)I"),
+    bm("addExact", &[I, I], BRet::Int, "(II)I"),
+    bm("subtractExact", &[I, I], BRet::Int, "(II)I"),
+    bm("multiplyExact", &[I, I], BRet::Int, "(II)I"),
+    bm("negateExact", &[I], BRet::Int, "(I)I"),
+    bm("incrementExact", &[I], BRet::Int, "(I)I"),
+    bm("decrementExact", &[I], BRet::Int, "(I)I"),
+    bm("absExact", &[I], BRet::Int, "(I)I"),
 ];
 
 const INTEGER_METHODS: &[BuiltinMethod] = &[
@@ -2426,6 +2569,46 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Str,
         descriptor: "(I)Ljava/lang/String;",
     },
+    bm("toString", &[I, I], BRet::Str, "(II)Ljava/lang/String;"),
+    bm("parseInt", &[S, I], BRet::Int, "(Ljava/lang/String;I)I"),
+    bm("toBinaryString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
+    bm("toOctalString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
+    bm("toHexString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
+    // valueOf returns the primitive value (no boxed identity/caching
+    // semantics in this VM — a documented deviation).
+    bm("valueOf", &[I], BRet::Int, "(I)Ljava/lang/Integer;"),
+    bm(
+        "valueOf",
+        &[S],
+        BRet::Int,
+        "(Ljava/lang/String;)Ljava/lang/Integer;",
+    ),
+    bm("compare", &[I, I], BRet::Int, "(II)I"),
+    bm("compareUnsigned", &[I, I], BRet::Int, "(II)I"),
+    bm("max", &[I, I], BRet::Int, "(II)I"),
+    bm("min", &[I, I], BRet::Int, "(II)I"),
+    bm("sum", &[I, I], BRet::Int, "(II)I"),
+    bm("hashCode", &[I], BRet::Int, "(I)I"),
+    bm("signum", &[I], BRet::Int, "(I)I"),
+    bm("bitCount", &[I], BRet::Int, "(I)I"),
+    bm("highestOneBit", &[I], BRet::Int, "(I)I"),
+    bm("lowestOneBit", &[I], BRet::Int, "(I)I"),
+    bm("numberOfLeadingZeros", &[I], BRet::Int, "(I)I"),
+    bm("numberOfTrailingZeros", &[I], BRet::Int, "(I)I"),
+    bm("reverse", &[I], BRet::Int, "(I)I"),
+    bm("reverseBytes", &[I], BRet::Int, "(I)I"),
+    bm("rotateLeft", &[I, I], BRet::Int, "(II)I"),
+    bm("rotateRight", &[I, I], BRet::Int, "(II)I"),
+    bm("parseUnsignedInt", &[S], BRet::Int, "(Ljava/lang/String;)I"),
+    bm("toUnsignedString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
+    bm(
+        "toUnsignedString",
+        &[I, I],
+        BRet::Str,
+        "(II)Ljava/lang/String;",
+    ),
+    bm("divideUnsigned", &[I, I], BRet::Int, "(II)I"),
+    bm("remainderUnsigned", &[I, I], BRet::Int, "(II)I"),
 ];
 
 const DOUBLE_METHODS: &[BuiltinMethod] = &[
@@ -2441,6 +2624,22 @@ const DOUBLE_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Str,
         descriptor: "(D)Ljava/lang/String;",
     },
+    bm("valueOf", &[D], BRet::Double, "(D)Ljava/lang/Double;"),
+    bm(
+        "valueOf",
+        &[S],
+        BRet::Double,
+        "(Ljava/lang/String;)Ljava/lang/Double;",
+    ),
+    bm("isNaN", &[D], BRet::Boolean, "(D)Z"),
+    bm("isInfinite", &[D], BRet::Boolean, "(D)Z"),
+    bm("isFinite", &[D], BRet::Boolean, "(D)Z"),
+    bm("compare", &[D, D], BRet::Int, "(DD)I"),
+    bm("max", &[D, D], BRet::Double, "(DD)D"),
+    bm("min", &[D, D], BRet::Double, "(DD)D"),
+    bm("sum", &[D, D], BRet::Double, "(DD)D"),
+    bm("hashCode", &[D], BRet::Int, "(D)I"),
+    bm("toHexString", &[D], BRet::Str, "(D)Ljava/lang/String;"),
 ];
 
 const CHARACTER_METHODS: &[BuiltinMethod] = &[
@@ -2486,6 +2685,37 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Char,
         descriptor: "(C)C",
     },
+    bm("isAlphabetic", &[C], BRet::Boolean, "(I)Z"),
+    bm("isWhitespace", &[C], BRet::Boolean, "(C)Z"),
+    bm("isSpaceChar", &[C], BRet::Boolean, "(C)Z"),
+    bm("isJavaIdentifierStart", &[C], BRet::Boolean, "(C)Z"),
+    bm("isJavaIdentifierPart", &[C], BRet::Boolean, "(C)Z"),
+    bm("isDefined", &[C], BRet::Boolean, "(C)Z"),
+    bm("isISOControl", &[C], BRet::Boolean, "(C)Z"),
+    bm("isTitleCase", &[C], BRet::Boolean, "(C)Z"),
+    bm("toTitleCase", &[C], BRet::Char, "(C)C"),
+    bm("getNumericValue", &[C], BRet::Int, "(C)I"),
+    bm("digit", &[C, I], BRet::Int, "(CI)I"),
+    bm("forDigit", &[I, I], BRet::Char, "(II)C"),
+    bm("compare", &[C, C], BRet::Int, "(CC)I"),
+    bm("hashCode", &[C], BRet::Int, "(C)I"),
+    bm("toString", &[C], BRet::Str, "(C)Ljava/lang/String;"),
+    bm("valueOf", &[C], BRet::Char, "(C)Ljava/lang/Character;"),
+    bm("isHighSurrogate", &[C], BRet::Boolean, "(C)Z"),
+    bm("isLowSurrogate", &[C], BRet::Boolean, "(C)Z"),
+    bm("isSurrogate", &[C], BRet::Boolean, "(C)Z"),
+    bm("charCount", &[I], BRet::Int, "(I)I"),
+];
+
+const BOOLEAN_METHODS: &[BuiltinMethod] = &[
+    bm("parseBoolean", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
+    bm("toString", &[Z], BRet::Str, "(Z)Ljava/lang/String;"),
+    bm("valueOf", &[Z], BRet::Boolean, "(Z)Ljava/lang/Boolean;"),
+    bm("compare", &[Z, Z], BRet::Int, "(ZZ)I"),
+    bm("hashCode", &[Z], BRet::Int, "(Z)I"),
+    bm("logicalAnd", &[Z, Z], BRet::Boolean, "(ZZ)Z"),
+    bm("logicalOr", &[Z, Z], BRet::Boolean, "(ZZ)Z"),
+    bm("logicalXor", &[Z, Z], BRet::Boolean, "(ZZ)Z"),
 ];
 
 /// The intrinsic method table and JVM class for a receiver type.
@@ -2509,6 +2739,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
         "Character" => Some(("java/lang/Character", CHARACTER_METHODS)),
         "String" => Some(("java/lang/String", STRING_STATIC_METHODS)),
+        "Boolean" => Some(("java/lang/Boolean", BOOLEAN_METHODS)),
         _ => None,
     }
 }
@@ -2518,15 +2749,34 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
 enum BuiltinConstant {
     Int(i32),
     Double(f64),
+    Char(u16),
+    Bool(bool),
 }
 
 /// Intrinsic static constants (`Integer.MAX_VALUE`, `Math.PI`, ...).
 fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> {
+    use BuiltinConstant::{Bool, Char, Double, Int};
     match (class, field) {
-        ("Integer", "MAX_VALUE") => Some(BuiltinConstant::Int(i32::MAX)),
-        ("Integer", "MIN_VALUE") => Some(BuiltinConstant::Int(i32::MIN)),
-        ("Math", "PI") => Some(BuiltinConstant::Double(std::f64::consts::PI)),
-        ("Math", "E") => Some(BuiltinConstant::Double(std::f64::consts::E)),
+        ("Integer", "MAX_VALUE") => Some(Int(i32::MAX)),
+        ("Integer", "MIN_VALUE") => Some(Int(i32::MIN)),
+        ("Integer", "SIZE") => Some(Int(32)),
+        ("Integer", "BYTES") => Some(Int(4)),
+        ("Math", "PI") => Some(Double(std::f64::consts::PI)),
+        ("Math", "E") => Some(Double(std::f64::consts::E)),
+        ("Double", "MAX_VALUE") => Some(Double(f64::MAX)),
+        ("Double", "MIN_VALUE") => Some(Double(f64::from_bits(1))),
+        ("Double", "MIN_NORMAL") => Some(Double(f64::MIN_POSITIVE)),
+        ("Double", "POSITIVE_INFINITY") => Some(Double(f64::INFINITY)),
+        ("Double", "NEGATIVE_INFINITY") => Some(Double(f64::NEG_INFINITY)),
+        ("Double", "NaN") => Some(Double(f64::NAN)),
+        ("Double", "SIZE") => Some(Int(64)),
+        ("Double", "BYTES") => Some(Int(8)),
+        ("Character", "MIN_VALUE") => Some(Char(0)),
+        ("Character", "MAX_VALUE") => Some(Char(u16::MAX)),
+        ("Character", "MIN_RADIX") => Some(Int(2)),
+        ("Character", "MAX_RADIX") => Some(Int(36)),
+        ("Boolean", "TRUE") => Some(Bool(true)),
+        ("Boolean", "FALSE") => Some(Bool(false)),
         _ => None,
     }
 }
@@ -2542,6 +2792,7 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
             elem: ElemType::Char,
             dims: 1,
         },
+        BParam::SelfList => elem.map_or(JType::Error, JType::List),
         BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
     }
 }
@@ -4238,16 +4489,25 @@ impl BodyGen<'_> {
                         receiver_ty.describe(self.table)
                     ),
                 );
-            } else if receiver_ty == JType::Str
-                && let Some((_, reason)) = UNSUPPORTED_STRING_METHODS
-                    .iter()
-                    .find(|(name, _)| *name == method)
-            {
+            } else if let Some(reason) = unsupported_member(
+                match receiver_ty {
+                    JType::Str => "String",
+                    JType::Scanner => "Scanner",
+                    JType::List(_) => "ArrayList",
+                    _ => "",
+                },
+                method,
+            ) {
                 // A real Java method we cannot model: say so honestly
                 // instead of a misleading "cannot find symbol".
+                let class = match receiver_ty {
+                    JType::Scanner => "Scanner",
+                    JType::List(_) => "ArrayList",
+                    _ => "String",
+                };
                 self.error(
                     span,
-                    format!("String.{method} exists in Java, but {reason}"),
+                    format!("{class}.{method} exists in Java, but {reason}"),
                 );
             } else {
                 self.error(
@@ -4296,14 +4556,10 @@ impl BodyGen<'_> {
             return None;
         }
         let Some(chosen) = pick_builtin(methods, method, &arg_types, None, self.table) else {
-            if class == "String"
-                && let Some((_, reason)) = UNSUPPORTED_STRING_STATICS
-                    .iter()
-                    .find(|(name, _)| *name == method)
-            {
+            if let Some(reason) = unsupported_member(class, method) {
                 self.error(
                     span,
-                    format!("String.{method} exists in Java, but {reason}"),
+                    format!("{class}.{method} exists in Java, but {reason}"),
                 );
             } else {
                 self.error(
@@ -5152,6 +5408,8 @@ impl BodyGen<'_> {
             {
                 match builtin_static_constant(&path[0], &path[1]) {
                     Some(BuiltinConstant::Double(_)) => JType::Double,
+                    Some(BuiltinConstant::Char(_)) => JType::Char,
+                    Some(BuiltinConstant::Bool(_)) => JType::Boolean,
                     _ => JType::Int,
                 }
             }
@@ -5790,6 +6048,14 @@ impl BodyGen<'_> {
                     let index = self.pool.intern(Constant::Double(value));
                     self.code.push_op_u16(op::LDC2_W, index, 2);
                     return JType::Double;
+                }
+                BuiltinConstant::Char(value) => {
+                    self.push_int(i32::from(value));
+                    return JType::Char;
+                }
+                BuiltinConstant::Bool(value) => {
+                    self.push_int(i32::from(value));
+                    return JType::Boolean;
                 }
             }
         }

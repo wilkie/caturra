@@ -924,6 +924,25 @@ fn scanner_method(
             let has = scanner_peek_line(heap, console, receiver)?;
             Ok(Some(JValue::Int(i32::from(has))))
         }
+        "nextBoolean" => {
+            let token = scanner_next_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            if token.eq_ignore_ascii_case("true") {
+                Ok(Some(JValue::Int(1)))
+            } else if token.eq_ignore_ascii_case("false") {
+                Ok(Some(JValue::Int(0)))
+            } else {
+                Err(throw("java.util.InputMismatchException"))
+            }
+        }
+        "hasNextBoolean" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token
+                .is_some_and(|t| t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("false"));
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
+        // Closing System.in is accepted and does nothing.
+        "close" => Ok(None),
         "next" => {
             let token = scanner_next_token(heap, console, receiver)?
                 .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
@@ -1075,7 +1094,50 @@ fn scanner_peek_token(
     }
 }
 
+/// Element equality for list membership: value equality for numbers
+/// and strings (Java's `equals`), reference equality for user objects
+/// (correct here, since `equals` overriding is not supported).
+fn values_equal(heap: &Heap, a: JValue, b: JValue) -> bool {
+    match (a, b) {
+        (JValue::Ref(Some(x)), JValue::Ref(Some(y))) => {
+            if x == y {
+                return true;
+            }
+            matches!(
+                (heap.get(x), heap.get(y)),
+                (
+                    Some(HeapObject::JavaString(sx)),
+                    Some(HeapObject::JavaString(sy)),
+                ) if sx == sy
+            )
+        }
+        _ => a == b,
+    }
+}
+
+/// A stored value's Java hash code, for `ArrayList.hashCode`.
+#[allow(clippy::cast_possible_wrap)]
+fn value_hash(heap: &Heap, value: JValue) -> i32 {
+    match value {
+        JValue::Int(v) => v,
+        JValue::Double(v) => java_double_hash(v),
+        JValue::Ref(Some(reference)) => match heap.get(reference) {
+            Some(HeapObject::JavaString(units)) => {
+                let mut hash: i32 = 0;
+                for unit in units {
+                    hash = hash.wrapping_mul(31).wrapping_add(i32::from(*unit));
+                }
+                hash
+            }
+            // Identity hash (arbitrary in Java too).
+            _ => reference.cast_signed(),
+        },
+        _ => 0,
+    }
+}
+
 /// `java.util.ArrayList` methods (values stored unboxed).
+#[allow(clippy::too_many_lines)] // one arm per documented method
 fn list_method(
     heap: &mut Heap,
     receiver: HeapRef,
@@ -1151,6 +1213,113 @@ fn list_method(
             };
             Ok(Some(values.remove(at)))
         }
+        ("clear", _, []) => {
+            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+                values.clear();
+            }
+            Ok(None)
+        }
+        ("contains", _, [value]) => {
+            let found = match heap.get(receiver) {
+                Some(HeapObject::ArrayList(values)) => {
+                    values.iter().any(|v| values_equal(heap, *v, *value))
+                }
+                _ => false,
+            };
+            Ok(Some(JValue::Int(i32::from(found))))
+        }
+        ("indexOf", _, [value]) => {
+            let index = match heap.get(receiver) {
+                Some(HeapObject::ArrayList(values)) => values
+                    .iter()
+                    .position(|v| values_equal(heap, *v, *value))
+                    .and_then(|i| i32::try_from(i).ok())
+                    .unwrap_or(-1),
+                _ => -1,
+            };
+            Ok(Some(JValue::Int(index)))
+        }
+        ("lastIndexOf", _, [value]) => {
+            let index = match heap.get(receiver) {
+                Some(HeapObject::ArrayList(values)) => values
+                    .iter()
+                    .rposition(|v| values_equal(heap, *v, *value))
+                    .and_then(|i| i32::try_from(i).ok())
+                    .unwrap_or(-1),
+                _ => -1,
+            };
+            Ok(Some(JValue::Int(index)))
+        }
+        ("remove", "(Ljava/lang/Object;)Z", [value]) => {
+            let position = match heap.get(receiver) {
+                Some(HeapObject::ArrayList(values)) => {
+                    values.iter().position(|v| values_equal(heap, *v, *value))
+                }
+                _ => None,
+            };
+            if let Some(position) = position
+                && let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver)
+            {
+                values.remove(position);
+                return Ok(Some(JValue::Int(1)));
+            }
+            Ok(Some(JValue::Int(0)))
+        }
+        ("addAll", "(Ljava/util/Collection;)Z", [JValue::Ref(other)]) => {
+            let other = other.ok_or_else(|| throw("java.lang.NullPointerException"))?;
+            let incoming = match heap.get(other) {
+                Some(HeapObject::ArrayList(values)) => values.clone(),
+                _ => return Err(throw("java.lang.ClassCastException: not a list")),
+            };
+            let changed = !incoming.is_empty();
+            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+                values.extend(incoming);
+            }
+            Ok(Some(JValue::Int(i32::from(changed))))
+        }
+        ("addAll", "(ILjava/util/Collection;)Z", [JValue::Int(index), JValue::Ref(other)]) => {
+            let other = other.ok_or_else(|| throw("java.lang.NullPointerException"))?;
+            let at = usize::try_from(*index)
+                .ok()
+                .filter(|i| *i <= list_len)
+                .ok_or_else(|| {
+                    throw(format!(
+                        "java.lang.IndexOutOfBoundsException: Index {index} out of bounds \
+                         for length {list_len}"
+                    ))
+                })?;
+            let incoming = match heap.get(other) {
+                Some(HeapObject::ArrayList(values)) => values.clone(),
+                _ => return Err(throw("java.lang.ClassCastException: not a list")),
+            };
+            let changed = !incoming.is_empty();
+            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+                for (offset, value) in incoming.into_iter().enumerate() {
+                    values.insert(at + offset, value);
+                }
+            }
+            Ok(Some(JValue::Int(i32::from(changed))))
+        }
+        ("equals", _, [JValue::Ref(other)]) => {
+            let equal = other.is_some_and(|other| match (heap.get(receiver), heap.get(other)) {
+                (Some(HeapObject::ArrayList(a)), Some(HeapObject::ArrayList(b))) => {
+                    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(heap, *x, *y))
+                }
+                _ => false,
+            });
+            Ok(Some(JValue::Int(i32::from(equal))))
+        }
+        ("hashCode", _, []) => {
+            let hash = match heap.get(receiver) {
+                Some(HeapObject::ArrayList(values)) => values.iter().fold(1i32, |acc, v| {
+                    acc.wrapping_mul(31).wrapping_add(value_hash(heap, *v))
+                }),
+                _ => 0,
+            };
+            Ok(Some(JValue::Int(hash)))
+        }
+        // Capacity hints: real methods, observable-free here.
+        ("ensureCapacity", _, [JValue::Int(_)]) | ("trimToSize", _, []) => Ok(None),
         ("toString", _, []) => {
             let values = match heap.get(receiver) {
                 Some(HeapObject::ArrayList(values)) => values.clone(),
@@ -1298,9 +1467,9 @@ impl JavaRng {
     }
 }
 
-/// Intrinsic static methods (`Math.*`, `Integer.parseInt`,
-/// `Double.parseDouble`).
-#[allow(clippy::too_many_lines)] // one arm per static intrinsic
+/// Intrinsic static methods, routed per class. Every method a student
+/// can find in the Java 11 documentation either works or reports an
+/// honest "not supported" reason at compile time.
 pub fn invoke_static(
     heap: &mut Heap,
     rng: &mut JavaRng,
@@ -1309,76 +1478,589 @@ pub fn invoke_static(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    let string_arg = |value: &JValue| -> Result<String, VmError> {
-        match value {
-            JValue::Ref(Some(reference)) => heap
-                .string_text(*reference)
-                .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
-            JValue::Ref(None) => Err(throw(
-                "java.lang.NumberFormatException: Cannot parse null string",
-            )),
-            _ => Err(throw("java.lang.VerifyError: expected a String argument")),
-        }
-    };
+    match class {
+        "java/lang/Math" => math_static(rng, method, args),
+        "java/lang/Integer" => integer_static(heap, method, args),
+        "java/lang/Double" => double_static(heap, method, args),
+        "java/lang/Character" => character_static(heap, method, args),
+        "java/lang/Boolean" => boolean_static(heap, method, args),
+        "java/lang/String" => string_static(heap, method, descriptor, args),
+        _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+    }
+}
 
-    match (class, method, args) {
-        ("java/lang/Math", "abs", [JValue::Int(v)]) => Ok(Some(JValue::Int(v.wrapping_abs()))),
-        ("java/lang/Math", "abs", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.abs()))),
-        ("java/lang/Math", "sqrt", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.sqrt()))),
-        ("java/lang/Math", "pow", [JValue::Double(a), JValue::Double(b)]) => {
-            Ok(Some(JValue::Double(a.powf(*b))))
-        }
-        ("java/lang/Math", "max", [JValue::Int(a), JValue::Int(b)]) => {
-            Ok(Some(JValue::Int((*a).max(*b))))
-        }
-        ("java/lang/Math", "max", [JValue::Double(a), JValue::Double(b)]) => {
-            Ok(Some(JValue::Double(a.max(*b))))
-        }
-        ("java/lang/Math", "min", [JValue::Int(a), JValue::Int(b)]) => {
-            Ok(Some(JValue::Int((*a).min(*b))))
-        }
-        ("java/lang/Math", "min", [JValue::Double(a), JValue::Double(b)]) => {
-            Ok(Some(JValue::Double(a.min(*b))))
-        }
-        ("java/lang/Math", "random", []) => Ok(Some(JValue::Double(rng.next_double()))),
-        ("java/lang/Math", "floor", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.floor()))),
-        ("java/lang/Math", "ceil", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.ceil()))),
-        ("java/lang/Math", "round", [JValue::Double(v)]) => {
+/// Java's `Math.max`/`min` double semantics: NaN wins, `+0.0 > -0.0`.
+#[allow(clippy::float_cmp)]
+fn java_double_max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        // +0.0 beats -0.0.
+        return if a.is_sign_positive() { a } else { b };
+    }
+    if a > b { a } else { b }
+}
+
+#[allow(clippy::float_cmp)]
+fn java_double_min(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_negative() { a } else { b };
+    }
+    if a < b { a } else { b }
+}
+
+/// `Math.floorDiv` with Java's toward-negative-infinity semantics.
+fn java_floor_div(a: i32, b: i32) -> Result<i32, VmError> {
+    if b == 0 {
+        return Err(throw("java.lang.ArithmeticException: / by zero"));
+    }
+    let quotient = a.wrapping_div(b);
+    if (a ^ b) < 0 && quotient.wrapping_mul(b) != a {
+        Ok(quotient - 1)
+    } else {
+        Ok(quotient)
+    }
+}
+
+fn overflow() -> VmError {
+    throw("java.lang.ArithmeticException: integer overflow")
+}
+
+#[allow(clippy::too_many_lines)] // one arm per documented method
+#[allow(clippy::float_cmp, clippy::many_single_char_names)]
+fn math_static(
+    rng: &mut JavaRng,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let d = |v: f64| Ok(Some(JValue::Double(v)));
+    let i = |v: i32| Ok(Some(JValue::Int(v)));
+    match (method, args) {
+        ("abs", [JValue::Int(v)]) => i(v.wrapping_abs()),
+        ("abs", [JValue::Double(v)]) => d(v.abs()),
+        ("absExact", [JValue::Int(v)]) => v.checked_abs().map_or_else(|| Err(overflow()), i),
+        ("sqrt", [JValue::Double(v)]) => d(v.sqrt()),
+        ("cbrt", [JValue::Double(v)]) => d(v.cbrt()),
+        ("pow", [JValue::Double(a), JValue::Double(b)]) => d(a.powf(*b)),
+        ("hypot", [JValue::Double(a), JValue::Double(b)]) => d(a.hypot(*b)),
+        ("max", [JValue::Int(a), JValue::Int(b)]) => i((*a).max(*b)),
+        ("max", [JValue::Double(a), JValue::Double(b)]) => d(java_double_max(*a, *b)),
+        ("min", [JValue::Int(a), JValue::Int(b)]) => i((*a).min(*b)),
+        ("min", [JValue::Double(a), JValue::Double(b)]) => d(java_double_min(*a, *b)),
+        ("random", []) => d(rng.next_double()),
+        ("floor", [JValue::Double(v)]) => d(v.floor()),
+        ("ceil", [JValue::Double(v)]) => d(v.ceil()),
+        ("rint", [JValue::Double(v)]) => d(v.round_ties_even()),
+        ("round", [JValue::Double(v)]) => {
             // Java rounds half-up toward positive infinity.
             #[allow(clippy::cast_possible_truncation)]
-            Ok(Some(JValue::Int((v + 0.5).floor() as i32)))
+            i((v + 0.5).floor() as i32)
         }
-        ("java/lang/Integer", "toString", [JValue::Int(v)]) => {
-            let reference = heap.alloc_string(&v.to_string());
-            Ok(Some(JValue::Ref(Some(reference))))
+        ("sin", [JValue::Double(v)]) => d(v.sin()),
+        ("cos", [JValue::Double(v)]) => d(v.cos()),
+        ("tan", [JValue::Double(v)]) => d(v.tan()),
+        ("asin", [JValue::Double(v)]) => d(v.asin()),
+        ("acos", [JValue::Double(v)]) => d(v.acos()),
+        ("atan", [JValue::Double(v)]) => d(v.atan()),
+        ("atan2", [JValue::Double(a), JValue::Double(b)]) => d(a.atan2(*b)),
+        ("sinh", [JValue::Double(v)]) => d(v.sinh()),
+        ("cosh", [JValue::Double(v)]) => d(v.cosh()),
+        ("tanh", [JValue::Double(v)]) => d(v.tanh()),
+        ("exp", [JValue::Double(v)]) => d(v.exp()),
+        ("expm1", [JValue::Double(v)]) => d(v.exp_m1()),
+        ("log", [JValue::Double(v)]) => d(v.ln()),
+        ("log10", [JValue::Double(v)]) => d(v.log10()),
+        ("log1p", [JValue::Double(v)]) => d(v.ln_1p()),
+        ("signum", [JValue::Double(v)]) => {
+            // Rust's signum maps ±0 to ±1; Java keeps ±0 and NaN.
+            d(if *v == 0.0 || v.is_nan() {
+                *v
+            } else {
+                v.signum()
+            })
         }
-        ("java/lang/Double", "toString", [JValue::Double(v)]) => {
+        ("toDegrees", [JValue::Double(v)]) => d(v.to_degrees()),
+        ("toRadians", [JValue::Double(v)]) => d(v.to_radians()),
+        ("copySign", [JValue::Double(a), JValue::Double(b)]) => d(a.copysign(*b)),
+        ("ulp", [JValue::Double(v)]) => {
+            let v = v.abs();
+            d(if v.is_nan() {
+                f64::NAN
+            } else if v.is_infinite() {
+                f64::INFINITY
+            } else if v == f64::MAX {
+                f64::MAX - f64::from_bits(f64::MAX.to_bits() - 1)
+            } else {
+                v.next_up() - v
+            })
+        }
+        ("nextUp", [JValue::Double(v)]) => d(v.next_up()),
+        ("nextDown", [JValue::Double(v)]) => d(v.next_down()),
+        ("nextAfter", [JValue::Double(start), JValue::Double(direction)]) => {
+            d(if start.is_nan() || direction.is_nan() {
+                f64::NAN
+            } else if start == direction {
+                *direction
+            } else if direction > start {
+                start.next_up()
+            } else {
+                start.next_down()
+            })
+        }
+        ("fma", [JValue::Double(a), JValue::Double(b), JValue::Double(c)]) => d(a.mul_add(*b, *c)),
+        ("IEEEremainder", [JValue::Double(a), JValue::Double(b)]) => {
+            let quotient = (a / b).round_ties_even();
+            d(if quotient.is_infinite() || quotient.is_nan() {
+                f64::NAN
+            } else {
+                a - quotient * b
+            })
+        }
+        ("getExponent", [JValue::Double(v)]) => {
+            let bits = (v.to_bits() >> 52) & 0x7FF;
+            i(if v.is_nan() || v.is_infinite() {
+                1024
+            } else if bits == 0 {
+                -1023 // zero and subnormals
+            } else {
+                i32::try_from(bits).unwrap_or(0) - 1023
+            })
+        }
+        ("floorDiv", [JValue::Int(a), JValue::Int(b)]) => java_floor_div(*a, *b).and_then(i),
+        ("floorMod", [JValue::Int(a), JValue::Int(b)]) => {
+            let quotient = java_floor_div(*a, *b)?;
+            i(a.wrapping_sub(quotient.wrapping_mul(*b)))
+        }
+        ("addExact", [JValue::Int(a), JValue::Int(b)]) => {
+            a.checked_add(*b).map_or_else(|| Err(overflow()), i)
+        }
+        ("subtractExact", [JValue::Int(a), JValue::Int(b)]) => {
+            a.checked_sub(*b).map_or_else(|| Err(overflow()), i)
+        }
+        ("multiplyExact", [JValue::Int(a), JValue::Int(b)]) => {
+            a.checked_mul(*b).map_or_else(|| Err(overflow()), i)
+        }
+        ("negateExact", [JValue::Int(v)]) => v.checked_neg().map_or_else(|| Err(overflow()), i),
+        ("incrementExact", [JValue::Int(v)]) => v.checked_add(1).map_or_else(|| Err(overflow()), i),
+        ("decrementExact", [JValue::Int(v)]) => v.checked_sub(1).map_or_else(|| Err(overflow()), i),
+        _ => Err(VmError::UnknownIntrinsic(format!("Math.{method}"))),
+    }
+}
+
+/// Java's `Integer.toString(int, radix)`: lowercase digits, radix
+/// clamped to 10 when out of range.
+fn int_to_string_radix(value: i32, radix: i32) -> String {
+    let radix = if (2..=36).contains(&radix) { radix } else { 10 };
+    let radix = u32::try_from(radix).expect("radix in range");
+    let mut magnitude = i64::from(value).unsigned_abs();
+    let mut digits = Vec::new();
+    loop {
+        let digit = u32::try_from(magnitude % u64::from(radix)).expect("digit < radix");
+        digits.push(char::from_digit(digit, radix).expect("valid digit"));
+        magnitude /= u64::from(radix);
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if value < 0 {
+        digits.push('-');
+    }
+    digits.iter().rev().collect()
+}
+
+fn parse_int_text(heap: &Heap, value: &JValue) -> Result<String, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => heap
+            .string_text(*reference)
+            .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
+        JValue::Ref(None) => Err(throw(
+            "java.lang.NumberFormatException: Cannot parse null string",
+        )),
+        _ => Err(throw("java.lang.VerifyError: expected a String argument")),
+    }
+}
+
+fn number_format(text: &str) -> VmError {
+    throw(format!(
+        "java.lang.NumberFormatException: For input string: \"{text}\""
+    ))
+}
+
+#[allow(clippy::too_many_lines)] // one arm per documented method
+#[allow(clippy::many_single_char_names)]
+fn integer_static(
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let i = |v: i32| Ok(Some(JValue::Int(v)));
+    let s = |heap: &mut Heap, text: String| {
+        let reference = heap.alloc_string(&text);
+        Ok(Some(JValue::Ref(Some(reference))))
+    };
+    match (method, args) {
+        ("parseInt" | "valueOf", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            text.parse().map_or_else(|_| Err(number_format(&text)), i)
+        }
+        ("parseInt", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
+            let text = parse_int_text(heap, text)?;
+            let radix = u32::try_from(*radix).ok().filter(|r| (2..=36).contains(r));
+            radix
+                .and_then(|r| i32::from_str_radix(&text, r).ok())
+                .map_or_else(|| Err(number_format(&text)), i)
+        }
+        ("parseUnsignedInt", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            text.parse::<u32>()
+                .map_or_else(|_| Err(number_format(&text)), |v| i(v.cast_signed()))
+        }
+        ("toString", [JValue::Int(v)]) => s(heap, v.to_string()),
+        ("toString", [JValue::Int(v), JValue::Int(radix)]) => {
+            s(heap, int_to_string_radix(*v, *radix))
+        }
+        ("toBinaryString", [JValue::Int(v)]) => s(heap, format!("{:b}", v.cast_unsigned())),
+        ("toOctalString", [JValue::Int(v)]) => s(heap, format!("{:o}", v.cast_unsigned())),
+        ("toHexString", [JValue::Int(v)]) => s(heap, format!("{:x}", v.cast_unsigned())),
+        ("toUnsignedString", [JValue::Int(v)]) => s(heap, v.cast_unsigned().to_string()),
+        ("toUnsignedString", [JValue::Int(v), JValue::Int(radix)]) => {
+            let radix = if (2..=36).contains(radix) { *radix } else { 10 };
+            let radix = u32::try_from(radix).expect("radix in range");
+            let mut magnitude = v.cast_unsigned();
+            let mut digits = Vec::new();
+            loop {
+                digits.push(char::from_digit(magnitude % radix, radix).expect("valid digit"));
+                magnitude /= radix;
+                if magnitude == 0 {
+                    break;
+                }
+            }
+            s(heap, digits.iter().rev().collect())
+        }
+
+        ("compare", [JValue::Int(a), JValue::Int(b)]) => i(match a.cmp(b) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }),
+        ("compareUnsigned", [JValue::Int(a), JValue::Int(b)]) => {
+            i(match a.cast_unsigned().cmp(&b.cast_unsigned()) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })
+        }
+        ("max", [JValue::Int(a), JValue::Int(b)]) => i((*a).max(*b)),
+        ("min", [JValue::Int(a), JValue::Int(b)]) => i((*a).min(*b)),
+        ("sum", [JValue::Int(a), JValue::Int(b)]) => i(a.wrapping_add(*b)),
+        ("valueOf" | "hashCode", [JValue::Int(v)]) => i(*v),
+        ("signum", [JValue::Int(v)]) => i(v.signum()),
+        ("bitCount", [JValue::Int(v)]) => i(i32::try_from(v.count_ones()).unwrap_or(0)),
+        ("highestOneBit", [JValue::Int(v)]) => i(if *v == 0 {
+            0
+        } else {
+            // Logical shift: the sign bit must not smear downward.
+            ((1u32 << 31) >> v.leading_zeros()).cast_signed()
+        }),
+        ("lowestOneBit", [JValue::Int(v)]) => i(v.wrapping_neg() & v),
+        ("numberOfLeadingZeros", [JValue::Int(v)]) => {
+            i(i32::try_from(v.leading_zeros()).unwrap_or(32))
+        }
+        ("numberOfTrailingZeros", [JValue::Int(v)]) => {
+            i(i32::try_from(v.trailing_zeros()).unwrap_or(32))
+        }
+        ("reverse", [JValue::Int(v)]) => i(v.reverse_bits()),
+        ("reverseBytes", [JValue::Int(v)]) => i(v.swap_bytes()),
+        ("rotateLeft", [JValue::Int(v), JValue::Int(n)]) => {
+            i(v.rotate_left(n.cast_unsigned() % 32))
+        }
+        ("rotateRight", [JValue::Int(v), JValue::Int(n)]) => {
+            i(v.rotate_right(n.cast_unsigned() % 32))
+        }
+        ("divideUnsigned", [JValue::Int(a), JValue::Int(b)]) => {
+            if *b == 0 {
+                return Err(throw("java.lang.ArithmeticException: / by zero"));
+            }
+            i((a.cast_unsigned() / b.cast_unsigned()).cast_signed())
+        }
+        ("remainderUnsigned", [JValue::Int(a), JValue::Int(b)]) => {
+            if *b == 0 {
+                return Err(throw("java.lang.ArithmeticException: / by zero"));
+            }
+            i((a.cast_unsigned() % b.cast_unsigned()).cast_signed())
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("Integer.{method}"))),
+    }
+}
+
+/// Java's `Double.hashCode`: fold the canonical bit pattern.
+#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+fn java_double_hash(v: f64) -> i32 {
+    let bits = if v.is_nan() {
+        0x7FF8_0000_0000_0000_u64
+    } else {
+        v.to_bits()
+    };
+    ((bits ^ (bits >> 32)) & 0xFFFF_FFFF) as u32 as i32
+}
+
+/// Java's `Double.toHexString`.
+fn java_double_to_hex(v: f64) -> String {
+    if v.is_nan() {
+        return String::from("NaN");
+    }
+    if v.is_infinite() {
+        return String::from(if v > 0.0 { "Infinity" } else { "-Infinity" });
+    }
+    let sign = if v.is_sign_negative() { "-" } else { "" };
+    let bits = v.to_bits();
+    let exponent = (bits >> 52) & 0x7FF;
+    let mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
+    if exponent == 0 {
+        if mantissa == 0 {
+            return format!("{sign}0x0.0p0");
+        }
+        // Subnormal.
+        let mut hex = format!("{mantissa:013x}");
+        while hex.len() > 1 && hex.ends_with('0') {
+            hex.pop();
+        }
+        return format!("{sign}0x0.{hex}p-1022");
+    }
+    let mut hex = format!("{mantissa:013x}");
+    while hex.len() > 1 && hex.ends_with('0') {
+        hex.pop();
+    }
+    let unbiased = i64::try_from(exponent).unwrap_or(0) - 1023;
+    format!("{sign}0x1.{hex}p{unbiased}")
+}
+
+#[allow(clippy::float_cmp)]
+fn double_static(
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let d = |v: f64| Ok(Some(JValue::Double(v)));
+    let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
+    match (method, args) {
+        ("parseDouble" | "valueOf", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            text.trim()
+                .parse()
+                .map_or_else(|_| Err(number_format(&text)), d)
+        }
+        ("toString", [JValue::Double(v)]) => {
             let reference = heap.alloc_string(&java_double_to_string(*v));
             Ok(Some(JValue::Ref(Some(reference))))
         }
-        ("java/lang/Character", method, [JValue::Int(unit)]) => {
-            let ch = char::from_u32(u32::try_from(*unit).unwrap_or(0)).unwrap_or('\u{FFFD}');
-            match method {
-                "isDigit" => Ok(Some(JValue::Int(i32::from(ch.is_ascii_digit())))),
-                "isLetter" => Ok(Some(JValue::Int(i32::from(ch.is_alphabetic())))),
-                "isLetterOrDigit" => Ok(Some(JValue::Int(i32::from(
-                    ch.is_alphabetic() || ch.is_ascii_digit(),
-                )))),
-                "isUpperCase" => Ok(Some(JValue::Int(i32::from(ch.is_uppercase())))),
-                "isLowerCase" => Ok(Some(JValue::Int(i32::from(ch.is_lowercase())))),
-                "toUpperCase" | "toLowerCase" => {
-                    let converted = if method == "toUpperCase" {
-                        ch.to_uppercase().next().unwrap_or(ch)
-                    } else {
-                        ch.to_lowercase().next().unwrap_or(ch)
-                    };
-                    let unit = u32::from(converted);
-                    Ok(Some(JValue::Int(i32::try_from(unit & 0xFFFF).unwrap_or(0))))
-                }
-                _ => Err(VmError::UnknownIntrinsic(format!("Character.{method}"))),
-            }
+        ("toHexString", [JValue::Double(v)]) => {
+            let reference = heap.alloc_string(&java_double_to_hex(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
         }
-        ("java/lang/String", "valueOf" | "copyValueOf", [value]) => {
+        ("valueOf", [JValue::Double(v)]) => d(*v),
+        ("isNaN", [JValue::Double(v)]) => z(v.is_nan()),
+        ("isInfinite", [JValue::Double(v)]) => z(v.is_infinite()),
+        ("isFinite", [JValue::Double(v)]) => z(v.is_finite()),
+        ("compare", [JValue::Double(a), JValue::Double(b)]) => {
+            // Java: -0.0 < 0.0 and NaN is the largest.
+            let ordering = if *a < *b {
+                -1
+            } else if *a > *b {
+                1
+            } else {
+                let a_bits = if a.is_nan() {
+                    0x7FF8_0000_0000_0000_u64
+                } else {
+                    a.to_bits()
+                };
+                let b_bits = if b.is_nan() {
+                    0x7FF8_0000_0000_0000_u64
+                } else {
+                    b.to_bits()
+                };
+                match a_bits.cast_signed().cmp(&b_bits.cast_signed()) {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                }
+            };
+            Ok(Some(JValue::Int(ordering)))
+        }
+        ("max", [JValue::Double(a), JValue::Double(b)]) => d(java_double_max(*a, *b)),
+        ("min", [JValue::Double(a), JValue::Double(b)]) => d(java_double_min(*a, *b)),
+        ("sum", [JValue::Double(a), JValue::Double(b)]) => d(a + b),
+        ("hashCode", [JValue::Double(v)]) => Ok(Some(JValue::Int(java_double_hash(*v)))),
+        _ => Err(VmError::UnknownIntrinsic(format!("Double.{method}"))),
+    }
+}
+
+/// Java's `Character.isWhitespace` (NOT Unicode `White_Space`: excludes
+/// the no-break spaces, includes the ASCII separators).
+fn java_is_whitespace(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\x0B' | '\x0C' | '\r' | '\x1C'..='\x1F')
+        || (java_is_space_char(c) && !matches!(c, '\u{00A0}' | '\u{2007}' | '\u{202F}'))
+}
+
+/// Java's `Character.isSpaceChar` (Unicode space separators).
+fn java_is_space_char(c: char) -> bool {
+    matches!(
+        c,
+        ' ' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+    )
+}
+
+#[allow(clippy::too_many_lines)] // one arm per documented method
+#[allow(clippy::many_single_char_names)]
+fn character_static(
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
+    let c_of = |unit: &i32| char::from_u32(u32::try_from(*unit).unwrap_or(0)).unwrap_or('\u{FFFD}');
+    let ch_ret = |c: char| {
+        Ok(Some(JValue::Int(
+            i32::try_from(u32::from(c) & 0xFFFF).unwrap_or(0),
+        )))
+    };
+    match (method, args) {
+        ("isDigit", [JValue::Int(v)]) => z(c_of(v).is_ascii_digit()),
+
+        ("isLetterOrDigit", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            z(c.is_alphabetic() || c.is_ascii_digit())
+        }
+        // isAlphabetic is a superset of isLetter in real Java (letter
+        // numbers); identical under this approximation.
+        ("isLetter" | "isAlphabetic", [JValue::Int(v)]) => z(c_of(v).is_alphabetic()),
+        ("isUpperCase", [JValue::Int(v)]) => z(c_of(v).is_uppercase()),
+        ("isLowerCase", [JValue::Int(v)]) => z(c_of(v).is_lowercase()),
+        ("isWhitespace", [JValue::Int(v)]) => z(java_is_whitespace(c_of(v))),
+        ("isSpaceChar", [JValue::Int(v)]) => z(java_is_space_char(c_of(v))),
+        ("isJavaIdentifierStart", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            z(c.is_alphabetic() || c == '_' || c == '$')
+        }
+        ("isJavaIdentifierPart", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            z(c.is_alphanumeric() || c == '_' || c == '$')
+        }
+        ("isDefined", [JValue::Int(v)]) => {
+            z(char::from_u32(u32::try_from(*v).unwrap_or(0)).is_some())
+        }
+        ("isISOControl", [JValue::Int(v)]) => z(matches!(*v, 0..=0x1F | 0x7F..=0x9F)),
+        ("isTitleCase", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            let upper = c.to_uppercase().next().unwrap_or(c);
+            let lower = c.to_lowercase().next().unwrap_or(c);
+            z(upper != c && lower != c)
+        }
+        ("toTitleCase" | "toUpperCase", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            ch_ret(c.to_uppercase().next().unwrap_or(c))
+        }
+        ("toLowerCase", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            ch_ret(c.to_lowercase().next().unwrap_or(c))
+        }
+        ("getNumericValue", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            let value = c.to_digit(10).map_or_else(
+                || {
+                    if c.is_ascii_alphabetic() {
+                        i32::try_from(u32::from(c.to_ascii_lowercase()) - u32::from('a'))
+                            .unwrap_or(-1)
+                            + 10
+                    } else {
+                        -1
+                    }
+                },
+                |d| i32::try_from(d).unwrap_or(-1),
+            );
+            Ok(Some(JValue::Int(value)))
+        }
+        ("digit", [JValue::Int(v), JValue::Int(radix)]) => {
+            let value = u32::try_from(*radix)
+                .ok()
+                .filter(|r| (2..=36).contains(r))
+                .and_then(|r| c_of(v).to_digit(r))
+                .and_then(|d| i32::try_from(d).ok())
+                .unwrap_or(-1);
+            Ok(Some(JValue::Int(value)))
+        }
+        ("forDigit", [JValue::Int(digit), JValue::Int(radix)]) => {
+            let c = u32::try_from(*radix)
+                .ok()
+                .filter(|r| (2..=36).contains(r))
+                .zip(u32::try_from(*digit).ok())
+                .filter(|(r, d)| d < r)
+                .and_then(|(r, d)| char::from_digit(d, r))
+                .unwrap_or('\0');
+            ch_ret(c)
+        }
+        ("compare", [JValue::Int(a), JValue::Int(b)]) => Ok(Some(JValue::Int(a - b))),
+
+        ("toString", [JValue::Int(v)]) => {
+            let reference = heap.alloc_string(&c_of(v).to_string());
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("valueOf" | "hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),
+        ("isHighSurrogate", [JValue::Int(v)]) => z((0xD800..0xDC00).contains(v)),
+        ("isLowSurrogate", [JValue::Int(v)]) => z((0xDC00..0xE000).contains(v)),
+        ("isSurrogate", [JValue::Int(v)]) => z((0xD800..0xE000).contains(v)),
+        ("charCount", [JValue::Int(v)]) => Ok(Some(JValue::Int(if *v >= 0x10000 { 2 } else { 1 }))),
+        _ => Err(VmError::UnknownIntrinsic(format!("Character.{method}"))),
+    }
+}
+
+fn boolean_static(
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
+    match (method, args) {
+        ("parseBoolean", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            z(text.eq_ignore_ascii_case("true"))
+        }
+        ("toString", [JValue::Int(v)]) => {
+            let reference = heap.alloc_string(if *v != 0 { "true" } else { "false" });
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("valueOf", [JValue::Int(v)]) => z(*v != 0),
+        ("compare", [JValue::Int(a), JValue::Int(b)]) => {
+            Ok(Some(JValue::Int(if (*a != 0) == (*b != 0) {
+                0
+            } else if *a != 0 {
+                1
+            } else {
+                -1
+            })))
+        }
+        // Java's fixed Boolean hash codes.
+        ("hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(if *v != 0 { 1231 } else { 1237 }))),
+        ("logicalAnd", [JValue::Int(a), JValue::Int(b)]) => z(*a != 0 && *b != 0),
+        ("logicalOr", [JValue::Int(a), JValue::Int(b)]) => z(*a != 0 || *b != 0),
+        ("logicalXor", [JValue::Int(a), JValue::Int(b)]) => z((*a != 0) != (*b != 0)),
+        _ => Err(VmError::UnknownIntrinsic(format!("Boolean.{method}"))),
+    }
+}
+
+fn string_static(
+    heap: &mut Heap,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    match (method, args) {
+        ("valueOf" | "copyValueOf", [value]) => {
             // The descriptor disambiguates int/char/boolean, which all
             // arrive as JValue::Int.
             let text = match (descriptor, value) {
@@ -1407,25 +2089,7 @@ pub fn invoke_static(
             let reference = heap.alloc_string(&text);
             Ok(Some(JValue::Ref(Some(reference))))
         }
-        ("java/lang/Integer", "parseInt", [value]) => {
-            let text = string_arg(value)?;
-            let parsed: i32 = text.parse().map_err(|_| {
-                throw(format!(
-                    "java.lang.NumberFormatException: For input string: \"{text}\""
-                ))
-            })?;
-            Ok(Some(JValue::Int(parsed)))
-        }
-        ("java/lang/Double", "parseDouble", [value]) => {
-            let text = string_arg(value)?;
-            let parsed: f64 = text.trim().parse().map_err(|_| {
-                throw(format!(
-                    "java.lang.NumberFormatException: For input string: \"{text}\""
-                ))
-            })?;
-            Ok(Some(JValue::Double(parsed)))
-        }
-        _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+        _ => Err(VmError::UnknownIntrinsic(format!("String.{method}"))),
     }
 }
 
@@ -1494,6 +2158,14 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
 /// coverage: NaN/infinities, integral values gaining `.0`, and the 1e7
 /// switch to scientific notation.
 pub(crate) fn java_double_to_string(value: f64) -> String {
+    // Java's FloatingDecimal renders the smallest subnormal as
+    // 4.9E-324; shortest-round-trip formatting would say 5.0E-324.
+    if value.to_bits() == 1 {
+        return String::from("4.9E-324");
+    }
+    if value.to_bits() == 0x8000_0000_0000_0001 {
+        return String::from("-4.9E-324");
+    }
     if value.is_nan() {
         return String::from("NaN");
     }

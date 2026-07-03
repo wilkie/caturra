@@ -128,21 +128,46 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     (`StringIndexOutOfBoundsException: String index out of range: 5`).
     `equals` accepts only strings/null (a documented narrowing of
     `equals(Object)`).
-  - `Math.abs/pow/sqrt/max/min/floor/ceil/round/random` plus `Math.PI`
-    and `Math.E` (`round` returns int, not long — the classroom idiom
-    is `(int) Math.round(x)` anyway). `random()` uses Java's LCG,
+  - The full Java 11 `Math` API for int/double (2026-07-03): trig,
+    hyperbolic, log/exp families, `cbrt`/`hypot`/`rint`/`signum`/
+    `toDegrees`/`toRadians`/`copySign`/`ulp`/`nextUp`/`nextDown`/
+    `nextAfter`/`fma`/`IEEEremainder`/`getExponent`, `floorDiv`/
+    `floorMod` with Java's negative semantics, the `xxxExact` family
+    throwing `ArithmeticException: integer overflow`, plus `PI`/`E`
+    (`round` returns int, not long — the classroom idiom is
+    `(int) Math.round(x)` anyway; transcendentals may differ from a
+    given JVM by 1 ulp on irrational results, as JVMs differ among
+    themselves). `random()` uses Java's LCG,
     seeded deterministically by default (tests) and from host entropy in
     the browser (`VmOptions::random_seed`).
-  - `Integer.MAX_VALUE/MIN_VALUE/parseInt/toString`,
-    `Double.parseDouble/toString`, and `Character.isDigit/isLetter/`
-    `isLetterOrDigit/isUpperCase/isLowerCase/toUpperCase/toLowerCase`,
-    with `NumberFormatException: For input string: "x"`.
-  - `Scanner` over `System.in` (`nextInt/nextDouble/next/nextLine/`
-    `hasNext*`), tokenizing like Java, fed by the host console — in the
-    browser this is the SharedArrayBuffer blocking-stdin path.
+  - The full Java 11 int/double surfaces of `Integer` (radix parsing
+    and formatting, the bit-twiddling family, the unsigned family,
+    `compare`/`min`/`max`/`sum`/`signum`/`hashCode`, `SIZE`/`BYTES`),
+    `Double` (all constants incl. infinities and `NaN`,
+    `isNaN`/`isInfinite`/`isFinite`, `compare` with Java's `-0.0 < 0.0`
+    and NaN-greatest ordering, bit-exact `hashCode`, `toHexString`),
+    `Character` (classification and conversion families with Java's
+    own `isWhitespace`-vs-`isSpaceChar` distinction, `digit`/`forDigit`/
+    `getNumericValue`, surrogates, radix constants), and `Boolean`
+    (including the 1231/1237 hash codes). `valueOf` returns primitive
+    values (no boxed identity or caching — a documented deviation).
+    Long/float/byte-dependent members report honest "the long type is
+    not supported" style errors, with
+    `NumberFormatException: For input string: "x"`.
+  - `Scanner` over `System.in` (`nextInt/nextDouble/nextBoolean/next/`
+    `nextLine/hasNext*` and `close`), tokenizing like Java, fed by the
+    host console — in the browser this is the SharedArrayBuffer
+    blocking-stdin path. Pattern/regex members, streams, and the
+    long/float/byte readers report honest reasons.
   - `ArrayList<E>` with the CSA generics surface: wrapper/String/class
-    element types, the diamond, `size/add(E)/add(int,E)/get/set/remove/`
-    `isEmpty`, autoboxing (a no-op in this VM — boxed-equality caching
+    element types, the diamond, and the full Java 11 method set
+    (2026-07-03): `size/add/get/set/remove` (by index and by value),
+    `clear/contains/indexOf/lastIndexOf/addAll` (both)/`equals`/
+    `hashCode` (Java's 31-fold)/`toString/isEmpty`, plus the capacity
+    hints as no-ops; element equality is by value for numbers and
+    strings and by identity for objects (correct here, since `equals`
+    overriding is not supported). Iterators, lambdas, comparators,
+    streams, `toArray`, and `subList` report honest reasons. Autoboxing (a no-op in this VM — boxed-equality caching
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
     Nested generics (`ArrayList<ArrayList<...>>`) are rejected kindly.
