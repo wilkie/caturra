@@ -3934,9 +3934,16 @@ impl BodyGen<'_> {
     /// `System.out.println(...)` and friends.
     fn print_call(&mut self, stream: &'static str, method: &str, args: &[Expr], span: SourceSpan) {
         if method != "println" && method != "print" {
+            // javac: "cannot find symbol — symbol: method prinn(String),
+            // location: variable out of type PrintStream", flattened to
+            // our single-line diagnostic form.
+            let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
             self.error(
                 span,
-                format!("PrintStream.{method} is not supported by jvmjs (try print or println)"),
+                format!(
+                    "cannot find symbol: method {method}({}) in class PrintStream",
+                    describe_types(&arg_types, self.table)
+                ),
             );
             return;
         }

@@ -1635,6 +1635,10 @@ fn stage6_compile_errors_match_javac_wording() {
             "class A { void f() { int x = 1; super(); } }",
             "call to super/this must be the first statement in a constructor",
         ),
+        (
+            r#"class M { static void f() { System.out.prinn("hello"); } }"#,
+            "cannot find symbol: method prinn(String) in class PrintStream",
+        ),
     ];
     for (source, expected) in cases {
         let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
