@@ -11,10 +11,16 @@ pub struct CompilationUnit {
     pub classes: Vec<ClassDecl>,
 }
 
-/// A class declaration.
+/// A class or interface declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassDecl {
     pub name: String,
+    /// `extends` clause (classes only; single inheritance).
+    pub superclass: Option<String>,
+    /// `implements` clause (or `extends` list for interfaces).
+    pub interfaces: Vec<String>,
+    pub is_abstract: bool,
+    pub is_interface: bool,
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<MethodDecl>,
     pub span: SourceSpan,
@@ -44,6 +50,8 @@ pub struct MethodDecl {
     pub is_public: bool,
     pub is_private: bool,
     pub is_constructor: bool,
+    /// Abstract or interface method — no body; `body` is empty.
+    pub is_abstract: bool,
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
@@ -132,6 +140,16 @@ pub enum Stmt {
     },
     Return {
         value: Option<Expr>,
+        span: SourceSpan,
+    },
+    /// `super(args);` — must be the first statement of a constructor.
+    SuperCall {
+        args: Vec<Expr>,
+        span: SourceSpan,
+    },
+    /// `this(args);` — constructor delegation, first statement only.
+    ThisCall {
+        args: Vec<Expr>,
         span: SourceSpan,
     },
 }
@@ -260,6 +278,18 @@ pub enum Expr {
         args: Vec<Expr>,
         span: SourceSpan,
     },
+    /// `expr instanceof Type`.
+    InstanceOf {
+        value: Box<Expr>,
+        ty: TypeRef,
+        span: SourceSpan,
+    },
+    /// `super.method(args)` — non-virtual call to the superclass.
+    SuperMethodCall {
+        method: String,
+        args: Vec<Expr>,
+        span: SourceSpan,
+    },
 }
 
 impl Expr {
@@ -277,7 +307,9 @@ impl Expr {
             | Expr::NewArray { span, .. }
             | Expr::ArrayLiteral { span, .. }
             | Expr::This { span }
-            | Expr::NewObject { span, .. } => *span,
+            | Expr::NewObject { span, .. }
+            | Expr::InstanceOf { span, .. }
+            | Expr::SuperMethodCall { span, .. } => *span,
         }
     }
 }

@@ -293,6 +293,60 @@ public class Stage5 {
     expect(stdout.join('')).toBe('Rex (2 treats)\nMochi (1 treats)\nadopted: 2\n');
   });
 
+  it('runs a stage-6 program: inheritance and polymorphism', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Stage6.java',
+        text: `
+abstract class Employee {
+    private String name;
+    Employee(String name) { this.name = name; }
+    abstract double pay();
+    public String toString() { return name + " earns " + pay(); }
+}
+
+class Salaried extends Employee {
+    private double annual;
+    Salaried(String name, double annual) {
+        super(name);
+        this.annual = annual;
+    }
+    double pay() { return annual / 12; }
+}
+
+class Hourly extends Employee {
+    private double rate;
+    private int hours;
+    Hourly(String name, double rate, int hours) {
+        super(name);
+        this.rate = rate;
+        this.hours = hours;
+    }
+    double pay() { return rate * hours; }
+}
+
+public class Stage6 {
+    public static void main(String[] args) {
+        Employee[] staff = { new Salaried("Ada", 120000.0), new Hourly("Alan", 50.0, 80) };
+        for (Employee e : staff) {
+            System.out.println(e);
+            System.out.println(e instanceof Hourly);
+        }
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Stage6', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('Ada earns 10000.0\nfalse\nAlan earns 4000.0\ntrue\n');
+  });
+
   it('routes System.err to the stderr callback', async () => {
     const session = await createJvmSession();
     const compiled = session.compile([

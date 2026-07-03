@@ -426,6 +426,106 @@ public class DiffObjArr {
 );
 
 differential_test!(
+    diff_inheritance,
+    "DiffInherit",
+    r#"
+abstract class Vehicle {
+    private String kind;
+    protected int wheels;
+    static String log = "";
+
+    Vehicle(String kind, int wheels) {
+        this.kind = kind;
+        this.wheels = wheels;
+        log += wheels;
+    }
+
+    abstract double speed();
+
+    public String toString() {
+        return kind + "/" + wheels + "/" + speed();
+    }
+}
+
+class Bike extends Vehicle {
+    Bike() {
+        super("bike", 2);
+    }
+
+    double speed() { return 15.5; }
+}
+
+class Car extends Vehicle {
+    private double top;
+
+    Car(double top) {
+        super("car", 4);
+        this.top = top;
+    }
+
+    Car() {
+        this(120.0);
+    }
+
+    double speed() { return top; }
+}
+
+public class DiffInherit {
+    public static void main(String[] args) {
+        Vehicle[] fleet = { new Bike(), new Car(200.0), new Car() };
+        for (Vehicle v : fleet) {
+            System.out.println(v);
+        }
+        System.out.println(Vehicle.log);
+        for (Vehicle v : fleet) {
+            System.out.println(v instanceof Car);
+        }
+        Vehicle first = fleet[1];
+        if (first instanceof Car) {
+            Car c = (Car) first;
+            System.out.println("cast ok: " + c.speed());
+        }
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_interfaces_and_super,
+    "DiffIface",
+    r#"
+interface Greeter {
+    String greet(String name);
+}
+
+class Plain implements Greeter {
+    public String greet(String name) { return "hi " + name; }
+}
+
+class Loud extends Plain {
+    public String greet(String name) {
+        return super.greet(name) + "!!!";
+    }
+}
+
+public class DiffIface {
+    static String greetAll(Greeter g) {
+        return g.greet("ada") + " / " + g.greet("alan");
+    }
+
+    public static void main(String[] args) {
+        Greeter p = new Plain();
+        Greeter l = new Loud();
+        System.out.println(greetAll(p));
+        System.out.println(greetAll(l));
+        System.out.println(l instanceof Plain);
+        System.out.println(p instanceof Loud);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

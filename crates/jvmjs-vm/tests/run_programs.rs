@@ -1388,6 +1388,277 @@ fn stage5_compile_errors_match_javac_wording() {
     }
 }
 
+// ----- stage 6: inheritance -----
+
+#[test]
+fn classic_shape_hierarchy_with_polymorphism() {
+    let out = run_stdout(
+        r#"
+        abstract class Shape {
+            private String name;
+
+            Shape(String name) {
+                this.name = name;
+            }
+
+            abstract double area();
+
+            String getName() { return name; }
+
+            public String toString() {
+                return name + " with area " + area();
+            }
+        }
+
+        class Circle extends Shape {
+            private double radius;
+
+            Circle(double radius) {
+                super("circle");
+                this.radius = radius;
+            }
+
+            double area() { return 3.14159 * radius * radius; }
+        }
+
+        class Rect extends Shape {
+            private double w;
+            private double h;
+
+            Rect(double w, double h) {
+                super("rect");
+                this.w = w;
+                this.h = h;
+            }
+
+            Rect(double side) {
+                this(side, side);
+            }
+
+            double area() { return w * h; }
+        }
+
+        public class Shapes {
+            public static void main(String[] args) {
+                Shape[] shapes = new Shape[3];
+                shapes[0] = new Circle(1.0);
+                shapes[1] = new Rect(2.0, 3.0);
+                shapes[2] = new Rect(2.0);
+                double total = 0.0;
+                for (Shape s : shapes) {
+                    System.out.println(s);
+                    total += s.area();
+                }
+                System.out.println(total);
+                System.out.println(shapes[1].getName());
+            }
+        }
+        "#,
+        "Shapes",
+    );
+    assert_eq!(
+        out,
+        "circle with area 3.14159\nrect with area 6.0\nrect with area 4.0\n13.14159\nrect\n"
+    );
+}
+
+#[test]
+fn super_method_calls_and_overriding() {
+    let out = run_stdout(
+        r#"
+        class Animal {
+            String speak() { return "..."; }
+            String describe() { return "an animal says " + speak(); }
+        }
+
+        class Dog extends Animal {
+            String speak() { return "woof"; }
+            String describe() {
+                return super.describe() + " (a dog: " + super.speak() + "/" + speak() + ")";
+            }
+        }
+
+        public class Zoo {
+            public static void main(String[] args) {
+                Animal a = new Dog();
+                // Dynamic dispatch inside inherited methods too.
+                System.out.println(a.describe());
+                Animal plain = new Animal();
+                System.out.println(plain.describe());
+            }
+        }
+        "#,
+        "Zoo",
+    );
+    assert_eq!(
+        out,
+        "an animal says woof (a dog: .../woof)\nan animal says ...\n"
+    );
+}
+
+#[test]
+fn interfaces_and_instanceof_and_casts() {
+    let out = run_stdout(
+        r#"
+        interface Playable {
+            String play();
+        }
+
+        class Guitar implements Playable {
+            public String play() { return "strum"; }
+        }
+
+        class Drum implements Playable {
+            public String play() { return "boom"; }
+            int hits() { return 2; }
+        }
+
+        public class Band {
+            public static void main(String[] args) {
+                Playable[] band = { new Guitar(), new Drum() };
+                for (Playable p : band) {
+                    System.out.print(p.play() + " ");
+                }
+                System.out.println();
+                for (Playable p : band) {
+                    System.out.println(p instanceof Drum);
+                    if (p instanceof Drum) {
+                        Drum d = (Drum) p;
+                        System.out.println("hits: " + d.hits());
+                    }
+                }
+                Playable nothing = null;
+                System.out.println(nothing instanceof Guitar);
+            }
+        }
+        "#,
+        "Band",
+    );
+    assert_eq!(out, "strum boom \nfalse\ntrue\nhits: 2\nfalse\n");
+}
+
+#[test]
+fn class_cast_exception_matches_java() {
+    let (result, console) = compile_and_run(
+        r"
+        class A { }
+        class B extends A { }
+
+        public class Bad {
+            public static void main(String[] args) {
+                A a = new A();
+                B b = (B) a;
+                System.out.println(b);
+            }
+        }
+        ",
+        "Bad",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.lang.ClassCastException: class A cannot be cast to class B"),
+        "{}",
+        console.stderr_text()
+    );
+}
+
+#[test]
+fn inherited_fields_and_super_chaining() {
+    let out = run_stdout(
+        r#"
+        class Base {
+            int base = 10;
+            static String log = "";
+
+            Base() {
+                log += "B";
+            }
+
+            Base(int extra) {
+                this();
+                log += "b" + extra;
+            }
+        }
+
+        class Derived extends Base {
+            int derived = 20;
+
+            Derived() {
+                super(5);
+                log += "D";
+            }
+
+            int total() { return base + derived; }
+        }
+
+        public class Chain {
+            public static void main(String[] args) {
+                Derived d = new Derived();
+                System.out.println(Base.log);
+                System.out.println(d.total());
+                System.out.println(d.base + " " + d.derived);
+            }
+        }
+        "#,
+        "Chain",
+    );
+    assert_eq!(out, "Bb5D\n30\n10 20\n");
+}
+
+#[test]
+fn stage6_compile_errors_match_javac_wording() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "class A { String f() { return \"a\"; } } class B extends A { int f() { return 1; } }",
+            "f() in B cannot override f() in A",
+        ),
+        (
+            "abstract class A { abstract void go(); } class M { static void f() { A a = new A(); } }",
+            "A is abstract; cannot be instantiated",
+        ),
+        (
+            "abstract class A { abstract void go(); } class B extends A { }",
+            "B is not abstract and does not override abstract method go() in A",
+        ),
+        (
+            "interface S { double area(); } class C implements S { }",
+            "C is not abstract and does not override abstract method area() in S",
+        ),
+        (
+            "class A { A(int x) { } } class B extends A { B() { } }",
+            "constructor A in class A cannot be applied to given types",
+        ),
+        (
+            "class A { int x; } class B extends A { int x; }",
+            "hiding the inherited field 'x' from A is not supported",
+        ),
+        (
+            "class A { void f() { int x = 1; super(); } }",
+            "call to super/this must be the first statement in a constructor",
+        ),
+    ];
+    for (source, expected) in cases {
+        let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+            path: "T.java".into(),
+            text: (*source).into(),
+        }]);
+        assert!(!result.success(), "case '{source}' compiled unexpectedly");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(expected)),
+            "case '{source}': expected '{expected}' in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

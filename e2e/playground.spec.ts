@@ -162,6 +162,33 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('d20');
   });
 
+  test('runs polymorphic hierarchies in the browser', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'interface Noise { String sound(); }',
+          'class Cat implements Noise {',
+          '    public String sound() { return "meow"; }',
+          '}',
+          'class Cow implements Noise {',
+          '    public String sound() { return "moo"; }',
+          '}',
+          '',
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        Noise[] farm = { new Cat(), new Cow() };',
+          '        for (Noise n : farm) System.out.print(n.sound() + " ");',
+          '        System.out.println();',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('meow moo');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page

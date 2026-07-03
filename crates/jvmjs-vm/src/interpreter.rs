@@ -329,6 +329,42 @@ impl<'run> Interpreter<'run> {
                     let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
                     pc = branch_target(addr, offset, bytes.len(), &malformed)?;
                 }
+                op::CHECKCAST | op::INSTANCEOF => {
+                    let index = read_u16(bytes, &mut pc, &malformed)?;
+                    let target = class
+                        .constant_pool
+                        .get_class_name(index)
+                        .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
+                        .to_owned();
+                    let reference = frame.pop_ref()?;
+                    let matches_type = match reference {
+                        None => false,
+                        Some(reference) => match self.heap.get(reference) {
+                            Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                                self.is_runtime_subtype(class_name, &target)
+                            }
+                            _ => false,
+                        },
+                    };
+                    if opcode == op::INSTANCEOF {
+                        frame.stack.push(JValue::Int(i32::from(matches_type)));
+                    } else {
+                        // checkcast: null always passes; a mismatch throws.
+                        if reference.is_some() && !matches_type {
+                            let actual = match reference.and_then(|r| self.heap.get(r)) {
+                                Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                                    class_name.clone()
+                                }
+                                _ => String::from("<object>"),
+                            };
+                            return Err(VmError::UncaughtException(format!(
+                                "java.lang.ClassCastException: class {actual} cannot be cast \
+                                 to class {target}"
+                            )));
+                        }
+                        frame.stack.push(JValue::Ref(reference));
+                    }
+                }
 
                 // ----- objects -----
                 op::NEW => {
@@ -676,21 +712,39 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        if let Some(target) = classes.get(&target_class) {
-            // A user constructor.
-            let ctor = target
-                .methods
-                .iter()
-                .find(|m| {
-                    target.constant_pool.get_utf8(m.name_index) == Some(method_name.as_str())
-                        && target.constant_pool.get_utf8(m.descriptor_index)
+        if classes.contains_key(&target_class) {
+            // A user constructor or a `super.method(...)` call; the
+            // method may be inherited, so walk the chain from the
+            // named class.
+            let mut found: Option<(&'run ClassFile, &'run MethodInfo)> = None;
+            let mut current = classes.get(&target_class);
+            let mut steps = 0usize;
+            while let Some(candidate) = current {
+                steps += 1;
+                if steps > classes.len() + 1 {
+                    break;
+                }
+                if let Some(method) = candidate.methods.iter().find(|m| {
+                    !m.access_flags
+                        .contains(jvmjs_classfile::MethodAccessFlags::ABSTRACT)
+                        && candidate.constant_pool.get_utf8(m.name_index)
+                            == Some(method_name.as_str())
+                        && candidate.constant_pool.get_utf8(m.descriptor_index)
                             == Some(descriptor.as_str())
-                })
-                .ok_or_else(|| {
-                    malformed(format!(
-                        "no constructor {method_name}{descriptor} in {target_class}"
-                    ))
-                })?;
+                }) {
+                    found = Some((candidate, method));
+                    break;
+                }
+                current = candidate
+                    .constant_pool
+                    .get_class_name(candidate.super_class)
+                    .and_then(|super_name| classes.get(super_name));
+            }
+            let (target, ctor) = found.ok_or_else(|| {
+                malformed(format!(
+                    "no method {method_name}{descriptor} in {target_class} or its superclasses"
+                ))
+            })?;
             let mut locals = Vec::with_capacity(1 + args.len());
             locals.push(JValue::Ref(Some(receiver)));
             for (value, width) in args.iter().zip(&widths) {
@@ -699,7 +753,11 @@ impl<'run> Interpreter<'run> {
                     locals.push(JValue::Int(0));
                 }
             }
-            self.execute(target, ctor, locals)?;
+            // Constructors return nothing; `super.method(...)` calls
+            // come through here too and may produce a value.
+            if let Some(value) = self.execute(target, ctor, locals)? {
+                frame.stack.push(value);
+            }
         } else {
             intrinsics::invoke_special(
                 &self.heap,
@@ -745,39 +803,94 @@ impl<'run> Interpreter<'run> {
         }
         self.statics.insert(class_name.to_owned(), fields);
 
+        // Superclass initialization runs first (JVMS §5.5).
+        if let Some(super_name) = class.constant_pool.get_class_name(class.super_class) {
+            let super_name = super_name.to_owned();
+            if super_name != "java/lang/Object" {
+                self.ensure_initialized(&super_name)?;
+            }
+        }
+
         if let Some(clinit) = find_static_method(class, "<clinit>", "()V") {
             self.execute(class, clinit, Vec::new())?;
         }
         Ok(())
     }
 
-    /// Allocate an instance of a user class with defaulted fields.
+    /// Allocate an instance of a user class with defaulted fields,
+    /// including fields inherited from superclasses.
     fn new_instance(&mut self, class_name: &str) -> crate::value::HeapObject {
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let class = classes.get(class_name).expect("checked by caller");
         let mut fields = HashMap::new();
-        for field in &class.fields {
-            if field
-                .access_flags
-                .contains(jvmjs_classfile::FieldAccessFlags::STATIC)
-            {
-                continue;
+        let mut current = classes.get(class_name);
+        let mut steps = 0usize;
+        while let Some(class) = current {
+            steps += 1;
+            if steps > classes.len() + 1 {
+                break; // cycle guard (compiler rejects these anyway)
             }
-            let name = class
+            for field in &class.fields {
+                if field
+                    .access_flags
+                    .contains(jvmjs_classfile::FieldAccessFlags::STATIC)
+                {
+                    continue;
+                }
+                let name = class
+                    .constant_pool
+                    .get_utf8(field.name_index)
+                    .unwrap_or_default()
+                    .to_owned();
+                let descriptor = class
+                    .constant_pool
+                    .get_utf8(field.descriptor_index)
+                    .unwrap_or_default();
+                fields
+                    .entry(name)
+                    .or_insert_with(|| default_for_descriptor(descriptor));
+            }
+            current = class
                 .constant_pool
-                .get_utf8(field.name_index)
-                .unwrap_or_default()
-                .to_owned();
-            let descriptor = class
-                .constant_pool
-                .get_utf8(field.descriptor_index)
-                .unwrap_or_default();
-            fields.insert(name, default_for_descriptor(descriptor));
+                .get_class_name(class.super_class)
+                .and_then(|super_name| classes.get(super_name));
         }
         crate::value::HeapObject::Instance {
             class_name: class_name.to_owned(),
             fields,
         }
+    }
+
+    /// Whether `sub` (a user class name) is `sup` or inherits from it,
+    /// walking `extends` and `implements` edges.
+    fn is_runtime_subtype(&self, sub: &str, sup: &str) -> bool {
+        if sub == sup {
+            return true;
+        }
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let mut stack = vec![sub.to_owned()];
+        let mut steps = 0usize;
+        while let Some(name) = stack.pop() {
+            steps += 1;
+            if steps > classes.len() * 4 + 4 {
+                return false;
+            }
+            if name == sup {
+                return true;
+            }
+            if let Some(class) = classes.get(&name) {
+                if let Some(parent) = class.constant_pool.get_class_name(class.super_class)
+                    && parent != "java/lang/Object"
+                {
+                    stack.push(parent.to_owned());
+                }
+                for interface in &class.interfaces {
+                    if let Some(iface) = class.constant_pool.get_class_name(*interface) {
+                        stack.push(iface.to_owned());
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Dispatch an instance method on a user-defined object, with the
@@ -791,19 +904,40 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Option<JValue>, VmError> {
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let class = classes
-            .get(instance_class)
-            .ok_or_else(|| VmError::MalformedClass {
+        if !classes.contains_key(instance_class) {
+            return Err(VmError::MalformedClass {
                 name: instance_class.to_owned(),
                 reason: String::from("instance of an unloaded class"),
-            })?;
-        let method = class.methods.iter().find(|m| {
-            !m.access_flags
-                .contains(jvmjs_classfile::MethodAccessFlags::STATIC)
-                && class.constant_pool.get_utf8(m.name_index) == Some(method_name)
-                && class.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
-        });
-        let Some(method) = method else {
+            });
+        }
+        // Virtual dispatch: search the instance's class, then up the
+        // superclass chain (skipping abstract declarations).
+        let mut found: Option<(&'run ClassFile, &'run MethodInfo)> = None;
+        let mut current = classes.get(instance_class);
+        let mut steps = 0usize;
+        while let Some(candidate) = current {
+            steps += 1;
+            if steps > classes.len() + 1 {
+                break;
+            }
+            if let Some(method) = candidate.methods.iter().find(|m| {
+                !m.access_flags
+                    .contains(jvmjs_classfile::MethodAccessFlags::STATIC)
+                    && !m
+                        .access_flags
+                        .contains(jvmjs_classfile::MethodAccessFlags::ABSTRACT)
+                    && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                    && candidate.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+            }) {
+                found = Some((candidate, method));
+                break;
+            }
+            current = candidate
+                .constant_pool
+                .get_class_name(candidate.super_class)
+                .and_then(|super_name| classes.get(super_name));
+        }
+        let Some((class, method)) = found else {
             // Object.toString() default: "ClassName@<hex>".
             if method_name == "toString" && descriptor == "()Ljava/lang/String;" {
                 let text = format!("{instance_class}@{receiver:x}");

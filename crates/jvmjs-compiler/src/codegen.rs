@@ -56,7 +56,23 @@ fn emit_class(
 ) -> ClassFile {
     let mut class = ClassFile::new_java11();
     class.this_class = intern_class(&mut class.constant_pool, &decl.name);
-    class.super_class = intern_class(&mut class.constant_pool, "java/lang/Object");
+    let super_name = decl.superclass.as_deref().unwrap_or("java/lang/Object");
+    class.super_class = intern_class(&mut class.constant_pool, super_name);
+    for interface in &decl.interfaces {
+        let index = intern_class(&mut class.constant_pool, interface);
+        class.interfaces.push(index);
+    }
+    {
+        let mut flags = class.access_flags.0;
+        if decl.is_abstract {
+            flags |= jvmjs_classfile::ClassAccessFlags::ABSTRACT;
+        }
+        if decl.is_interface {
+            flags |= jvmjs_classfile::ClassAccessFlags::INTERFACE;
+            flags &= !jvmjs_classfile::ClassAccessFlags::SUPER;
+        }
+        class.access_flags = jvmjs_classfile::ClassAccessFlags(flags);
+    }
 
     for field in &decl.fields {
         let ty = table.resolve_type(&field.ty).unwrap_or(JType::Unsupported);
@@ -101,13 +117,14 @@ fn emit_class(
     }
 
     // Default constructor when none is declared (JLS §8.8.9).
-    if !decl.methods.iter().any(|m| m.is_constructor) {
+    if !decl.is_interface && !decl.methods.iter().any(|m| m.is_constructor) {
         let default_ctor = MethodDecl {
             name: decl.name.clone(),
             is_static: false,
             is_public: true,
             is_private: false,
             is_constructor: true,
+            is_abstract: false,
             return_type: TypeRef::Void,
             params: Vec::new(),
             body: Vec::new(),
@@ -224,6 +241,7 @@ struct MethodSig {
     ret: Option<JType>,
     is_static: bool,
     is_private: bool,
+    is_abstract: bool,
 }
 
 impl MethodSig {
@@ -259,6 +277,10 @@ struct FieldSig {
 /// Everything call/field resolution knows about one class.
 struct ClassInfo {
     id: ClassId,
+    superclass: Option<ClassId>,
+    interfaces: Vec<ClassId>,
+    is_abstract: bool,
+    is_interface: bool,
     methods: Vec<MethodSig>,
     fields: Vec<FieldSig>,
 }
@@ -303,6 +325,10 @@ impl MethodTable {
                     class.name.clone(),
                     ClassInfo {
                         id,
+                        superclass: None,
+                        interfaces: Vec::new(),
+                        is_abstract: false,
+                        is_interface: false,
                         methods: Vec::new(),
                         fields: Vec::new(),
                     },
@@ -357,6 +383,7 @@ impl MethodTable {
                         },
                         is_static: method.is_static,
                         is_private: method.is_private,
+                        is_abstract: method.is_abstract,
                     };
                     if methods
                         .iter()
@@ -379,15 +406,43 @@ impl MethodTable {
 
                 // A class with no declared constructor gets the default
                 // one (JLS §8.8.9).
-                if !methods.iter().any(|m| m.name == "<init>") {
+                if !class.is_interface && !methods.iter().any(|m| m.name == "<init>") {
                     methods.push(MethodSig {
                         name: String::from("<init>"),
                         params: Vec::new(),
                         ret: None,
                         is_static: false,
                         is_private: false,
+                        is_abstract: false,
                     });
                 }
+
+                let superclass = class.superclass.as_ref().and_then(|name| {
+                    let id = table.class_id(name);
+                    if id.is_none() {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            format!("cannot find symbol: class {name}"),
+                            class.span,
+                        ));
+                    }
+                    id
+                });
+                let interface_ids: Vec<ClassId> = class
+                    .interfaces
+                    .iter()
+                    .filter_map(|name| {
+                        let id = table.class_id(name);
+                        if id.is_none() {
+                            diagnostics.push(Diagnostic::error(
+                                path,
+                                format!("cannot find symbol: class {name}"),
+                                class.span,
+                            ));
+                        }
+                        id
+                    })
+                    .collect();
 
                 let info = table
                     .classes
@@ -395,9 +450,258 @@ impl MethodTable {
                     .expect("registered in pass 1");
                 info.methods = methods;
                 info.fields = fields;
+                info.superclass = superclass;
+                info.interfaces = interface_ids;
+                info.is_abstract = class.is_abstract;
+                info.is_interface = class.is_interface;
             }
         }
+        table.check_hierarchy(units, diagnostics);
         table
+    }
+
+    /// Post-pass hierarchy validation: cycles, extends-shape, override
+    /// compatibility, abstract completeness, field hiding.
+    #[allow(clippy::too_many_lines)]
+    fn check_hierarchy(
+        &mut self,
+        units: &[(String, CompilationUnit)],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        // Cycles: walk each chain with a step bound.
+        let mut cyclic = Vec::new();
+        for info in self.classes.values() {
+            let mut current = info.superclass;
+            let mut steps = 0usize;
+            while let Some(id) = current {
+                if id == info.id || steps > self.class_names.len() {
+                    cyclic.push(info.id);
+                    break;
+                }
+                steps += 1;
+                current = self.info_by_id(id).and_then(|i| i.superclass);
+            }
+        }
+        for id in cyclic {
+            let name = self.class_name(id).to_owned();
+            diagnostics.push(Diagnostic {
+                severity: crate::diagnostics::Severity::Error,
+                message: format!("cyclic inheritance involving {name}"),
+                path: String::new(),
+                span: None,
+            });
+            // Break the cycle so later chain walks terminate.
+            if let Some(info) = self.classes.get_mut(&name) {
+                info.superclass = None;
+            }
+        }
+
+        for (path, unit) in units {
+            for class in &unit.classes {
+                let Some(info) = self.classes.get(&class.name) else {
+                    continue;
+                };
+                // Shape checks: classes extend classes, implement interfaces.
+                if let Some(sup) = info.superclass
+                    && self.info_by_id(sup).is_some_and(|s| s.is_interface)
+                {
+                    diagnostics.push(Diagnostic::error(
+                        path,
+                        format!(
+                            "class {} cannot extend interface {} (use implements)",
+                            class.name,
+                            self.class_name(sup)
+                        ),
+                        class.span,
+                    ));
+                }
+                for iface in &info.interfaces {
+                    if self.info_by_id(*iface).is_some_and(|i| !i.is_interface)
+                        && !class.is_interface
+                    {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            format!(
+                                "{} is not an interface (use extends for classes)",
+                                self.class_name(*iface)
+                            ),
+                            class.span,
+                        ));
+                    }
+                }
+
+                // Override compatibility against ancestors.
+                for method in &class.methods {
+                    if method.is_constructor {
+                        continue;
+                    }
+                    let params: Vec<JType> = method
+                        .params
+                        .iter()
+                        .map(|p| self.resolve_type(&p.ty).unwrap_or(JType::Unsupported))
+                        .collect();
+                    let ret = match &method.return_type {
+                        TypeRef::Void => None,
+                        other => Some(self.resolve_type(other).unwrap_or(JType::Unsupported)),
+                    };
+                    let mut ancestor = info.superclass;
+                    while let Some(id) = ancestor {
+                        let Some(parent) = self.info_by_id(id) else {
+                            break;
+                        };
+                        if let Some(sup_sig) = parent
+                            .methods
+                            .iter()
+                            .find(|m| m.name == method.name && m.params == params && !m.is_private)
+                        {
+                            let compatible_return = sup_sig.ret == ret
+                                || matches!(
+                                    (ret, sup_sig.ret),
+                                    (Some(JType::Object(sub)), Some(JType::Object(sup)))
+                                        if self.is_subtype(sub, sup)
+                                );
+                            if !compatible_return || sup_sig.is_static != method.is_static {
+                                diagnostics.push(Diagnostic::error(
+                                    path,
+                                    format!(
+                                        "{}() in {} cannot override {}() in {}",
+                                        method.name,
+                                        class.name,
+                                        method.name,
+                                        self.class_name(id)
+                                    ),
+                                    method.span,
+                                ));
+                            }
+                            break;
+                        }
+                        ancestor = parent.superclass;
+                    }
+                }
+
+                // Field hiding (unsupported by design — see LANGUAGE.md).
+                for field in &class.fields {
+                    let mut ancestor = info.superclass;
+                    while let Some(id) = ancestor {
+                        let Some(parent) = self.info_by_id(id) else {
+                            break;
+                        };
+                        if parent.fields.iter().any(|f| f.name == field.name) {
+                            diagnostics.push(Diagnostic::error(
+                                path,
+                                format!(
+                                    "hiding the inherited field '{}' from {} is not supported \
+                                     by jvmjs",
+                                    field.name,
+                                    self.class_name(id)
+                                ),
+                                field.span,
+                            ));
+                            break;
+                        }
+                        ancestor = parent.superclass;
+                    }
+                }
+
+                // Concrete classes must implement all abstract methods.
+                if !class.is_abstract && !class.is_interface {
+                    let unimplemented = self.missing_abstract_method(info.id);
+                    if let Some((method_name, owner)) = unimplemented {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            format!(
+                                "{} is not abstract and does not override abstract method \
+                                 {method_name}() in {owner}",
+                                class.name
+                            ),
+                            class.span,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    fn info_by_id(&self, id: ClassId) -> Option<&ClassInfo> {
+        let name = self.class_names.get(usize::from(id.0))?;
+        self.classes.get(name)
+    }
+
+    /// Whether `sub` is `sup` or reachable via extends/implements.
+    fn is_subtype(&self, sub: ClassId, sup: ClassId) -> bool {
+        if sub == sup {
+            return true;
+        }
+        let mut steps = 0usize;
+        let mut stack = vec![sub];
+        while let Some(id) = stack.pop() {
+            steps += 1;
+            if steps > self.class_names.len() * 4 {
+                return false; // cycle guard
+            }
+            if id == sup {
+                return true;
+            }
+            if let Some(info) = self.info_by_id(id) {
+                if let Some(parent) = info.superclass {
+                    stack.push(parent);
+                }
+                stack.extend(info.interfaces.iter().copied());
+            }
+        }
+        false
+    }
+
+    /// Find one abstract method (from the superclass chain or any
+    /// interface) with no concrete implementation in the chain.
+    fn missing_abstract_method(&self, class: ClassId) -> Option<(String, String)> {
+        // Collect every abstract signature visible to this class.
+        let mut required: Vec<(&MethodSig, ClassId)> = Vec::new();
+        let mut stack = vec![class];
+        let mut steps = 0usize;
+        while let Some(id) = stack.pop() {
+            steps += 1;
+            if steps > self.class_names.len() * 4 {
+                break;
+            }
+            if let Some(info) = self.info_by_id(id) {
+                for m in &info.methods {
+                    if m.is_abstract {
+                        required.push((m, id));
+                    }
+                }
+                if let Some(parent) = info.superclass {
+                    stack.push(parent);
+                }
+                stack.extend(info.interfaces.iter().copied());
+            }
+        }
+
+        'outer: for (sig, owner) in required {
+            // Look for a concrete implementation along the class chain.
+            let mut current = Some(class);
+            let mut steps = 0usize;
+            while let Some(id) = current {
+                steps += 1;
+                if steps > self.class_names.len() + 1 {
+                    break;
+                }
+                if let Some(info) = self.info_by_id(id) {
+                    if info
+                        .methods
+                        .iter()
+                        .any(|m| m.name == sig.name && m.params == sig.params && !m.is_abstract)
+                    {
+                        continue 'outer;
+                    }
+                    current = info.superclass;
+                } else {
+                    break;
+                }
+            }
+            return Some((sig.name.clone(), self.class_name(owner).to_owned()));
+        }
+        None
     }
 
     fn has_class(&self, name: &str) -> bool {
@@ -442,22 +746,58 @@ impl MethodTable {
         }
     }
 
-    /// Look up a field in a class.
-    fn field(&self, class: &str, name: &str) -> Option<&FieldSig> {
-        self.classes
-            .get(class)?
-            .fields
-            .iter()
-            .find(|f| f.name == name)
+    /// Look up a field in a class or its ancestors, returning the
+    /// owning class alongside.
+    fn field(&self, class: &str, name: &str) -> Option<(ClassId, &FieldSig)> {
+        let mut current = self.classes.get(class);
+        let mut steps = 0usize;
+        while let Some(info) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                return None;
+            }
+            if let Some(field) = info.fields.iter().find(|f| f.name == name) {
+                return Some((info.id, field));
+            }
+            current = info.superclass.and_then(|id| self.info_by_id(id));
+        }
+        None
     }
 
     /// Resolve `class.name(args)`: applicable-by-widening, exact match
     /// first, then the unique most-specific method.
     fn resolve(&self, class: &str, name: &str, args: &[JType]) -> Resolution<'_> {
-        let Some(info) = self.classes.get(class) else {
+        if !self.classes.contains_key(class) {
             return Resolution::UnknownName;
-        };
-        let named: Vec<&MethodSig> = info.methods.iter().filter(|m| m.name == name).collect();
+        }
+        // Walk the chain (and interfaces, for interface receivers),
+        // nearest declaration first; an override shadows its ancestor.
+        let mut named: Vec<&MethodSig> = Vec::new();
+        let mut stack = vec![self.classes.get(class).map(|i| i.id)];
+        let mut steps = 0usize;
+        while let Some(Some(id)) = stack.pop() {
+            steps += 1;
+            if steps > self.class_names.len() * 4 {
+                break;
+            }
+            if let Some(info) = self.info_by_id(id) {
+                for m in &info.methods {
+                    if m.name == name
+                        && !named
+                            .iter()
+                            .any(|seen| seen.params == m.params && seen.name == m.name)
+                    {
+                        named.push(m);
+                    }
+                }
+                if let Some(parent) = info.superclass {
+                    stack.push(Some(parent));
+                }
+                for iface in &info.interfaces {
+                    stack.push(Some(*iface));
+                }
+            }
+        }
         if named.is_empty() {
             return Resolution::UnknownName;
         }
@@ -466,7 +806,7 @@ impl MethodTable {
             .copied()
             .filter(|m| {
                 m.params.len() == args.len()
-                    && m.params.iter().zip(args).all(|(p, a)| widens(*a, *p))
+                    && m.params.iter().zip(args).all(|(p, a)| widens(*a, *p, self))
             })
             .collect();
         match applicable.len() {
@@ -487,7 +827,7 @@ impl MethodTable {
                             m.params
                                 .iter()
                                 .zip(&other.params)
-                                .all(|(a, b)| widens(*a, *b))
+                                .all(|(a, b)| widens(*a, *b, self))
                         })
                     })
                     .collect();
@@ -515,8 +855,9 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
     }
 }
 
-/// Method-invocation / assignment widening (JLS §5.3 without boxing).
-fn widens(from: JType, to: JType) -> bool {
+/// Method-invocation / assignment widening (JLS §5.3 without boxing),
+/// including reference widening up the class hierarchy.
+fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
     from == to
         || matches!(
             (from, to),
@@ -526,6 +867,10 @@ fn widens(from: JType, to: JType) -> bool {
                     JType::Null,
                     JType::Str | JType::Array { .. } | JType::Object(_)
                 )
+        )
+        || matches!(
+            (from, to),
+            (JType::Object(sub), JType::Object(sup)) if table.is_subtype(sub, sup)
         )
 }
 
@@ -706,6 +1051,7 @@ struct LocalVar {
     assigned: bool,
 }
 
+#[allow(clippy::too_many_lines)] // ctor chaining preamble is cohesive
 fn emit_method(
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
@@ -750,24 +1096,61 @@ fn emit_method(
         ));
     }
 
+    // Abstract / interface methods have no body and no Code attribute.
+    if decl.is_abstract {
+        let descriptor = method_descriptor(path, diagnostics, table, decl);
+        let mut flags = MethodAccessFlags::ABSTRACT;
+        if decl.is_public || class_decl.is_interface {
+            flags |= MethodAccessFlags::PUBLIC;
+        }
+        let name_index = pool.intern_utf8(&decl.name);
+        let descriptor_index = pool.intern_utf8(&descriptor);
+        return MethodInfo {
+            access_flags: MethodAccessFlags(flags),
+            name_index,
+            descriptor_index,
+            attributes: Vec::new(),
+        };
+    }
+
+    let mut statements: &[Stmt] = &decl.body;
     if decl.is_constructor {
-        // Implicit super(): Object's constructor, then instance field
-        // initializers (JLS §12.5).
-        body.code.push_op(op::ALOAD_0, 1);
-        let object_init = intern_method_ref(body.pool, "java/lang/Object", "<init>", "()V");
-        body.code.push_op_u16(op::INVOKESPECIAL, object_init, 0);
-        body.code.drop_stack(1);
-        for field in &class_decl.fields {
-            if field.is_static {
-                continue;
+        // Chaining (JLS §12.5): an explicit super(...)/this(...) must be
+        // first; otherwise the implicit super() runs. Field
+        // initializers run only on the super path.
+        let explicit = statements.first().and_then(|stmt| match stmt {
+            Stmt::SuperCall { args, span } => Some((true, args, *span)),
+            Stmt::ThisCall { args, span } => Some((false, args, *span)),
+            _ => None,
+        });
+        if let Some((is_super, args, span)) = explicit {
+            statements = &statements[1..];
+            if is_super {
+                body.emit_constructor_call_on_this(
+                    class_decl
+                        .superclass
+                        .as_deref()
+                        .unwrap_or("java/lang/Object"),
+                    args,
+                    span,
+                );
+                body.emit_instance_field_initializers(class_decl);
+            } else {
+                let current = class_decl.name.clone();
+                body.emit_constructor_call_on_this(&current, args, span);
+                // Delegated constructor already ran the field inits.
             }
-            if let Some(init) = &field.init {
-                body.emit_field_initializer(field, init);
-            }
+        } else {
+            let super_name = class_decl
+                .superclass
+                .as_deref()
+                .unwrap_or("java/lang/Object");
+            body.emit_constructor_call_on_this(super_name, &[], decl.span);
+            body.emit_instance_field_initializers(class_decl);
         }
     }
 
-    for stmt in &decl.body {
+    for stmt in statements {
         body.statement(stmt);
     }
     // javac-style missing-return check: a non-void method whose body
@@ -1072,6 +1455,12 @@ impl BodyGen<'_> {
                 None => self.error(*span, "'continue' can only be used inside a loop"),
             },
             Stmt::Return { value, span } => self.return_statement(value.as_ref(), *span),
+            Stmt::SuperCall { span, .. } | Stmt::ThisCall { span, .. } => {
+                self.error(
+                    *span,
+                    "call to super/this must be the first statement in a constructor",
+                );
+            }
         }
     }
 
@@ -1324,7 +1713,7 @@ impl BodyGen<'_> {
     fn assign(&mut self, name: &str, op: Option<BinaryOp>, value: &Expr, span: SourceSpan) {
         if self.lookup(name).is_none() {
             // Implicit field of the current class.
-            if let Some(field) = self.table.field(self.current_class, name) {
+            if let Some((owner, field)) = self.table.field(self.current_class, name) {
                 let field = field.clone();
                 if !field.is_static && self.in_static {
                     self.error(
@@ -1341,7 +1730,7 @@ impl BodyGen<'_> {
                 } else {
                     FieldReceiver::This
                 };
-                self.assign_field(self.current_class_id, &receiver, &field, op, value, span);
+                self.assign_field(owner, &receiver, &field, op, value, span);
                 return;
             }
         }
@@ -1449,7 +1838,7 @@ impl BodyGen<'_> {
             && self.lookup(&path[0]).is_none()
             && let Some(class_id) = self.table.class_id(&path[0])
         {
-            let Some(field) = self.resolve_field(class_id, name, span) else {
+            let Some((_owner, field)) = self.resolve_field(class_id, name, span) else {
                 self.expr(value);
                 self.code.discard();
                 return;
@@ -1489,7 +1878,7 @@ impl BodyGen<'_> {
             }
             return;
         };
-        let Some(field) = self.resolve_field(class_id, name, span) else {
+        let Some((owner, field)) = self.resolve_field(class_id, name, span) else {
             return;
         };
         if field.is_static {
@@ -1500,7 +1889,7 @@ impl BodyGen<'_> {
             return;
         }
         self.assign_field(
-            class_id,
+            owner,
             &FieldReceiver::Object(object),
             &field,
             op_kind,
@@ -1683,6 +2072,60 @@ impl BodyGen<'_> {
         }
     }
 
+    /// Emit `super(...)`/`this(...)`-style constructor invocation with
+    /// `this` (slot 0) as the receiver.
+    fn emit_constructor_call_on_this(&mut self, class_name: &str, args: &[Expr], span: SourceSpan) {
+        self.code.push_op(op::ALOAD_0, 1);
+        if class_name == "java/lang/Object" {
+            let object_init = intern_method_ref(self.pool, "java/lang/Object", "<init>", "()V");
+            self.code.push_op_u16(op::INVOKESPECIAL, object_init, 0);
+            self.code.drop_stack(1);
+            return;
+        }
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            for arg in args {
+                self.expr(arg);
+            }
+            return;
+        }
+        let table = self.table;
+        let sig = if let Resolution::Found(sig) = table.resolve(class_name, "<init>", &arg_types) {
+            sig.clone()
+        } else {
+            self.error(
+                span,
+                format!(
+                    "constructor {class_name} in class {class_name} cannot be applied to \
+                     given types ({})",
+                    describe_types(&arg_types, self.table)
+                ),
+            );
+            return;
+        };
+        for (arg, param) in args.iter().zip(&sig.params) {
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, *param);
+        }
+        let descriptor = sig.descriptor(self.table);
+        let init_ref = intern_method_ref(self.pool, class_name, "<init>", &descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
+        self.code.drop_stack(1 + args_width);
+    }
+
+    /// The instance-field initializers, in declaration order.
+    fn emit_instance_field_initializers(&mut self, class_decl: &ClassDecl) {
+        for field in &class_decl.fields {
+            if field.is_static {
+                continue;
+            }
+            if let Some(init) = &field.init {
+                self.emit_field_initializer(field, init);
+            }
+        }
+    }
+
     /// Look up a field of `class_id`, with a javac-style private-access
     /// check. Returns a copied signature.
     fn resolve_field(
@@ -1690,9 +2133,9 @@ impl BodyGen<'_> {
         class_id: ClassId,
         name: &str,
         span: SourceSpan,
-    ) -> Option<FieldSig> {
+    ) -> Option<(ClassId, FieldSig)> {
         let class_name = self.table.class_name(class_id).to_owned();
-        let Some(field) = self.table.field(&class_name, name) else {
+        let Some((owner, field)) = self.table.field(&class_name, name) else {
             self.error(
                 span,
                 format!("cannot find symbol: field '{name}' in class {class_name}"),
@@ -1700,11 +2143,17 @@ impl BodyGen<'_> {
             return None;
         };
         let field = field.clone();
-        if field.is_private && class_id != self.current_class_id {
-            self.error(span, format!("{name} has private access in {class_name}"));
+        if field.is_private && owner != self.current_class_id {
+            self.error(
+                span,
+                format!(
+                    "{name} has private access in {}",
+                    self.table.class_name(owner)
+                ),
+            );
             return None;
         }
-        Some(field)
+        Some((owner, field))
     }
 
     /// Emit a read of a field of the current class through the implicit
@@ -1753,6 +2202,17 @@ impl BodyGen<'_> {
             }
             return JType::Error;
         };
+        if self
+            .table
+            .info_by_id(class_id)
+            .is_some_and(|i| i.is_abstract || i.is_interface)
+        {
+            self.error(
+                span,
+                format!("{class_name} is abstract; cannot be instantiated"),
+            );
+            return JType::Error;
+        }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             for arg in args {
@@ -2465,7 +2925,7 @@ impl BodyGen<'_> {
                 // Implicit this-field or static field of the current class.
                 self.table
                     .field(self.current_class, &path[0])
-                    .map_or(JType::Error, |f| f.ty)
+                    .map_or(JType::Error, |(_, f)| f.ty)
             }
             Expr::Name { path, .. }
                 if path.len() == 2
@@ -2484,13 +2944,13 @@ impl BodyGen<'_> {
                         return self
                             .table
                             .field(&owner, &path[1])
-                            .map_or(JType::Error, |f| f.ty);
+                            .map_or(JType::Error, |(_, f)| f.ty);
                     }
                     return JType::Error;
                 }
                 self.table
                     .field(&path[0], &path[1])
-                    .map_or(JType::Error, |f| f.ty)
+                    .map_or(JType::Error, |(_, f)| f.ty)
             }
             Expr::Name { .. } | Expr::ArrayLiteral { .. } => JType::Error,
             Expr::Index { array, .. } => self.type_of(array).element_type().unwrap_or(JType::Error),
@@ -2500,7 +2960,7 @@ impl BodyGen<'_> {
                     let owner = self.table.class_name(id).to_owned();
                     self.table
                         .field(&owner, name)
-                        .map_or(JType::Error, |f| f.ty)
+                        .map_or(JType::Error, |(_, f)| f.ty)
                 }
                 _ => JType::Error,
             },
@@ -2546,7 +3006,8 @@ impl BodyGen<'_> {
             }
             Expr::Unary {
                 op: UnaryOp::Not, ..
-            } => JType::Boolean,
+            }
+            | Expr::InstanceOf { .. } => JType::Boolean,
             Expr::Unary {
                 op: UnaryOp::Neg,
                 operand,
@@ -2582,6 +3043,20 @@ impl BodyGen<'_> {
                 .table
                 .class_id(class)
                 .map_or(JType::Error, JType::Object),
+            Expr::SuperMethodCall { method, args, .. } => {
+                let current = self.table.class_name(self.current_class_id).to_owned();
+                let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass)
+                else {
+                    return JType::Error;
+                };
+                let super_name = self.table.class_name(superclass).to_owned();
+                let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                let table = self.table;
+                match table.resolve(&super_name, method, &arg_types) {
+                    Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
+                    _ => JType::Error,
+                }
+            }
         }
     }
 
@@ -2660,7 +3135,120 @@ impl BodyGen<'_> {
                 JType::Object(self.current_class_id)
             }
             Expr::NewObject { class, args, span } => self.new_object(class, args, *span),
+            Expr::InstanceOf { value, ty, span } => self.instance_of(value, ty, *span),
+            Expr::SuperMethodCall { method, args, span } => {
+                match self.super_method_call(method, args, *span) {
+                    None => JType::Error,
+                    Some(Some(ty)) => ty,
+                    Some(None) => {
+                        self.error(
+                            *span,
+                            format!("'{method}' returns void, so it cannot be used as a value"),
+                        );
+                        JType::Error
+                    }
+                }
+            }
         }
+    }
+
+    /// `value instanceof Type` (reference types only).
+    fn instance_of(&mut self, value: &Expr, ty: &TypeRef, span: SourceSpan) -> JType {
+        let value_ty = self.expr(value);
+        let Some(target) = self.table.resolve_type(ty) else {
+            self.error(span, "unknown type in instanceof");
+            return JType::Error;
+        };
+        let JType::Object(target_id) = target else {
+            self.error(
+                span,
+                format!(
+                    "instanceof needs a class type, got {}",
+                    target.describe(self.table)
+                ),
+            );
+            return JType::Error;
+        };
+        if !value_ty.is_reference() && value_ty != JType::Error {
+            self.error(
+                span,
+                format!(
+                    "unexpected type: {} cannot be tested with instanceof",
+                    value_ty.describe(self.table)
+                ),
+            );
+            return JType::Error;
+        }
+        let class_name = self.table.class_name(target_id).to_owned();
+        let class_index = intern_class(self.pool, &class_name);
+        self.code.push_op_u16(op::INSTANCEOF, class_index, 1);
+        self.code.drop_stack(1);
+        JType::Boolean
+    }
+
+    /// `super.method(args)` — non-virtual dispatch to the superclass.
+    #[allow(clippy::option_option)]
+    fn super_method_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        if self.in_static {
+            self.error(
+                span,
+                "non-static variable super cannot be referenced from a static context",
+            );
+            return None;
+        }
+        let current = self.table.class_name(self.current_class_id).to_owned();
+        let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass) else {
+            self.error(span, format!("{current} has no superclass"));
+            return None;
+        };
+        let super_name = self.table.class_name(superclass).to_owned();
+
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            for arg in args {
+                self.expr(arg);
+            }
+            return None;
+        }
+        let table = self.table;
+        let sig = if let Resolution::Found(sig) = table.resolve(&super_name, method, &arg_types) {
+            sig.clone()
+        } else {
+            self.error(
+                span,
+                format!(
+                    "cannot find symbol: method {method}({}) in class {super_name}",
+                    describe_types(&arg_types, self.table)
+                ),
+            );
+            return None;
+        };
+        if sig.is_static || sig.is_abstract {
+            self.error(
+                span,
+                format!("cannot call {method}() via super (it has no body there)"),
+            );
+            return None;
+        }
+
+        self.code.push_op(op::ALOAD_0, 1);
+        for (arg, param) in args.iter().zip(&sig.params) {
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, *param);
+        }
+        let descriptor = sig.descriptor(self.table);
+        let method_ref = intern_method_ref(self.pool, &super_name, method, &descriptor);
+        let ret_width = sig.ret.map_or(0, JType::width);
+        self.code
+            .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
+        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
+        self.code.drop_stack(1 + args_width);
+        Some(sig.ret)
     }
 
     /// Field access on a value: only `.length` on arrays exists so far.
@@ -2675,7 +3263,7 @@ impl BodyGen<'_> {
             return JType::Int;
         }
         if let JType::Object(class_id) = object_ty {
-            let Some(field) = self.resolve_field(class_id, name, span) else {
+            let Some((owner, field)) = self.resolve_field(class_id, name, span) else {
                 return JType::Error;
             };
             if field.is_static {
@@ -2685,7 +3273,7 @@ impl BodyGen<'_> {
                 );
                 return JType::Error;
             }
-            return self.emit_getfield(class_id, &field);
+            return self.emit_getfield(owner, &field);
         }
         if object_ty == JType::Str && name == "length" {
             self.error(
@@ -2917,7 +3505,7 @@ impl BodyGen<'_> {
                 if let JType::Object(id) = var.ty {
                     let (slot, ty) = (var.slot, var.ty);
                     self.emit_load(slot, ty);
-                    let Some(field) = self.resolve_field(id, &path[1], span) else {
+                    let Some((owner, field)) = self.resolve_field(id, &path[1], span) else {
                         return JType::Error;
                     };
                     if field.is_static {
@@ -2928,10 +3516,10 @@ impl BodyGen<'_> {
                         );
                         return JType::Error;
                     }
-                    return self.emit_getfield(id, &field);
+                    return self.emit_getfield(owner, &field);
                 }
             } else if let Some(class_id) = self.table.class_id(&path[0]) {
-                let Some(field) = self.resolve_field(class_id, &path[1], span) else {
+                let Some((owner, field)) = self.resolve_field(class_id, &path[1], span) else {
                     return JType::Error;
                 };
                 if !field.is_static {
@@ -2944,7 +3532,7 @@ impl BodyGen<'_> {
                     );
                     return JType::Error;
                 }
-                return self.emit_getfield(class_id, &field);
+                return self.emit_getfield(owner, &field);
             }
         }
         if path.len() != 1 {
@@ -2954,10 +3542,10 @@ impl BodyGen<'_> {
         let name = &path[0];
         if self.lookup(name).is_none() {
             // Implicit field of the current class.
-            if let Some(field) = self.table.field(self.current_class, name) {
+            if let Some((owner, field)) = self.table.field(self.current_class, name) {
                 let field = field.clone();
                 if field.is_static {
-                    return self.emit_getfield(self.current_class_id, &field);
+                    return self.emit_getfield(owner, &field);
                 }
                 if self.in_static {
                     self.error(
@@ -2970,7 +3558,7 @@ impl BodyGen<'_> {
                     return JType::Error;
                 }
                 self.code.push_op(op::ALOAD_0, 1);
-                return self.emit_getfield(self.current_class_id, &field);
+                return self.emit_getfield(owner, &field);
             }
         }
         let Some(var) = self.lookup(name) else {
@@ -3060,6 +3648,53 @@ impl BodyGen<'_> {
         let source = self.expr(operand);
         if source == JType::Error {
             return JType::Error;
+        }
+        // Reference casts between class/interface types.
+        if let JType::Object(target_id) = target {
+            match source {
+                JType::Null => return target,
+                JType::Object(source_id) => {
+                    let upcast = self.table.is_subtype(source_id, target_id);
+                    let downcast = self.table.is_subtype(target_id, source_id);
+                    let source_is_interface = self
+                        .table
+                        .info_by_id(source_id)
+                        .is_some_and(|i| i.is_interface);
+                    let target_is_interface = self
+                        .table
+                        .info_by_id(target_id)
+                        .is_some_and(|i| i.is_interface);
+                    if upcast {
+                        return target; // always safe, no check needed
+                    }
+                    if downcast || source_is_interface || target_is_interface {
+                        let class_name = self.table.class_name(target_id).to_owned();
+                        let class_index = intern_class(self.pool, &class_name);
+                        self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+                        return target;
+                    }
+                    self.error(
+                        span,
+                        format!(
+                            "incompatible types: {} cannot be converted to {}",
+                            source.describe(self.table),
+                            target.describe(self.table)
+                        ),
+                    );
+                    return JType::Error;
+                }
+                _ => {
+                    self.error(
+                        span,
+                        format!(
+                            "incompatible types: {} cannot be converted to {}",
+                            source.describe(self.table),
+                            target.describe(self.table)
+                        ),
+                    );
+                    return JType::Error;
+                }
+            }
         }
         match (source, target) {
             (s, t) if s == t => t,
@@ -3516,6 +4151,7 @@ impl BodyGen<'_> {
             // need no code.
             (JType::Error, _) | (JType::Char, JType::Int) => {}
             (JType::Null, to) if to.is_reference() => {}
+            (JType::Object(sub), JType::Object(sup)) if self.table.is_subtype(sub, sup) => {}
             (f, t) if f == t => {}
             (JType::Int | JType::Char, JType::Double) => self.code.push_op(op::I2D, 1),
             (JType::Double, JType::Int | JType::Char) => {

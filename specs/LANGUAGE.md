@@ -18,7 +18,7 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Accepted today (v0 slice + stages 1–5)
+## Accepted today (v0 slice + stages 1–6)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
@@ -97,6 +97,20 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   `instanceof` wait for stage 6; String methods (`s.equals(t)`,
   `s.length()`) wait for the class library.
 
+- **Inheritance** (stage 6): `extends` (single), `implements` (multiple),
+  `interface` and `abstract class`/`abstract` methods with completeness
+  checks in javac's wording ("B is not abstract and does not override
+  abstract method go() in A"), method overriding with compatibility checks
+  ("f() in B cannot override f() in A") and true polymorphic dispatch
+  (including calls made from inherited method bodies), `super.method(...)`,
+  `super(...)`/`this(...)` constructor chaining with Java's first-statement
+  and field-initializer rules, inherited fields, subtype reference widening
+  in assignments/arguments/overloads, `instanceof` (null is false), class
+  casts with upcast elision and runtime `ClassCastException` ("class A
+  cannot be cast to class B"), and superclass-first static initialization.
+  Field hiding is rejected by design; `protected` currently behaves like
+  public (no packages).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
@@ -131,8 +145,9 @@ friendly message for now.
 5. ~~Objects: fields, constructors, `new`, instance methods, `this`.~~
    **Done (2026-07-02)** — plus static fields/`<clinit>` and private-access
    enforcement, differential-verified against OpenJDK 11.
-6. Inheritance: `extends`, `super`, overriding, polymorphic dispatch;
-   `interface` / `abstract`.
+6. ~~Inheritance: `extends`, `super`, overriding, polymorphic dispatch;
+   `interface` / `abstract`.~~ **Done (2026-07-02)** — plus `this(...)`
+   chaining and `instanceof`, differential-verified against OpenJDK 11.
 7. Generics as far as `ArrayList<E>` requires (erasure, autoboxing).
 
 The staging order optimizes for what CSA course units need earliest.

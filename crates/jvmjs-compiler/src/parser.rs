@@ -107,6 +107,13 @@ struct Modifiers {
     is_private: bool,
     is_static: bool,
     is_final: bool,
+    is_abstract: bool,
+}
+
+/// Parsed class-level modifiers.
+#[derive(Debug, Default, Clone, Copy)]
+struct ClassModifiers {
+    is_abstract: bool,
 }
 
 /// One parsed class member.
@@ -307,7 +314,11 @@ impl Parser<'_> {
                     modifiers.is_final = true;
                     self.pos += 1;
                 }
-                Some(TokenKind::Keyword(Keyword::Protected | Keyword::Abstract)) => {
+                Some(TokenKind::Keyword(Keyword::Abstract)) => {
+                    modifiers.is_abstract = true;
+                    self.pos += 1;
+                }
+                Some(TokenKind::Keyword(Keyword::Protected)) => {
                     self.pos += 1;
                 }
                 _ => return modifiers,
@@ -317,33 +328,47 @@ impl Parser<'_> {
 
     fn class_decl(&mut self) -> Parsed<ClassDecl> {
         let start = self.here();
-        self.modifiers();
+        let modifiers = self.class_modifiers();
 
-        if self.at_keyword(Keyword::Interface) || self.at_keyword(Keyword::Enum) {
-            let what = if self.at_keyword(Keyword::Interface) {
-                "interfaces"
-            } else {
-                "enums"
-            };
-            self.error_here(format!("{what} are not yet supported by jvmjs"));
+        if self.at_keyword(Keyword::Enum) {
+            self.error_here("enums are not yet supported by jvmjs");
             return Err(Abort);
         }
-        if !self.eat_keyword(Keyword::Class) {
+        let is_interface = self.eat_keyword(Keyword::Interface);
+        if !is_interface && !self.eat_keyword(Keyword::Class) {
             self.error_here("expected a class declaration");
             return Err(Abort);
         }
         let (name, name_span) = self.expect_ident("for the class")?;
 
-        if self.at_keyword(Keyword::Extends) || self.at_keyword(Keyword::Implements) {
-            let what = if self.at_keyword(Keyword::Extends) {
-                "extends"
+        let mut superclass = None;
+        let mut interfaces = Vec::new();
+        if self.eat_keyword(Keyword::Extends) {
+            if is_interface {
+                // Interfaces extend other interfaces (a list).
+                loop {
+                    let (parent, _) = self.expect_ident("after 'extends'")?;
+                    interfaces.push(parent);
+                    if !self.eat_symbol(",") {
+                        break;
+                    }
+                }
             } else {
-                "implements"
-            };
-            self.error_here(format!("'{what}' is not yet supported by jvmjs"));
-            // Skip the clause so the class body still parses.
-            while !self.at_symbol("{") && self.peek().is_some() {
-                self.pos += 1;
+                let (parent, _) = self.expect_ident("after 'extends'")?;
+                superclass = Some(parent);
+            }
+        }
+        if self.eat_keyword(Keyword::Implements) {
+            if is_interface {
+                self.error_here("interfaces cannot implement");
+                return Err(Abort);
+            }
+            loop {
+                let (parent, _) = self.expect_ident("after 'implements'")?;
+                interfaces.push(parent);
+                if !self.eat_symbol(",") {
+                    break;
+                }
             }
         }
 
@@ -372,6 +397,10 @@ impl Parser<'_> {
 
         Ok(ClassDecl {
             name,
+            superclass,
+            interfaces,
+            is_abstract: modifiers.is_abstract || is_interface,
+            is_interface,
             fields,
             methods,
             span: SourceSpan {
@@ -379,6 +408,23 @@ impl Parser<'_> {
                 end: name_span.end,
             },
         })
+    }
+
+    /// Class-level modifiers (public/abstract/final tracked loosely).
+    fn class_modifiers(&mut self) -> ClassModifiers {
+        let mut modifiers = ClassModifiers::default();
+        loop {
+            match self.peek() {
+                Some(TokenKind::Keyword(Keyword::Abstract)) => {
+                    modifiers.is_abstract = true;
+                    self.pos += 1;
+                }
+                Some(TokenKind::Keyword(Keyword::Public | Keyword::Final)) => {
+                    self.pos += 1;
+                }
+                _ => return modifiers,
+            }
+        }
     }
 
     fn member(&mut self, class_name: &str) -> Parsed<Member> {
@@ -391,16 +437,17 @@ impl Parser<'_> {
             && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
         {
             let (name, name_span) = self.expect_ident("for the constructor")?;
-            let (params, body) = self.method_rest(name_span)?;
+            let (params, body) = self.method_rest(name_span, false)?;
             return Ok(Member::Method(MethodDecl {
                 name,
                 is_static: false,
                 is_public: modifiers.is_public,
                 is_private: modifiers.is_private,
                 is_constructor: true,
+                is_abstract: false,
                 return_type: TypeRef::Void,
                 params,
-                body,
+                body: body.unwrap_or_default(),
                 span: SourceSpan {
                     start: start.start,
                     end: name_span.end,
@@ -443,16 +490,18 @@ impl Parser<'_> {
             return Ok(Member::Fields(fields));
         }
 
-        let (params, body) = self.method_rest(name_span)?;
+        let (params, body) = self.method_rest(name_span, true)?;
+        let is_abstract = body.is_none();
         Ok(Member::Method(MethodDecl {
             name,
             is_static: modifiers.is_static,
             is_public: modifiers.is_public,
             is_private: modifiers.is_private,
             is_constructor: false,
+            is_abstract,
             return_type: member_type,
             params,
-            body,
+            body: body.unwrap_or_default(),
             span: SourceSpan {
                 start: start.start,
                 end: name_span.end,
@@ -461,7 +510,12 @@ impl Parser<'_> {
     }
 
     /// Parameter list and body, shared by methods and constructors.
-    fn method_rest(&mut self, name_span: SourceSpan) -> Parsed<(Vec<Param>, Vec<Stmt>)> {
+    /// With `allow_abstract`, a `;` instead of a body yields `None`.
+    fn method_rest(
+        &mut self,
+        name_span: SourceSpan,
+        allow_abstract: bool,
+    ) -> Parsed<(Vec<Param>, Option<Vec<Stmt>>)> {
         self.expect_symbol("(", "to open the parameter list")?;
         let mut params = Vec::new();
         if !self.at_symbol(")") {
@@ -479,13 +533,16 @@ impl Parser<'_> {
         }
         self.expect_symbol(")", "to close the parameter list")?;
 
-        if self.at_symbol(";") {
-            self.error_at(name_span, "abstract methods are not yet supported by jvmjs");
-            return Err(Abort);
+        if self.eat_symbol(";") {
+            if !allow_abstract {
+                self.error_at(name_span, "constructors need a body");
+                return Err(Abort);
+            }
+            return Ok((params, None));
         }
         self.expect_symbol("{", "to open the method body")?;
         let body = self.block_body();
-        Ok((params, body))
+        Ok((params, Some(body)))
     }
 
     fn type_ref(&mut self) -> Parsed<TypeRef> {
@@ -578,6 +635,24 @@ impl Parser<'_> {
                 return self.return_statement().map(Some);
             }
             _ => {}
+        }
+
+        // Constructor chaining: `super(args);` / `this(args);`.
+        if matches!(
+            self.peek(),
+            Some(TokenKind::Keyword(Keyword::Super | Keyword::This))
+        ) && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
+        {
+            let span = self.here();
+            let is_super = self.at_keyword(Keyword::Super);
+            self.pos += 1;
+            let args = self.arguments()?;
+            self.expect_symbol(";", "to end the constructor call")?;
+            return Ok(Some(if is_super {
+                Stmt::SuperCall { args, span }
+            } else {
+                Stmt::ThisCall { args, span }
+            }));
         }
 
         if let Some(TokenKind::Keyword(keyword)) = self.peek()
@@ -977,7 +1052,7 @@ impl Parser<'_> {
     }
 
     fn relational(&mut self) -> Parsed<Expr> {
-        self.binary_level(
+        let mut expr = self.binary_level(
             Self::additive,
             &[
                 ("<=", BinaryOp::Le),
@@ -985,7 +1060,20 @@ impl Parser<'_> {
                 ("<", BinaryOp::Lt),
                 (">", BinaryOp::Gt),
             ],
-        )
+        )?;
+        while self.eat_keyword(Keyword::Instanceof) {
+            let ty = self.type_ref()?;
+            let span = SourceSpan {
+                start: expr.span().start,
+                end: self.here().start,
+            };
+            expr = Expr::InstanceOf {
+                value: Box::new(expr),
+                ty,
+                span,
+            };
+        }
+        Ok(expr)
     }
 
     fn additive(&mut self) -> Parsed<Expr> {
@@ -1068,6 +1156,35 @@ impl Parser<'_> {
                 ))
             )
             && matches!(self.peek_at(2), Some(TokenKind::Symbol(")")))
+        {
+            self.pos += 1;
+            let ty = self.type_ref()?;
+            self.expect_symbol(")", "to close the cast")?;
+            let operand = self.unary()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Ok(Expr::Cast {
+                ty,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+        // Class cast: `(Shape) x`. `(name)` followed by a token that
+        // can only start an operand is a cast, not a parenthesized
+        // expression (`(a) - b` stays arithmetic).
+        if self.at_symbol("(")
+            && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
+            && matches!(self.peek_at(2), Some(TokenKind::Symbol(")")))
+            && matches!(
+                self.peek_at(3),
+                Some(
+                    TokenKind::Identifier(_)
+                        | TokenKind::Keyword(Keyword::New | Keyword::This)
+                        | TokenKind::StringLiteral(_)
+                )
+            )
         {
             self.pos += 1;
             let ty = self.type_ref()?;
@@ -1365,8 +1482,29 @@ impl Parser<'_> {
                 Ok(Expr::This { span })
             }
             Some(TokenKind::Keyword(Keyword::Super)) => {
-                self.error_here("'super' is not yet supported by jvmjs");
-                Err(Abort)
+                let start = self.here();
+                self.pos += 1;
+                if !self.eat_symbol(".") {
+                    self.error_at(start, "expected '.' after 'super' (super.method(...))");
+                    return Err(Abort);
+                }
+                let (method, method_span) = self.expect_ident("after 'super.'")?;
+                if !self.at_symbol("(") {
+                    self.error_at(
+                        method_span,
+                        "super field access is not supported by jvmjs (call a method instead)",
+                    );
+                    return Err(Abort);
+                }
+                let args = self.arguments()?;
+                Ok(Expr::SuperMethodCall {
+                    method,
+                    args,
+                    span: SourceSpan {
+                        start: start.start,
+                        end: method_span.end,
+                    },
+                })
             }
             _ => {
                 self.error_here("expected an expression");
