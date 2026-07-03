@@ -9,6 +9,7 @@
 //! We target Java 11 class files: major version 55, minor version 0.
 
 mod constant_pool;
+pub mod debug;
 mod model;
 pub mod opcodes;
 mod reader;

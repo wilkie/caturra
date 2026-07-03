@@ -8,9 +8,21 @@
  * interactive stdin; without isolation everything else works but stdin
  * reads return EOF.
  */
-import type { CompileResult, JavaSourceFile, RunResult } from './index.js';
+import type {
+  CompileResult,
+  DebugBreakpoint,
+  DebugControlResponse,
+  DebugPauseSnapshot,
+  JavaSourceFile,
+  RunResult,
+} from './index.js';
 import type { ResultValueByType, WorkerRequest, WorkerResponse } from './protocol.js';
-import { createStdinBuffer, supplyLine } from './stdin-channel.js';
+import {
+  createInterruptFlag,
+  createStdinBuffer,
+  requestInterrupt,
+  supplyLine,
+} from './stdin-channel.js';
 
 /** Where a run's standard input comes from. */
 export type StdinSource = string[] | (() => string | null | Promise<string | null>);
@@ -31,6 +43,17 @@ export interface WorkerRunOptions {
   stdin?: StdinSource;
 }
 
+/** Options for {@link JvmWorkerSession.runDebug}. */
+export interface WorkerDebugRunOptions extends WorkerRunOptions {
+  breakpoints?: DebugBreakpoint[];
+  /**
+   * Called at every pause. May be async: the engine stays parked until
+   * the returned promise resolves with a command (e.g. after the user
+   * clicks a step button).
+   */
+  onPause: (snapshot: DebugPauseSnapshot) => DebugControlResponse | Promise<DebugControlResponse>;
+}
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
@@ -38,6 +61,10 @@ interface Pending {
   onStderr?: ((text: string) => void) | undefined;
   nextLine?: (() => Promise<string | null>) | undefined;
   stdinBuffer?: SharedArrayBuffer | undefined;
+  onPause?:
+    | ((snapshot: DebugPauseSnapshot) => DebugControlResponse | Promise<DebugControlResponse>)
+    | undefined;
+  debugBuffer?: SharedArrayBuffer | undefined;
 }
 
 function normalizeStdin(source: StdinSource | undefined): () => Promise<string | null> {
@@ -67,6 +94,7 @@ export class JvmWorkerSession {
   readonly #worker: Worker;
   readonly #pending = new Map<number, Pending>();
   #nextId = 1;
+  #activeInterruptFlag: SharedArrayBuffer | undefined;
 
   private constructor(worker: Worker) {
     this.#worker = worker;
@@ -138,6 +166,67 @@ export class JvmWorkerSession {
     }
     this.#worker.postMessage(request);
     return promise as Promise<RunResult>;
+  }
+
+  /**
+   * `java` under a debugger: pauses at `breakpoints`, calling `onPause`
+   * for each stop; {@link requestPause} interrupts a running program.
+   * Requires a cross-origin isolated page (the pause channel blocks on
+   * a SharedArrayBuffer, like stdin).
+   */
+  async runDebug(mainClass: string, options: WorkerDebugRunOptions): Promise<RunResult> {
+    const isolated =
+      typeof SharedArrayBuffer !== 'undefined' &&
+      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true;
+    if (!isolated) {
+      throw new Error(
+        'jvmjs: debugging needs a cross-origin isolated page (COOP/COEP headers); ' +
+          'see specs/EXECUTION.md.',
+      );
+    }
+    const stdinBuffer = createStdinBuffer();
+    const debugBuffer = createStdinBuffer();
+    const interruptFlag = createInterruptFlag();
+    this.#activeInterruptFlag = interruptFlag;
+
+    const id = this.#nextId++;
+    const promise = new Promise<unknown>((resolve, reject) => {
+      this.#pending.set(id, {
+        resolve,
+        reject,
+        onStdout: options.onStdout,
+        onStderr: options.onStderr,
+        nextLine: normalizeStdin(options.stdin),
+        stdinBuffer,
+        onPause: options.onPause,
+        debugBuffer,
+      });
+    });
+    this.#worker.postMessage({
+      id,
+      type: 'runDebug',
+      mainClass,
+      args: options.args ?? [],
+      breakpoints: options.breakpoints ?? [],
+      debugBuffer,
+      interruptFlag,
+      stdinBuffer,
+    } satisfies WorkerRequest);
+    try {
+      return (await promise) as RunResult;
+    } finally {
+      this.#activeInterruptFlag = undefined;
+    }
+  }
+
+  /**
+   * Ask the running debug program to pause at the next opportunity
+   * (the pause button). No-op when no debug run is active.
+   */
+  requestPause(): void {
+    if (this.#activeInterruptFlag) {
+      requestInterrupt(this.#activeInterruptFlag);
+    }
   }
 
   // ----- Virtual filesystem passthrough -----
@@ -225,7 +314,23 @@ export class JvmWorkerSession {
       case 'stdin-request':
         void this.#answerStdin(pending);
         break;
+      case 'debug-paused':
+        void this.#answerPause(pending, message.snapshot);
+        break;
     }
+  }
+
+  async #answerPause(pending: Pending, snapshot: DebugPauseSnapshot): Promise<void> {
+    if (!pending.debugBuffer || !pending.onPause) {
+      return;
+    }
+    let control: DebugControlResponse;
+    try {
+      control = await pending.onPause(snapshot);
+    } catch {
+      control = { command: 'terminate' };
+    }
+    supplyLine(pending.debugBuffer, JSON.stringify(control));
   }
 
   async #answerStdin(pending: Pending): Promise<void> {

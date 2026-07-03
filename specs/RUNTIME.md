@@ -52,14 +52,27 @@ read. Revisit if we ever want real JVMs to load our class files.
 
 ## Method calls and the call stack
 
-User-method calls (`invokestatic` today) recurse on the host (Rust/WASM)
-stack, one interpreter invocation per Java frame, guarded by
-`VmOptions::max_call_depth` (default 256) which raises Java's
-`StackOverflowError`. The limit is set conservatively so the host stack can
-never actually overflow. If deeper recursion becomes a real need (e.g.
-element-per-frame recursion over large arrays), the interpreter should move
-to an explicit heap-allocated frame stack — noted here as the intended
-design change rather than raising the limit.
+The Java call stack is an explicit heap-allocated `Vec<Frame>` (adopted
+2026-07-02, replacing the original host-stack recursion). Each `Frame` is
+plain data — owner class, method name, pc, locals, operand stack — and
+the dispatch loop is one flat loop: call opcodes push a frame, return
+opcodes pop one. `<clinit>` bodies run as pseudo-caller frames pushed
+beneath the triggering instruction, which rewinds and re-executes after
+initialization (JVMS §5.5 ordering, superclass first).
+
+Consequences and intent:
+
+- `VmOptions::max_call_depth` (default 4096, roughly Java-like) is a pure
+  semantics knob raising `StackOverflowError`; the host (Rust/WASM) stack
+  stays O(1) at any Java depth, so debug-build frame sizes and the ~1MB
+  WASM stack no longer constrain the limit.
+- Parsed `Code` attributes are cached per method (`Rc`), so hot recursive
+  calls no longer re-parse bytecode on every invocation.
+- Uncaught exceptions print `java`-style `\tat Class.method(Class.java)`
+  trace lines (no line numbers yet — we don't emit LineNumberTable).
+- Frames being inspectable data is the intended foundation for a step
+  debugger in the playground: pause the loop, walk `Vec<Frame>`, show
+  locals per frame.
 
 ## Runaway protection
 

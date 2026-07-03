@@ -80,3 +80,23 @@ export function readLineBlocking(
   bytes.set(new Uint8Array(buffer, HEADER_BYTES, length));
   return new TextDecoder().decode(bytes);
 }
+
+// ----- Interrupt flag (debugger pause button) -----
+//
+// A single shared Int32 the main thread sets and the engine polls
+// between instructions. Consuming resets it, so one click = one pause.
+
+/** Allocate the shared interrupt flag (main thread). */
+export function createInterruptFlag(): SharedArrayBuffer {
+  return new SharedArrayBuffer(4);
+}
+
+/** Main thread: request a pause at the next opportunity. */
+export function requestInterrupt(flag: SharedArrayBuffer): void {
+  Atomics.store(new Int32Array(flag, 0, 1), 0, 1);
+}
+
+/** Worker: check-and-clear the pause request. */
+export function consumeInterrupt(flag: SharedArrayBuffer): boolean {
+  return Atomics.compareExchange(new Int32Array(flag, 0, 1), 0, 1, 0) === 1;
+}

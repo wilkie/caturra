@@ -7,6 +7,7 @@
 //! `Math`, console IO via `System.out` / `Scanner`, and `java.io.File`
 //! backed by the in-memory [`vfs::VirtualFileSystem`].
 
+pub mod debug;
 mod interpreter;
 pub mod intrinsics;
 pub mod io;
@@ -14,6 +15,10 @@ pub mod value;
 pub mod vfs;
 pub mod vm;
 
+pub use debug::{
+    Breakpoint, DebugCommand, DebugControl, DebugFrameSnapshot, DebugHost, DebugSnapshot,
+    PauseReason,
+};
 pub use io::{BufferedConsole, ConsoleIo};
 pub use value::{Heap, HeapObject, HeapRef, JValue};
 pub use vfs::{VfsError, VirtualFileSystem};

@@ -715,6 +715,87 @@ public class DiffFiles {
 );
 
 differential_test!(
+    diff_deep_recursion,
+    "DiffDeep",
+    r"
+public class DiffDeep {
+    static int sum(int n) {
+        if (n == 0) {
+            return 0;
+        }
+        return n + sum(n - 1);
+    }
+
+    static int fib(int n) {
+        if (n < 2) {
+            return n;
+        }
+        return fib(n - 1) + fib(n - 2);
+    }
+
+    public static void main(String[] args) {
+        System.out.println(sum(3000));
+        System.out.println(fib(20));
+    }
+}
+"
+);
+
+/// `javap -l` is the reference reader for debug attributes: if it
+/// prints our `LineNumberTable` / `LocalVariableTable` / `SourceFile`, the
+/// encoding is real.
+#[test]
+fn javap_accepts_debug_attributes() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Probe.java".into(),
+        text: r#"
+public class Probe {
+    static int triple(int x) {
+        int result = x * 3;
+        return result;
+    }
+
+    public static void main(String[] args) {
+        int a = 2;
+        double b = 1.5;
+        String label = "hi";
+        System.out.println(triple(a) + b + label);
+    }
+}
+"#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+
+    let dir = std::env::temp_dir().join(format!("jvmjs-javap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    for class in compilation.classes {
+        let bytes = jvmjs_classfile::write_class_file(&class.class_file);
+        std::fs::write(dir.join(format!("{}.class", class.binary_name)), bytes)
+            .expect("write class");
+    }
+    let output = Command::new("javap")
+        .args(["-l", "Probe.class"])
+        .current_dir(&dir)
+        .output()
+        .expect("javap runs");
+    let text = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(output.status.success(), "javap rejected the class: {text}");
+    assert!(text.contains("LineNumberTable"), "{text}");
+    assert!(text.contains("LocalVariableTable"), "{text}");
+    // Locals are named, with the declared slots.
+    assert!(text.contains("result"), "{text}");
+    assert!(text.contains("label"), "{text}");
+    assert!(text.contains("args"), "{text}");
+}
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

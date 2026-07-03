@@ -42,10 +42,61 @@ export interface CompileResult {
 
 /** The result of a `java` call. */
 export interface RunResult {
-  /** How the program ended. `error` covers uncaught exceptions and VM errors. */
-  status: 'completed' | 'exited' | 'error';
+  /**
+   * How the program ended. `error` covers uncaught exceptions and VM
+   * errors; `stopped` means the debugger terminated it.
+   */
+  status: 'completed' | 'exited' | 'stopped' | 'error';
   exitCode: number;
   error?: string | null;
+}
+
+// ----- Debugging -----
+
+/** A source breakpoint: file as compiled (`Main.java`) + 1-based line. */
+export interface DebugBreakpoint {
+  file: string;
+  line: number;
+}
+
+/** How to proceed after a pause. */
+export type DebugCommandName = 'continue' | 'stepOver' | 'stepInto' | 'stepOut' | 'terminate';
+
+/** The host's answer to a pause. */
+export interface DebugControlResponse {
+  command: DebugCommandName;
+  /** Full replacement of the breakpoint set (edits made while paused). */
+  breakpoints?: DebugBreakpoint[];
+}
+
+/** One paused frame, innermost first in {@link DebugPauseSnapshot}. */
+export interface DebugFrame {
+  className: string;
+  methodName: string;
+  sourceFile: string;
+  /** Current 1-based source line, when line info covers the pc. */
+  line: number | null;
+  /** Named locals live at the pause point: `[name, renderedValue]`. */
+  locals: [string, string][];
+}
+
+/** Everything needed to render a paused program. */
+export interface DebugPauseSnapshot {
+  reason: 'breakpoint' | 'step' | 'interrupt';
+  frames: DebugFrame[];
+}
+
+/** Options for {@link JvmSession.runDebug}. */
+export interface DebugRunOptions extends RunOptions {
+  breakpoints?: DebugBreakpoint[];
+  /**
+   * Called at every pause; must return the command synchronously (in
+   * the worker this blocks on a SharedArrayBuffer until the user
+   * chooses — see JvmWorkerSession.runDebug for the async form).
+   */
+  onPause: (snapshot: DebugPauseSnapshot) => DebugControlResponse;
+  /** Polled periodically; return `true` to pause (pause button). */
+  pollInterrupt?: () => boolean;
 }
 
 /** Console hooks for a program run. */
@@ -121,6 +172,27 @@ export class JvmSession {
     ) as RunResult;
   }
 
+  /**
+   * `java` under a debugger: pauses at breakpoints (and interrupts),
+   * calling `onPause` for each stop. Synchronous — see
+   * `JvmWorkerSession.runDebug` for the browser-friendly async form.
+   */
+  runDebug(mainClass: string, options: DebugRunOptions): RunResult {
+    return this.#inner.runDebug(
+      mainClass,
+      options.args ?? [],
+      JSON.stringify(options.breakpoints ?? []),
+      (text: string) => options.onStdout?.(text),
+      (text: string) => options.onStderr?.(text),
+      options.readStdin ?? null,
+      (snapshotJson: string) => {
+        const snapshot = JSON.parse(snapshotJson) as DebugPauseSnapshot;
+        return JSON.stringify(options.onPause(snapshot));
+      },
+      options.pollInterrupt ?? null,
+    ) as RunResult;
+  }
+
   // ----- Virtual filesystem (backs java.io.File inside the VM) -----
 
   /** Write a file, creating parent directories as needed. */
@@ -169,4 +241,4 @@ export async function createJvmSession(wasm?: WasmSource): Promise<JvmSession> {
 // stdin support (see specs/EXECUTION.md). The synchronous JvmSession
 // above remains for Node, tests, and the worker's own internals.
 export { JvmWorkerSession } from './worker-session.js';
-export type { StdinSource, WorkerRunOptions } from './worker-session.js';
+export type { StdinSource, WorkerDebugRunOptions, WorkerRunOptions } from './worker-session.js';

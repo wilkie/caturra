@@ -11,6 +11,7 @@ use jvmjs_classfile::{
     AttributeInfo, CODE_ATTRIBUTE, ClassFile, CodeAttribute, Constant, MethodAccessFlags,
     MethodInfo, write_code_attribute,
 };
+use jvmjs_vm::{Breakpoint, DebugCommand, DebugControl, DebugHost, DebugSnapshot, PauseReason};
 use jvmjs_vm::{BufferedConsole, ExitStatus, VirtualFileSystem, Vm, VmError, VmOptions};
 
 /// Assemble a class equivalent to:
@@ -823,16 +824,9 @@ fn runaway_recursion_overflows_like_java() {
 
     let mut vfs = VirtualFileSystem::new();
     let mut console = BufferedConsole::new();
-    // A small explicit limit keeps the test independent of the host
-    // (debug-build) stack size; the default limit works the same way.
-    let mut vm = Vm::new(
-        VmOptions {
-            max_call_depth: 64,
-            ..VmOptions::default()
-        },
-        &mut vfs,
-        &mut console,
-    );
+    // The default limit (4096) is safe to exhaust: frames live on the
+    // heap, not the host stack.
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
     for class in compilation.classes {
         vm.load_class(class.class_file).unwrap();
     }
@@ -2077,6 +2071,376 @@ fn vfs_seeded_files_are_visible_to_java() {
     assert_eq!(console.stdout_text(), "50\n");
     // And output written by Java is visible to the host afterwards.
     assert!(vfs.exists("/data/input.txt"));
+}
+
+// ----- explicit-frame interpreter -----
+
+#[test]
+fn deep_recursion_works_like_java() {
+    // Depth ~3000 — far past what host-stack recursion survived
+    // (the old engine was capped at 256 frames); real Java handles it.
+    let out = run_stdout(
+        r"
+        public class DeepSum {
+            static int sum(int n) {
+                if (n == 0) {
+                    return 0;
+                }
+                return n + sum(n - 1);
+            }
+
+            public static void main(String[] args) {
+                System.out.println(sum(3000));
+            }
+        }
+        ",
+        "DeepSum",
+    );
+    assert_eq!(out, "4501500\n");
+}
+
+#[test]
+fn mutual_recursion_at_depth() {
+    let out = run_stdout(
+        r"
+        public class PingPong {
+            static int ping(int n) {
+                if (n == 0) {
+                    return 0;
+                }
+                return 1 + pong(n - 1);
+            }
+
+            static int pong(int n) {
+                if (n == 0) {
+                    return 0;
+                }
+                return 1 + ping(n - 1);
+            }
+
+            public static void main(String[] args) {
+                System.out.println(ping(2500));
+            }
+        }
+        ",
+        "PingPong",
+    );
+    assert_eq!(out, "2500\n");
+}
+
+#[test]
+fn uncaught_exceptions_carry_a_stack_trace() {
+    let (result, console) = compile_and_run(
+        r"
+        public class Trace {
+            static int explode() {
+                return 1 / 0;
+            }
+
+            static int middle() {
+                return explode();
+            }
+
+            public static void main(String[] args) {
+                System.out.println(middle());
+            }
+        }
+        ",
+        "Trace",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    let stderr = console.stderr_text();
+    assert!(
+        stderr.contains("java.lang.ArithmeticException: / by zero"),
+        "{stderr}"
+    );
+    // Innermost first with source line numbers, like real java.
+    let explode_at = stderr.find("\tat Trace.explode(Trace.java:4)").unwrap();
+    let middle_at = stderr.find("\tat Trace.middle(Trace.java:8)").unwrap();
+    let main_at = stderr.find("\tat Trace.main(Trace.java:12)").unwrap();
+    assert!(explode_at < middle_at && middle_at < main_at, "{stderr}");
+}
+
+#[test]
+fn clinit_chain_runs_ancestors_first_via_frames() {
+    // Touching C's statics initializes A, then B, then C — with each
+    // <clinit> running as a pseudo-caller frame, deep static-time
+    // recursion included.
+    let out = run_stdout(
+        r#"
+        class A {
+            static String log = start();
+            static String start() { return "A"; }
+        }
+
+        class B extends A {
+            static String tag = A.log + "B";
+        }
+
+        class C extends B {
+            static String tag2 = B.tag + "C" + depth(200);
+            static int depth(int n) {
+                if (n == 0) {
+                    return 0;
+                }
+                return depth(n - 1);
+            }
+        }
+
+        public class InitChain {
+            public static void main(String[] args) {
+                System.out.println(C.tag2);
+                System.out.println(A.log);
+            }
+        }
+        "#,
+        "InitChain",
+    );
+    assert_eq!(out, "ABC0\nA\n");
+}
+
+// ----- the debugger -----
+
+/// A scripted debug host: follows a fixed list of commands and records
+/// every pause's snapshot for assertions.
+struct ScriptedHost {
+    script: Vec<DebugCommand>,
+    at: usize,
+    pauses: Vec<DebugSnapshot>,
+}
+
+impl ScriptedHost {
+    fn new(script: Vec<DebugCommand>) -> Self {
+        Self {
+            script,
+            at: 0,
+            pauses: Vec::new(),
+        }
+    }
+}
+
+impl DebugHost for ScriptedHost {
+    fn on_pause(&mut self, snapshot: &DebugSnapshot) -> DebugControl {
+        self.pauses.push(snapshot.clone());
+        let command = self
+            .script
+            .get(self.at)
+            .copied()
+            .unwrap_or(DebugCommand::Continue);
+        self.at += 1;
+        DebugControl {
+            command,
+            breakpoints: None,
+        }
+    }
+}
+
+fn debug_run(
+    source: &str,
+    class: &str,
+    breakpoints: &[(&str, u32)],
+    script: Vec<DebugCommand>,
+) -> (ScriptedHost, String, Result<ExitStatus, VmError>) {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: format!("{class}.java"),
+        text: source.into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for compiled in compilation.classes {
+        vm.load_class(compiled.class_file).unwrap();
+    }
+    let breakpoints: Vec<Breakpoint> = breakpoints
+        .iter()
+        .map(|(file, line)| Breakpoint {
+            file: (*file).to_owned(),
+            line: *line,
+        })
+        .collect();
+    let mut host = ScriptedHost::new(script);
+    let result = vm.run_main_debug(class, &[], &breakpoints, &mut host);
+    (host, console.stdout_text(), result)
+}
+
+const DEBUG_PROGRAM: &str = r"public class Dbg {
+    static int square(int x) {
+        int result = x * x;
+        return result;
+    }
+
+    public static void main(String[] args) {
+        int total = 0;
+        for (int i = 1; i <= 3; i++) {
+            total += square(i);
+        }
+        System.out.println(total);
+    }
+}
+";
+
+#[test]
+fn breakpoint_pauses_each_arrival_with_named_locals() {
+    // Line 10 is `total += square(i);` — inside the loop, 3 arrivals.
+    let (host, stdout, result) = debug_run(
+        DEBUG_PROGRAM,
+        "Dbg",
+        &[("Dbg.java", 10)],
+        vec![
+            DebugCommand::Continue,
+            DebugCommand::Continue,
+            DebugCommand::Continue,
+        ],
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(stdout, "14\n");
+    assert_eq!(host.pauses.len(), 3);
+    for (index, pause) in host.pauses.iter().enumerate() {
+        assert_eq!(pause.reason, PauseReason::Breakpoint);
+        let top = &pause.frames[0];
+        assert_eq!(top.class_name, "Dbg");
+        assert_eq!(top.method_name, "main");
+        assert_eq!(top.source_file, "Dbg.java");
+        assert_eq!(top.line, Some(10));
+        // Named locals with values at the pause point.
+        let get = |name: &str| {
+            top.locals.iter().find(|(n, _)| n == name).map_or_else(
+                || panic!("missing local {name}: {:?}", top.locals),
+                |(_, v)| v.clone(),
+            )
+        };
+        let i = i32::try_from(index).expect("small index") + 1;
+        assert_eq!(get("i"), i.to_string());
+        let expected_total: i32 = (1..i).map(|n| n * n).sum();
+        assert_eq!(get("total"), expected_total.to_string());
+        assert!(get("args").starts_with('['), "{:?}", top.locals);
+    }
+}
+
+#[test]
+fn step_into_descends_and_step_out_returns() {
+    let (host, stdout, result) = debug_run(
+        DEBUG_PROGRAM,
+        "Dbg",
+        &[("Dbg.java", 10)],
+        vec![
+            DebugCommand::StepInto, // from line 10 into square's line 3
+            DebugCommand::StepOut,  // back to main
+            DebugCommand::Continue, // skip the 2nd breakpoint arrival
+            DebugCommand::Continue, // skip the 3rd
+        ],
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(stdout, "14\n");
+
+    // Pause 2: inside square(), with the call stack showing main below.
+    let inside = &host.pauses[1];
+    assert_eq!(inside.reason, PauseReason::Step);
+    assert_eq!(inside.frames[0].method_name, "square");
+    assert_eq!(inside.frames[0].line, Some(3));
+    assert_eq!(inside.frames.len(), 2);
+    assert_eq!(inside.frames[1].method_name, "main");
+    let x = inside.frames[0]
+        .locals
+        .iter()
+        .find(|(n, _)| n == "x")
+        .map(|(_, v)| v.clone());
+    assert_eq!(x.as_deref(), Some("1"));
+
+    // Pause 3: stepped out, back in main.
+    let out = &host.pauses[2];
+    assert_eq!(out.frames[0].method_name, "main");
+    assert_eq!(out.frames.len(), 1);
+}
+
+#[test]
+fn step_over_stays_in_the_frame() {
+    let (host, _, result) = debug_run(
+        DEBUG_PROGRAM,
+        "Dbg",
+        &[("Dbg.java", 8)], // int total = 0;
+        vec![
+            DebugCommand::StepOver, // to line 9 (for)
+            DebugCommand::StepOver, // to line 10 — over the call, not into it
+            DebugCommand::StepOver, // loop update / next line, still in main
+            DebugCommand::Continue,
+        ],
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert!(host.pauses.len() >= 4, "{}", host.pauses.len());
+    for pause in &host.pauses[..4] {
+        assert_eq!(pause.frames[0].method_name, "main", "{pause:?}");
+        assert_eq!(pause.frames.len(), 1);
+    }
+    assert_eq!(host.pauses[1].frames[0].line, Some(9));
+    assert_eq!(host.pauses[2].frames[0].line, Some(10));
+}
+
+#[test]
+fn terminate_stops_the_program() {
+    let (host, stdout, result) = debug_run(
+        DEBUG_PROGRAM,
+        "Dbg",
+        &[("Dbg.java", 10)],
+        vec![DebugCommand::Terminate],
+    );
+    assert!(matches!(result, Err(VmError::Stopped)), "{result:?}");
+    assert_eq!(stdout, "");
+    assert_eq!(host.pauses.len(), 1);
+}
+
+#[test]
+fn interrupt_pauses_a_running_loop() {
+    struct InterruptingHost {
+        asked: bool,
+        paused: bool,
+    }
+    impl DebugHost for InterruptingHost {
+        fn on_pause(&mut self, snapshot: &DebugSnapshot) -> DebugControl {
+            assert_eq!(snapshot.reason, PauseReason::Interrupt);
+            self.paused = true;
+            DebugControl {
+                command: DebugCommand::Terminate,
+                breakpoints: None,
+            }
+        }
+        fn interrupt_requested(&mut self) -> bool {
+            self.asked = true;
+            true
+        }
+    }
+
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Spin.java".into(),
+        text: r"
+        public class Spin {
+            public static void main(String[] args) {
+                while (true) {
+                    int x = 1;
+                }
+            }
+        }
+        "
+        .into(),
+    }]);
+    assert!(compilation.success());
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for compiled in compilation.classes {
+        vm.load_class(compiled.class_file).unwrap();
+    }
+    let mut host = InterruptingHost {
+        asked: false,
+        paused: false,
+    };
+    let result = vm.run_main_debug("Spin", &[], &[], &mut host);
+    assert!(matches!(result, Err(VmError::Stopped)), "{result:?}");
+    assert!(host.asked && host.paused);
 }
 
 #[test]

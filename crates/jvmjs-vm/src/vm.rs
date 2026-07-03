@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use jvmjs_classfile::{ClassFile, MethodAccessFlags};
 
+use crate::debug::{Breakpoint, DebugHost};
 use crate::interpreter::Interpreter;
 use crate::io::ConsoleIo;
 use crate::value::{HeapObject, JValue};
@@ -34,6 +35,8 @@ pub enum VmError {
     UnknownIntrinsic(String),
     #[error("operand stack underflow (malformed bytecode)")]
     StackUnderflow,
+    #[error("the program was stopped by the debugger")]
+    Stopped,
 }
 
 /// Options controlling a VM instance.
@@ -43,10 +46,9 @@ pub struct VmOptions {
     /// student's `while (true) {}` can't hang the browser tab.
     pub max_instructions: u64,
     /// Maximum method-call depth; exceeding it raises Java's
-    /// `StackOverflowError`. The interpreter currently recurses on the
-    /// host stack, so this must stay well inside the WASM stack budget;
-    /// deep-recursion support means moving to an explicit frame stack
-    /// (see `specs/RUNTIME.md`).
+    /// `StackOverflowError`. Frames live on an explicit heap-allocated
+    /// stack (see `specs/RUNTIME.md`), so this is purely a Java
+    /// semantics knob — the host stack stays O(1) at any depth.
     pub max_call_depth: u32,
     /// Seed for `Math.random()` (Java's LCG). `None` uses a fixed
     /// default — deterministic, which tests rely on; hosts that want
@@ -58,7 +60,7 @@ impl Default for VmOptions {
     fn default() -> Self {
         Self {
             max_instructions: 500_000_000,
-            max_call_depth: 256,
+            max_call_depth: 4096,
             random_seed: None,
         }
     }
@@ -126,6 +128,28 @@ impl<'host> Vm<'host> {
 
     /// Run `public static void main(String[] args)` of the named class.
     pub fn run_main(&mut self, class_name: &str, args: &[String]) -> Result<ExitStatus, VmError> {
+        self.run_main_inner(class_name, args, None)
+    }
+
+    /// Run under a debugger: pauses at `breakpoints` (and on host
+    /// interrupts), blocking in [`DebugHost::on_pause`] until the host
+    /// picks a command.
+    pub fn run_main_debug(
+        &mut self,
+        class_name: &str,
+        args: &[String],
+        breakpoints: &[Breakpoint],
+        host: &mut dyn DebugHost,
+    ) -> Result<ExitStatus, VmError> {
+        self.run_main_inner(class_name, args, Some((breakpoints, host)))
+    }
+
+    fn run_main_inner(
+        &mut self,
+        class_name: &str,
+        args: &[String],
+        debug: Option<(&[Breakpoint], &mut dyn DebugHost)>,
+    ) -> Result<ExitStatus, VmError> {
         let class = self
             .classes
             .get(class_name)
@@ -150,6 +174,9 @@ impl<'host> Vm<'host> {
             self.options.max_call_depth,
             self.options.random_seed,
         );
+        if let Some((breakpoints, host)) = debug {
+            interpreter.attach_debugger(host, breakpoints);
+        }
         let arg_refs: Vec<JValue> = args
             .iter()
             .map(|a| JValue::Ref(Some(interpreter.intern_string(a))))

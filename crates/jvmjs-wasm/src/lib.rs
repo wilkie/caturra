@@ -45,9 +45,127 @@ struct JsCompileResult {
     diagnostics: Vec<JsDiagnostic>,
 }
 
+/// A debugger host backed by JS callbacks; `on_pause` blocks the
+/// worker until the main thread supplies a command.
+struct JsDebugHost<'js> {
+    on_pause: &'js js_sys::Function,
+    poll_interrupt: Option<&'js js_sys::Function>,
+}
+
+impl jvmjs_vm::DebugHost for JsDebugHost<'_> {
+    fn on_pause(&mut self, snapshot: &jvmjs_vm::DebugSnapshot) -> jvmjs_vm::DebugControl {
+        let payload = snapshot_to_json(snapshot);
+        let response = self
+            .on_pause
+            .call1(&JsValue::NULL, &JsValue::from_str(&payload))
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_default();
+        parse_debug_control(&response)
+    }
+
+    fn interrupt_requested(&mut self) -> bool {
+        self.poll_interrupt
+            .and_then(|f| f.call0(&JsValue::NULL).ok())
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Serialize)]
+struct JsSnapshotFrame<'s> {
+    #[serde(rename = "className")]
+    class_name: &'s str,
+    #[serde(rename = "methodName")]
+    method_name: &'s str,
+    #[serde(rename = "sourceFile")]
+    source_file: &'s str,
+    line: Option<u32>,
+    locals: Vec<(&'s str, &'s str)>,
+}
+
+#[derive(Serialize)]
+struct JsSnapshot<'s> {
+    reason: &'static str,
+    frames: Vec<JsSnapshotFrame<'s>>,
+}
+
+fn snapshot_to_json(snapshot: &jvmjs_vm::DebugSnapshot) -> String {
+    let js = JsSnapshot {
+        reason: match snapshot.reason {
+            jvmjs_vm::PauseReason::Breakpoint => "breakpoint",
+            jvmjs_vm::PauseReason::Step => "step",
+            jvmjs_vm::PauseReason::Interrupt => "interrupt",
+        },
+        frames: snapshot
+            .frames
+            .iter()
+            .map(|f| JsSnapshotFrame {
+                class_name: &f.class_name,
+                method_name: &f.method_name,
+                source_file: &f.source_file,
+                line: f.line,
+                locals: f
+                    .locals
+                    .iter()
+                    .map(|(n, v)| (n.as_str(), v.as_str()))
+                    .collect(),
+            })
+            .collect(),
+    };
+    serde_json::to_string(&js).unwrap_or_default()
+}
+
+#[derive(Deserialize)]
+struct JsBreakpoint {
+    file: String,
+    line: u32,
+}
+
+#[derive(Deserialize)]
+struct JsDebugControl {
+    command: String,
+    breakpoints: Option<Vec<JsBreakpoint>>,
+}
+
+fn parse_breakpoints(json: &str) -> Vec<jvmjs_vm::Breakpoint> {
+    serde_json::from_str::<Vec<JsBreakpoint>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|b| jvmjs_vm::Breakpoint {
+            file: b.file,
+            line: b.line,
+        })
+        .collect()
+}
+
+fn parse_debug_control(json: &str) -> jvmjs_vm::DebugControl {
+    let parsed: Option<JsDebugControl> = serde_json::from_str(json).ok();
+    let (command, breakpoints) = parsed.map_or((String::from("terminate"), None), |c| {
+        (c.command, c.breakpoints)
+    });
+    jvmjs_vm::DebugControl {
+        command: match command.as_str() {
+            "continue" => jvmjs_vm::DebugCommand::Continue,
+            "stepOver" => jvmjs_vm::DebugCommand::StepOver,
+            "stepInto" => jvmjs_vm::DebugCommand::StepInto,
+            "stepOut" => jvmjs_vm::DebugCommand::StepOut,
+            _ => jvmjs_vm::DebugCommand::Terminate,
+        },
+        breakpoints: breakpoints.map(|list| {
+            list.into_iter()
+                .map(|b| jvmjs_vm::Breakpoint {
+                    file: b.file,
+                    line: b.line,
+                })
+                .collect()
+        }),
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct JsRunResult {
-    /// `"completed"`, `"exited"`, or `"error"`.
+    /// `"completed"`, `"exited"`, `"stopped"`, or `"error"`.
     status: &'static str,
     #[serde(rename = "exitCode")]
     exit_code: i32,
@@ -203,6 +321,72 @@ impl JvmSession {
             Ok(jvmjs_vm::vm::ExitStatus::Exited(code)) => JsRunResult {
                 status: "exited",
                 exit_code: code,
+                error: None,
+            },
+            Err(e) => JsRunResult {
+                status: "error",
+                exit_code: 1,
+                error: Some(e.to_string()),
+            },
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// `java` under a debugger. `breakpoints` is JSON
+    /// `[{"file","line"}]`. `on_pause` receives a snapshot as a JSON
+    /// string and must return a command JSON string
+    /// `{"command": "continue|stepOver|stepInto|stepOut|terminate",
+    ///   "breakpoints"?: [{"file","line"}]}` — it may block (the worker
+    /// waits on a `SharedArrayBuffer`). `poll_interrupt`, if given, is
+    /// called periodically and returns whether to pause.
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = runDebug)]
+    pub fn run_debug(
+        &mut self,
+        main_class: &str,
+        args: Vec<String>,
+        breakpoints_json: &str,
+        stdout: &js_sys::Function,
+        stderr: &js_sys::Function,
+        stdin: Option<js_sys::Function>,
+        on_pause: &js_sys::Function,
+        poll_interrupt: Option<js_sys::Function>,
+    ) -> Result<JsValue, JsValue> {
+        let mut console = JsConsole {
+            stdout,
+            stderr,
+            stdin: stdin.as_ref(),
+        };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let seed = (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64;
+        let options = VmOptions {
+            random_seed: Some(seed),
+            ..VmOptions::default()
+        };
+        let breakpoints = parse_breakpoints(breakpoints_json);
+        let mut vm = Vm::new(options, &mut self.vfs, &mut console);
+        for compiled in &self.classes {
+            vm.load_class(compiled.class_file.clone())
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        }
+        let mut host = JsDebugHost {
+            on_pause,
+            poll_interrupt: poll_interrupt.as_ref(),
+        };
+        let result = match vm.run_main_debug(main_class, &args, &breakpoints, &mut host) {
+            Ok(jvmjs_vm::vm::ExitStatus::Completed) => JsRunResult {
+                status: "completed",
+                exit_code: 0,
+                error: None,
+            },
+            Ok(jvmjs_vm::vm::ExitStatus::Exited(code)) => JsRunResult {
+                status: "exited",
+                exit_code: code,
+                error: None,
+            },
+            Err(jvmjs_vm::VmError::Stopped) => JsRunResult {
+                status: "stopped",
+                exit_code: 0,
                 error: None,
             },
             Err(e) => JsRunResult {

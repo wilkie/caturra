@@ -58,6 +58,18 @@ fn emit_class(
     class.this_class = intern_class(&mut class.constant_pool, &decl.name);
     let super_name = decl.superclass.as_deref().unwrap_or("java/lang/Object");
     class.super_class = intern_class(&mut class.constant_pool, super_name);
+
+    // SourceFile attribute: which compilation unit this class came
+    // from — the debugger keys breakpoints by (file, line).
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let file_index = class.constant_pool.intern_utf8(file_name);
+    let source_file_name = class
+        .constant_pool
+        .intern_utf8(jvmjs_classfile::debug::SOURCE_FILE_ATTRIBUTE);
+    class.attributes.push(AttributeInfo {
+        name_index: source_file_name,
+        info: jvmjs_classfile::debug::encode_source_file(file_index),
+    });
     for interface in &decl.interfaces {
         let index = intern_class(&mut class.constant_pool, interface);
         class.interfaces.push(index);
@@ -172,6 +184,7 @@ fn emit_clinit(
         scopes: vec![Vec::new()],
         next_slot: 0,
         loop_stack: Vec::new(),
+        local_var_debug: Vec::new(),
     };
     for field in &decl.fields {
         if !field.is_static {
@@ -183,7 +196,8 @@ fn emit_clinit(
     }
     body.code.push_op(op::RETURN, 0);
     let max_locals = body.next_slot;
-    let (bytecode, max_stack) = body.code.finish();
+    let local_var_debug = std::mem::take(&mut body.local_var_debug);
+    let (bytecode, max_stack, line_numbers) = body.code.finish();
     finish_method_info(
         pool,
         "<clinit>",
@@ -192,10 +206,15 @@ fn emit_clinit(
         max_stack,
         max_locals,
         bytecode,
+        &line_numbers,
+        &local_var_debug,
     )
 }
 
-/// Assemble the final [`MethodInfo`] from emitted parts.
+/// Assemble the final [`MethodInfo`] from emitted parts, including the
+/// `LineNumberTable` and `LocalVariableTable` debug attributes nested
+/// in the `Code` attribute.
+#[allow(clippy::too_many_arguments)] // one assembly point
 fn finish_method_info(
     pool: &mut ConstantPool,
     name: &str,
@@ -204,13 +223,43 @@ fn finish_method_info(
     max_stack: u16,
     max_locals: u16,
     code: Vec<u8>,
+    line_numbers: &[(u16, u16)],
+    local_var_debug: &[(String, String, u16, u16)],
 ) -> MethodInfo {
+    let code_len = u16::try_from(code.len()).unwrap_or(u16::MAX);
+    let mut code_attributes = Vec::new();
+    if !line_numbers.is_empty() {
+        let name_index = pool.intern_utf8(jvmjs_classfile::debug::LINE_NUMBER_TABLE_ATTRIBUTE);
+        code_attributes.push(AttributeInfo {
+            name_index,
+            info: jvmjs_classfile::debug::encode_line_number_table(line_numbers),
+        });
+    }
+    if !local_var_debug.is_empty() {
+        let entries: Vec<jvmjs_classfile::debug::LocalVariableEntry> = local_var_debug
+            .iter()
+            .map(|(var_name, var_descriptor, slot, start_pc)| {
+                jvmjs_classfile::debug::LocalVariableEntry {
+                    start_pc: *start_pc,
+                    length: code_len.saturating_sub(*start_pc),
+                    name_index: pool.intern_utf8(var_name),
+                    descriptor_index: pool.intern_utf8(var_descriptor),
+                    index: *slot,
+                }
+            })
+            .collect();
+        let name_index = pool.intern_utf8(jvmjs_classfile::debug::LOCAL_VARIABLE_TABLE_ATTRIBUTE);
+        code_attributes.push(AttributeInfo {
+            name_index,
+            info: jvmjs_classfile::debug::encode_local_variable_table(&entries),
+        });
+    }
     let code_attribute = CodeAttribute {
         max_stack,
         max_locals,
         code,
         exception_table: Vec::new(),
-        attributes: Vec::new(),
+        attributes: code_attributes,
     };
     let name_index = pool.intern_utf8(name);
     let descriptor_index = pool.intern_utf8(descriptor);
@@ -1117,6 +1166,27 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
     }
 }
 
+/// The span a statement's line marker should use (`None` for blocks —
+/// their inner statements mark themselves).
+fn statement_span(stmt: &Stmt) -> Option<SourceSpan> {
+    match stmt {
+        Stmt::Block(_) => None,
+        Stmt::LocalDecl { span, .. }
+        | Stmt::Assign { span, .. }
+        | Stmt::ForEach { span, .. }
+        | Stmt::If { span, .. }
+        | Stmt::While { span, .. }
+        | Stmt::DoWhile { span, .. }
+        | Stmt::For { span, .. }
+        | Stmt::Break { span }
+        | Stmt::Continue { span }
+        | Stmt::Return { span, .. }
+        | Stmt::SuperCall { span, .. }
+        | Stmt::ThisCall { span, .. } => Some(*span),
+        Stmt::Expr(expr) => Some(expr.span()),
+    }
+}
+
 struct LocalVar {
     slot: u16,
     ty: JType,
@@ -1152,12 +1222,17 @@ fn emit_method(
         scopes: vec![Vec::new()],
         next_slot: u16::from(!decl.is_static),
         loop_stack: Vec::new(),
+        local_var_debug: Vec::new(),
     };
 
+    if !decl.is_static {
+        body.record_local_debug("this", JType::Object(class_id), 0);
+    }
     for param in &decl.params {
         let ty = table.resolve_type(&param.ty).unwrap_or(JType::Unsupported);
         let slot = body.next_slot;
         body.next_slot += ty.width();
+        body.record_local_debug(&param.name, ty, slot);
         body.scopes[0].push((
             param.name.clone(),
             LocalVar {
@@ -1236,7 +1311,8 @@ fn emit_method(
     body.code.push_op(op::RETURN, 0);
 
     let max_locals = body.next_slot;
-    let (bytecode, max_stack) = body.code.finish();
+    let local_var_debug = std::mem::take(&mut body.local_var_debug);
+    let (bytecode, max_stack, line_numbers) = body.code.finish();
 
     let descriptor = method_descriptor(path, diagnostics, table, decl);
     let mut flags = 0;
@@ -1262,6 +1338,8 @@ fn emit_method(
         max_stack,
         max_locals,
         bytecode,
+        &line_numbers,
+        &local_var_debug,
     )
 }
 
@@ -1975,12 +2053,24 @@ struct BodyGen<'a> {
     next_slot: u16,
     /// Innermost-last enclosing loops, for `break`/`continue`.
     loop_stack: Vec<LoopLabels>,
+    /// `(name, descriptor, slot, live-from offset)` per declared local,
+    /// for the `LocalVariableTable` debug attribute. Slots are never
+    /// reused, so live ranges safely extend to the end of the method.
+    local_var_debug: Vec<(String, String, u16, u16)>,
 }
 
 impl BodyGen<'_> {
     fn error(&mut self, span: SourceSpan, message: impl Into<String>) {
         self.diagnostics
             .push(Diagnostic::error(self.path, message, span));
+    }
+
+    /// Record a declared local for the `LocalVariableTable`.
+    fn record_local_debug(&mut self, name: &str, ty: JType, slot: u16) {
+        let descriptor = ty.descriptor(self.table);
+        let start = self.code.offset();
+        self.local_var_debug
+            .push((name.to_owned(), descriptor, slot, start));
     }
 
     fn lookup(&mut self, name: &str) -> Option<&mut LocalVar> {
@@ -1995,6 +2085,9 @@ impl BodyGen<'_> {
     // ----- statements -----
 
     fn statement(&mut self, stmt: &Stmt) {
+        if let Some(span) = statement_span(stmt) {
+            self.code.mark_line(span.start.line);
+        }
         match stmt {
             Stmt::Block(statements) => {
                 self.scopes.push(Vec::new());
@@ -2278,6 +2371,7 @@ impl BodyGen<'_> {
             }
             let slot = self.next_slot;
             self.next_slot += var_ty.width();
+            self.record_local_debug(&declarator.name, var_ty, slot);
 
             let assigned = if let Some(init) = &declarator.init {
                 // `int[] a = {1, 2};` — the literal takes its type
@@ -3503,6 +3597,7 @@ impl BodyGen<'_> {
         }
         let var_slot = self.next_slot;
         self.next_slot += var_ty.width();
+        self.record_local_debug(name, var_ty, var_slot);
         self.scopes.last_mut().expect("scope pushed").push((
             name.to_owned(),
             LocalVar {
@@ -3584,6 +3679,7 @@ impl BodyGen<'_> {
         }
         let var_slot = self.next_slot;
         self.next_slot += var_ty.width();
+        self.record_local_debug(name, var_ty, var_slot);
         self.scopes.last_mut().expect("scope pushed").push((
             name.to_owned(),
             LocalVar {
@@ -5369,6 +5465,9 @@ struct Label(usize);
 /// our VM sizes its stack dynamically and never reads `max_stack`, and
 /// no external verifier consumes our output (`specs/RUNTIME.md`).
 struct CodeBuilder {
+    /// `(bytecode offset, source line)` pairs for the
+    /// `LineNumberTable` debug attribute.
+    line_numbers: Vec<(u16, u16)>,
     bytes: Vec<u8>,
     depth: u16,
     max_stack: u16,
@@ -5382,9 +5481,33 @@ impl CodeBuilder {
             bytes: Vec::new(),
             depth: 0,
             max_stack: 0,
+            line_numbers: Vec::new(),
             labels: Vec::new(),
             patches: Vec::new(),
         }
+    }
+
+    /// Current bytecode offset (for debug live ranges).
+    fn offset(&self) -> u16 {
+        u16::try_from(self.bytes.len()).unwrap_or(u16::MAX)
+    }
+
+    /// Record that the code emitted from here on corresponds to
+    /// `line` (1-based). Consecutive duplicate lines and same-offset
+    /// re-marks collapse.
+    fn mark_line(&mut self, line: u32) {
+        let line = u16::try_from(line).unwrap_or(u16::MAX);
+        let offset = u16::try_from(self.bytes.len()).unwrap_or(u16::MAX);
+        if let Some((last_offset, last_line)) = self.line_numbers.last_mut() {
+            if *last_line == line {
+                return;
+            }
+            if *last_offset == offset {
+                *last_line = line;
+                return;
+            }
+        }
+        self.line_numbers.push((offset, line));
     }
 
     fn new_label(&mut self) -> Label {
@@ -5445,7 +5568,7 @@ impl CodeBuilder {
     }
 
     /// Resolve all label patches and return the final bytecode.
-    fn finish(mut self) -> (Vec<u8>, u16) {
+    fn finish(mut self) -> (Vec<u8>, u16, Vec<(u16, u16)>) {
         for (patch_at, opcode_at, label) in &self.patches {
             let target = self.labels[label.0].expect("branch to unbound label");
             let offset = i32::try_from(target).expect("code too large")
@@ -5453,7 +5576,7 @@ impl CodeBuilder {
             let offset = i16::try_from(offset).expect("branch offset exceeds 16 bits");
             self.bytes[*patch_at..*patch_at + 2].copy_from_slice(&offset.to_be_bytes());
         }
-        (self.bytes, self.max_stack)
+        (self.bytes, self.max_stack, self.line_numbers)
     }
 }
 

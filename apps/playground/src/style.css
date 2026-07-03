@@ -79,3 +79,28 @@ label {
 .console-error {
   color: light-dark(#b00020, #ff6b6b);
 }
+
+.run-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+#debug-bar:not([hidden]) {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+#paused-view {
+  border: 1px solid #d0d5dd;
+  border-radius: 4px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: #fffaf0;
+}
+
+#paused-view pre {
+  margin: 0;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}

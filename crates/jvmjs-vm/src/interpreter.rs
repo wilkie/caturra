@@ -6,11 +6,16 @@
 //! know yet is a `VmError`, never undefined behavior.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use jvmjs_classfile::{
-    CODE_ATTRIBUTE, ClassFile, Constant, MethodInfo, opcodes as op, read_code_attribute,
+    CODE_ATTRIBUTE, ClassFile, CodeAttribute, Constant, MethodInfo, opcodes as op,
+    read_code_attribute,
 };
 
+use crate::debug::{
+    Breakpoint, DebugCommand, DebugFrameSnapshot, DebugHost, DebugSnapshot, PauseReason,
+};
 use crate::intrinsics::{self, IntrinsicStatics};
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, JValue};
@@ -33,9 +38,53 @@ pub(crate) struct Interpreter<'run> {
     /// initialization by the same thread proceeds).
     init_started: std::collections::HashSet<String>,
     remaining_instructions: u64,
-    call_depth: u32,
     max_call_depth: u32,
+    /// Suspended caller frames; the active frame lives as a local in
+    /// [`Self::run_loop`] and is swapped in and out on call/return.
+    /// Keeping frames as plain data (rather than host-stack recursion)
+    /// decouples Java call depth from the host stack and makes frames
+    /// inspectable — the foundation for step debugging.
+    frames: Vec<Frame<'run>>,
+    /// The active frame's (class, method, file, line) for stack traces;
+    /// class/method/file update on frame switches, line at each
+    /// line-table boundary.
+    current_location: Option<CurrentLocation>,
+    /// Parsed `Code` attributes with their debug tables, keyed by
+    /// `MethodInfo` address (stable for the run — `classes` is borrowed
+    /// for `'run`). Parsing once per method instead of once per call.
+    code_cache: HashMap<usize, Rc<MethodCode>>,
+    /// Debugger state, present only for debug runs.
+    debug: Option<DebugState<'run>>,
 }
+
+/// Where the active frame is, for stack traces and snapshots.
+struct CurrentLocation {
+    class_name: String,
+    method_name: String,
+    source_file: String,
+    line: Option<u16>,
+}
+
+/// Live debugger state for one run.
+struct DebugState<'run> {
+    host: &'run mut dyn DebugHost,
+    breakpoints: std::collections::HashSet<(String, u32)>,
+    /// Active step goal from the last pause.
+    step: Option<StepGoal>,
+    /// Skip the pause check once at this address (just resumed there).
+    resume_at: Option<usize>,
+    /// Countdown to the next interrupt poll.
+    poll_in: u32,
+}
+
+/// What "one step" means, decided when the step command was issued.
+struct StepGoal {
+    mode: DebugCommand,
+    /// Suspended-frame count when the step began.
+    depth: usize,
+}
+
+const INTERRUPT_POLL_INTERVAL: u32 = 4096;
 
 impl<'run> Interpreter<'run> {
     pub fn new(
@@ -57,9 +106,26 @@ impl<'run> Interpreter<'run> {
             statics: HashMap::new(),
             init_started: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
-            call_depth: 0,
             max_call_depth,
+            frames: Vec::new(),
+            current_location: None,
+            code_cache: HashMap::new(),
+            debug: None,
         }
+    }
+
+    /// Attach a debugger for this run.
+    pub fn attach_debugger(&mut self, host: &'run mut dyn DebugHost, breakpoints: &[Breakpoint]) {
+        self.debug = Some(DebugState {
+            host,
+            breakpoints: breakpoints
+                .iter()
+                .map(|b| (b.file.clone(), b.line))
+                .collect(),
+            step: None,
+            resume_at: None,
+            poll_in: INTERRUPT_POLL_INTERVAL,
+        });
     }
 
     /// Allocate (or reuse) the interned string for `text`, per JLS
@@ -74,500 +140,809 @@ impl<'run> Interpreter<'run> {
     }
 
     /// Execute one method to completion, returning its result value
-    /// (`None` for void). Recursion mirrors Java's call stack, guarded
-    /// by `max_call_depth` → `StackOverflowError`.
+    /// (`None` for void). The Java call stack is an explicit
+    /// [`Vec<Frame>`]; the host stack stays O(1) regardless of Java
+    /// call depth. `max_call_depth` frames → `StackOverflowError`.
     pub fn execute(
         &mut self,
-        class: &ClassFile,
-        method: &MethodInfo,
+        class: &'run ClassFile,
+        method: &'run MethodInfo,
         locals: Vec<JValue>,
     ) -> Result<Option<JValue>, VmError> {
-        self.call_depth += 1;
-        if self.call_depth > self.max_call_depth {
-            self.call_depth -= 1;
+        debug_assert!(self.frames.is_empty(), "execute is not re-entrant");
+        let frame = self.make_frame(class, method, locals)?;
+        let result = self.run_loop(frame);
+        if let Err(VmError::UncaughtException(message)) = result {
+            let message = self.attach_stack_trace(message);
+            self.frames.clear();
+            return Err(VmError::UncaughtException(message));
+        }
+        self.frames.clear();
+        result
+    }
+
+    /// Append a Java-style stack trace (`\tat Class.method(Class.java)`
+    /// lines, innermost first) to an uncaught exception's message.
+    fn attach_stack_trace(&self, message: String) -> String {
+        use std::fmt::Write as _;
+        let mut full = message;
+        let location = |file: &str, line: Option<u16>| match line {
+            Some(line) => format!("{file}:{line}"),
+            None => file.to_owned(),
+        };
+        if let Some(current) = &self.current_location {
+            let _ = write!(
+                full,
+                "\n\tat {}.{}({})",
+                current.class_name,
+                current.method_name,
+                location(&current.source_file, current.line)
+            );
+        }
+        for suspended in self.frames.iter().rev() {
+            let class_name = suspended.class.class_name().unwrap_or("<unknown>");
+            let _ = write!(
+                full,
+                "\n\tat {class_name}.{}({})",
+                suspended.method_name,
+                location(&suspended.code.source_file, suspended.current_line)
+            );
+        }
+        full
+    }
+
+    /// The per-instruction debugger hook: decides whether to pause at
+    /// `addr` (line boundary hit, step goal met, or host interrupt) and
+    /// blocks in `on_pause` if so. Returns the resume command.
+    fn debug_checkpoint(
+        &mut self,
+        frame: &mut Frame<'run>,
+        addr: usize,
+        boundary_line: u16,
+    ) -> Option<DebugCommand> {
+        let depth = self.frames.len();
+        let debug = self.debug.as_mut().expect("caller checked debug mode");
+
+        // Just resumed: the first instruction after a pause is the one
+        // we paused on — run it without re-pausing. The marker clears
+        // immediately so looping back to the same address pauses again.
+        if let Some(resume_addr) = debug.resume_at.take()
+            && resume_addr == addr
+        {
+            return None;
+        }
+
+        // Host interrupt (pause / stop button), polled sparsely.
+        debug.poll_in = debug.poll_in.saturating_sub(1);
+        let interrupted = if debug.poll_in == 0 {
+            debug.poll_in = INTERRUPT_POLL_INTERVAL;
+            debug.host.interrupt_requested()
+        } else {
+            false
+        };
+
+        let at_line_boundary = boundary_line != 0;
+        let reason = if interrupted {
+            Some(PauseReason::Interrupt)
+        } else if at_line_boundary
+            && debug
+                .breakpoints
+                .contains(&(frame.code.source_file.clone(), u32::from(boundary_line)))
+        {
+            Some(PauseReason::Breakpoint)
+        } else if at_line_boundary
+            && debug.step.as_ref().is_some_and(|goal| match goal.mode {
+                DebugCommand::StepInto => true,
+                DebugCommand::StepOver => depth <= goal.depth,
+                DebugCommand::StepOut => depth < goal.depth,
+                _ => false,
+            })
+        {
+            Some(PauseReason::Step)
+        } else {
+            None
+        };
+        let reason = reason?;
+
+        let snapshot = self.build_snapshot(frame, reason);
+        let debug = self.debug.as_mut().expect("still debugging");
+        let control = debug.host.on_pause(&snapshot);
+        if let Some(new_breakpoints) = control.breakpoints {
+            debug.breakpoints = new_breakpoints
+                .into_iter()
+                .map(|b| (b.file, b.line))
+                .collect();
+        }
+        debug.step = match control.command {
+            DebugCommand::StepInto | DebugCommand::StepOver | DebugCommand::StepOut => {
+                Some(StepGoal {
+                    mode: control.command,
+                    depth,
+                })
+            }
+            _ => None,
+        };
+        debug.resume_at = Some(addr);
+        Some(control.command)
+    }
+
+    /// Snapshot the paused call stack, innermost frame first.
+    fn build_snapshot(&self, active: &Frame<'run>, reason: PauseReason) -> DebugSnapshot {
+        let mut frames = Vec::with_capacity(1 + self.frames.len());
+        frames.push(self.snapshot_frame(active));
+        for suspended in self.frames.iter().rev() {
+            frames.push(self.snapshot_frame(suspended));
+        }
+        DebugSnapshot { reason, frames }
+    }
+
+    fn snapshot_frame(&self, frame: &Frame<'run>) -> DebugFrameSnapshot {
+        let pc = u16::try_from(frame.pc).unwrap_or(u16::MAX);
+        let locals = frame
+            .code
+            .local_vars
+            .iter()
+            .filter(|(_, _, _, start_pc)| *start_pc <= pc)
+            .map(|(name, _, slot, _)| {
+                let value = frame
+                    .locals
+                    .get(usize::from(*slot))
+                    .copied()
+                    .unwrap_or(JValue::NULL);
+                (name.clone(), self.render_value(value))
+            })
+            .collect();
+        DebugFrameSnapshot {
+            class_name: frame.class.class_name().unwrap_or("<unknown>").to_owned(),
+            method_name: frame.method_name.clone(),
+            source_file: frame.code.source_file.clone(),
+            line: frame.current_line.map(u32::from),
+            locals,
+        }
+    }
+
+    /// Render a value for the paused-locals view.
+    fn render_value(&self, value: JValue) -> String {
+        match value {
+            JValue::Int(v) => v.to_string(),
+            JValue::Long(v) => v.to_string(),
+            JValue::Float(v) => v.to_string(),
+            JValue::Double(v) => intrinsics::java_double_to_string(v),
+            JValue::Ref(None) => String::from("null"),
+            JValue::Ref(Some(reference)) => match self.heap.get(reference) {
+                Some(crate::value::HeapObject::JavaString(units)) => {
+                    format!("\"{}\"", String::from_utf16_lossy(units))
+                }
+                Some(crate::value::HeapObject::IntArray(values)) => {
+                    render_array(values.iter().map(i32::to_string))
+                }
+                Some(crate::value::HeapObject::DoubleArray(values)) => {
+                    render_array(values.iter().map(|v| intrinsics::java_double_to_string(*v)))
+                }
+                Some(crate::value::HeapObject::RefArray(values)) => {
+                    render_array(values.iter().map(|v| self.render_value(*v)))
+                }
+                Some(crate::value::HeapObject::ArrayList(values)) => {
+                    render_array(values.iter().map(|v| self.render_value(*v)))
+                }
+                Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                    format!("{class_name}@{reference:x}")
+                }
+                Some(crate::value::HeapObject::Scanner { .. }) => String::from("Scanner"),
+                Some(crate::value::HeapObject::File(path)) => format!("File({path})"),
+                Some(crate::value::HeapObject::Writer { path }) => {
+                    format!("PrintWriter({path})")
+                }
+                _ => String::from("<object>"),
+            },
+        }
+    }
+
+    /// Build a frame for a call: depth check, cached `Code` lookup,
+    /// locals sized to `max_locals`.
+    fn make_frame(
+        &mut self,
+        class: &'run ClassFile,
+        method: &'run MethodInfo,
+        mut locals: Vec<JValue>,
+    ) -> Result<Frame<'run>, VmError> {
+        if self.frames.len() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
             return Err(VmError::UncaughtException(String::from(
                 "java.lang.StackOverflowError",
             )));
         }
-        let result = self.execute_frame(class, method, locals);
-        self.call_depth -= 1;
-        result
+        let key = std::ptr::from_ref(method) as usize;
+        let code = if let Some(cached) = self.code_cache.get(&key) {
+            Rc::clone(cached)
+        } else {
+            let parsed = Rc::new(parse_method_code(class, method)?);
+            self.code_cache.insert(key, Rc::clone(&parsed));
+            parsed
+        };
+        if locals.len() < usize::from(code.attr.max_locals) {
+            locals.resize(usize::from(code.attr.max_locals), JValue::Int(0));
+        }
+        let method_name = class
+            .constant_pool
+            .get_utf8(method.name_index)
+            .unwrap_or("<unknown>")
+            .to_owned();
+        Ok(Frame {
+            class,
+            method_name,
+            code,
+            pc: 0,
+            current_line: None,
+            locals,
+            stack: Vec::new(),
+        })
     }
 
     /// The dispatch loop is one long match by design; splitting it per
-    /// opcode family would only scatter the instruction set.
+    /// opcode family would only scatter the instruction set. The outer
+    /// `'frames` loop re-establishes per-frame context after every
+    /// call/return; the inner loop decodes instructions.
     #[allow(clippy::too_many_lines)]
-    fn execute_frame(
-        &mut self,
-        class: &ClassFile,
-        method: &MethodInfo,
-        mut locals: Vec<JValue>,
-    ) -> Result<Option<JValue>, VmError> {
-        let class_name = class.class_name().unwrap_or("<unknown>").to_owned();
-        let malformed = |reason: String| VmError::MalformedClass {
-            name: class_name.clone(),
-            reason,
-        };
+    fn run_loop(&mut self, mut frame: Frame<'run>) -> Result<Option<JValue>, VmError> {
+        'frames: loop {
+            let class = frame.class;
+            let class_name = class.class_name().unwrap_or("<unknown>").to_owned();
+            self.current_location = Some(CurrentLocation {
+                class_name: class_name.clone(),
+                method_name: frame.method_name.clone(),
+                source_file: frame.code.source_file.clone(),
+                line: frame.current_line,
+            });
+            let malformed = |reason: String| VmError::MalformedClass {
+                name: class_name.clone(),
+                reason,
+            };
+            let code = Rc::clone(&frame.code);
+            let bytes = &code.attr.code;
+            let mut pc = frame.pc;
 
-        let code_info = method
-            .attributes
-            .iter()
-            .find(|a| class.constant_pool.get_utf8(a.name_index) == Some(CODE_ATTRIBUTE))
-            .ok_or_else(|| malformed(String::from("method has no Code attribute")))?;
-        let code = read_code_attribute(&code_info.info)
-            .map_err(|e| malformed(format!("bad Code attribute: {e}")))?;
+            loop {
+                if self.remaining_instructions == 0 {
+                    return Err(VmError::InstructionBudgetExceeded);
+                }
+                self.remaining_instructions -= 1;
 
-        if locals.len() < usize::from(code.max_locals) {
-            locals.resize(usize::from(code.max_locals), JValue::Int(0));
-        }
-        let mut frame = Frame {
-            locals,
-            stack: Vec::new(),
-        };
-        let bytes = &code.code;
-        let mut pc = 0usize;
+                let addr = pc;
 
-        loop {
-            if self.remaining_instructions == 0 {
-                return Err(VmError::InstructionBudgetExceeded);
-            }
-            self.remaining_instructions -= 1;
-
-            let addr = pc;
-            let opcode = *bytes.get(addr).ok_or_else(|| {
-                malformed(format!(
-                    "execution ran off the end of bytecode at pc {addr}"
-                ))
-            })?;
-            pc = addr + 1;
-
-            match opcode {
-                op::NOP => {}
-                op::ACONST_NULL => frame.stack.push(JValue::NULL),
-                op::ICONST_M1..=op::ICONST_5 => {
-                    let value = i32::from(opcode) - i32::from(op::ICONST_0);
-                    frame.stack.push(JValue::Int(value));
-                }
-                op::BIPUSH => {
-                    let byte = read_u8(bytes, &mut pc, &malformed)?;
-                    frame.stack.push(JValue::Int(i32::from(byte.cast_signed())));
-                }
-                op::SIPUSH => {
-                    let short = read_u16(bytes, &mut pc, &malformed)?;
-                    frame
-                        .stack
-                        .push(JValue::Int(i32::from(short.cast_signed())));
-                }
-                op::LDC => {
-                    let index = u16::from(read_u8(bytes, &mut pc, &malformed)?);
-                    let value = self.load_constant(class, index, &malformed)?;
-                    frame.stack.push(value);
-                }
-                op::LDC_W | op::LDC2_W => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    let value = self.load_constant(class, index, &malformed)?;
-                    frame.stack.push(value);
-                }
-
-                // ----- locals -----
-                op::ILOAD | op::DLOAD | op::ALOAD => {
-                    let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
-                    frame.load(slot, &malformed)?;
-                }
-                op::ILOAD_0..=op::ILOAD_3 => {
-                    frame.load(usize::from(opcode - op::ILOAD_0), &malformed)?;
-                }
-                op::DLOAD_0..=op::DLOAD_3 => {
-                    frame.load(usize::from(opcode - op::DLOAD_0), &malformed)?;
-                }
-                op::ALOAD_0..=op::ALOAD_3 => {
-                    frame.load(usize::from(opcode - op::ALOAD_0), &malformed)?;
-                }
-                op::ISTORE | op::DSTORE | op::ASTORE => {
-                    let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
-                    frame.store(slot, &malformed)?;
-                }
-                op::ISTORE_0..=op::ISTORE_3 => {
-                    frame.store(usize::from(opcode - op::ISTORE_0), &malformed)?;
-                }
-                op::DSTORE_0..=op::DSTORE_3 => {
-                    frame.store(usize::from(opcode - op::DSTORE_0), &malformed)?;
-                }
-                op::ASTORE_0..=op::ASTORE_3 => {
-                    frame.store(usize::from(opcode - op::ASTORE_0), &malformed)?;
-                }
-
-                // ----- stack manipulation -----
-                op::POP => {
-                    frame.pop()?;
-                }
-                op::POP2 => {
-                    // One category-2 value or two category-1 values.
-                    let top = frame.pop()?;
-                    if !matches!(top, JValue::Double(_) | JValue::Long(_)) {
-                        frame.pop()?;
+                // Source-line boundary: update the current line (for
+                // stack traces) and give the debugger a chance to
+                // pause before this line's first instruction runs.
+                let boundary_line = code.boundary_lines.get(addr).copied().unwrap_or(0);
+                if boundary_line != 0 {
+                    frame.current_line = Some(boundary_line);
+                    if let Some(location) = &mut self.current_location {
+                        location.line = Some(boundary_line);
                     }
                 }
-                op::DUP => {
-                    let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
-                    frame.stack.push(top);
+                if self.debug.is_some() {
+                    frame.pc = addr;
+                    if self.debug_checkpoint(&mut frame, addr, boundary_line)
+                        == Some(DebugCommand::Terminate)
+                    {
+                        return Err(VmError::Stopped);
+                    }
                 }
-                op::DUP2 => {
-                    // One category-2 value or the top two category-1s.
-                    let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
-                    if matches!(top, JValue::Double(_) | JValue::Long(_)) {
+
+                let opcode = *bytes.get(addr).ok_or_else(|| {
+                    malformed(format!(
+                        "execution ran off the end of bytecode at pc {addr}"
+                    ))
+                })?;
+                pc = addr + 1;
+
+                match opcode {
+                    op::NOP => {}
+                    op::ACONST_NULL => frame.stack.push(JValue::NULL),
+                    op::ICONST_M1..=op::ICONST_5 => {
+                        let value = i32::from(opcode) - i32::from(op::ICONST_0);
+                        frame.stack.push(JValue::Int(value));
+                    }
+                    op::BIPUSH => {
+                        let byte = read_u8(bytes, &mut pc, &malformed)?;
+                        frame.stack.push(JValue::Int(i32::from(byte.cast_signed())));
+                    }
+                    op::SIPUSH => {
+                        let short = read_u16(bytes, &mut pc, &malformed)?;
+                        frame
+                            .stack
+                            .push(JValue::Int(i32::from(short.cast_signed())));
+                    }
+                    op::LDC => {
+                        let index = u16::from(read_u8(bytes, &mut pc, &malformed)?);
+                        let value = self.load_constant(class, index, &malformed)?;
+                        frame.stack.push(value);
+                    }
+                    op::LDC_W | op::LDC2_W => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        let value = self.load_constant(class, index, &malformed)?;
+                        frame.stack.push(value);
+                    }
+
+                    // ----- locals -----
+                    op::ILOAD | op::DLOAD | op::ALOAD => {
+                        let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                        frame.load(slot, &malformed)?;
+                    }
+                    op::ILOAD_0..=op::ILOAD_3 => {
+                        frame.load(usize::from(opcode - op::ILOAD_0), &malformed)?;
+                    }
+                    op::DLOAD_0..=op::DLOAD_3 => {
+                        frame.load(usize::from(opcode - op::DLOAD_0), &malformed)?;
+                    }
+                    op::ALOAD_0..=op::ALOAD_3 => {
+                        frame.load(usize::from(opcode - op::ALOAD_0), &malformed)?;
+                    }
+                    op::ISTORE | op::DSTORE | op::ASTORE => {
+                        let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                        frame.store(slot, &malformed)?;
+                    }
+                    op::ISTORE_0..=op::ISTORE_3 => {
+                        frame.store(usize::from(opcode - op::ISTORE_0), &malformed)?;
+                    }
+                    op::DSTORE_0..=op::DSTORE_3 => {
+                        frame.store(usize::from(opcode - op::DSTORE_0), &malformed)?;
+                    }
+                    op::ASTORE_0..=op::ASTORE_3 => {
+                        frame.store(usize::from(opcode - op::ASTORE_0), &malformed)?;
+                    }
+
+                    // ----- stack manipulation -----
+                    op::POP => {
+                        frame.pop()?;
+                    }
+                    op::POP2 => {
+                        // One category-2 value or two category-1 values.
+                        let top = frame.pop()?;
+                        if !matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                            frame.pop()?;
+                        }
+                    }
+                    op::DUP => {
+                        let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
                         frame.stack.push(top);
-                    } else {
+                    }
+                    op::DUP2 => {
+                        // One category-2 value or the top two category-1s.
+                        let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
+                        if matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                            frame.stack.push(top);
+                        } else {
+                            let len = frame.stack.len();
+                            if len < 2 {
+                                return Err(VmError::StackUnderflow);
+                            }
+                            let under = frame.stack[len - 2];
+                            frame.stack.push(under);
+                            frame.stack.push(top);
+                        }
+                    }
+                    op::SWAP => {
                         let len = frame.stack.len();
                         if len < 2 {
                             return Err(VmError::StackUnderflow);
                         }
-                        let under = frame.stack[len - 2];
-                        frame.stack.push(under);
-                        frame.stack.push(top);
+                        frame.stack.swap(len - 1, len - 2);
                     }
-                }
-                op::SWAP => {
-                    let len = frame.stack.len();
-                    if len < 2 {
-                        return Err(VmError::StackUnderflow);
-                    }
-                    frame.stack.swap(len - 1, len - 2);
-                }
 
-                // ----- arithmetic (Java wrapping semantics) -----
-                op::IADD => frame.int_binop(i32::wrapping_add)?,
-                op::ISUB => frame.int_binop(i32::wrapping_sub)?,
-                op::IMUL => frame.int_binop(i32::wrapping_mul)?,
-                op::IDIV => frame.int_division(i32::wrapping_div)?,
-                op::IREM => frame.int_division(i32::wrapping_rem)?,
-                op::INEG => {
-                    let value = frame.pop_int()?;
-                    frame.stack.push(JValue::Int(value.wrapping_neg()));
-                }
-                op::DADD => frame.double_binop(|a, b| a + b)?,
-                op::DSUB => frame.double_binop(|a, b| a - b)?,
-                op::DMUL => frame.double_binop(|a, b| a * b)?,
-                op::DDIV => frame.double_binop(|a, b| a / b)?,
-                op::DREM => frame.double_binop(|a, b| a % b)?,
-                op::DNEG => {
-                    let value = frame.pop_double()?;
-                    frame.stack.push(JValue::Double(-value));
-                }
+                    // ----- arithmetic (Java wrapping semantics) -----
+                    op::IADD => frame.int_binop(i32::wrapping_add)?,
+                    op::ISUB => frame.int_binop(i32::wrapping_sub)?,
+                    op::IMUL => frame.int_binop(i32::wrapping_mul)?,
+                    op::IDIV => frame.int_division(i32::wrapping_div)?,
+                    op::IREM => frame.int_division(i32::wrapping_rem)?,
+                    op::INEG => {
+                        let value = frame.pop_int()?;
+                        frame.stack.push(JValue::Int(value.wrapping_neg()));
+                    }
+                    op::DADD => frame.double_binop(|a, b| a + b)?,
+                    op::DSUB => frame.double_binop(|a, b| a - b)?,
+                    op::DMUL => frame.double_binop(|a, b| a * b)?,
+                    op::DDIV => frame.double_binop(|a, b| a / b)?,
+                    op::DREM => frame.double_binop(|a, b| a % b)?,
+                    op::DNEG => {
+                        let value = frame.pop_double()?;
+                        frame.stack.push(JValue::Double(-value));
+                    }
 
-                // ----- conversions -----
-                op::I2D => {
-                    let value = frame.pop_int()?;
-                    frame.stack.push(JValue::Double(f64::from(value)));
-                }
-                op::D2I => {
-                    let value = frame.pop_double()?;
-                    // `as` matches JVM d2i: NaN -> 0, saturating bounds.
-                    frame.stack.push(JValue::Int(value as i32));
-                }
-                op::I2C => {
-                    let value = frame.pop_int()?;
-                    // i2c truncates to 16 bits and zero-extends.
-                    let truncated = (value.cast_unsigned() & 0xFFFF).cast_signed();
-                    frame.stack.push(JValue::Int(truncated));
-                }
+                    // ----- conversions -----
+                    op::I2D => {
+                        let value = frame.pop_int()?;
+                        frame.stack.push(JValue::Double(f64::from(value)));
+                    }
+                    op::D2I => {
+                        let value = frame.pop_double()?;
+                        // `as` matches JVM d2i: NaN -> 0, saturating bounds.
+                        frame.stack.push(JValue::Int(value as i32));
+                    }
+                    op::I2C => {
+                        let value = frame.pop_int()?;
+                        // i2c truncates to 16 bits and zero-extends.
+                        let truncated = (value.cast_unsigned() & 0xFFFF).cast_signed();
+                        frame.stack.push(JValue::Int(truncated));
+                    }
 
-                // ----- comparisons and branches -----
-                op::DCMPL | op::DCMPG => {
-                    let b = frame.pop_double()?;
-                    let a = frame.pop_double()?;
-                    let result = if a.is_nan() || b.is_nan() {
-                        if opcode == op::DCMPG { 1 } else { -1 }
-                    } else if a < b {
-                        -1
-                    } else {
-                        i32::from(a > b)
-                    };
-                    frame.stack.push(JValue::Int(result));
-                }
-                op::IFEQ..=op::IFLE => {
-                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                    let value = frame.pop_int()?;
-                    let jump = match opcode {
-                        op::IFEQ => value == 0,
-                        op::IFNE => value != 0,
-                        op::IFLT => value < 0,
-                        op::IFGE => value >= 0,
-                        op::IFGT => value > 0,
-                        _ => value <= 0,
-                    };
-                    if jump {
+                    // ----- comparisons and branches -----
+                    op::DCMPL | op::DCMPG => {
+                        let b = frame.pop_double()?;
+                        let a = frame.pop_double()?;
+                        let result = if a.is_nan() || b.is_nan() {
+                            if opcode == op::DCMPG { 1 } else { -1 }
+                        } else if a < b {
+                            -1
+                        } else {
+                            i32::from(a > b)
+                        };
+                        frame.stack.push(JValue::Int(result));
+                    }
+                    op::IFEQ..=op::IFLE => {
+                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                        let value = frame.pop_int()?;
+                        let jump = match opcode {
+                            op::IFEQ => value == 0,
+                            op::IFNE => value != 0,
+                            op::IFLT => value < 0,
+                            op::IFGE => value >= 0,
+                            op::IFGT => value > 0,
+                            _ => value <= 0,
+                        };
+                        if jump {
+                            pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                        }
+                    }
+                    op::IF_ICMPEQ..=op::IF_ICMPLE => {
+                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                        let b = frame.pop_int()?;
+                        let a = frame.pop_int()?;
+                        let jump = match opcode {
+                            op::IF_ICMPEQ => a == b,
+                            op::IF_ICMPNE => a != b,
+                            op::IF_ICMPLT => a < b,
+                            op::IF_ICMPGE => a >= b,
+                            op::IF_ICMPGT => a > b,
+                            _ => a <= b,
+                        };
+                        if jump {
+                            pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                        }
+                    }
+                    op::IF_ACMPEQ | op::IF_ACMPNE => {
+                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                        let b = frame.pop_ref()?;
+                        let a = frame.pop_ref()?;
+                        let jump = (a == b) == (opcode == op::IF_ACMPEQ);
+                        if jump {
+                            pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                        }
+                    }
+                    op::IFNULL | op::IFNONNULL => {
+                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                        let reference = frame.pop_ref()?;
+                        if reference.is_none() == (opcode == op::IFNULL) {
+                            pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                        }
+                    }
+                    op::GOTO => {
+                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
                         pc = branch_target(addr, offset, bytes.len(), &malformed)?;
                     }
-                }
-                op::IF_ICMPEQ..=op::IF_ICMPLE => {
-                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                    let b = frame.pop_int()?;
-                    let a = frame.pop_int()?;
-                    let jump = match opcode {
-                        op::IF_ICMPEQ => a == b,
-                        op::IF_ICMPNE => a != b,
-                        op::IF_ICMPLT => a < b,
-                        op::IF_ICMPGE => a >= b,
-                        op::IF_ICMPGT => a > b,
-                        _ => a <= b,
-                    };
-                    if jump {
-                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                    }
-                }
-                op::IF_ACMPEQ | op::IF_ACMPNE => {
-                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                    let b = frame.pop_ref()?;
-                    let a = frame.pop_ref()?;
-                    let jump = (a == b) == (opcode == op::IF_ACMPEQ);
-                    if jump {
-                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                    }
-                }
-                op::IFNULL | op::IFNONNULL => {
-                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                    let reference = frame.pop_ref()?;
-                    if reference.is_none() == (opcode == op::IFNULL) {
-                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                    }
-                }
-                op::GOTO => {
-                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                    pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                }
-                op::CHECKCAST | op::INSTANCEOF => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    let target = class
-                        .constant_pool
-                        .get_class_name(index)
-                        .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
-                        .to_owned();
-                    let reference = frame.pop_ref()?;
-                    let matches_type = match reference {
-                        None => false,
-                        Some(reference) => match self.heap.get(reference) {
-                            Some(crate::value::HeapObject::Instance { class_name, .. }) => {
-                                self.is_runtime_subtype(class_name, &target)
-                            }
-                            _ => false,
-                        },
-                    };
-                    if opcode == op::INSTANCEOF {
-                        frame.stack.push(JValue::Int(i32::from(matches_type)));
-                    } else {
-                        // checkcast: null always passes; a mismatch throws.
-                        if reference.is_some() && !matches_type {
-                            let actual = match reference.and_then(|r| self.heap.get(r)) {
+                    op::CHECKCAST | op::INSTANCEOF => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        let target = class
+                            .constant_pool
+                            .get_class_name(index)
+                            .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
+                            .to_owned();
+                        let reference = frame.pop_ref()?;
+                        let matches_type = match reference {
+                            None => false,
+                            Some(reference) => match self.heap.get(reference) {
                                 Some(crate::value::HeapObject::Instance { class_name, .. }) => {
-                                    class_name.clone()
+                                    self.is_runtime_subtype(class_name, &target)
                                 }
-                                _ => String::from("<object>"),
-                            };
-                            return Err(VmError::UncaughtException(format!(
-                                "java.lang.ClassCastException: class {actual} cannot be cast \
+                                _ => false,
+                            },
+                        };
+                        if opcode == op::INSTANCEOF {
+                            frame.stack.push(JValue::Int(i32::from(matches_type)));
+                        } else {
+                            // checkcast: null always passes; a mismatch throws.
+                            if reference.is_some() && !matches_type {
+                                let actual = match reference.and_then(|r| self.heap.get(r)) {
+                                    Some(crate::value::HeapObject::Instance {
+                                        class_name, ..
+                                    }) => class_name.clone(),
+                                    _ => String::from("<object>"),
+                                };
+                                return Err(VmError::UncaughtException(format!(
+                                    "java.lang.ClassCastException: class {actual} cannot be cast \
                                  to class {target}"
-                            )));
+                                )));
+                            }
+                            frame.stack.push(JValue::Ref(reference));
                         }
-                        frame.stack.push(JValue::Ref(reference));
                     }
-                }
 
-                // ----- objects -----
-                op::NEW => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    let target = class
-                        .constant_pool
-                        .get_class_name(index)
-                        .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
-                        .to_owned();
-                    let object = if self.classes.contains_key(&target) {
-                        self.ensure_initialized(&target)?;
-                        self.new_instance(&target)
-                    } else {
-                        intrinsics::instantiate(&target).ok_or_else(|| {
-                            VmError::UnknownIntrinsic(format!("cannot instantiate {target}"))
-                        })?
-                    };
-                    let reference = self.heap.alloc(object);
-                    frame.stack.push(JValue::Ref(Some(reference)));
-                }
-                op::INVOKESPECIAL => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    self.invoke_special_op(class, &mut frame, index, &malformed)?;
-                }
-                op::GETSTATIC => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    self.getstatic_op(class, &mut frame, index, &malformed)?;
-                }
-                op::PUTSTATIC => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    self.putstatic_op(class, &mut frame, index, &malformed)?;
-                }
-                op::GETFIELD => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    self.getfield_op(class, &mut frame, index, &malformed)?;
-                }
-                op::PUTFIELD => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    self.putfield_op(class, &mut frame, index, &malformed)?;
-                }
-                op::INVOKEVIRTUAL => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    self.invoke_virtual_op(class, &mut frame, index, &malformed)?;
-                }
-                op::INVOKESTATIC => {
-                    let index = read_u16(bytes, &mut pc, &malformed)?;
-                    let (target_class, method_name, descriptor) = class
-                        .constant_pool
-                        .get_member_ref(index)
-                        .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
-                        .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
-                    let widths = descriptor_arg_widths(&descriptor)
-                        .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
-                    let mut args = Vec::with_capacity(widths.len());
-                    for _ in &widths {
-                        args.push(frame.pop()?);
+                    // ----- objects -----
+                    op::NEW => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        let target = class
+                            .constant_pool
+                            .get_class_name(index)
+                            .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
+                            .to_owned();
+                        let object = if self.classes.contains_key(&target) {
+                            if let Some(mut chain) = self.begin_initialization(&target)?
+                                && !chain.is_empty()
+                            {
+                                // Run <clinit> chain first, then re-execute
+                                // this instruction (JVMS §5.5).
+                                frame.pc = addr;
+                                let first = chain.remove(0);
+                                self.frames.push(std::mem::replace(&mut frame, first));
+                                for pending in chain.into_iter().rev() {
+                                    self.frames.push(pending);
+                                }
+                                continue 'frames;
+                            }
+                            self.new_instance(&target)
+                        } else {
+                            intrinsics::instantiate(&target).ok_or_else(|| {
+                                VmError::UnknownIntrinsic(format!("cannot instantiate {target}"))
+                            })?
+                        };
+                        let reference = self.heap.alloc(object);
+                        frame.stack.push(JValue::Ref(Some(reference)));
                     }
-                    args.reverse();
-                    let result = self.invoke_static(
-                        &target_class,
-                        &method_name,
-                        &descriptor,
-                        &widths,
-                        &args,
-                    )?;
-                    if let Some(value) = result {
-                        frame.stack.push(value);
+                    op::INVOKESPECIAL => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        if let Some(callee) =
+                            self.invoke_special_op(class, &mut frame, index, &malformed)?
+                        {
+                            frame.pc = pc;
+                            self.frames.push(std::mem::replace(&mut frame, callee));
+                            continue 'frames;
+                        }
                     }
-                }
-                // ----- arrays -----
-                op::NEWARRAY => {
-                    let atype = read_u8(bytes, &mut pc, &malformed)?;
-                    let length = check_array_size(frame.pop_int()?)?;
-                    let object = match atype {
-                        op::T_INT | op::T_BOOLEAN | op::T_CHAR => {
-                            crate::value::HeapObject::IntArray(vec![0; length])
+                    op::GETSTATIC | op::PUTSTATIC => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        let field_class = class
+                            .constant_pool
+                            .get_member_ref(index)
+                            .map(|(c, _, _)| c.to_owned())
+                            .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
+                        if let Some(mut chain) = self.begin_initialization(&field_class)?
+                            && !chain.is_empty()
+                        {
+                            frame.pc = addr;
+                            let first = chain.remove(0);
+                            self.frames.push(std::mem::replace(&mut frame, first));
+                            for pending in chain.into_iter().rev() {
+                                self.frames.push(pending);
+                            }
+                            continue 'frames;
                         }
-                        op::T_DOUBLE => crate::value::HeapObject::DoubleArray(vec![0.0; length]),
-                        other => {
-                            return Err(malformed(format!("unsupported newarray type {other}")));
+                        if opcode == op::GETSTATIC {
+                            self.getstatic_op(class, &mut frame, index, &malformed)?;
+                        } else {
+                            self.putstatic_op(class, &mut frame, index, &malformed)?;
                         }
-                    };
-                    let reference = self.heap.alloc(object);
-                    frame.stack.push(JValue::Ref(Some(reference)));
-                }
-                op::ANEWARRAY => {
-                    let _class_index = read_u16(bytes, &mut pc, &malformed)?;
-                    let length = check_array_size(frame.pop_int()?)?;
-                    let reference = self.heap.alloc(crate::value::HeapObject::RefArray(vec![
+                    }
+                    op::GETFIELD => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        self.getfield_op(class, &mut frame, index, &malformed)?;
+                    }
+                    op::PUTFIELD => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        self.putfield_op(class, &mut frame, index, &malformed)?;
+                    }
+                    op::INVOKEVIRTUAL => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        if let Some(callee) =
+                            self.invoke_virtual_op(class, &mut frame, index, &malformed)?
+                        {
+                            frame.pc = pc;
+                            self.frames.push(std::mem::replace(&mut frame, callee));
+                            continue 'frames;
+                        }
+                    }
+                    op::INVOKESTATIC => {
+                        let index = read_u16(bytes, &mut pc, &malformed)?;
+                        let (target_class, method_name, descriptor) = class
+                            .constant_pool
+                            .get_member_ref(index)
+                            .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
+                            .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
+                        // Initialization retry happens before arguments are
+                        // popped so the re-executed instruction sees them.
+                        if let Some(mut chain) = self.begin_initialization(&target_class)?
+                            && !chain.is_empty()
+                        {
+                            frame.pc = addr;
+                            let first = chain.remove(0);
+                            self.frames.push(std::mem::replace(&mut frame, first));
+                            for pending in chain.into_iter().rev() {
+                                self.frames.push(pending);
+                            }
+                            continue 'frames;
+                        }
+                        let widths = descriptor_arg_widths(&descriptor)
+                            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+                        let mut args = Vec::with_capacity(widths.len());
+                        for _ in &widths {
+                            args.push(frame.pop()?);
+                        }
+                        args.reverse();
+                        if let Some(callee) = self.invoke_static(
+                            &target_class,
+                            &method_name,
+                            &descriptor,
+                            &widths,
+                            &args,
+                            &mut frame,
+                        )? {
+                            frame.pc = pc;
+                            self.frames.push(std::mem::replace(&mut frame, callee));
+                            continue 'frames;
+                        }
+                    }
+                    // ----- arrays -----
+                    op::NEWARRAY => {
+                        let atype = read_u8(bytes, &mut pc, &malformed)?;
+                        let length = check_array_size(frame.pop_int()?)?;
+                        let object = match atype {
+                            op::T_INT | op::T_BOOLEAN | op::T_CHAR => {
+                                crate::value::HeapObject::IntArray(vec![0; length])
+                            }
+                            op::T_DOUBLE => {
+                                crate::value::HeapObject::DoubleArray(vec![0.0; length])
+                            }
+                            other => {
+                                return Err(malformed(format!(
+                                    "unsupported newarray type {other}"
+                                )));
+                            }
+                        };
+                        let reference = self.heap.alloc(object);
+                        frame.stack.push(JValue::Ref(Some(reference)));
+                    }
+                    op::ANEWARRAY => {
+                        let _class_index = read_u16(bytes, &mut pc, &malformed)?;
+                        let length = check_array_size(frame.pop_int()?)?;
+                        let reference = self.heap.alloc(crate::value::HeapObject::RefArray(vec![
                             JValue::NULL;
                             length
                         ]));
-                    frame.stack.push(JValue::Ref(Some(reference)));
-                }
-                op::MULTIANEWARRAY => {
-                    let class_index = read_u16(bytes, &mut pc, &malformed)?;
-                    let dims = usize::from(read_u8(bytes, &mut pc, &malformed)?);
-                    let descriptor = class
-                        .constant_pool
-                        .get_class_name(class_index)
-                        .ok_or_else(|| malformed(format!("bad class ref at pool {class_index}")))?
-                        .to_owned();
-                    let mut counts = Vec::with_capacity(dims);
-                    for _ in 0..dims {
-                        counts.push(frame.pop_int()?);
+                        frame.stack.push(JValue::Ref(Some(reference)));
                     }
-                    counts.reverse();
-                    let reference = self.alloc_multi_array(&descriptor, &counts, &malformed)?;
-                    frame.stack.push(JValue::Ref(Some(reference)));
-                }
-                op::ARRAYLENGTH => {
-                    let reference = frame.pop_ref()?.ok_or_else(null_array)?;
-                    let length = match self.heap.get(reference) {
-                        Some(crate::value::HeapObject::IntArray(v)) => v.len(),
-                        Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
-                        Some(crate::value::HeapObject::RefArray(v)) => v.len(),
-                        _ => return Err(malformed(String::from("arraylength on a non-array"))),
-                    };
-                    frame
-                        .stack
-                        .push(JValue::Int(i32::try_from(length).unwrap_or(i32::MAX)));
-                }
-                op::IALOAD | op::BALOAD | op::CALOAD => {
-                    let (reference, index) = frame.pop_array_access()?;
-                    let Some(crate::value::HeapObject::IntArray(values)) = self.heap.get(reference)
-                    else {
-                        return Err(malformed(String::from("int-array load on a non-int-array")));
-                    };
-                    let value = *array_get(values, index)?;
-                    frame.stack.push(JValue::Int(value));
-                }
-                op::DALOAD => {
-                    let (reference, index) = frame.pop_array_access()?;
-                    let Some(crate::value::HeapObject::DoubleArray(values)) =
-                        self.heap.get(reference)
-                    else {
-                        return Err(malformed(String::from("daload on a non-double-array")));
-                    };
-                    let value = *array_get(values, index)?;
-                    frame.stack.push(JValue::Double(value));
-                }
-                op::AALOAD => {
-                    let (reference, index) = frame.pop_array_access()?;
-                    let Some(crate::value::HeapObject::RefArray(values)) = self.heap.get(reference)
-                    else {
-                        return Err(malformed(String::from("aaload on a non-reference-array")));
-                    };
-                    let value = *array_get(values, index)?;
-                    frame.stack.push(value);
-                }
-                op::IASTORE | op::BASTORE | op::CASTORE => {
-                    let value = frame.pop_int()?;
-                    let (reference, index) = frame.pop_array_access()?;
-                    let Some(crate::value::HeapObject::IntArray(values)) =
-                        self.heap.get_mut(reference)
-                    else {
-                        return Err(malformed(String::from(
-                            "int-array store on a non-int-array",
-                        )));
-                    };
-                    let slot = array_get_mut(values, index)?;
-                    // Stores mask to the element width (JVMS castore /
-                    // bastore); boolean arrays hold 0/1.
-                    *slot = match opcode {
-                        op::CASTORE => i32::from(value.cast_unsigned() as u16),
-                        op::BASTORE => value & 1,
-                        _ => value,
-                    };
-                }
-                op::DASTORE => {
-                    let value = frame.pop_double()?;
-                    let (reference, index) = frame.pop_array_access()?;
-                    let Some(crate::value::HeapObject::DoubleArray(values)) =
-                        self.heap.get_mut(reference)
-                    else {
-                        return Err(malformed(String::from("dastore on a non-double-array")));
-                    };
-                    *array_get_mut(values, index)? = value;
-                }
-                op::AASTORE => {
-                    let value = frame.pop()?;
-                    let (reference, index) = frame.pop_array_access()?;
-                    let Some(crate::value::HeapObject::RefArray(values)) =
-                        self.heap.get_mut(reference)
-                    else {
-                        return Err(malformed(String::from("aastore on a non-reference-array")));
-                    };
-                    *array_get_mut(values, index)? = value;
-                }
+                    op::MULTIANEWARRAY => {
+                        let class_index = read_u16(bytes, &mut pc, &malformed)?;
+                        let dims = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                        let descriptor = class
+                            .constant_pool
+                            .get_class_name(class_index)
+                            .ok_or_else(|| {
+                                malformed(format!("bad class ref at pool {class_index}"))
+                            })?
+                            .to_owned();
+                        let mut counts = Vec::with_capacity(dims);
+                        for _ in 0..dims {
+                            counts.push(frame.pop_int()?);
+                        }
+                        counts.reverse();
+                        let reference = self.alloc_multi_array(&descriptor, &counts, &malformed)?;
+                        frame.stack.push(JValue::Ref(Some(reference)));
+                    }
+                    op::ARRAYLENGTH => {
+                        let reference = frame.pop_ref()?.ok_or_else(null_array)?;
+                        let length = match self.heap.get(reference) {
+                            Some(crate::value::HeapObject::IntArray(v)) => v.len(),
+                            Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
+                            Some(crate::value::HeapObject::RefArray(v)) => v.len(),
+                            _ => return Err(malformed(String::from("arraylength on a non-array"))),
+                        };
+                        frame
+                            .stack
+                            .push(JValue::Int(i32::try_from(length).unwrap_or(i32::MAX)));
+                    }
+                    op::IALOAD | op::BALOAD | op::CALOAD => {
+                        let (reference, index) = frame.pop_array_access()?;
+                        let Some(crate::value::HeapObject::IntArray(values)) =
+                            self.heap.get(reference)
+                        else {
+                            return Err(malformed(String::from(
+                                "int-array load on a non-int-array",
+                            )));
+                        };
+                        let value = *array_get(values, index)?;
+                        frame.stack.push(JValue::Int(value));
+                    }
+                    op::DALOAD => {
+                        let (reference, index) = frame.pop_array_access()?;
+                        let Some(crate::value::HeapObject::DoubleArray(values)) =
+                            self.heap.get(reference)
+                        else {
+                            return Err(malformed(String::from("daload on a non-double-array")));
+                        };
+                        let value = *array_get(values, index)?;
+                        frame.stack.push(JValue::Double(value));
+                    }
+                    op::AALOAD => {
+                        let (reference, index) = frame.pop_array_access()?;
+                        let Some(crate::value::HeapObject::RefArray(values)) =
+                            self.heap.get(reference)
+                        else {
+                            return Err(malformed(String::from("aaload on a non-reference-array")));
+                        };
+                        let value = *array_get(values, index)?;
+                        frame.stack.push(value);
+                    }
+                    op::IASTORE | op::BASTORE | op::CASTORE => {
+                        let value = frame.pop_int()?;
+                        let (reference, index) = frame.pop_array_access()?;
+                        let Some(crate::value::HeapObject::IntArray(values)) =
+                            self.heap.get_mut(reference)
+                        else {
+                            return Err(malformed(String::from(
+                                "int-array store on a non-int-array",
+                            )));
+                        };
+                        let slot = array_get_mut(values, index)?;
+                        // Stores mask to the element width (JVMS castore /
+                        // bastore); boolean arrays hold 0/1.
+                        *slot = match opcode {
+                            op::CASTORE => i32::from(value.cast_unsigned() as u16),
+                            op::BASTORE => value & 1,
+                            _ => value,
+                        };
+                    }
+                    op::DASTORE => {
+                        let value = frame.pop_double()?;
+                        let (reference, index) = frame.pop_array_access()?;
+                        let Some(crate::value::HeapObject::DoubleArray(values)) =
+                            self.heap.get_mut(reference)
+                        else {
+                            return Err(malformed(String::from("dastore on a non-double-array")));
+                        };
+                        *array_get_mut(values, index)? = value;
+                    }
+                    op::AASTORE => {
+                        let value = frame.pop()?;
+                        let (reference, index) = frame.pop_array_access()?;
+                        let Some(crate::value::HeapObject::RefArray(values)) =
+                            self.heap.get_mut(reference)
+                        else {
+                            return Err(malformed(String::from(
+                                "aastore on a non-reference-array",
+                            )));
+                        };
+                        *array_get_mut(values, index)? = value;
+                    }
 
-                op::RETURN => return Ok(None),
-                op::IRETURN | op::DRETURN | op::ARETURN => {
-                    let value = frame.pop()?;
-                    return Ok(Some(value));
+                    op::RETURN => match self.frames.pop() {
+                        None => return Ok(None),
+                        Some(caller) => {
+                            frame = caller;
+                            continue 'frames;
+                        }
+                    },
+                    op::IRETURN | op::DRETURN | op::ARETURN => {
+                        let value = frame.pop()?;
+                        match self.frames.pop() {
+                            None => return Ok(Some(value)),
+                            Some(caller) => {
+                                frame = caller;
+                                frame.stack.push(value);
+                                continue 'frames;
+                            }
+                        }
+                    }
+                    other => return Err(VmError::UnsupportedOpcode(other)),
                 }
-                other => return Err(VmError::UnsupportedOpcode(other)),
             }
         }
     }
@@ -587,8 +962,8 @@ impl<'run> Interpreter<'run> {
             .get_member_ref(index)
             .map(|(c, f, d)| (c.to_owned(), f.to_owned(), d.to_owned()))
             .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
+        // The dispatch loop ran the initialization check already.
         let value = if self.classes.contains_key(&field_class) {
-            self.ensure_initialized(&field_class)?;
             *self
                 .statics
                 .get(&field_class)
@@ -623,7 +998,7 @@ impl<'run> Interpreter<'run> {
                 "{field_class}.{field_name}"
             )));
         }
-        self.ensure_initialized(&field_class)?;
+        // The dispatch loop ran the initialization check already.
         let value = frame.pop()?;
         let slot = self
             .statics
@@ -692,15 +1067,17 @@ impl<'run> Interpreter<'run> {
         Ok(())
     }
 
-    /// `invokespecial`: user constructors and intrinsic `<init>`s.
+    /// `invokespecial`: user constructors and `super.method(...)`
+    /// (returned as a frame to push) or intrinsic `<init>`s (handled
+    /// inline, `None`).
     #[inline(never)]
     fn invoke_special_op(
         &mut self,
         class: &ClassFile,
-        frame: &mut Frame,
+        frame: &mut Frame<'run>,
         index: u16,
         malformed: &impl Fn(String) -> VmError,
-    ) -> Result<(), VmError> {
+    ) -> Result<Option<Frame<'run>>, VmError> {
         let (target_class, method_name, descriptor) = class
             .constant_pool
             .get_member_ref(index)
@@ -760,70 +1137,86 @@ impl<'run> Interpreter<'run> {
                     locals.push(JValue::Int(0));
                 }
             }
-            // Constructors return nothing; `super.method(...)` calls
-            // come through here too and may produce a value.
-            if let Some(value) = self.execute(target, ctor, locals)? {
-                frame.stack.push(value);
-            }
-        } else {
-            intrinsics::invoke_special(
-                &mut self.heap,
-                self.vfs,
-                receiver,
-                &target_class,
-                &method_name,
-                &descriptor,
-                &args,
-            )?;
+            // Constructors and `super.method(...)` calls both come
+            // through here; any return value flows back through the
+            // return opcodes when the pushed frame pops.
+            return Ok(Some(self.make_frame(target, ctor, locals)?));
         }
-        Ok(())
+        intrinsics::invoke_special(
+            &mut self.heap,
+            self.vfs,
+            receiver,
+            &target_class,
+            &method_name,
+            &descriptor,
+            &args,
+        )?;
+        Ok(None)
     }
 
-    /// Run a user class's static initialization on first use
-    /// (JVMS §5.5): default static field values, then `<clinit>`.
-    fn ensure_initialized(&mut self, class_name: &str) -> Result<(), VmError> {
-        if self.init_started.contains(class_name) {
-            return Ok(());
+    /// Begin a user class's static initialization on first use
+    /// (JVMS §5.5). Marks the class (and any uninitialized
+    /// superclasses) started, installs default static field values, and
+    /// returns the `<clinit>` frames to run in order — superclass
+    /// first — as pseudo-caller frames. Returns `None` when the class
+    /// is already initialized (or isn't a user class); `Some(vec![])`
+    /// when initialization completed with no `<clinit>` bodies to run.
+    fn begin_initialization(
+        &mut self,
+        class_name: &str,
+    ) -> Result<Option<Vec<Frame<'run>>>, VmError> {
+        if self.init_started.contains(class_name) || !self.classes.contains_key(class_name) {
+            return Ok(None);
         }
-        self.init_started.insert(class_name.to_owned());
 
+        // Collect the uninitialized chain, subclass → ancestor.
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let Some(class) = classes.get(class_name) else {
-            return Ok(());
-        };
-        let mut fields = HashMap::new();
-        for field in &class.fields {
-            if !field
-                .access_flags
-                .contains(jvmjs_classfile::FieldAccessFlags::STATIC)
-            {
-                continue;
+        let mut chain: Vec<&'run ClassFile> = Vec::new();
+        let mut current = classes.get(class_name);
+        while let Some(class) = current {
+            let name = class.class_name().unwrap_or_default();
+            if self.init_started.contains(name) {
+                break;
             }
-            let name = class
-                .constant_pool
-                .get_utf8(field.name_index)
-                .unwrap_or_default()
-                .to_owned();
-            let descriptor = class
-                .constant_pool
-                .get_utf8(field.descriptor_index)
-                .unwrap_or_default();
-            fields.insert(name, default_for_descriptor(descriptor));
-        }
-        self.statics.insert(class_name.to_owned(), fields);
+            self.init_started.insert(name.to_owned());
+            chain.push(class);
 
-        // Superclass initialization runs first (JVMS §5.5).
-        if let Some(super_name) = class.constant_pool.get_class_name(class.super_class) {
-            let super_name = super_name.to_owned();
-            if super_name != "java/lang/Object" {
-                self.ensure_initialized(&super_name)?;
+            let mut fields = HashMap::new();
+            for field in &class.fields {
+                if !field
+                    .access_flags
+                    .contains(jvmjs_classfile::FieldAccessFlags::STATIC)
+                {
+                    continue;
+                }
+                let field_name = class
+                    .constant_pool
+                    .get_utf8(field.name_index)
+                    .unwrap_or_default()
+                    .to_owned();
+                let descriptor = class
+                    .constant_pool
+                    .get_utf8(field.descriptor_index)
+                    .unwrap_or_default();
+                fields.insert(field_name, default_for_descriptor(descriptor));
+            }
+            self.statics.insert(name.to_owned(), fields);
+
+            current = class
+                .constant_pool
+                .get_class_name(class.super_class)
+                .filter(|s| *s != "java/lang/Object")
+                .and_then(|super_name| classes.get(super_name));
+        }
+
+        // <clinit> frames in execution order: ancestor-most first.
+        let mut frames = Vec::new();
+        for class in chain.into_iter().rev() {
+            if let Some(clinit) = find_static_method(class, "<clinit>", "()V") {
+                frames.push(self.make_frame(class, clinit, Vec::new())?);
             }
         }
-
-        if let Some(clinit) = find_static_method(class, "<clinit>", "()V") {
-            self.execute(class, clinit, Vec::new())?;
-        }
-        Ok(())
+        Ok(Some(frames))
     }
 
     /// Allocate an instance of a user class with defaulted fields,
@@ -903,15 +1296,16 @@ impl<'run> Interpreter<'run> {
     }
 
     /// Dispatch an instance method on a user-defined object, with the
-    /// default `toString` when the class doesn't define one.
-    fn invoke_user_virtual(
+    /// default `toString` when the class doesn't define one. Returns
+    /// either a frame to push or an inline result value.
+    fn user_virtual_dispatch(
         &mut self,
         receiver: HeapRef,
         instance_class: &str,
         method_name: &str,
         descriptor: &str,
         args: &[JValue],
-    ) -> Result<Option<JValue>, VmError> {
+    ) -> Result<UserDispatch<'run>, VmError> {
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         if !classes.contains_key(instance_class) {
             return Err(VmError::MalformedClass {
@@ -951,14 +1345,15 @@ impl<'run> Interpreter<'run> {
             if method_name == "toString" && descriptor == "()Ljava/lang/String;" {
                 let text = format!("{instance_class}@{receiver:x}");
                 let reference = self.heap.alloc_string(&text);
-                return Ok(Some(JValue::Ref(Some(reference))));
+                return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
             }
             return Err(VmError::UnknownIntrinsic(format!(
                 "{instance_class}.{method_name}{descriptor}"
             )));
         };
 
-        self.ensure_initialized(instance_class)?;
+        // The instance's class chain was initialized when the object
+        // was constructed (`new` runs <clinit> first).
         let widths = descriptor_arg_widths(descriptor).ok_or_else(|| VmError::MalformedClass {
             name: instance_class.to_owned(),
             reason: format!("bad descriptor {descriptor}"),
@@ -971,7 +1366,7 @@ impl<'run> Interpreter<'run> {
                 locals.push(JValue::Int(0));
             }
         }
-        self.execute(class, method, locals)
+        Ok(UserDispatch::Call(self.make_frame(class, method, locals)?))
     }
 
     /// Recursively allocate a (possibly partial) multi-dimensional
@@ -1008,9 +1403,10 @@ impl<'run> Interpreter<'run> {
         Ok(self.heap.alloc(crate::value::HeapObject::RefArray(rows)))
     }
 
-    /// `invokestatic`: dispatch to a user-defined static method,
-    /// building its frame's locals from the popped arguments (doubles
-    /// occupy two slots, JVMS §2.6.1).
+    /// `invokestatic`: a user-defined static method becomes a frame to
+    /// push (locals built from the popped arguments — doubles occupy
+    /// two slots, JVMS §2.6.1); intrinsic statics run inline and push
+    /// their result onto the caller's stack.
     fn invoke_static(
         &mut self,
         class_name: &str,
@@ -1018,21 +1414,24 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         widths: &[u16],
         args: &[JValue],
-    ) -> Result<Option<JValue>, VmError> {
-        // Decouple the class borrow from `self` so the recursive
-        // `execute` can take `&mut self`.
+        frame: &mut Frame<'run>,
+    ) -> Result<Option<Frame<'run>>, VmError> {
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         let Some(class) = classes.get(class_name) else {
             // Intrinsic statics: Math.*, Integer.parseInt, ...
-            return intrinsics::invoke_static(
+            let result = intrinsics::invoke_static(
                 &mut self.heap,
                 &mut self.rng,
                 class_name,
                 method_name,
                 args,
-            );
+            )?;
+            if let Some(value) = result {
+                frame.stack.push(value);
+            }
+            return Ok(None);
         };
-        self.ensure_initialized(class_name)?;
+        // The caller ran the initialization check before popping args.
         let method = find_static_method(class, method_name, descriptor).ok_or_else(|| {
             VmError::MalformedClass {
                 name: class_name.to_owned(),
@@ -1047,18 +1446,19 @@ impl<'run> Interpreter<'run> {
                 locals.push(JValue::Int(0)); // padding for the wide slot
             }
         }
-        self.execute(class, method, locals)
+        Ok(Some(self.make_frame(class, method, locals)?))
     }
 
     /// `invokevirtual`: resolve the method ref, pop arguments and
-    /// receiver, and dispatch (v0: intrinsics only).
+    /// receiver, and dispatch — user methods become a frame to push,
+    /// intrinsics run inline.
     fn invoke_virtual_op(
         &mut self,
         class: &ClassFile,
-        frame: &mut Frame,
+        frame: &mut Frame<'run>,
         index: u16,
         malformed: &impl Fn(String) -> VmError,
-    ) -> Result<(), VmError> {
+    ) -> Result<Option<Frame<'run>>, VmError> {
         let (target_class, method_name, descriptor) = class
             .constant_pool
             .get_member_ref(index)
@@ -1092,7 +1492,16 @@ impl<'run> Interpreter<'run> {
             _ => None,
         };
         let result = if let Some(instance_class) = instance_class {
-            self.invoke_user_virtual(receiver, &instance_class, &method_name, &descriptor, &args)?
+            match self.user_virtual_dispatch(
+                receiver,
+                &instance_class,
+                &method_name,
+                &descriptor,
+                &args,
+            )? {
+                UserDispatch::Call(callee) => return Ok(Some(callee)),
+                UserDispatch::Value(value) => value,
+            }
         } else {
             intrinsics::invoke_virtual(
                 &mut self.heap,
@@ -1108,7 +1517,7 @@ impl<'run> Interpreter<'run> {
         if let Some(value) = result {
             frame.stack.push(value);
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Materialize a loadable constant-pool entry as a value
@@ -1143,12 +1552,111 @@ impl<'run> Interpreter<'run> {
     }
 }
 
-struct Frame {
+/// The outcome of dispatching a virtual call on a user object.
+enum UserDispatch<'run> {
+    /// Push this frame and continue executing inside it.
+    Call(Frame<'run>),
+    /// The call was satisfied inline (default `toString`).
+    Value(Option<JValue>),
+}
+
+/// One Java method activation, as plain data: everything a debugger
+/// would need to show a paused call (owner class, method name, program
+/// counter, locals, operand stack).
+struct Frame<'run> {
+    class: &'run ClassFile,
+    method_name: String,
+    code: Rc<MethodCode>,
+    pc: usize,
+    /// The last source line crossed (1-based), from `LineNumberTable`.
+    current_line: Option<u16>,
     locals: Vec<JValue>,
     stack: Vec<JValue>,
 }
 
-impl Frame {
+/// A parsed `Code` attribute plus its debug tables, cached per method.
+struct MethodCode {
+    attr: CodeAttribute,
+    /// `boundary_lines[pc]` is the source line starting at `pc`, or 0 —
+    /// O(1) per-instruction lookup in the dispatch loop.
+    boundary_lines: Vec<u16>,
+    /// Named locals from `LocalVariableTable`:
+    /// `(name, descriptor, slot, live-from pc)`.
+    local_vars: Vec<(String, String, u16, u16)>,
+    /// The class's `SourceFile` (falls back to `ClassName.java`).
+    source_file: String,
+}
+
+/// Parse a method's `Code` attribute and debug tables.
+fn parse_method_code(class: &ClassFile, method: &MethodInfo) -> Result<MethodCode, VmError> {
+    let class_name = class.class_name().unwrap_or("<unknown>").to_owned();
+    let malformed = |reason: String| VmError::MalformedClass {
+        name: class_name.clone(),
+        reason,
+    };
+    let code_info = method
+        .attributes
+        .iter()
+        .find(|a| class.constant_pool.get_utf8(a.name_index) == Some(CODE_ATTRIBUTE))
+        .ok_or_else(|| malformed(String::from("method has no Code attribute")))?;
+    let attr = read_code_attribute(&code_info.info)
+        .map_err(|e| malformed(format!("bad Code attribute: {e}")))?;
+
+    let mut boundary_lines = vec![0u16; attr.code.len()];
+    let mut local_vars = Vec::new();
+    for nested in &attr.attributes {
+        match class.constant_pool.get_utf8(nested.name_index) {
+            Some(jvmjs_classfile::debug::LINE_NUMBER_TABLE_ATTRIBUTE) => {
+                for (start_pc, line) in
+                    jvmjs_classfile::debug::decode_line_number_table(&nested.info)
+                        .unwrap_or_default()
+                {
+                    if let Some(slot) = boundary_lines.get_mut(usize::from(start_pc)) {
+                        *slot = line;
+                    }
+                }
+            }
+            Some(jvmjs_classfile::debug::LOCAL_VARIABLE_TABLE_ATTRIBUTE) => {
+                for entry in jvmjs_classfile::debug::decode_local_variable_table(&nested.info)
+                    .unwrap_or_default()
+                {
+                    let name = class
+                        .constant_pool
+                        .get_utf8(entry.name_index)
+                        .unwrap_or("?")
+                        .to_owned();
+                    let descriptor = class
+                        .constant_pool
+                        .get_utf8(entry.descriptor_index)
+                        .unwrap_or("")
+                        .to_owned();
+                    local_vars.push((name, descriptor, entry.index, entry.start_pc));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let source_file = class
+        .attributes
+        .iter()
+        .find(|a| {
+            class.constant_pool.get_utf8(a.name_index)
+                == Some(jvmjs_classfile::debug::SOURCE_FILE_ATTRIBUTE)
+        })
+        .and_then(|a| jvmjs_classfile::debug::decode_source_file(&a.info))
+        .and_then(|index| class.constant_pool.get_utf8(index))
+        .map_or_else(|| format!("{class_name}.java"), str::to_owned);
+
+    Ok(MethodCode {
+        attr,
+        boundary_lines,
+        local_vars,
+        source_file,
+    })
+}
+
+impl Frame<'_> {
     fn pop(&mut self) -> Result<JValue, VmError> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
     }
@@ -1238,6 +1746,16 @@ impl Frame {
         self.stack.push(JValue::Double(apply(a, b)));
         Ok(())
     }
+}
+
+/// `[a, b, c]` capped at 20 elements for the locals view.
+fn render_array(items: impl Iterator<Item = String>) -> String {
+    let mut parts: Vec<String> = items.take(21).collect();
+    if parts.len() > 20 {
+        parts.truncate(20);
+        parts.push(String::from("…"));
+    }
+    format!("[{}]", parts.join(", "))
 }
 
 /// The default value for a field of the given descriptor (JLS §4.12.5).

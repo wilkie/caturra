@@ -54,3 +54,33 @@ Worker, and blocking stdin is implemented with `SharedArrayBuffer` + `Atomics`.*
 - stdout/stderr arrive on the main thread as message events, so output ordering
   relative to program completion is preserved by the protocol (result message
   is sent after all output messages).
+
+## Debugging
+
+Traditional source-level debugging (added 2026-07-02), carried by the
+standard class-file metadata so the pipeline stays honest:
+
+- The compiler emits `SourceFile`, `LineNumberTable` (statement-level pc
+  → line marks), and `LocalVariableTable` (named locals with live
+  ranges; slots are never reused, so ranges extend to method end).
+  `javap -l` accepts and prints all three — verified in the
+  differential suite. Stack traces read them too:
+  `at Main.main(Main.java:12)`.
+- The VM pauses _before_ the first instruction of a marked line when a
+  breakpoint (`file` + 1-based `line`) matches, a step goal is met
+  (into / over / out, tracked by suspended-frame depth), or the host's
+  interrupt flag is set (polled every 4096 instructions). Pausing calls
+  the host's `on_pause` with a snapshot — frames innermost-first, each
+  with class, method, file, line, and named locals — and blocks until
+  it returns continue / step / terminate (plus optional breakpoint
+  replacement).
+- In the browser, the pause blocks the engine worker on a
+  SharedArrayBuffer command channel (the stdin pattern); the main
+  thread's `JvmWorkerSession.runDebug` exposes an async `onPause` so UI
+  clicks resolve the command. `requestPause()` sets a shared interrupt
+  flag — also the stop button for runaway loops. Requires cross-origin
+  isolation, like stdin.
+- The playground has a minimal panel (line-number breakpoints, step
+  buttons, frames/locals view). A real editor gutter (CodeMirror) is
+  the intended next step; breakpoints are already keyed by (file, line)
+  so the UI change is purely presentational.

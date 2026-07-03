@@ -258,6 +258,77 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('read back: virtual filesystem');
   });
 
+  test('debugger pauses at a breakpoint, shows locals, steps, resumes', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'public class Main {',
+          '    static int twice(int n) {',
+          '        return n * 2;',
+          '    }',
+          '',
+          '    public static void main(String[] args) {',
+          '        int total = 0;',
+          '        for (int i = 1; i <= 2; i++) {',
+          '            total += twice(i);',
+          '        }',
+          '        System.out.println("total " + total);',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    // Flag line 9 (`total += twice(i);`) the traditional way.
+    await page.getByTestId('breakpoints').fill('9');
+    await page.getByTestId('debug').click();
+
+    // First arrival: paused with locals i=1, total=0.
+    const frames = page.getByTestId('frames');
+    await expect(frames).toContainText('Main.main (Main.java:9)');
+    await expect(frames).toContainText('i = 1');
+    await expect(frames).toContainText('total = 0');
+
+    // Step into twice(): the callee frame appears with n = 1.
+    await page.getByTestId('step-into').click();
+    await expect(frames).toContainText('Main.twice (Main.java:3)');
+    await expect(frames).toContainText('n = 1');
+
+    // Continue: second breakpoint arrival, loop state advanced.
+    await page.getByTestId('resume').click();
+    await expect(frames).toContainText('i = 2');
+    await expect(frames).toContainText('total = 2');
+
+    // Continue to completion.
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('total 6');
+    await expect(page.getByTestId('debug-bar')).toBeHidden();
+  });
+
+  test('debugger stop button terminates the program', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        System.out.println("before");',
+          '        System.out.println("after");',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('breakpoints').fill('4');
+    await page.getByTestId('debug').click();
+    await expect(page.getByTestId('frames')).toContainText('Main.main (Main.java:4)');
+    await page.getByTestId('stop').click();
+    await expect(page.getByTestId('console')).toContainText('(stopped by the debugger)');
+    const consoleText = await page.getByTestId('console').textContent();
+    expect(consoleText).toContain('before');
+    expect(consoleText).not.toContain('after');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page

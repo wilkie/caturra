@@ -17,9 +17,25 @@
         <textarea id="source" data-testid="source" spellcheck="false"></textarea>
         <label for="stdin">Program input (one line per Scanner read)</label>
         <textarea id="stdin" data-testid="stdin" rows="3" spellcheck="false"></textarea>
-        <button id="run" data-testid="run" disabled>Compile &amp; Run</button>
+        <label for="breakpoints">Breakpoints (line numbers, comma-separated)</label>
+        <input id="breakpoints" data-testid="breakpoints" placeholder="e.g. 3, 7" />
+        <div class="run-row">
+          <button id="run" data-testid="run" disabled>Compile &amp; Run</button>
+          <button id="debug" data-testid="debug" disabled>Debug</button>
+        </div>
       </section>
       <section class="console-pane">
+        <div id="debug-bar" data-testid="debug-bar" hidden>
+          <button id="resume" data-testid="resume">Continue</button>
+          <button id="step-over" data-testid="step-over">Step Over</button>
+          <button id="step-into" data-testid="step-into">Step Into</button>
+          <button id="step-out" data-testid="step-out">Step Out</button>
+          <button id="stop" data-testid="stop">Stop</button>
+        </div>
+        <div id="paused-view" data-testid="paused-view" hidden>
+          <label>Paused</label>
+          <pre id="frames" data-testid="frames"></pre>
+        </div>
         <label for="console">Console</label>
         <pre id="console" data-testid="console"></pre>
       </section>

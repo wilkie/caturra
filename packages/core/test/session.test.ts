@@ -426,6 +426,123 @@ public class Curve {
     expect(session.readTextFile('/curved.txt')).toBe('95\n90\n82\n100\n');
   });
 
+  it('handles Java-like recursion depth on the WASM stack', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Deep.java',
+        text: `
+public class Deep {
+    static int sum(int n) {
+        if (n == 0) return 0;
+        return n + sum(n - 1);
+    }
+
+    public static void main(String[] args) {
+        System.out.println(sum(3000));
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Deep', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('4501500\n');
+  });
+
+  it('debugs a program: breakpoints, stepping, and named locals', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Debug.java',
+        text: `public class Debug {
+    static int twice(int n) {
+        int doubled = n * 2;
+        return doubled;
+    }
+
+    public static void main(String[] args) {
+        int sum = 0;
+        for (int i = 1; i <= 2; i++) {
+            sum += twice(i);
+        }
+        System.out.println(sum);
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.success).toBe(true);
+
+    const pauses: import('../src/index.js').DebugPauseSnapshot[] = [];
+    const script: import('../src/index.js').DebugCommandName[] = [
+      'stepInto', // from line 10 into twice()
+      'stepOut', // back to main
+      'continue', // to the second breakpoint arrival
+      'continue',
+    ];
+    let step = 0;
+    const stdout: string[] = [];
+    const result = session.runDebug('Debug', {
+      breakpoints: [{ file: 'Debug.java', line: 10 }],
+      onStdout: (text) => stdout.push(text),
+      onPause: (snapshot) => {
+        pauses.push(snapshot);
+        return { command: script[step++] ?? 'continue' };
+      },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('6\n');
+    expect(pauses.length).toBe(4);
+
+    // First pause: the breakpoint, with loop locals visible.
+    expect(pauses[0]?.reason).toBe('breakpoint');
+    expect(pauses[0]?.frames[0]?.methodName).toBe('main');
+    expect(pauses[0]?.frames[0]?.line).toBe(10);
+    const locals0 = new Map(pauses[0]?.frames[0]?.locals);
+    expect(locals0.get('i')).toBe('1');
+    expect(locals0.get('sum')).toBe('0');
+
+    // Second pause: stepped into twice(), call stack is two deep.
+    expect(pauses[1]?.reason).toBe('step');
+    expect(pauses[1]?.frames[0]?.methodName).toBe('twice');
+    expect(pauses[1]?.frames.length).toBe(2);
+    const locals1 = new Map(pauses[1]?.frames[0]?.locals);
+    expect(locals1.get('n')).toBe('1');
+
+    // Third pause: stepped out, back in main.
+    expect(pauses[2]?.frames[0]?.methodName).toBe('main');
+  });
+
+  it('debug terminate stops the program with status stopped', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Halt.java',
+        text: `public class Halt {
+    public static void main(String[] args) {
+        int x = 1;
+        System.out.println(x);
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.success).toBe(true);
+    const stdout: string[] = [];
+    const result = session.runDebug('Halt', {
+      breakpoints: [{ file: 'Halt.java', line: 3 }],
+      onStdout: (text) => stdout.push(text),
+      onPause: () => ({ command: 'terminate' }),
+    });
+    expect(result.status).toBe('stopped');
+    expect(stdout.join('')).toBe('');
+  });
+
   it('routes System.err to the stderr callback', async () => {
     const session = await createJvmSession();
     const compiled = session.compile([

@@ -919,7 +919,7 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
 /// that round-trip, exact scientific-notation thresholds). Current
 /// coverage: NaN/infinities, integral values gaining `.0`, and the 1e7
 /// switch to scientific notation.
-fn java_double_to_string(value: f64) -> String {
+pub(crate) fn java_double_to_string(value: f64) -> String {
     if value.is_nan() {
         return String::from("NaN");
     }

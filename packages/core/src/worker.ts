@@ -7,8 +7,9 @@
  * `new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })`.
  */
 import { initJvm, JvmSession, jvmVersion } from './index.js';
+import type { DebugControlResponse } from './index.js';
 import type { WorkerRequest, WorkerResponse } from './protocol.js';
-import { readLineBlocking } from './stdin-channel.js';
+import { consumeInterrupt, readLineBlocking } from './stdin-channel.js';
 
 /**
  * Minimal typing for the dedicated-worker global scope. (The full
@@ -55,6 +56,37 @@ async function handle(request: WorkerRequest): Promise<unknown> {
           scope.postMessage({ id, type: 'stderr', text });
         },
         readStdin,
+      });
+    }
+    case 'runDebug': {
+      const { id, stdinBuffer, debugBuffer, interruptFlag } = request;
+      const readStdin = stdinBuffer
+        ? () =>
+            readLineBlocking(stdinBuffer, () => {
+              scope.postMessage({ id, type: 'stdin-request' });
+            })
+        : () => null;
+      return (await session()).runDebug(request.mainClass, {
+        args: request.args,
+        breakpoints: request.breakpoints,
+        onStdout: (text) => {
+          scope.postMessage({ id, type: 'stdout', text });
+        },
+        onStderr: (text) => {
+          scope.postMessage({ id, type: 'stderr', text });
+        },
+        readStdin,
+        onPause: (snapshot) => {
+          // Park on the shared channel until the main thread answers
+          // with a command (same blocking pattern as stdin).
+          const response = readLineBlocking(debugBuffer, () => {
+            scope.postMessage({ id, type: 'debug-paused', snapshot });
+          });
+          return response === null
+            ? { command: 'terminate' }
+            : (JSON.parse(response) as DebugControlResponse);
+        },
+        pollInterrupt: () => consumeInterrupt(interruptFlag),
       });
     }
     case 'writeFile':
