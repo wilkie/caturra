@@ -11,7 +11,9 @@ import {
   getSource,
   setPausedLine,
   setSource,
+  showDiagnostics,
   toggleBreakpointAtLine,
+  type SourceSquiggle,
 } from './editor.js';
 
 const DEFAULT_PROGRAM = `public class Main {
@@ -78,6 +80,24 @@ function formatDiagnostic(diagnostic: Diagnostic): string {
     ? `${diagnostic.path}:${String(diagnostic.start.line)}:${String(diagnostic.start.column)}`
     : diagnostic.path;
   return `${location}: ${diagnostic.severity}: ${diagnostic.message}\n`;
+}
+
+/** Print diagnostics to the console pane and squiggle them in the editor. */
+function reportDiagnostics(diagnostics: Diagnostic[]): void {
+  for (const diagnostic of diagnostics) {
+    append(formatDiagnostic(diagnostic), diagnostic.severity === 'error' ? 'error' : 'normal');
+  }
+  const squiggles: SourceSquiggle[] = diagnostics
+    .filter((diagnostic) => diagnostic.path === 'Main.java' && diagnostic.start)
+    .map((diagnostic) => ({
+      severity: diagnostic.severity,
+      message: diagnostic.message,
+      startLine: diagnostic.start?.line ?? 1,
+      startColumn: diagnostic.start?.column ?? 1,
+      endLine: diagnostic.end?.line,
+      endColumn: diagnostic.end?.column,
+    }));
+  showDiagnostics(editor, squiggles);
 }
 
 // One long-lived engine worker for the page; each Compile & Run
@@ -150,9 +170,7 @@ async function debugProgram(): Promise<void> {
     const session = await sessionReady;
     append('$ javac Main.java\n');
     const compiled = await session.compile([{ path: 'Main.java', text: getSource(editor) }]);
-    for (const diagnostic of compiled.diagnostics) {
-      append(formatDiagnostic(diagnostic), diagnostic.severity === 'error' ? 'error' : 'normal');
-    }
+    reportDiagnostics(compiled.diagnostics);
     if (compiled.success) {
       append('$ java Main (debugger attached)\n');
       const stdinLines = stdinEl.value === '' ? [] : stdinEl.value.split('\n');
@@ -203,9 +221,7 @@ async function runProgram(): Promise<void> {
     const session = await sessionReady;
     append('$ javac Main.java\n');
     const compiled = await session.compile([{ path: 'Main.java', text: getSource(editor) }]);
-    for (const diagnostic of compiled.diagnostics) {
-      append(formatDiagnostic(diagnostic), diagnostic.severity === 'error' ? 'error' : 'normal');
-    }
+    reportDiagnostics(compiled.diagnostics);
     if (compiled.success) {
       append('$ java Main\n');
       const stdinLines = stdinEl.value === '' ? [] : stdinEl.value.split('\n');

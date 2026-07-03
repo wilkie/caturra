@@ -19,6 +19,45 @@ async function setSource(page: Page, text: string): Promise<void> {
   }, text);
 }
 
+/** WCAG relative luminance of a computed `rgb(...)` color. */
+function luminance(rgb: string): number {
+  const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(rgb);
+  if (!match) {
+    throw new Error(`unparseable color: ${rgb}`);
+  }
+  const [r, g, b] = [match[1], match[2], match[3]].map((part) => {
+    const channel = Number(part) / 255;
+    return channel <= 0.039_28 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(a: string, b: string): number {
+  const first = luminance(a);
+  const second = luminance(b);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+/** Computed text color and effective (nearest opaque) background. */
+async function colorPair(page: Page, selector: string): Promise<{ color: string; bg: string }> {
+  return page.evaluate((sel) => {
+    const element = document.querySelector(sel);
+    if (!element) {
+      throw new Error(`missing ${sel}`);
+    }
+    const color = getComputedStyle(element).color;
+    let node: Element | null = element;
+    while (node) {
+      const bg = getComputedStyle(node).backgroundColor;
+      if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+        return { color, bg };
+      }
+      node = node.parentElement;
+    }
+    return { color, bg: 'rgb(255, 255, 255)' };
+  }, selector);
+}
+
 async function toggleBreakpoint(page: Page, line: number): Promise<void> {
   await page.evaluate((l) => {
     (window as unknown as { playground: PlaygroundHooks }).playground.toggleBreakpoint(l);
@@ -411,6 +450,49 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('three');
   });
 
+  test('compiler errors appear as squiggles with hover messages', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        int x = yy + 1;',
+        '        System.out.println(x);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText("cannot find variable 'yy'");
+
+    // The squiggle sits on the offending token.
+    const squiggle = page.locator('.cm-lintRange-error');
+    await expect(squiggle).toHaveCount(1);
+    await expect(squiggle).toContainText('yy');
+
+    // Hovering shows the compiler message.
+    await squiggle.hover();
+    await expect(page.locator('.cm-tooltip-lint')).toContainText("cannot find variable 'yy'");
+
+    // Fixing the code and re-running clears the squiggle.
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        int yy = 2;',
+        '        int x = yy + 1;',
+        '        System.out.println(x);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('3');
+    await expect(page.locator('.cm-lintRange-error')).toHaveCount(0);
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await setSource(
@@ -428,5 +510,60 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText(
       'only int, double, boolean, and char primitives are supported',
     );
+  });
+});
+
+test.describe('playground in dark mode', () => {
+  test.use({ colorScheme: 'dark' });
+
+  test('editor, tooltip, and paused view stay legible', async ({ page }) => {
+    await page.goto('/');
+
+    // The editor follows the scheme: dark background, not the light
+    // default sitting on a dark page.
+    const editor = await colorPair(page, '#source .cm-content');
+    expect(luminance(editor.bg)).toBeLessThan(0.5);
+    expect(contrastRatio(editor.color, editor.bg)).toBeGreaterThan(4);
+
+    // Syntax tokens too: the light theme's dark keyword colors on a
+    // dark background is exactly the bug this guards against.
+    const keyword = await page.evaluate(() => {
+      const spans = [...document.querySelectorAll('#source .cm-line span')];
+      const target = spans.find((span) => span.textContent === 'public');
+      if (!target) {
+        throw new Error('no highlighted keyword token found');
+      }
+      return getComputedStyle(target).color;
+    });
+    expect(contrastRatio(keyword, editor.bg)).toBeGreaterThan(3);
+
+    // Squiggle hover tooltip: readable text on its background.
+    await setSource(page, 'public class Main { int x = yy; }');
+    await page.getByTestId('run').click();
+    await expect(page.locator('.cm-lintRange-error')).toHaveCount(1);
+    await page.locator('.cm-lintRange-error').hover();
+    await expect(page.locator('.cm-tooltip-lint')).toBeVisible();
+    const tooltip = await colorPair(page, '.cm-tooltip-lint');
+    expect(contrastRatio(tooltip.color, tooltip.bg)).toBeGreaterThan(4);
+
+    // Paused debugger view: the frames/locals text is readable.
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        int a = 41;',
+        '        System.out.println(a + 1);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await toggleBreakpoint(page, 4);
+    await page.getByTestId('debug').click();
+    await expect(page.getByTestId('frames')).toContainText('a = 41');
+    const frames = await colorPair(page, '#frames');
+    expect(contrastRatio(frames.color, frames.bg)).toBeGreaterThan(4);
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('42');
   });
 });

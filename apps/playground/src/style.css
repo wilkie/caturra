@@ -96,11 +96,11 @@ label {
 }
 
 #paused-view {
-  border: 1px solid #d0d5dd;
+  border: 1px solid light-dark(#d0d5dd, #5a5145);
   border-radius: 4px;
   padding: 0.5rem;
   margin-bottom: 0.5rem;
-  background: #fffaf0;
+  background: light-dark(#fffaf0, #2e2a1f);
 }
 
 #paused-view pre {
@@ -153,5 +153,8 @@ label {
 }
 
 .cm-paused-line {
-  background: color-mix(in srgb, #f9c74f 35%, transparent);
+  background: light-dark(
+    color-mix(in srgb, #f9c74f 35%, transparent),
+    color-mix(in srgb, #f9c74f 22%, transparent)
+  );
 }

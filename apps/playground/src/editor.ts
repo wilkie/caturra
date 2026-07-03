@@ -8,7 +8,10 @@
  * matching the engine's `(file, line)` breakpoint keys.
  */
 import { java } from '@codemirror/lang-java';
-import { RangeSet, StateEffect, StateField } from '@codemirror/state';
+import { setDiagnostics } from '@codemirror/lint';
+import type { Diagnostic as EditorDiagnostic } from '@codemirror/lint';
+import { Compartment, RangeSet, StateEffect, StateField } from '@codemirror/state';
+import { oneDark } from '@codemirror/theme-one-dark';
 import { Decoration, GutterMarker, gutter, lineNumbers } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { EditorView, minimalSetup } from 'codemirror';
@@ -116,14 +119,75 @@ export function setPausedLine(view: EditorView, line: number | null): void {
   view.dispatch({ effects });
 }
 
+// ----- Diagnostics (compiler errors as squiggles) -----
+
+/** A compiler diagnostic with 1-based line/column positions. */
+export interface SourceSquiggle {
+  severity: 'error' | 'warning';
+  message: string;
+  startLine: number;
+  startColumn: number;
+  endLine?: number | undefined;
+  endColumn?: number | undefined;
+}
+
+/**
+ * Show compiler diagnostics as squiggly underlines with hover
+ * messages. Pass an empty array to clear them (a clean compile).
+ * Ranges are clamped to the document, and survive edits — CodeMirror
+ * maps them through changes until the next compile replaces them.
+ */
+export function showDiagnostics(view: EditorView, squiggles: SourceSquiggle[]): void {
+  const doc = view.state.doc;
+  const offsetAt = (line: number, column: number): number => {
+    const clampedLine = Math.min(Math.max(line, 1), doc.lines);
+    const info = doc.line(clampedLine);
+    return Math.min(info.from + Math.max(column - 1, 0), info.to);
+  };
+  const diagnostics: EditorDiagnostic[] = squiggles.map((squiggle) => {
+    const from = offsetAt(squiggle.startLine, squiggle.startColumn);
+    let to =
+      squiggle.endLine !== undefined && squiggle.endColumn !== undefined
+        ? offsetAt(squiggle.endLine, squiggle.endColumn)
+        : doc.lineAt(from).to;
+    if (to <= from) {
+      // Zero-width span: underline at least one character (or the
+      // line end when the span sits at it).
+      to = Math.min(from + 1, doc.length);
+    }
+    return {
+      from,
+      to,
+      severity: squiggle.severity,
+      message: squiggle.message,
+    };
+  });
+  view.dispatch(setDiagnostics(view.state, diagnostics));
+}
+
 // ----- Construction -----
+
+/**
+ * The page follows the OS color scheme (`color-scheme: light dark`),
+ * but CodeMirror defaults to its light theme unconditionally — which
+ * on a dark page means light-theme syntax colors on a dark background
+ * and white-on-white tooltips. Follow the scheme instead, and switch
+ * live when it changes.
+ */
+const themeCompartment = new Compartment();
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+function themeFor(dark: boolean) {
+  return dark ? oneDark : [];
+}
 
 /** Create the editor inside `parent` with the given initial source. */
 export function createEditor(parent: HTMLElement, doc: string): EditorView {
-  return new EditorView({
+  const view = new EditorView({
     parent,
     doc,
     extensions: [
+      themeCompartment.of(themeFor(darkQuery.matches)),
       breakpointField,
       gutter({
         class: 'cm-breakpoint-gutter',
@@ -151,6 +215,12 @@ export function createEditor(parent: HTMLElement, doc: string): EditorView {
       java(),
     ],
   });
+  darkQuery.addEventListener('change', (event) => {
+    view.dispatch({
+      effects: themeCompartment.reconfigure(themeFor(event.matches)),
+    });
+  });
+  return view;
 }
 
 /** The full source text. */
