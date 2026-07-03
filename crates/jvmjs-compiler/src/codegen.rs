@@ -21,8 +21,8 @@ use jvmjs_classfile::{
 
 use crate::CompiledClass;
 use crate::ast::{
-    BinaryOp, ClassDecl, CompilationUnit, Expr, Literal, LocalDeclarator, MethodDecl, Stmt,
-    TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, Literal, LocalDeclarator, MethodDecl,
+    Stmt, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
@@ -84,19 +84,19 @@ struct MethodSig {
 
 impl MethodSig {
     fn describe(&self) -> String {
-        let params: Vec<&str> = self.params.iter().map(|p| p.describe()).collect();
+        let params: Vec<String> = self.params.iter().map(|p| p.describe()).collect();
         format!("{}({})", self.name, params.join(","))
     }
 
     fn descriptor(&self) -> String {
         let mut out = String::from("(");
         for param in &self.params {
-            out.push_str(param.descriptor());
+            out.push_str(&param.descriptor());
         }
         out.push(')');
         match self.ret {
             None => out.push('V'),
-            Some(ty) => out.push_str(ty.descriptor()),
+            Some(ty) => out.push_str(&ty.descriptor()),
         }
         out
     }
@@ -216,6 +216,19 @@ impl MethodTable {
     }
 }
 
+/// The [`ElemType`] for a base (non-array) type, if it can be an array
+/// element.
+fn elem_type_of(ty: JType) -> Option<ElemType> {
+    match ty {
+        JType::Int => Some(ElemType::Int),
+        JType::Double => Some(ElemType::Double),
+        JType::Boolean => Some(ElemType::Boolean),
+        JType::Char => Some(ElemType::Char),
+        JType::Str => Some(ElemType::Str),
+        _ => None,
+    }
+}
+
 /// Method-invocation / assignment widening (JLS §5.3 without boxing).
 fn widens(from: JType, to: JType) -> bool {
     from == to
@@ -223,8 +236,41 @@ fn widens(from: JType, to: JType) -> bool {
             (from, to),
             (JType::Char, JType::Int)
                 | (JType::Int | JType::Char, JType::Double)
-                | (JType::Null, JType::Str)
+                | (JType::Null, JType::Str | JType::Array { .. })
         )
+}
+
+/// The element base type of an array (arrays of arrays are expressed
+/// via [`JType::Array`]'s `dims`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ElemType {
+    Int,
+    Double,
+    Boolean,
+    Char,
+    Str,
+}
+
+impl ElemType {
+    fn descriptor(self) -> &'static str {
+        match self {
+            ElemType::Int => "I",
+            ElemType::Double => "D",
+            ElemType::Boolean => "Z",
+            ElemType::Char => "C",
+            ElemType::Str => "Ljava/lang/String;",
+        }
+    }
+
+    fn base_type(self) -> JType {
+        match self {
+            ElemType::Int => JType::Int,
+            ElemType::Double => JType::Double,
+            ElemType::Boolean => JType::Boolean,
+            ElemType::Char => JType::Char,
+            ElemType::Str => JType::Str,
+        }
+    }
 }
 
 /// The static type of an expression on the operand stack.
@@ -238,23 +284,36 @@ enum JType {
     Str,
     /// The type of the `null` literal.
     Null,
-    /// A type jvmjs doesn't handle yet (e.g. `String[] args`).
+    /// An array: `int[]` is `{elem: Int, dims: 1}`, `int[][]` has
+    /// `dims: 2`, and so on.
+    Array {
+        elem: ElemType,
+        dims: u8,
+    },
+    /// A type jvmjs doesn't handle yet.
     Unsupported,
     /// A diagnostic was already reported for this subtree.
     Error,
 }
 
 impl JType {
-    fn describe(self) -> &'static str {
+    fn describe(self) -> String {
         match self {
-            JType::Int => "int",
-            JType::Double => "double",
-            JType::Boolean => "boolean",
-            JType::Char => "char",
-            JType::Str => "String",
-            JType::Null => "null",
-            JType::Unsupported => "an unsupported type",
-            JType::Error => "an unknown type",
+            JType::Int => String::from("int"),
+            JType::Double => String::from("double"),
+            JType::Boolean => String::from("boolean"),
+            JType::Char => String::from("char"),
+            JType::Str => String::from("String"),
+            JType::Null => String::from("null"),
+            JType::Array { elem, dims } => {
+                let mut out = elem.base_type().describe();
+                for _ in 0..dims {
+                    out.push_str("[]");
+                }
+                out
+            }
+            JType::Unsupported => String::from("an unsupported type"),
+            JType::Error => String::from("an unknown type"),
         }
     }
 
@@ -262,22 +321,43 @@ impl JType {
         matches!(self, JType::Int | JType::Double | JType::Char)
     }
 
+    fn is_reference(self) -> bool {
+        matches!(self, JType::Str | JType::Null | JType::Array { .. })
+    }
+
     /// Width in operand-stack slots (JVMS §2.6.2).
     fn width(self) -> u16 {
         if self == JType::Double { 2 } else { 1 }
     }
 
-    /// The JVM field descriptor for this type.
-    fn descriptor(self) -> &'static str {
+    /// The type of this array's elements (one dimension down).
+    fn element_type(self) -> Option<JType> {
         match self {
-            JType::Int => "I",
-            JType::Double => "D",
-            JType::Boolean => "Z",
-            JType::Char => "C",
-            JType::Str | JType::Null => "Ljava/lang/String;",
+            JType::Array { elem, dims: 1 } => Some(elem.base_type()),
+            JType::Array { elem, dims } => Some(JType::Array {
+                elem,
+                dims: dims - 1,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The JVM field descriptor for this type.
+    fn descriptor(self) -> String {
+        match self {
+            JType::Int => String::from("I"),
+            JType::Double => String::from("D"),
+            JType::Boolean => String::from("Z"),
+            JType::Char => String::from("C"),
+            JType::Str | JType::Null => String::from("Ljava/lang/String;"),
+            JType::Array { elem, dims } => {
+                let mut out = "[".repeat(usize::from(dims));
+                out.push_str(elem.descriptor());
+                out
+            }
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
-            JType::Unsupported | JType::Error => "Ljava/lang/Object;",
+            JType::Unsupported | JType::Error => String::from("Ljava/lang/Object;"),
         }
     }
 }
@@ -298,6 +378,23 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
         TypeRef::Boolean => Some(JType::Boolean),
         TypeRef::Char => Some(JType::Char),
         TypeRef::Named(name) if name == "String" => Some(JType::Str),
+        TypeRef::Array(inner) => {
+            let mut dims: u8 = 1;
+            let mut current = inner.as_ref();
+            while let TypeRef::Array(next) = current {
+                dims = dims.checked_add(1)?;
+                current = next;
+            }
+            let elem = match current {
+                TypeRef::Int => ElemType::Int,
+                TypeRef::Double => ElemType::Double,
+                TypeRef::Boolean => ElemType::Boolean,
+                TypeRef::Char => ElemType::Char,
+                TypeRef::Named(name) if name == "String" => ElemType::Str,
+                _ => return None,
+            };
+            Some(JType::Array { elem, dims })
+        }
         _ => None,
     }
 }
@@ -509,7 +606,7 @@ enum CallTarget {
 }
 
 fn describe_types(types: &[JType]) -> String {
-    let names: Vec<&str> = types.iter().map(|t| t.describe()).collect();
+    let names: Vec<String> = types.iter().map(|t| t.describe()).collect();
     names.join(",")
 }
 
@@ -573,13 +670,23 @@ impl BodyGen<'_> {
                 self.local_decl(ty, *is_final, declarators, *span);
             }
             Stmt::Assign {
-                name,
+                target,
                 op,
                 value,
                 span,
-            } => {
-                self.assign(name, *op, value, *span);
-            }
+            } => match target {
+                AssignTarget::Var(name) => self.assign(name, *op, value, *span),
+                AssignTarget::Index { array, index } => {
+                    self.assign_element(array, index, *op, value, *span);
+                }
+            },
+            Stmt::ForEach {
+                ty,
+                name,
+                iterable,
+                body,
+                span,
+            } => self.for_each(ty, name, iterable, body, *span),
             Stmt::Expr(expr) => self.expression_statement(expr),
             Stmt::If {
                 cond, then, els, ..
@@ -822,8 +929,21 @@ impl BodyGen<'_> {
             self.next_slot += var_ty.width();
 
             let assigned = if let Some(init) = &declarator.init {
-                let init_ty = self.expr(init);
-                self.convert_for_assignment(init_ty, var_ty, init.span());
+                // `int[] a = {1, 2};` — the literal takes its type
+                // from the declaration.
+                if let Expr::ArrayLiteral { elements, span } = init {
+                    if matches!(var_ty, JType::Array { .. }) {
+                        self.emit_array_literal(elements, var_ty, *span);
+                    } else {
+                        self.error(
+                            *span,
+                            format!("illegal initializer for {}", var_ty.describe()),
+                        );
+                    }
+                } else {
+                    let init_ty = self.expr(init);
+                    self.convert_for_assignment(init_ty, var_ty, init.span());
+                }
                 self.emit_store(slot, var_ty);
                 true
             } else {
@@ -929,6 +1049,223 @@ impl BodyGen<'_> {
                 self.emit_store(slot, var_ty);
             }
         }
+    }
+
+    // ----- arrays -----
+
+    /// Emit array reference + index for an element access, returning
+    /// the element type.
+    fn array_and_index(&mut self, array: &Expr, index: &Expr) -> Option<JType> {
+        let array_ty = self.expr(array);
+        let Some(element) = array_ty.element_type() else {
+            if array_ty != JType::Error {
+                self.error(
+                    array.span(),
+                    format!("array required, but {} found", array_ty.describe()),
+                );
+            }
+            return None;
+        };
+        let index_ty = self.expr(index);
+        if !matches!(index_ty, JType::Int | JType::Char | JType::Error) {
+            self.error(
+                index.span(),
+                format!(
+                    "incompatible types: {} cannot be converted to int (array index)",
+                    index_ty.describe()
+                ),
+            );
+        }
+        Some(element)
+    }
+
+    /// The array-load opcode for an element type.
+    fn xaload(&mut self, element: JType) {
+        let opcode = match element {
+            JType::Double => op::DALOAD,
+            JType::Boolean => op::BALOAD,
+            JType::Char => op::CALOAD,
+            JType::Int => op::IALOAD,
+            _ => op::AALOAD,
+        };
+        // Pops arrayref + index, pushes the element.
+        self.code.push_op(opcode, element.width());
+        self.code.drop_stack(2 + element.width());
+        self.code.grow_stack(element.width());
+    }
+
+    /// The array-store opcode for an element type.
+    fn xastore(&mut self, element: JType) {
+        let opcode = match element {
+            JType::Double => op::DASTORE,
+            JType::Boolean => op::BASTORE,
+            JType::Char => op::CASTORE,
+            JType::Int => op::IASTORE,
+            _ => op::AASTORE,
+        };
+        self.code.push_op(opcode, 0);
+        self.code.drop_stack(2 + element.width());
+    }
+
+    /// `a[i] = v`, `a[i] += v`, `a[i]++` (as `+= 1`).
+    fn assign_element(
+        &mut self,
+        array: &Expr,
+        index: &Expr,
+        op_kind: Option<BinaryOp>,
+        value: &Expr,
+        span: SourceSpan,
+    ) {
+        let Some(element) = self.array_and_index(array, index) else {
+            self.expr(value);
+            self.code.discard();
+            return;
+        };
+
+        match op_kind {
+            None => {
+                let value_ty = self.expr(value);
+                self.convert_for_assignment(value_ty, element, value.span());
+                self.xastore(element);
+            }
+            Some(op_kind) => {
+                if element == JType::Str {
+                    if op_kind != BinaryOp::Add {
+                        self.error(span, "only '+=' can be applied to a String element");
+                        return;
+                    }
+                    // arrayref, index on stack: duplicate for the
+                    // read-modify-write.
+                    self.code.push_op(op::DUP2, 2);
+                    self.xaload(element);
+                    self.begin_concat_with_value_on_stack(JType::Str);
+                    let part_ty = self.expr(value);
+                    self.append_part(part_ty, value.span());
+                    self.finish_concat();
+                    self.xastore(element);
+                    return;
+                }
+                let value_ty = self.type_of(value);
+                if element == JType::Boolean || !element.is_numeric() || !value_ty.is_numeric() {
+                    if value_ty != JType::Error {
+                        self.error(
+                            span,
+                            format!(
+                                "operator '{}' cannot be applied to {} and {}",
+                                compound_symbol(op_kind),
+                                element.describe(),
+                                value_ty.describe()
+                            ),
+                        );
+                    }
+                    return;
+                }
+                let promoted = promote(element, value_ty);
+                self.code.push_op(op::DUP2, 2);
+                self.xaload(element);
+                self.numeric_conversion(element, promoted);
+                let actual = self.expr(value);
+                self.numeric_conversion(actual, promoted);
+                self.arithmetic_op(op_kind, promoted);
+                self.narrow_back(promoted, element);
+                self.xastore(element);
+            }
+        }
+    }
+
+    /// `for (Type name : array) body`, desugared to an indexed loop
+    /// over synthetic (unnamed) locals.
+    fn for_each(
+        &mut self,
+        ty: &TypeRef,
+        name: &str,
+        iterable: &Expr,
+        body: &Stmt,
+        span: SourceSpan,
+    ) {
+        let iterable_ty = self.expr(iterable);
+        let Some(element) = iterable_ty.element_type() else {
+            if iterable_ty != JType::Error {
+                self.error(
+                    iterable.span(),
+                    format!(
+                        "for-each needs an array, but {} found (ArrayList arrives later)",
+                        iterable_ty.describe()
+                    ),
+                );
+            }
+            return;
+        };
+        let Some(var_ty) = type_from_ref(ty) else {
+            self.error(span, "unknown type for the for-each variable");
+            self.code.discard();
+            return;
+        };
+
+        // Synthetic slots for the array and the index.
+        let array_slot = self.next_slot;
+        self.next_slot += 1;
+        let index_slot = self.next_slot;
+        self.next_slot += 1;
+        self.emit_store(array_slot, iterable_ty);
+        self.code.push_op(op::ICONST_0, 1);
+        self.emit_store(index_slot, JType::Int);
+
+        // The loop variable lives in its own scope.
+        self.scopes.push(Vec::new());
+        if self.lookup(name).is_some() {
+            self.error(
+                span,
+                format!("variable '{name}' is already defined in this method"),
+            );
+        }
+        let var_slot = self.next_slot;
+        self.next_slot += var_ty.width();
+        self.scopes.last_mut().expect("scope pushed").push((
+            name.to_owned(),
+            LocalVar {
+                slot: var_slot,
+                ty: var_ty,
+                is_final: false,
+                assigned: true,
+            },
+        ));
+
+        let cond_label = self.code.new_label();
+        let continue_label = self.code.new_label();
+        let end = self.code.new_label();
+
+        self.code.bind(cond_label);
+        self.emit_load(index_slot, JType::Int);
+        self.emit_load(array_slot, iterable_ty);
+        self.code.push_op(op::ARRAYLENGTH, 1);
+        self.code.drop_stack(1);
+        self.code.branch(op::IF_ICMPGE, end, 2);
+
+        self.emit_load(array_slot, iterable_ty);
+        self.emit_load(index_slot, JType::Int);
+        self.xaload(element);
+        self.convert_for_assignment(element, var_ty, span);
+        self.emit_store(var_slot, var_ty);
+
+        let before = self.assigned_flags();
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label,
+        });
+        self.statement(body);
+        self.loop_stack.pop();
+        self.restore_assigned(&before);
+
+        self.code.bind(continue_label);
+        self.emit_load(index_slot, JType::Int);
+        self.code.push_op(op::ICONST_1, 1);
+        self.code.push_op(op::IADD, 0);
+        self.code.drop_stack(1);
+        self.emit_store(index_slot, JType::Int);
+        self.code.branch(op::GOTO, cond_label, 0);
+        self.code.bind(end);
+        self.scopes.pop();
     }
 
     fn expression_statement(&mut self, expr: &Expr) {
@@ -1152,6 +1489,14 @@ impl BodyGen<'_> {
                 );
                 None
             }
+            JType::Array { .. } => {
+                self.error(
+                    span,
+                    "printing an array directly is not supported by jvmjs \
+                     (print its elements in a loop)",
+                );
+                None
+            }
             JType::Unsupported => {
                 self.error(span, "this value's type is not yet supported by jvmjs");
                 None
@@ -1177,7 +1522,36 @@ impl BodyGen<'_> {
             Expr::Name { path, .. } if path.len() == 1 => {
                 self.lookup(&path[0]).map_or(JType::Error, |v| v.ty)
             }
-            Expr::Name { .. } => JType::Error,
+            Expr::Name { path, .. }
+                if path.len() == 2
+                    && path[1] == "length"
+                    && self
+                        .lookup(&path[0])
+                        .is_some_and(|v| matches!(v.ty, JType::Array { .. })) =>
+            {
+                JType::Int
+            }
+            Expr::Name { .. } | Expr::ArrayLiteral { .. } => JType::Error,
+            Expr::Index { array, .. } => self.type_of(array).element_type().unwrap_or(JType::Error),
+            Expr::Field { object, name, .. } => {
+                if name == "length" && matches!(self.type_of(object), JType::Array { .. }) {
+                    JType::Int
+                } else {
+                    JType::Error
+                }
+            }
+            Expr::NewArray { elem, dims, .. } => {
+                match (
+                    type_from_ref(elem).and_then(elem_type_of),
+                    u8::try_from(dims.len()),
+                ) {
+                    (Some(element), Ok(count)) => JType::Array {
+                        elem: element,
+                        dims: count,
+                    },
+                    _ => JType::Error,
+                }
+            }
             Expr::Call {
                 receiver,
                 method,
@@ -1267,6 +1641,196 @@ impl BodyGen<'_> {
             Expr::Unary { op, operand, span } => self.unary(*op, operand, *span),
             Expr::Cast { ty, operand, span } => self.cast(ty, operand, *span),
             Expr::Binary { op, lhs, rhs, span } => self.binary(*op, lhs, rhs, *span),
+            Expr::Index { array, index, .. } => match self.array_and_index(array, index) {
+                Some(element) => {
+                    self.xaload(element);
+                    element
+                }
+                None => JType::Error,
+            },
+            Expr::Field { object, name, span } => self.field(object, name, *span),
+            Expr::NewArray {
+                elem,
+                dims,
+                init,
+                span,
+            } => self.new_array(elem, dims, init.as_deref(), *span),
+            Expr::ArrayLiteral { span, .. } => {
+                self.error(
+                    *span,
+                    "an array initializer { ... } can only be used in a declaration \
+                     (or write new int[] { ... })",
+                );
+                JType::Error
+            }
+        }
+    }
+
+    /// Field access on a value: only `.length` on arrays exists so far.
+    fn field(&mut self, object: &Expr, name: &str, span: SourceSpan) -> JType {
+        let object_ty = self.expr(object);
+        if object_ty == JType::Error {
+            return JType::Error;
+        }
+        if name == "length" && matches!(object_ty, JType::Array { .. }) {
+            self.code.push_op(op::ARRAYLENGTH, 1);
+            self.code.drop_stack(1);
+            return JType::Int;
+        }
+        if object_ty == JType::Str && name == "length" {
+            self.error(
+                span,
+                "String.length() is a method — call it with parentheses \
+                 (String methods arrive with the class library)",
+            );
+            return JType::Error;
+        }
+        self.error(
+            span,
+            format!("cannot find field '{name}' on {}", object_ty.describe()),
+        );
+        JType::Error
+    }
+
+    /// `new T[n]`, `new T[n][m]`, `new T[n][]`, `new T[] {...}`.
+    fn new_array(
+        &mut self,
+        elem: &TypeRef,
+        dims: &[Option<Expr>],
+        init: Option<&[Expr]>,
+        span: SourceSpan,
+    ) -> JType {
+        let Ok(dim_count) = u8::try_from(dims.len()) else {
+            self.error(span, "too many array dimensions");
+            return JType::Error;
+        };
+        let Some(element) = type_from_ref(elem).and_then(elem_type_of) else {
+            self.error(span, "unknown array element type");
+            return JType::Error;
+        };
+        let array_ty = JType::Array {
+            elem: element,
+            dims: dim_count,
+        };
+
+        if let Some(init) = init {
+            self.emit_array_literal(init, array_ty, span);
+            return array_ty;
+        }
+
+        // Emit the sized dimension counts.
+        let sized: Vec<&Expr> = dims.iter().map_while(Option::as_ref).collect();
+        for size in &sized {
+            let size_ty = self.expr(size);
+            if !matches!(size_ty, JType::Int | JType::Char | JType::Error) {
+                self.error(
+                    size.span(),
+                    format!(
+                        "incompatible types: {} cannot be converted to int (array size)",
+                        size_ty.describe()
+                    ),
+                );
+            }
+        }
+
+        if sized.len() == 1 && dim_count == 1 {
+            self.emit_new_1d(element);
+        } else {
+            // Multi-dimensional (or partially-sized) creation.
+            let class_index = {
+                let descriptor = array_ty.descriptor();
+                intern_class(self.pool, &descriptor)
+            };
+            if sized.len() == 1 {
+                // e.g. `new int[3][]` — one dimension allocated, rows null.
+                // anewarray's element class is one dimension down.
+                let element_descriptor = array_ty
+                    .element_type()
+                    .expect("array has an element type")
+                    .descriptor();
+                let element_class = intern_class(self.pool, &element_descriptor);
+                self.code.push_op_u16(op::ANEWARRAY, element_class, 1);
+                self.code.drop_stack(1);
+            } else {
+                self.code.bytes.push(op::MULTIANEWARRAY);
+                self.code
+                    .bytes
+                    .extend_from_slice(&class_index.to_be_bytes());
+                self.code
+                    .bytes
+                    .push(u8::try_from(sized.len()).expect("dims fit u8"));
+                self.code
+                    .drop_stack(u16::try_from(sized.len()).expect("dims fit u16"));
+                self.code.grow_stack(1);
+            }
+        }
+        array_ty
+    }
+
+    /// Allocate a one-dimensional array of `element` with the length
+    /// already on the stack.
+    fn emit_new_1d(&mut self, element: ElemType) {
+        match element {
+            ElemType::Str => {
+                let class = intern_class(self.pool, "java/lang/String");
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
+            prim => {
+                let atype = match prim {
+                    ElemType::Int => op::T_INT,
+                    ElemType::Double => op::T_DOUBLE,
+                    ElemType::Boolean => op::T_BOOLEAN,
+                    ElemType::Char => op::T_CHAR,
+                    ElemType::Str => unreachable!(),
+                };
+                self.code.push_op(op::NEWARRAY, 1);
+                self.code.bytes.push(atype);
+                self.code.drop_stack(1);
+            }
+        }
+    }
+
+    /// Emit an array from a `{...}` literal, leaving the reference on
+    /// the stack. Nested literals build the inner dimensions.
+    fn emit_array_literal(&mut self, elements: &[Expr], array_ty: JType, span: SourceSpan) {
+        let Some(element) = array_ty.element_type() else {
+            self.error(
+                span,
+                format!(
+                    "array initializer cannot be assigned to {}",
+                    array_ty.describe()
+                ),
+            );
+            return;
+        };
+        let Ok(count) = i32::try_from(elements.len()) else {
+            self.error(span, "array initializer is too large");
+            return;
+        };
+        self.push_int(count);
+        if let JType::Array { elem, dims: 1 } = array_ty {
+            self.emit_new_1d(elem);
+        } else {
+            let element_descriptor = element.descriptor();
+            let element_class = intern_class(self.pool, &element_descriptor);
+            self.code.push_op_u16(op::ANEWARRAY, element_class, 1);
+            self.code.drop_stack(1);
+        }
+
+        for (position, value) in elements.iter().enumerate() {
+            self.code.push_op(op::DUP, 1);
+            self.push_int(i32::try_from(position).expect("checked above"));
+            if let Expr::ArrayLiteral {
+                elements: nested, ..
+            } = value
+            {
+                self.emit_array_literal(nested, element, value.span());
+            } else {
+                let value_ty = self.expr(value);
+                self.convert_for_assignment(value_ty, element, value.span());
+            }
+            self.xastore(element);
         }
     }
 
@@ -1315,6 +1879,19 @@ impl BodyGen<'_> {
     }
 
     fn name(&mut self, path: &[String], span: SourceSpan) -> JType {
+        // `a.length` parses as a dotted name; resolve it as array
+        // length when `a` is an array-typed local.
+        if path.len() == 2
+            && path[1] == "length"
+            && let Some(var) = self.lookup(&path[0])
+            && matches!(var.ty, JType::Array { .. })
+        {
+            let (slot, ty) = (var.slot, var.ty);
+            self.emit_load(slot, ty);
+            self.code.push_op(op::ARRAYLENGTH, 1);
+            self.code.drop_stack(1);
+            return JType::Int;
+        }
         if path.len() != 1 {
             self.error(
                 span,
@@ -1533,8 +2110,7 @@ impl BodyGen<'_> {
 
         let is_equality = matches!(op, BinaryOp::Eq | BinaryOp::Ne);
         let both_boolean = lt == JType::Boolean && rt == JType::Boolean;
-        let both_refs =
-            matches!(lt, JType::Str | JType::Null) && matches!(rt, JType::Str | JType::Null);
+        let both_refs = lt.is_reference() && rt.is_reference();
         let both_numeric = lt.is_numeric() && rt.is_numeric();
 
         if !(both_numeric || (is_equality && (both_boolean || both_refs))) {
@@ -1677,6 +2253,14 @@ impl BodyGen<'_> {
             JType::Boolean => "(Z)Ljava/lang/StringBuilder;",
             JType::Char => "(C)Ljava/lang/StringBuilder;",
             JType::Str | JType::Null => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+            JType::Array { .. } => {
+                self.error(
+                    span,
+                    "concatenating an array directly is not supported by jvmjs \
+                     (append its elements in a loop)",
+                );
+                return;
+            }
             JType::Unsupported => {
                 self.error(span, "this value's type is not yet supported by jvmjs");
                 return;
@@ -1804,7 +2388,7 @@ impl BodyGen<'_> {
     fn emit_load(&mut self, slot: u16, ty: JType) {
         let (base, short_base) = match ty {
             JType::Double => (op::DLOAD, op::DLOAD_0),
-            JType::Str | JType::Null => (op::ALOAD, op::ALOAD_0),
+            JType::Str | JType::Null | JType::Array { .. } => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
         self.local_op(base, short_base, slot);
@@ -1814,7 +2398,7 @@ impl BodyGen<'_> {
     fn emit_store(&mut self, slot: u16, ty: JType) {
         let (base, short_base) = match ty {
             JType::Double => (op::DSTORE, op::DSTORE_0),
-            JType::Str | JType::Null => (op::ASTORE, op::ASTORE_0),
+            JType::Str | JType::Null | JType::Array { .. } => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };
         self.local_op(base, short_base, slot);

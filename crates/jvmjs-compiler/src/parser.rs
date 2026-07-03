@@ -7,8 +7,8 @@
 //! problem, not just the first.
 
 use crate::ast::{
-    BinaryOp, ClassDecl, CompilationUnit, Expr, Literal, LocalDeclarator, MethodDecl, Param, Stmt,
-    TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, Literal, LocalDeclarator, MethodDecl,
+    Param, Stmt, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -43,16 +43,16 @@ fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
     }
 }
 
-/// Lower `x++` / `x--` to `x += 1` / `x -= 1`.
+/// Lower `x++` / `x--` (and `a[i]++`) to `+= 1` / `-= 1`.
 fn increment_statement(
-    name: String,
+    target: AssignTarget,
     increment: bool,
     start: SourcePosition,
     end: SourcePosition,
 ) -> Stmt {
     let span = SourceSpan { start, end };
     Stmt::Assign {
-        name,
+        target,
         op: Some(if increment {
             BinaryOp::Add
         } else {
@@ -63,6 +63,19 @@ fn increment_statement(
             span,
         },
         span,
+    }
+}
+
+/// Convert an expression to an assignment target, if it has the right
+/// shape (`x` or `a[i]`).
+fn assignment_target(expr: &Expr) -> Option<AssignTarget> {
+    match expr {
+        Expr::Name { path, .. } if path.len() == 1 => Some(AssignTarget::Var(path[0].clone())),
+        Expr::Index { array, index, .. } => Some(AssignTarget::Index {
+            array: array.clone(),
+            index: index.clone(),
+        }),
+        _ => None,
     }
 }
 
@@ -488,44 +501,40 @@ impl Parser<'_> {
     /// An assignment, `++`/`--`, or call statement, WITHOUT the
     /// trailing `;` (shared by statements and `for` headers).
     fn simple_statement(&mut self) -> Parsed<Stmt> {
-        // Prefix `++x` / `--x`.
+        // Prefix `++x` / `--x` (also `++a[i]`).
         if self.at_symbol("++") || self.at_symbol("--") {
             let start = self.here();
             let increment = self.at_symbol("++");
             self.pos += 1;
-            let (name, name_span) = self.expect_ident("after the increment operator")?;
+            let operand = self.postfix_expression()?;
+            let Some(target) = assignment_target(&operand) else {
+                self.error_at(operand.span(), "++/-- can only be applied to a variable");
+                return Err(Abort);
+            };
             return Ok(increment_statement(
-                name,
+                target,
                 increment,
                 start.start,
-                name_span.end,
+                operand.span().end,
             ));
         }
 
         let expr = self.expression()?;
 
         if let Some(op) = self.assignment_operator() {
-            let Expr::Name { path, span } = &expr else {
+            let Some(target) = assignment_target(&expr) else {
                 self.error_at(
                     expr.span(),
-                    "the left side of an assignment must be a variable",
+                    "the left side of an assignment must be a variable or array element",
                 );
                 return Err(Abort);
             };
-            if path.len() != 1 {
-                self.error_at(
-                    *span,
-                    "only simple variables can be assigned (fields come later)",
-                );
-                return Err(Abort);
-            }
-            let name = path[0].clone();
-            let start = span.start;
+            let start = expr.span().start;
             self.pos += 1;
             let value = self.expression()?;
             let end = value.span().end;
             return Ok(Stmt::Assign {
-                name,
+                target,
                 op,
                 value,
                 span: SourceSpan { start, end },
@@ -535,19 +544,18 @@ impl Parser<'_> {
         if self.at_symbol("++") || self.at_symbol("--") {
             let increment = self.at_symbol("++");
             self.pos += 1;
-            let Expr::Name { path, span } = &expr else {
-                self.error_at(expr.span(), "++/-- can only be applied to a variable");
+            let Some(target) = assignment_target(&expr) else {
+                self.error_at(
+                    expr.span(),
+                    "++/-- can only be applied to a variable or array element",
+                );
                 return Err(Abort);
             };
-            if path.len() != 1 {
-                self.error_at(*span, "++/-- can only be applied to a simple variable");
-                return Err(Abort);
-            }
             return Ok(increment_statement(
-                path[0].clone(),
+                target,
                 increment,
-                span.start,
-                span.end,
+                expr.span().start,
+                expr.span().end,
             ));
         }
 
@@ -641,16 +649,21 @@ impl Parser<'_> {
         self.pos += 1; // 'for'
         self.expect_symbol("(", "after 'for'")?;
 
-        // `for (Type name : ...)` — for-each needs arrays/ArrayList.
+        // `for (Type name : iterable) body` — the enhanced for.
         if self.header_contains_top_level_colon() {
-            self.error_at(
-                start,
-                "for-each loops are not yet supported by jvmjs (they arrive with arrays)",
-            );
-            self.skip_balanced_parens();
-            // Parse and discard the body so recovery is clean.
-            let _ = self.statement();
-            return Err(Abort);
+            let ty = self.type_ref()?;
+            let (name, _) = self.expect_ident("for the loop variable")?;
+            self.expect_symbol(":", "in the for-each header")?;
+            let iterable = self.expression()?;
+            self.expect_symbol(")", "to close the for-each header")?;
+            let body = Box::new(self.embedded_statement("a for-each loop")?);
+            return Ok(Stmt::ForEach {
+                ty,
+                name,
+                iterable,
+                body,
+                span: start,
+            });
         }
 
         let init = if self.eat_symbol(";") {
@@ -744,26 +757,6 @@ impl Parser<'_> {
         false
     }
 
-    /// Skip forward past the closing `)` matching an already-consumed
-    /// `(`.
-    fn skip_balanced_parens(&mut self) {
-        let mut depth = 1usize;
-        while let Some(kind) = self.peek() {
-            match kind {
-                TokenKind::Symbol("(") => depth += 1,
-                TokenKind::Symbol(")") => {
-                    depth -= 1;
-                    if depth == 0 {
-                        self.pos += 1;
-                        return;
-                    }
-                }
-                _ => {}
-            }
-            self.pos += 1;
-        }
-    }
-
     /// Whether the cursor starts a local declaration:
     /// `final? <type> name ...` — a primitive-type keyword, `final`, or
     /// a class type followed by a name (or `[]`).
@@ -799,16 +792,18 @@ impl Parser<'_> {
         let start = self.here();
         let is_final = self.eat_keyword(Keyword::Final);
         let ty = self.type_ref()?;
-        if matches!(ty, TypeRef::Array(_)) {
-            self.error_at(start, "arrays are not yet supported by jvmjs");
-            return Err(Abort);
-        }
 
         let mut declarators = Vec::new();
         loop {
             let (name, name_span) = self.expect_ident("for the variable")?;
             let init = if self.eat_symbol("=") {
-                Some(self.expression()?)
+                // `int[] a = {1, 2, 3};` — the literal form is only
+                // legal directly in a declaration.
+                if self.at_symbol("{") {
+                    Some(self.array_literal()?)
+                } else {
+                    Some(self.expression()?)
+                }
             } else {
                 None
             };
@@ -1015,12 +1010,30 @@ impl Parser<'_> {
                     path.push(segment);
                     span.end = segment_span.end;
                 } else {
-                    self.error_at(
-                        segment_span,
-                        "field access on an expression is not yet supported by jvmjs",
-                    );
-                    return Err(Abort);
+                    // Field access on a computed value: `m[i].length`.
+                    let span = SourceSpan {
+                        start: expr.span().start,
+                        end: segment_span.end,
+                    };
+                    expr = Expr::Field {
+                        object: Box::new(expr),
+                        name: segment,
+                        span,
+                    };
                 }
+            } else if self.at_symbol("[") {
+                self.pos += 1;
+                let index = self.expression()?;
+                self.expect_symbol("]", "to close the array index")?;
+                let span = SourceSpan {
+                    start: expr.span().start,
+                    end: self.here().start,
+                };
+                expr = Expr::Index {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                    span,
+                };
             } else if self.at_symbol("(") {
                 if let Expr::Name { path, span } = &expr
                     && path.len() == 1
@@ -1046,6 +1059,130 @@ impl Parser<'_> {
                 return Ok(expr);
             }
         }
+    }
+
+    /// `new int[3]`, `new int[2][3]`, `new int[]{...}` — array
+    /// creation. Constructor calls (`new Scanner(...)`) get a friendly
+    /// not-yet message.
+    fn new_expression(&mut self) -> Parsed<Expr> {
+        let start = self.here();
+        self.pos += 1; // 'new'
+
+        let base = match self.peek() {
+            Some(TokenKind::Keyword(Keyword::Int)) => {
+                self.pos += 1;
+                TypeRef::Int
+            }
+            Some(TokenKind::Keyword(Keyword::Double)) => {
+                self.pos += 1;
+                TypeRef::Double
+            }
+            Some(TokenKind::Keyword(Keyword::Boolean)) => {
+                self.pos += 1;
+                TypeRef::Boolean
+            }
+            Some(TokenKind::Keyword(Keyword::Char)) => {
+                self.pos += 1;
+                TypeRef::Char
+            }
+            Some(TokenKind::Identifier(_)) => {
+                let (name, _) = self.expect_ident("after 'new'")?;
+                TypeRef::Named(name)
+            }
+            _ => {
+                self.error_here("expected a type after 'new'");
+                return Err(Abort);
+            }
+        };
+
+        if self.at_symbol("(") {
+            self.error_at(
+                start,
+                "object creation with 'new' is not yet supported by jvmjs \
+                 (arrays work: new int[10])",
+            );
+            return Err(Abort);
+        }
+
+        let mut dims: Vec<Option<Expr>> = Vec::new();
+        while self.eat_symbol("[") {
+            if self.eat_symbol("]") {
+                dims.push(None);
+            } else {
+                let size = self.expression()?;
+                self.expect_symbol("]", "to close the array size")?;
+                dims.push(Some(size));
+            }
+        }
+        if dims.is_empty() {
+            self.error_at(start, "expected '[' after the array type");
+            return Err(Abort);
+        }
+        // Sized dimensions must come before empty ones (JLS §15.10.1).
+        let first_empty = dims.iter().position(Option::is_none);
+        if let Some(first_empty) = first_empty
+            && dims[first_empty..].iter().any(Option::is_some)
+        {
+            self.error_at(
+                start,
+                "cannot specify an array dimension after an empty dimension",
+            );
+            return Err(Abort);
+        }
+
+        let init = if dims[0].is_none() {
+            // `new int[] {...}` — all dims empty, initializer required.
+            if !self.at_symbol("{") {
+                self.error_at(
+                    start,
+                    "array creation with '[]' needs an initializer { ... }",
+                );
+                return Err(Abort);
+            }
+            let Expr::ArrayLiteral { elements, .. } = self.array_literal()? else {
+                unreachable!("array_literal returns an ArrayLiteral");
+            };
+            Some(elements)
+        } else {
+            None
+        };
+
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        Ok(Expr::NewArray {
+            elem: base,
+            dims,
+            init,
+            span,
+        })
+    }
+
+    /// `{ e1, e2, ... }` with nested literals for 2D arrays. Only
+    /// called where an array initializer is legal.
+    fn array_literal(&mut self) -> Parsed<Expr> {
+        let start = self.here();
+        self.expect_symbol("{", "to open the array initializer")?;
+        let mut elements = Vec::new();
+        if !self.at_symbol("}") {
+            loop {
+                if self.at_symbol("{") {
+                    elements.push(self.array_literal()?);
+                } else {
+                    elements.push(self.expression()?);
+                }
+                if !self.eat_symbol(",") {
+                    break;
+                }
+            }
+        }
+        self.expect_symbol("}", "to close the array initializer")?;
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        Ok(Expr::ArrayLiteral { elements, span })
     }
 
     fn arguments(&mut self) -> Parsed<Vec<Expr>> {
@@ -1111,10 +1248,7 @@ impl Parser<'_> {
                 self.expect_symbol(")", "to close the parenthesized expression")?;
                 Ok(inner)
             }
-            Some(TokenKind::Keyword(Keyword::New)) => {
-                self.error_here("object creation with 'new' is not yet supported by jvmjs");
-                Err(Abort)
-            }
+            Some(TokenKind::Keyword(Keyword::New)) => self.new_expression(),
             Some(TokenKind::Keyword(Keyword::This | Keyword::Super)) => {
                 self.error_here("'this' and 'super' are not yet supported by jvmjs");
                 Err(Abort)
@@ -1309,19 +1443,40 @@ mod tests {
     }
 
     #[test]
-    fn for_each_gets_a_friendly_message_and_recovers() {
-        let errors = parse_errors(
-            r#"
+    fn parses_for_each_and_array_syntax() {
+        let unit = parse_ok(
+            r"
             class M {
                 static void f() {
-                    for (String s : names) { System.out.println(s); }
-                    System.out.println("after");
+                    int[] a = {1, 2, 3};
+                    int[][] grid = new int[2][3];
+                    String[] names = new String[] {};
+                    a[0] = 5;
+                    a[1] += 2;
+                    a[2]++;
+                    grid[1][2] = a[0] + a.length;
+                    int total = 0;
+                    for (int x : a) total += x;
                 }
             }
-            "#,
+            ",
         );
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].message.contains("for-each"));
+        let body = &unit.classes[0].methods[0].body;
+        let Stmt::LocalDecl { declarators, .. } = &body[0] else {
+            panic!("expected declaration");
+        };
+        assert!(matches!(
+            declarators[0].init,
+            Some(Expr::ArrayLiteral { .. })
+        ));
+        let Stmt::Assign {
+            target: AssignTarget::Index { .. },
+            ..
+        } = &body[3]
+        else {
+            panic!("expected element assignment, got {:?}", body[3]);
+        };
+        assert!(matches!(&body[8], Stmt::ForEach { name, .. } if name == "x"));
     }
 
     #[test]
@@ -1393,7 +1548,12 @@ mod tests {
             ",
         );
         let body = &unit.classes[0].methods[0].body;
-        let Stmt::Assign { name, op: None, .. } = &body[1] else {
+        let Stmt::Assign {
+            target: AssignTarget::Var(name),
+            op: None,
+            ..
+        } = &body[1]
+        else {
             panic!("expected plain assignment");
         };
         assert_eq!(name, "x");

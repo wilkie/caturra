@@ -89,10 +89,13 @@ describe('javac (compile)', () => {
   it('gives friendly diagnostics for not-yet-supported Java', async () => {
     const session = await createJvmSession();
     const result = session.compile([
-      { path: 'Main.java', text: 'class Main { static void f() { int[] nums = new int[3]; } }' },
+      {
+        path: 'Main.java',
+        text: 'class Main { static void f() { Object o = new Object(); } }',
+      },
     ]);
     expect(result.success).toBe(false);
-    expect(result.diagnostics[0]?.message).toMatch(/arrays are not yet supported/);
+    expect(result.diagnostics[0]?.message).toMatch(/'new' is not yet supported/);
   });
 });
 
@@ -209,6 +212,40 @@ public class Stage3 {
     const result = session.run('Stage3', { onStdout: (text) => stdout.push(text) });
     expect(result.status).toBe('completed');
     expect(stdout.join('')).toBe('21\nint 21\ndouble 21.0\n');
+  });
+
+  it('runs a stage-4 program: arrays, 2D, for-each', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Stage4.java',
+        text: `
+public class Stage4 {
+    public static void main(String[] args) {
+        int[] data = {4, 8, 15, 16, 23, 42};
+        int total = 0;
+        for (int v : data) total += v;
+        System.out.println("sum: " + total + " of " + data.length);
+
+        int[][] grid = new int[2][3];
+        grid[1][2] = 7;
+        System.out.println(grid[1][2] + " " + grid[0][0]);
+
+        String[] words = {"lost", "found"};
+        words[0] += "!";
+        System.out.println(words[0]);
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Stage4', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('sum: 108 of 6\n7 0\nlost!\n');
   });
 
   it('routes System.err to the stderr callback', async () => {

@@ -18,7 +18,7 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Accepted today (v0 slice + stages 1–3)
+## Accepted today (v0 slice + stages 1–4)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
@@ -66,6 +66,20 @@ slice.
   `print` / `println` with zero arguments or one argument of any supported
   expression type.
 - Literals: exponent notation (`1e10`, `2.5E-3`) lexes as double.
+- **Arrays** (any element of `int`/`double`/`boolean`/`char`/`String`, any
+  dimension count): `new T[n]` / `new T[n][m]` / `new T[n][]` (via
+  `newarray`/`anewarray`/`multianewarray`), `{...}` initializers in
+  declarations and `new T[] {...}` (nested for 2D, ragged rows fine),
+  `a[i]` reads/writes with compound assignment and `++`/`--` on elements,
+  `a.length` / `m[i].length`, arrays as parameters and returns (rows are
+  references — aliasing behaves like Java), reference `==`, and
+  `for (T x : array)` desugared to an indexed loop (element widening
+  applies; `break`/`continue` work). Runtime exceptions use Java 11's
+  wording: `ArrayIndexOutOfBoundsException: Index 5 out of bounds for
+length 3`, `NegativeArraySizeException`, `NullPointerException`.
+  `main`'s `String[] args` is now fully usable. Printing or
+  concatenating a whole array gets a friendly error instead of Java's
+  `[I@hash` (revisited when `Object` lands).
 
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
@@ -96,7 +110,8 @@ friendly message for now.
    suite (`crates/jvmjs-vm/tests/differential.rs`), which runs identical
    programs through `javac`+`java` and jvmjs and requires byte-identical
    stdout.
-4. Arrays (1D, then 2D), `for-each`.
+4. ~~Arrays (1D, then 2D), `for-each`.~~ **Done (2026-07-02)** — both
+   dimensions at once, differential-verified against OpenJDK 11.
 5. Objects: fields, constructors, `new`, instance methods, `this`.
 6. Inheritance: `extends`, `super`, overriding, polymorphic dispatch;
    `interface` / `abstract`.

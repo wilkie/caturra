@@ -275,6 +275,75 @@ public class DiffOverload {
 );
 
 differential_test!(
+    diff_arrays,
+    "DiffArrays",
+    r#"
+public class DiffArrays {
+    static int sum(int[] values) {
+        int total = 0;
+        for (int v : values) total += v;
+        return total;
+    }
+
+    public static void main(String[] args) {
+        int[] data = {5, 3, 8, 1};
+        System.out.println(data.length);
+        System.out.println(sum(data));
+        data[2] += 10;
+        data[0]++;
+        System.out.println(data[2] + " " + data[0]);
+
+        double[] d = new double[3];
+        d[1] = 2.5;
+        System.out.println(d[0] + " " + d[1]);
+
+        boolean[] b = new boolean[2];
+        System.out.println(b[1]);
+
+        char[] c = {'h', 'i'};
+        System.out.println("" + c[0] + c[1]);
+
+        String[] s = new String[2];
+        System.out.println(s[0]);
+        s[0] = "set";
+        System.out.println(s[0]);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_2d_arrays,
+    "Diff2D",
+    r#"
+public class Diff2D {
+    public static void main(String[] args) {
+        int[][] m = new int[3][4];
+        for (int r = 0; r < m.length; r++) {
+            for (int c = 0; c < m[r].length; c++) {
+                m[r][c] = r * m[r].length + c;
+            }
+        }
+        int total = 0;
+        for (int[] row : m) {
+            for (int v : row) total += v;
+        }
+        System.out.println(total);
+        System.out.println(m.length + " " + m[0].length);
+
+        int[][] jag = {{1}, {2, 3}, {4, 5, 6}};
+        System.out.println(jag[2].length);
+        System.out.println(jag[1][1]);
+
+        int[] alias = m[2];
+        alias[0] = -1;
+        System.out.println(m[2][0]);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

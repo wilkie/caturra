@@ -198,6 +198,21 @@ impl<'run> Interpreter<'run> {
                     let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
                     frame.stack.push(top);
                 }
+                op::DUP2 => {
+                    // One category-2 value or the top two category-1s.
+                    let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
+                    if matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                        frame.stack.push(top);
+                    } else {
+                        let len = frame.stack.len();
+                        if len < 2 {
+                            return Err(VmError::StackUnderflow);
+                        }
+                        let under = frame.stack[len - 2];
+                        frame.stack.push(under);
+                        frame.stack.push(top);
+                    }
+                }
                 op::SWAP => {
                     let len = frame.stack.len();
                     if len < 2 {
@@ -382,6 +397,127 @@ impl<'run> Interpreter<'run> {
                         frame.stack.push(value);
                     }
                 }
+                // ----- arrays -----
+                op::NEWARRAY => {
+                    let atype = read_u8(bytes, &mut pc, &malformed)?;
+                    let length = check_array_size(frame.pop_int()?)?;
+                    let object = match atype {
+                        op::T_INT | op::T_BOOLEAN | op::T_CHAR => {
+                            crate::value::HeapObject::IntArray(vec![0; length])
+                        }
+                        op::T_DOUBLE => crate::value::HeapObject::DoubleArray(vec![0.0; length]),
+                        other => {
+                            return Err(malformed(format!("unsupported newarray type {other}")));
+                        }
+                    };
+                    let reference = self.heap.alloc(object);
+                    frame.stack.push(JValue::Ref(Some(reference)));
+                }
+                op::ANEWARRAY => {
+                    let _class_index = read_u16(bytes, &mut pc, &malformed)?;
+                    let length = check_array_size(frame.pop_int()?)?;
+                    let reference = self.heap.alloc(crate::value::HeapObject::RefArray(vec![
+                            JValue::NULL;
+                            length
+                        ]));
+                    frame.stack.push(JValue::Ref(Some(reference)));
+                }
+                op::MULTIANEWARRAY => {
+                    let class_index = read_u16(bytes, &mut pc, &malformed)?;
+                    let dims = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                    let descriptor = class
+                        .constant_pool
+                        .get_class_name(class_index)
+                        .ok_or_else(|| malformed(format!("bad class ref at pool {class_index}")))?
+                        .to_owned();
+                    let mut counts = Vec::with_capacity(dims);
+                    for _ in 0..dims {
+                        counts.push(frame.pop_int()?);
+                    }
+                    counts.reverse();
+                    let reference = self.alloc_multi_array(&descriptor, &counts, &malformed)?;
+                    frame.stack.push(JValue::Ref(Some(reference)));
+                }
+                op::ARRAYLENGTH => {
+                    let reference = frame.pop_ref()?.ok_or_else(null_array)?;
+                    let length = match self.heap.get(reference) {
+                        Some(crate::value::HeapObject::IntArray(v)) => v.len(),
+                        Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
+                        Some(crate::value::HeapObject::RefArray(v)) => v.len(),
+                        _ => return Err(malformed(String::from("arraylength on a non-array"))),
+                    };
+                    frame
+                        .stack
+                        .push(JValue::Int(i32::try_from(length).unwrap_or(i32::MAX)));
+                }
+                op::IALOAD | op::BALOAD | op::CALOAD => {
+                    let (reference, index) = frame.pop_array_access()?;
+                    let Some(crate::value::HeapObject::IntArray(values)) = self.heap.get(reference)
+                    else {
+                        return Err(malformed(String::from("int-array load on a non-int-array")));
+                    };
+                    let value = *array_get(values, index)?;
+                    frame.stack.push(JValue::Int(value));
+                }
+                op::DALOAD => {
+                    let (reference, index) = frame.pop_array_access()?;
+                    let Some(crate::value::HeapObject::DoubleArray(values)) =
+                        self.heap.get(reference)
+                    else {
+                        return Err(malformed(String::from("daload on a non-double-array")));
+                    };
+                    let value = *array_get(values, index)?;
+                    frame.stack.push(JValue::Double(value));
+                }
+                op::AALOAD => {
+                    let (reference, index) = frame.pop_array_access()?;
+                    let Some(crate::value::HeapObject::RefArray(values)) = self.heap.get(reference)
+                    else {
+                        return Err(malformed(String::from("aaload on a non-reference-array")));
+                    };
+                    let value = *array_get(values, index)?;
+                    frame.stack.push(value);
+                }
+                op::IASTORE | op::BASTORE | op::CASTORE => {
+                    let value = frame.pop_int()?;
+                    let (reference, index) = frame.pop_array_access()?;
+                    let Some(crate::value::HeapObject::IntArray(values)) =
+                        self.heap.get_mut(reference)
+                    else {
+                        return Err(malformed(String::from(
+                            "int-array store on a non-int-array",
+                        )));
+                    };
+                    let slot = array_get_mut(values, index)?;
+                    // Stores mask to the element width (JVMS castore /
+                    // bastore); boolean arrays hold 0/1.
+                    *slot = match opcode {
+                        op::CASTORE => i32::from(value.cast_unsigned() as u16),
+                        op::BASTORE => value & 1,
+                        _ => value,
+                    };
+                }
+                op::DASTORE => {
+                    let value = frame.pop_double()?;
+                    let (reference, index) = frame.pop_array_access()?;
+                    let Some(crate::value::HeapObject::DoubleArray(values)) =
+                        self.heap.get_mut(reference)
+                    else {
+                        return Err(malformed(String::from("dastore on a non-double-array")));
+                    };
+                    *array_get_mut(values, index)? = value;
+                }
+                op::AASTORE => {
+                    let value = frame.pop()?;
+                    let (reference, index) = frame.pop_array_access()?;
+                    let Some(crate::value::HeapObject::RefArray(values)) =
+                        self.heap.get_mut(reference)
+                    else {
+                        return Err(malformed(String::from("aastore on a non-reference-array")));
+                    };
+                    *array_get_mut(values, index)? = value;
+                }
+
                 op::RETURN => return Ok(None),
                 op::IRETURN | op::DRETURN | op::ARETURN => {
                     let value = frame.pop()?;
@@ -390,6 +526,40 @@ impl<'run> Interpreter<'run> {
                 other => return Err(VmError::UnsupportedOpcode(other)),
             }
         }
+    }
+
+    /// Recursively allocate a (possibly partial) multi-dimensional
+    /// array described by `descriptor` (e.g. `[[I`) with the given
+    /// leading dimension counts.
+    fn alloc_multi_array(
+        &mut self,
+        descriptor: &str,
+        counts: &[i32],
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<HeapRef, VmError> {
+        let (first, rest_counts) = counts
+            .split_first()
+            .ok_or_else(|| malformed(String::from("multianewarray with zero dimensions")))?;
+        let length = check_array_size(*first)?;
+        let element_descriptor = descriptor
+            .strip_prefix('[')
+            .ok_or_else(|| malformed(format!("bad array descriptor {descriptor}")))?;
+
+        if rest_counts.is_empty() {
+            let object = match element_descriptor {
+                "I" | "Z" | "C" => crate::value::HeapObject::IntArray(vec![0; length]),
+                "D" => crate::value::HeapObject::DoubleArray(vec![0.0; length]),
+                _ => crate::value::HeapObject::RefArray(vec![JValue::NULL; length]),
+            };
+            return Ok(self.heap.alloc(object));
+        }
+
+        let mut rows = Vec::with_capacity(length);
+        for _ in 0..length {
+            let row = self.alloc_multi_array(element_descriptor, rest_counts, malformed)?;
+            rows.push(JValue::Ref(Some(row)));
+        }
+        Ok(self.heap.alloc(crate::value::HeapObject::RefArray(rows)))
     }
 
     /// `invokestatic`: dispatch to a user-defined static method,
@@ -549,6 +719,14 @@ impl Frame {
         }
     }
 
+    /// Pop `index` then `arrayref` for an array access, raising NPE for
+    /// a null array.
+    fn pop_array_access(&mut self) -> Result<(HeapRef, i32), VmError> {
+        let index = self.pop_int()?;
+        let reference = self.pop_ref()?.ok_or_else(null_array)?;
+        Ok((reference, index))
+    }
+
     fn load(&mut self, slot: usize, malformed: &impl Fn(String) -> VmError) -> Result<(), VmError> {
         let value = *self
             .locals
@@ -599,6 +777,43 @@ impl Frame {
         self.stack.push(JValue::Double(apply(a, b)));
         Ok(())
     }
+}
+
+fn null_array() -> VmError {
+    VmError::UncaughtException(String::from(
+        "java.lang.NullPointerException: the array is null",
+    ))
+}
+
+/// Validate an array creation size (JVMS: negative →
+/// `NegativeArraySizeException`).
+fn check_array_size(size: i32) -> Result<usize, VmError> {
+    usize::try_from(size).map_err(|_| {
+        VmError::UncaughtException(format!("java.lang.NegativeArraySizeException: {size}"))
+    })
+}
+
+/// Bounds-checked array element access with Java 11's exception
+/// message format.
+fn array_get<T>(values: &[T], index: i32) -> Result<&T, VmError> {
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| values.get(i))
+        .ok_or_else(|| out_of_bounds(index, values.len()))
+}
+
+fn array_get_mut<T>(values: &mut [T], index: i32) -> Result<&mut T, VmError> {
+    let length = values.len();
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| values.get_mut(i))
+        .ok_or_else(|| out_of_bounds(index, length))
+}
+
+fn out_of_bounds(index: i32, length: usize) -> VmError {
+    VmError::UncaughtException(format!(
+        "java.lang.ArrayIndexOutOfBoundsException: Index {index} out of bounds for length {length}"
+    ))
 }
 
 /// Resolve a branch offset relative to the branch opcode's address.

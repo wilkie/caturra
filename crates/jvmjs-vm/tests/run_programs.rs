@@ -918,6 +918,225 @@ fn while_true_with_return_needs_no_trailing_return() {
     assert_eq!(out, "64\n");
 }
 
+// ----- stage 4: arrays -----
+
+#[test]
+fn arrays_create_fill_and_read() {
+    let out = run_stdout(
+        r#"
+        public class Arrays1 {
+            public static void main(String[] args) {
+                int[] squares = new int[5];
+                for (int i = 0; i < squares.length; i++) {
+                    squares[i] = i * i;
+                }
+                for (int i = 0; i < squares.length; i++) {
+                    System.out.print(squares[i]);
+                    System.out.print(" ");
+                }
+                System.out.println();
+
+                double[] temps = {98.6, 99.1, 97.5};
+                System.out.println(temps[1]);
+                boolean[] flags = new boolean[2];
+                System.out.println(flags[0]);
+                char[] letters = {'j', 'v', 'm'};
+                letters[0] = 'J';
+                System.out.println("" + letters[0] + letters[1] + letters[2]);
+                String[] names = {"Ada", "Grace"};
+                System.out.println(names[0] + " & " + names[1]);
+            }
+        }
+        "#,
+        "Arrays1",
+    );
+    assert_eq!(out, "0 1 4 9 16 \n99.1\nfalse\nJvm\nAda & Grace\n");
+}
+
+#[test]
+fn array_algorithms_and_for_each() {
+    let out = run_stdout(
+        r#"
+        public class Algo {
+            static int sum(int[] values) {
+                int total = 0;
+                for (int v : values) total += v;
+                return total;
+            }
+
+            static int max(int[] values) {
+                int best = values[0];
+                for (int v : values) {
+                    if (v > best) best = v;
+                }
+                return best;
+            }
+
+            static void reverse(int[] values) {
+                for (int i = 0; i < values.length / 2; i++) {
+                    int tmp = values[i];
+                    values[i] = values[values.length - 1 - i];
+                    values[values.length - 1 - i] = tmp;
+                }
+            }
+
+            public static void main(String[] args) {
+                int[] data = {3, 1, 4, 1, 5, 9, 2, 6};
+                System.out.println(sum(data));
+                System.out.println(max(data));
+                reverse(data);
+                String s = "";
+                for (int v : data) s += v;
+                System.out.println(s);
+                data[0] += 10;
+                data[1]++;
+                System.out.println(data[0] + "," + data[1]);
+            }
+        }
+        "#,
+        "Algo",
+    );
+    assert_eq!(out, "31\n9\n62951413\n16,3\n");
+}
+
+#[test]
+fn two_dimensional_arrays() {
+    let out = run_stdout(
+        r#"
+        public class Grid {
+            public static void main(String[] args) {
+                int[][] m = new int[3][4];
+                for (int r = 0; r < m.length; r++) {
+                    for (int c = 0; c < m[r].length; c++) {
+                        m[r][c] = r * 10 + c;
+                    }
+                }
+                System.out.println(m.length + "x" + m[0].length);
+                System.out.println(m[2][3]);
+
+                int[][] jagged = {{1}, {2, 3}, {4, 5, 6}};
+                int total = 0;
+                for (int[] row : jagged) {
+                    total += row.length;
+                }
+                System.out.println(total);
+                System.out.println(jagged[2][1]);
+
+                // Row objects are references: aliasing is visible.
+                int[] alias = m[1];
+                alias[0] = 99;
+                System.out.println(m[1][0]);
+            }
+        }
+        "#,
+        "Grid",
+    );
+    assert_eq!(out, "3x4\n23\n6\n5\n99\n");
+}
+
+#[test]
+fn array_exceptions_match_java_wording() {
+    let (result, console) = compile_and_run(
+        r"
+        public class Oob {
+            public static void main(String[] args) {
+                int[] a = new int[3];
+                int i = 5;
+                System.out.println(a[i]);
+            }
+        }
+        ",
+        "Oob",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console.stderr_text().contains(
+            "java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 3"
+        ),
+        "{}",
+        console.stderr_text()
+    );
+
+    let (result, console) = compile_and_run(
+        r"
+        public class Neg {
+            public static void main(String[] args) {
+                int n = -2;
+                int[] a = new int[n];
+                System.out.println(a.length);
+            }
+        }
+        ",
+        "Neg",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.lang.NegativeArraySizeException: -2"),
+        "{}",
+        console.stderr_text()
+    );
+
+    let (result, console) = compile_and_run(
+        r"
+        public class NullRow {
+            public static void main(String[] args) {
+                int[][] m = new int[2][];
+                System.out.println(m[0][0]);
+            }
+        }
+        ",
+        "NullRow",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.lang.NullPointerException"),
+        "{}",
+        console.stderr_text()
+    );
+}
+
+#[test]
+fn main_args_are_finally_usable() {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Args.java".into(),
+        text: r#"
+        public class Args {
+            public static void main(String[] args) {
+                System.out.println(args.length);
+                for (String arg : args) {
+                    System.out.println("arg: " + arg);
+                }
+            }
+        }
+        "#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("Args", &["hello".into(), "world".into()]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "2\narg: hello\narg: world\n");
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

@@ -41,7 +41,13 @@ pub enum HeapObject {
     StringBuilder(Vec<u16>),
     /// The intrinsic object behind `System.out` / `System.err`.
     PrintStream(StdStream),
-    /// A reference array (e.g. `String[] args`).
+    /// An `int[]`, `boolean[]`, or `char[]` — all stored as i32 per
+    /// JVMS array-load semantics (stores mask to the element width).
+    IntArray(Vec<i32>),
+    /// A `double[]`.
+    DoubleArray(Vec<f64>),
+    /// A reference array (e.g. `String[] args`, or the rows of a 2D
+    /// array).
     RefArray(Vec<JValue>),
 }
 

@@ -31,6 +31,13 @@ pub const DLOAD_3: u8 = 0x29;
 pub const ALOAD_0: u8 = 0x2A;
 pub const ALOAD_3: u8 = 0x2D;
 
+// Array element loads.
+pub const IALOAD: u8 = 0x2E;
+pub const DALOAD: u8 = 0x31;
+pub const AALOAD: u8 = 0x32;
+pub const BALOAD: u8 = 0x33;
+pub const CALOAD: u8 = 0x34;
+
 // Local variable stores (with 0-3 short forms).
 pub const ISTORE: u8 = 0x36;
 pub const DSTORE: u8 = 0x39;
@@ -42,11 +49,20 @@ pub const DSTORE_3: u8 = 0x4A;
 pub const ASTORE_0: u8 = 0x4B;
 pub const ASTORE_3: u8 = 0x4E;
 
+// Array element stores.
+pub const IASTORE: u8 = 0x4F;
+pub const DASTORE: u8 = 0x52;
+pub const AASTORE: u8 = 0x53;
+pub const BASTORE: u8 = 0x54;
+pub const CASTORE: u8 = 0x55;
+
 // Stack manipulation.
 pub const POP: u8 = 0x57;
 /// Pops one category-2 value (double/long) or two category-1 values.
 pub const POP2: u8 = 0x58;
 pub const DUP: u8 = 0x59;
+/// Duplicates one category-2 value or the top two category-1 values.
+pub const DUP2: u8 = 0x5C;
 pub const SWAP: u8 = 0x5F;
 
 // Arithmetic.
@@ -100,3 +116,15 @@ pub const INVOKEVIRTUAL: u8 = 0xB6;
 pub const INVOKESPECIAL: u8 = 0xB7;
 pub const INVOKESTATIC: u8 = 0xB8;
 pub const NEW: u8 = 0xBB;
+
+// Arrays.
+pub const NEWARRAY: u8 = 0xBC;
+pub const ANEWARRAY: u8 = 0xBD;
+pub const ARRAYLENGTH: u8 = 0xBE;
+pub const MULTIANEWARRAY: u8 = 0xC5;
+
+// `newarray` element type codes (JVMS Table 6.5.newarray-A).
+pub const T_BOOLEAN: u8 = 4;
+pub const T_CHAR: u8 = 5;
+pub const T_DOUBLE: u8 = 7;
+pub const T_INT: u8 = 10;

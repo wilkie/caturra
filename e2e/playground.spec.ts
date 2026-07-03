@@ -116,6 +116,28 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('fib(12) = 144');
   });
 
+  test('runs array programs in the browser', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        int[] scores = {90, 85, 77, 100};',
+          '        int best = scores[0];',
+          '        for (int s : scores) {',
+          '            if (s > best) best = s;',
+          '        }',
+          '        System.out.println("best of " + scores.length + ": " + best);',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('best of 4: 100');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page
@@ -124,15 +146,15 @@ test.describe('playground', () => {
         [
           'public class Main {',
           '    public static void main(String[] args) {',
-          '        int[] nums = new int[3];',
-          '        System.out.println(nums.length);',
+          '        String s = new String("hi");',
+          '        System.out.println(s);',
           '    }',
           '}',
         ].join('\n'),
       );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
-      'arrays are not yet supported by jvmjs',
+      "object creation with 'new' is not yet supported",
     );
   });
 });

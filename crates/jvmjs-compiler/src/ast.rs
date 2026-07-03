@@ -63,12 +63,20 @@ pub enum Stmt {
         declarators: Vec<LocalDeclarator>,
         span: SourceSpan,
     },
-    /// `x = e;`, `x += e;` (op = `Some(Add)`), and `x++;` (lowered to
-    /// `x += 1`). Plain assignment has `op = None`.
+    /// `x = e;`, `a[i] = e;`, `x += e;` (op = `Some(Add)`), and `x++;`
+    /// (lowered to `x += 1`). Plain assignment has `op = None`.
     Assign {
-        name: String,
+        target: AssignTarget,
         op: Option<BinaryOp>,
         value: Expr,
+        span: SourceSpan,
+    },
+    /// `for (Type name : iterable) body`.
+    ForEach {
+        ty: TypeRef,
+        name: String,
+        iterable: Expr,
+        body: Box<Stmt>,
         span: SourceSpan,
     },
     If {
@@ -115,6 +123,15 @@ pub struct LocalDeclarator {
     pub name: String,
     pub init: Option<Expr>,
     pub span: SourceSpan,
+}
+
+/// The left side of an assignment.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignTarget {
+    /// `x = ...`
+    Var(String),
+    /// `a[i] = ...` (nested for `m[i][j]`: `array` is itself an index).
+    Index { array: Box<Expr>, index: Box<Expr> },
 }
 
 /// A binary operator.
@@ -182,6 +199,35 @@ pub enum Expr {
         operand: Box<Expr>,
         span: SourceSpan,
     },
+    /// Array element access: `a[i]`.
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
+        span: SourceSpan,
+    },
+    /// Field access on a non-name expression: `m[i].length`. (Dotted
+    /// identifier chains stay [`Expr::Name`].)
+    Field {
+        object: Box<Expr>,
+        name: String,
+        span: SourceSpan,
+    },
+    /// `new int[3]`, `new int[2][3]`, `new int[3][]`, or (with `init`)
+    /// `new int[] {1, 2}`.
+    NewArray {
+        /// Element base type (`int` in `new int[2][3]`).
+        elem: TypeRef,
+        /// One entry per `[...]`: `Some(len)` or `None` for empty.
+        dims: Vec<Option<Expr>>,
+        init: Option<Vec<Expr>>,
+        span: SourceSpan,
+    },
+    /// `{1, 2, 3}` — only valid as a declaration initializer or nested
+    /// inside another array literal / `new T[] {...}`.
+    ArrayLiteral {
+        elements: Vec<Expr>,
+        span: SourceSpan,
+    },
 }
 
 impl Expr {
@@ -193,7 +239,11 @@ impl Expr {
             | Expr::Call { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Unary { span, .. }
-            | Expr::Cast { span, .. } => *span,
+            | Expr::Cast { span, .. }
+            | Expr::Index { span, .. }
+            | Expr::Field { span, .. }
+            | Expr::NewArray { span, .. }
+            | Expr::ArrayLiteral { span, .. } => *span,
         }
     }
 }
