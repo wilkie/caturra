@@ -115,15 +115,23 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   - `String` methods over UTF-16: `length`, `charAt`, `substring` (both),
     `indexOf`, `equals`/`equalsIgnoreCase`, `compareTo`, `contains`,
     `startsWith`/`endsWith`, `toUpperCase`/`toLowerCase`, `trim`,
-    `isEmpty`, with Java 11 exception wording
+    `isEmpty`, `replace` (both overloads), and `split` — the split
+    delimiter is treated literally, not as a regex (a documented
+    deviation visible only for metacharacter delimiters like `"."`);
+    trailing empty strings drop like Java's. With Java 11 exception
+    wording
     (`StringIndexOutOfBoundsException: String index out of range: 5`).
     `equals` accepts only strings/null (a documented narrowing of
     `equals(Object)`).
-  - `Math.abs/pow/sqrt/max/min/random` — `random()` uses Java's LCG,
+  - `Math.abs/pow/sqrt/max/min/floor/ceil/round/random` plus `Math.PI`
+    and `Math.E` (`round` returns int, not long — the classroom idiom
+    is `(int) Math.round(x)` anyway). `random()` uses Java's LCG,
     seeded deterministically by default (tests) and from host entropy in
     the browser (`VmOptions::random_seed`).
-  - `Integer.MAX_VALUE/MIN_VALUE/parseInt`, `Double.parseDouble`, with
-    `NumberFormatException: For input string: "x"`.
+  - `Integer.MAX_VALUE/MIN_VALUE/parseInt/toString`,
+    `Double.parseDouble/toString`, and `Character.isDigit/isLetter/`
+    `isLetterOrDigit/isUpperCase/isLowerCase/toUpperCase/toLowerCase`,
+    with `NumberFormatException: For input string: "x"`.
   - `Scanner` over `System.in` (`nextInt/nextDouble/next/nextLine/`
     `hasNext*`), tokenizing like Java, fed by the host console — in the
     browser this is the SharedArrayBuffer blocking-stdin path.

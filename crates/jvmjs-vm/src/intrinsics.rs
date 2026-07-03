@@ -314,6 +314,33 @@ fn string_method(
             let other = arg_units(other)?;
             Ok(Some(JValue::Int(compare_utf16(&units, &other))))
         }
+        ("split", [delimiter]) => {
+            let delimiter = arg_units(delimiter)?;
+            let parts = split_units(&units, &delimiter);
+            let refs: Vec<JValue> = parts
+                .into_iter()
+                .map(|part| JValue::Ref(Some(heap.alloc(HeapObject::JavaString(part)))))
+                .collect();
+            let reference = heap.alloc(HeapObject::RefArray(refs));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("replace", [JValue::Int(from), JValue::Int(to)]) => {
+            let from = u16::try_from(*from).unwrap_or(u16::MAX);
+            let to = u16::try_from(*to).unwrap_or(u16::MAX);
+            let replaced: Vec<u16> = units
+                .iter()
+                .map(|unit| if *unit == from { to } else { *unit })
+                .collect();
+            let reference = heap.alloc(HeapObject::JavaString(replaced));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("replace", [from, to]) => {
+            let from = arg_units(from)?;
+            let to = arg_units(to)?;
+            let replaced = replace_units(&units, &from, &to);
+            let reference = heap.alloc(HeapObject::JavaString(replaced));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("toUpperCase", []) => {
             let text = String::from_utf16_lossy(&units).to_uppercase();
             let reference = heap.alloc_string(&text);
@@ -397,6 +424,61 @@ fn compare_utf16(a: &[u16], b: &[u16]) -> i32 {
         }
     }
     i32::try_from(a.len()).unwrap_or(i32::MAX) - i32::try_from(b.len()).unwrap_or(i32::MAX)
+}
+
+/// `String.split` with a literal delimiter. Matches Java's default
+/// behavior of dropping trailing empty strings; an empty delimiter
+/// splits into single code units (as Java's empty regex does). The
+/// delimiter is NOT a regex — a documented deviation that only shows
+/// for metacharacter delimiters like `"."`.
+fn split_units(haystack: &[u16], delimiter: &[u16]) -> Vec<Vec<u16>> {
+    let mut parts: Vec<Vec<u16>> = Vec::new();
+    if delimiter.is_empty() {
+        parts.extend(haystack.iter().map(|unit| vec![*unit]));
+    } else {
+        let mut start = 0;
+        let mut at = 0;
+        while at + delimiter.len() <= haystack.len() {
+            if &haystack[at..at + delimiter.len()] == delimiter {
+                parts.push(haystack[start..at].to_vec());
+                at += delimiter.len();
+                start = at;
+            } else {
+                at += 1;
+            }
+        }
+        parts.push(haystack[start..].to_vec());
+    }
+    // Java (limit 0) removes trailing empty strings.
+    while parts.last().is_some_and(Vec::is_empty) {
+        parts.pop();
+    }
+    parts
+}
+
+/// `String.replace(CharSequence, CharSequence)` — literal in Java too.
+fn replace_units(haystack: &[u16], from: &[u16], to: &[u16]) -> Vec<u16> {
+    if from.is_empty() {
+        // Java inserts `to` between every character.
+        let mut out = to.to_vec();
+        for unit in haystack {
+            out.push(*unit);
+            out.extend_from_slice(to);
+        }
+        return out;
+    }
+    let mut out = Vec::with_capacity(haystack.len());
+    let mut at = 0;
+    while at < haystack.len() {
+        if at + from.len() <= haystack.len() && &haystack[at..at + from.len()] == from {
+            out.extend_from_slice(to);
+            at += from.len();
+        } else {
+            out.push(haystack[at]);
+            at += 1;
+        }
+    }
+    out
 }
 
 /// `java.util.Scanner` methods, pulling lines from the console on
@@ -833,6 +915,43 @@ pub fn invoke_static(
             Ok(Some(JValue::Double(a.min(*b))))
         }
         ("java/lang/Math", "random", []) => Ok(Some(JValue::Double(rng.next_double()))),
+        ("java/lang/Math", "floor", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.floor()))),
+        ("java/lang/Math", "ceil", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.ceil()))),
+        ("java/lang/Math", "round", [JValue::Double(v)]) => {
+            // Java rounds half-up toward positive infinity.
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(Some(JValue::Int((v + 0.5).floor() as i32)))
+        }
+        ("java/lang/Integer", "toString", [JValue::Int(v)]) => {
+            let reference = heap.alloc_string(&v.to_string());
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("java/lang/Double", "toString", [JValue::Double(v)]) => {
+            let reference = heap.alloc_string(&java_double_to_string(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("java/lang/Character", method, [JValue::Int(unit)]) => {
+            let ch = char::from_u32(u32::try_from(*unit).unwrap_or(0)).unwrap_or('\u{FFFD}');
+            match method {
+                "isDigit" => Ok(Some(JValue::Int(i32::from(ch.is_ascii_digit())))),
+                "isLetter" => Ok(Some(JValue::Int(i32::from(ch.is_alphabetic())))),
+                "isLetterOrDigit" => Ok(Some(JValue::Int(i32::from(
+                    ch.is_alphabetic() || ch.is_ascii_digit(),
+                )))),
+                "isUpperCase" => Ok(Some(JValue::Int(i32::from(ch.is_uppercase())))),
+                "isLowerCase" => Ok(Some(JValue::Int(i32::from(ch.is_lowercase())))),
+                "toUpperCase" | "toLowerCase" => {
+                    let converted = if method == "toUpperCase" {
+                        ch.to_uppercase().next().unwrap_or(ch)
+                    } else {
+                        ch.to_lowercase().next().unwrap_or(ch)
+                    };
+                    let unit = u32::from(converted);
+                    Ok(Some(JValue::Int(i32::try_from(unit & 0xFFFF).unwrap_or(0))))
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!("Character.{method}"))),
+            }
+        }
         ("java/lang/Integer", "parseInt", [value]) => {
             let text = string_arg(value)?;
             let parsed: i32 = text.parse().map_err(|_| {

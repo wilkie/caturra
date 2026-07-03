@@ -188,3 +188,40 @@ label {
 .watch-error {
   color: light-dark(#b00020, #ff6b6b);
 }
+
+#file-tabs {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.file-tab {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.file-tab.active {
+  font-weight: 600;
+  border-bottom-color: transparent;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.file-close {
+  opacity: 0.6;
+}
+
+.file-close:hover {
+  opacity: 1;
+  color: light-dark(#b00020, #ff6b6b);
+}
+
+#add-file {
+  font-size: 0.9rem;
+  padding: 0.1rem 0.5rem;
+  cursor: pointer;
+}

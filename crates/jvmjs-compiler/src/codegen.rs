@@ -1542,6 +1542,8 @@ enum BRet {
     Boolean,
     Char,
     Str,
+    /// `String[]` (e.g. `String.split`).
+    StrArray,
     /// The list's element type.
     Elem,
 }
@@ -1626,6 +1628,24 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Str],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/String;)Z",
+    },
+    BuiltinMethod {
+        name: "split",
+        params: &[BParam::Str],
+        ret: BRet::StrArray,
+        descriptor: "(Ljava/lang/String;)[Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "replace",
+        params: &[BParam::Char, BParam::Char],
+        ret: BRet::Str,
+        descriptor: "(CC)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "replace",
+        params: &[BParam::Str, BParam::Str],
+        ret: BRet::Str,
+        descriptor: "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;",
     },
     BuiltinMethod {
         name: "toUpperCase",
@@ -1915,6 +1935,26 @@ const MATH_METHODS: &[BuiltinMethod] = &[
         descriptor: "()D",
     },
     BuiltinMethod {
+        name: "floor",
+        params: &[BParam::Double],
+        ret: BRet::Double,
+        descriptor: "(D)D",
+    },
+    BuiltinMethod {
+        name: "ceil",
+        params: &[BParam::Double],
+        ret: BRet::Double,
+        descriptor: "(D)D",
+    },
+    // Java returns long; jvmjs surfaces int (documented deviation —
+    // the classroom idiom is `(int) Math.round(x)` anyway).
+    BuiltinMethod {
+        name: "round",
+        params: &[BParam::Double],
+        ret: BRet::Int,
+        descriptor: "(D)I",
+    },
+    BuiltinMethod {
         name: "max",
         params: &[BParam::Int, BParam::Int],
         ret: BRet::Int,
@@ -1940,19 +1980,80 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
-const INTEGER_METHODS: &[BuiltinMethod] = &[BuiltinMethod {
-    name: "parseInt",
-    params: &[BParam::Str],
-    ret: BRet::Int,
-    descriptor: "(Ljava/lang/String;)I",
-}];
+const INTEGER_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "parseInt",
+        params: &[BParam::Str],
+        ret: BRet::Int,
+        descriptor: "(Ljava/lang/String;)I",
+    },
+    BuiltinMethod {
+        name: "toString",
+        params: &[BParam::Int],
+        ret: BRet::Str,
+        descriptor: "(I)Ljava/lang/String;",
+    },
+];
 
-const DOUBLE_METHODS: &[BuiltinMethod] = &[BuiltinMethod {
-    name: "parseDouble",
-    params: &[BParam::Str],
-    ret: BRet::Double,
-    descriptor: "(Ljava/lang/String;)D",
-}];
+const DOUBLE_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "parseDouble",
+        params: &[BParam::Str],
+        ret: BRet::Double,
+        descriptor: "(Ljava/lang/String;)D",
+    },
+    BuiltinMethod {
+        name: "toString",
+        params: &[BParam::Double],
+        ret: BRet::Str,
+        descriptor: "(D)Ljava/lang/String;",
+    },
+];
+
+const CHARACTER_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "isDigit",
+        params: &[BParam::Char],
+        ret: BRet::Boolean,
+        descriptor: "(C)Z",
+    },
+    BuiltinMethod {
+        name: "isLetter",
+        params: &[BParam::Char],
+        ret: BRet::Boolean,
+        descriptor: "(C)Z",
+    },
+    BuiltinMethod {
+        name: "isLetterOrDigit",
+        params: &[BParam::Char],
+        ret: BRet::Boolean,
+        descriptor: "(C)Z",
+    },
+    BuiltinMethod {
+        name: "isUpperCase",
+        params: &[BParam::Char],
+        ret: BRet::Boolean,
+        descriptor: "(C)Z",
+    },
+    BuiltinMethod {
+        name: "isLowerCase",
+        params: &[BParam::Char],
+        ret: BRet::Boolean,
+        descriptor: "(C)Z",
+    },
+    BuiltinMethod {
+        name: "toUpperCase",
+        params: &[BParam::Char],
+        ret: BRet::Char,
+        descriptor: "(C)C",
+    },
+    BuiltinMethod {
+        name: "toLowerCase",
+        params: &[BParam::Char],
+        ret: BRet::Char,
+        descriptor: "(C)C",
+    },
+];
 
 /// The intrinsic method table and JVM class for a receiver type.
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
@@ -1972,15 +2073,25 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
+        "Character" => Some(("java/lang/Character", CHARACTER_METHODS)),
         _ => None,
     }
 }
 
-/// Intrinsic static constants (`Integer.MAX_VALUE`, ...).
-fn builtin_static_constant(class: &str, field: &str) -> Option<i32> {
+/// A compile-time intrinsic constant's value.
+#[derive(Debug, Clone, Copy)]
+enum BuiltinConstant {
+    Int(i32),
+    Double(f64),
+}
+
+/// Intrinsic static constants (`Integer.MAX_VALUE`, `Math.PI`, ...).
+fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> {
     match (class, field) {
-        ("Integer", "MAX_VALUE") => Some(i32::MAX),
-        ("Integer", "MIN_VALUE") => Some(i32::MIN),
+        ("Integer", "MAX_VALUE") => Some(BuiltinConstant::Int(i32::MAX)),
+        ("Integer", "MIN_VALUE") => Some(BuiltinConstant::Int(i32::MIN)),
+        ("Math", "PI") => Some(BuiltinConstant::Double(std::f64::consts::PI)),
+        ("Math", "E") => Some(BuiltinConstant::Double(std::f64::consts::E)),
         _ => None,
     }
 }
@@ -2035,6 +2146,10 @@ fn bret_type(ret: BRet, elem: Option<ElemType>) -> Option<JType> {
         BRet::Boolean => Some(JType::Boolean),
         BRet::Char => Some(JType::Char),
         BRet::Str => Some(JType::Str),
+        BRet::StrArray => Some(JType::Array {
+            elem: ElemType::Str,
+            dims: 1,
+        }),
         BRet::Elem => Some(elem.map_or(JType::Error, ElemType::base_type)),
     }
 }
@@ -2441,8 +2556,6 @@ impl BodyGen<'_> {
             }
             let slot = self.next_slot;
             self.next_slot += var_ty.width();
-            self.record_local_debug(&declarator.name, var_ty, slot);
-
             let assigned = if let Some(init) = &declarator.init {
                 // `int[] a = {1, 2};` — the literal takes its type
                 // from the declaration.
@@ -2464,6 +2577,10 @@ impl BodyGen<'_> {
             } else {
                 false
             };
+            // Recorded after the initializer's store (javac does the
+            // same): a paused debugger doesn't show the variable until
+            // it actually holds its value.
+            self.record_local_debug(&declarator.name, var_ty, slot);
             self.scopes
                 .last_mut()
                 .expect("scope stack is never empty")
@@ -4169,7 +4286,10 @@ impl BodyGen<'_> {
                     && !self.table.has_class(&path[0])
                     && builtin_static_constant(&path[0], &path[1]).is_some() =>
             {
-                JType::Int
+                match builtin_static_constant(&path[0], &path[1]) {
+                    Some(BuiltinConstant::Double(_)) => JType::Double,
+                    _ => JType::Int,
+                }
             }
             Expr::Name { path, .. } if path.len() == 2 => {
                 // `x.field` on a local object, or `Class.staticField`.
@@ -4784,8 +4904,17 @@ impl BodyGen<'_> {
             && self.lookup(&path[0]).is_none()
             && let Some(value) = builtin_static_constant(&path[0], &path[1])
         {
-            self.push_int(value);
-            return JType::Int;
+            match value {
+                BuiltinConstant::Int(value) => {
+                    self.push_int(value);
+                    return JType::Int;
+                }
+                BuiltinConstant::Double(value) => {
+                    let index = self.pool.intern(Constant::Double(value));
+                    self.code.push_op_u16(op::LDC2_W, index, 2);
+                    return JType::Double;
+                }
+            }
         }
         // `x.field` on a local object, or `Class.staticField`.
         if path.len() == 2 {

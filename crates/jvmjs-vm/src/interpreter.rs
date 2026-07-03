@@ -328,8 +328,19 @@ impl<'run> Interpreter<'run> {
         }
     }
 
-    /// Render a value for the paused-locals view.
+    /// Render a value for the paused-locals view. Instances expand one
+    /// level (`Dog@1{age=3, name="Rex"}`); nested references inside
+    /// stay shallow to keep the display bounded.
     fn render_value(&self, value: JValue) -> String {
+        self.render_value_depth(value, 0)
+    }
+
+    fn render_shallow(&self, value: JValue) -> String {
+        self.render_value_depth(value, 1)
+    }
+
+    #[allow(clippy::too_many_lines)] // one rendering ladder
+    fn render_value_depth(&self, value: JValue, depth: u8) -> String {
         match value {
             JValue::Int(v) => v.to_string(),
             JValue::Long(v) => v.to_string(),
@@ -347,13 +358,23 @@ impl<'run> Interpreter<'run> {
                     render_array(values.iter().map(|v| intrinsics::java_double_to_string(*v)))
                 }
                 Some(crate::value::HeapObject::RefArray(values)) => {
-                    render_array(values.iter().map(|v| self.render_value(*v)))
+                    render_array(values.iter().map(|v| self.render_shallow(*v)))
                 }
                 Some(crate::value::HeapObject::ArrayList(values)) => {
-                    render_array(values.iter().map(|v| self.render_value(*v)))
+                    render_array(values.iter().map(|v| self.render_shallow(*v)))
                 }
-                Some(crate::value::HeapObject::Instance { class_name, .. }) => {
-                    format!("{class_name}@{reference:x}")
+                Some(crate::value::HeapObject::Instance { class_name, fields }) => {
+                    if depth > 0 || fields.is_empty() {
+                        return format!("{class_name}@{reference:x}");
+                    }
+                    // Sorted for stable display (fields live in a map).
+                    let mut names: Vec<&String> = fields.keys().collect();
+                    names.sort();
+                    let rendered: Vec<String> = names
+                        .into_iter()
+                        .map(|name| format!("{name}={}", self.render_shallow(fields[name])))
+                        .collect();
+                    format!("{class_name}@{reference:x}{{{}}}", rendered.join(", "))
                 }
                 Some(crate::value::HeapObject::Scanner { .. }) => String::from("Scanner"),
                 Some(crate::value::HeapObject::File(path)) => format!("File({path})"),

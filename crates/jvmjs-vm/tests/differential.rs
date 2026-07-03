@@ -842,6 +842,38 @@ public class DiffFq {
 );
 
 differential_test!(
+    diff_classlib_extras,
+    "DiffExtras",
+    r#"
+public class DiffExtras {
+    public static void main(String[] args) {
+        String csv = "ada,alan,,grace,";
+        String[] names = csv.split(",");
+        System.out.println(names.length);
+        for (String name : names) {
+            System.out.println("[" + name + "]");
+        }
+        System.out.println("banana".replace('a', 'o'));
+        System.out.println("mississippi".replace("ss", "SS"));
+        System.out.println(Math.floor(-2.5) + " " + Math.ceil(-2.5));
+        System.out.println(Math.round(2.5) + " " + Math.round(-2.5) + " " + Math.round(2.4));
+        System.out.println(Math.PI);
+        System.out.println(Math.E);
+        System.out.println(Integer.toString(-42) + Double.toString(1.5));
+        System.out.println(Character.isDigit('7'));
+        System.out.println(Character.isLetter('7'));
+        System.out.println(Character.isUpperCase('a') + " " + Character.isLowerCase('a'));
+        System.out.println(Character.toUpperCase('q'));
+        System.out.println(Character.toLowerCase('Q'));
+        String word = "hello world";
+        String[] parts = word.split(" ");
+        System.out.println(parts[0].toUpperCase() + "!" + parts[1]);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

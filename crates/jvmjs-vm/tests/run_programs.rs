@@ -2753,6 +2753,80 @@ public class WatchMe {
 }
 
 #[test]
+fn paused_view_expands_instance_fields() {
+    struct FieldHost {
+        seen: Vec<String>,
+    }
+    impl DebugHost for FieldHost {
+        fn on_pause(
+            &mut self,
+            snapshot: &DebugSnapshot,
+            _: &mut dyn WatchEvaluator,
+        ) -> DebugControl {
+            for local in &snapshot.frames[0].locals {
+                self.seen.push(format!("{} = {}", local.name, local.value));
+            }
+            DebugControl {
+                command: DebugCommand::Continue,
+                breakpoints: None,
+            }
+        }
+    }
+
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Pets.java".into(),
+        text: r#"
+        class Dog {
+            String name;
+            int age;
+            Dog buddy;
+            Dog(String name, int age) { this.name = name; this.age = age; }
+        }
+
+        public class Pets {
+            public static void main(String[] args) {
+                Dog rex = new Dog("Rex", 3);
+                Dog pal = new Dog("Pal", 5);
+                rex.buddy = pal;
+                System.out.println(rex.age + pal.age);
+            }
+        }
+        "#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let mut host = FieldHost { seen: Vec::new() };
+    let breakpoints = [Breakpoint {
+        file: "Pets.java".into(),
+        line: 14, // System.out.println(...)
+    }];
+    vm.run_main_debug("Pets", &[], &breakpoints, &mut host)
+        .unwrap();
+
+    // One level deep, fields sorted, nested instance shallow.
+    let rex = host.seen.iter().find(|s| s.starts_with("rex = ")).unwrap();
+    assert!(
+        rex.contains("Dog@")
+            && rex.contains("age=3")
+            && rex.contains("buddy=Dog@")
+            && rex.contains("name=\"Rex\""),
+        "{rex}"
+    );
+    // The nested buddy is NOT expanded (no inner braces after buddy=Dog@N).
+    let after_buddy = rex.split("buddy=").nth(1).unwrap();
+    assert!(
+        !after_buddy.split(',').next().unwrap().contains('{'),
+        "{rex}"
+    );
+}
+
+#[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
         path: "NoMain.java".into(),

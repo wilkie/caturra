@@ -14,6 +14,7 @@ import { Compartment, RangeSet, StateEffect, StateField } from '@codemirror/stat
 import { oneDark } from '@codemirror/theme-one-dark';
 import { Decoration, GutterMarker, gutter, lineNumbers } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
 import { EditorView, minimalSetup } from 'codemirror';
 
 // ----- Breakpoints -----
@@ -73,6 +74,17 @@ export function breakpointLines(view: EditorView): number[] {
   const iter = view.state.field(breakpointField).iter();
   while (iter.value !== null) {
     lines.push(view.state.doc.lineAt(iter.from).number);
+    iter.next();
+  }
+  return lines;
+}
+
+/** 1-based breakpoint lines of a detached (inactive-tab) state. */
+export function breakpointLinesInState(state: EditorState): number[] {
+  const lines: number[] = [];
+  const iter = state.field(breakpointField).iter();
+  while (iter.value !== null) {
+    lines.push(state.doc.lineAt(iter.from).number);
     iter.next();
   }
   return lines;
@@ -181,40 +193,46 @@ function themeFor(dark: boolean) {
   return dark ? oneDark : [];
 }
 
+/** The full extension set (shared by every tab's state). */
+function editorExtensions() {
+  return [
+    themeCompartment.of(themeFor(darkQuery.matches)),
+    breakpointField,
+    gutter({
+      class: 'cm-breakpoint-gutter',
+      markers: (view) => view.state.field(breakpointField),
+      initialSpacer: () => spacerMarker,
+      domEventHandlers: {
+        mousedown(view, line) {
+          toggleBreakpoint(view, line.from);
+          return true;
+        },
+      },
+    }),
+    lineNumbers({
+      domEventHandlers: {
+        mousedown(view, line) {
+          toggleBreakpoint(view, line.from);
+          return true;
+        },
+      },
+    }),
+    pausedLineField,
+    // minimalSetup instead of basicSetup: the latter brings its own
+    // line-number gutter, which would duplicate ours.
+    minimalSetup,
+    java(),
+  ];
+}
+
+/** Build a detached document state (a not-currently-shown tab). */
+export function createFileState(doc: string): EditorState {
+  return EditorState.create({ doc, extensions: editorExtensions() });
+}
+
 /** Create the editor inside `parent` with the given initial source. */
 export function createEditor(parent: HTMLElement, doc: string): EditorView {
-  const view = new EditorView({
-    parent,
-    doc,
-    extensions: [
-      themeCompartment.of(themeFor(darkQuery.matches)),
-      breakpointField,
-      gutter({
-        class: 'cm-breakpoint-gutter',
-        markers: (view) => view.state.field(breakpointField),
-        initialSpacer: () => spacerMarker,
-        domEventHandlers: {
-          mousedown(view, line) {
-            toggleBreakpoint(view, line.from);
-            return true;
-          },
-        },
-      }),
-      lineNumbers({
-        domEventHandlers: {
-          mousedown(view, line) {
-            toggleBreakpoint(view, line.from);
-            return true;
-          },
-        },
-      }),
-      pausedLineField,
-      // minimalSetup instead of basicSetup: the latter brings its own
-      // line-number gutter, which would duplicate ours.
-      minimalSetup,
-      java(),
-    ],
-  });
+  const view = new EditorView({ parent, state: createFileState(doc) });
   darkQuery.addEventListener('change', (event) => {
     view.dispatch({
       effects: themeCompartment.reconfigure(themeFor(event.matches)),

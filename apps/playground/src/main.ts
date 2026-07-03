@@ -5,9 +5,12 @@ import {
   type DebugPauseSnapshot,
   type Diagnostic,
 } from '@jvmjs/core';
+import type { EditorState } from '@codemirror/state';
 import {
   breakpointLines,
+  breakpointLinesInState,
   createEditor,
+  createFileState,
   getSource,
   setPausedLine,
   setSource,
@@ -47,7 +50,108 @@ const watchesEl = mustGet('#watches', HTMLUListElement);
 /** Watch expressions, kept across runs so re-debugging keeps them. */
 const watchExpressions: string[] = [];
 
+const fileTabsEl = mustGet('#file-tabs', HTMLDivElement);
+const addFileEl = mustGet('#add-file', HTMLButtonElement);
+
 const editor = createEditor(sourceEl, DEFAULT_PROGRAM);
+
+// ----- File tabs: one EditorView, one detached state per inactive
+// ----- file. Breakpoints and squiggles live inside each state, so
+// ----- they travel with their tab. Main.java is fixed.
+let activeFile = 'Main.java';
+const inactiveFiles = new Map<string, EditorState>();
+/** Squiggles per file, applied when a tab becomes active. */
+const fileSquiggles = new Map<string, SourceSquiggle[]>();
+
+function allFileNames(): string[] {
+  const names = new Set<string>([activeFile, ...inactiveFiles.keys()]);
+  return ['Main.java', ...[...names].filter((n) => n !== 'Main.java').sort()];
+}
+
+function switchToFile(name: string): void {
+  if (name === activeFile || !inactiveFiles.has(name)) {
+    return;
+  }
+  inactiveFiles.set(activeFile, editor.state);
+  const next = inactiveFiles.get(name);
+  if (!next) {
+    return;
+  }
+  inactiveFiles.delete(name);
+  editor.setState(next);
+  activeFile = name;
+  showDiagnostics(editor, fileSquiggles.get(name) ?? []);
+  renderTabs();
+}
+
+function addFile(name: string, text = ''): void {
+  const fileName = name.endsWith('.java') ? name : `${name}.java`;
+  if (fileName === activeFile || inactiveFiles.has(fileName)) {
+    switchToFile(fileName);
+    return;
+  }
+  inactiveFiles.set(fileName, createFileState(text));
+  renderTabs();
+  switchToFile(fileName);
+}
+
+function removeFile(name: string): void {
+  if (name === 'Main.java') {
+    return;
+  }
+  if (name === activeFile) {
+    switchToFile('Main.java');
+  }
+  inactiveFiles.delete(name);
+  fileSquiggles.delete(name);
+  renderTabs();
+}
+
+function renderTabs(): void {
+  for (const tab of [...fileTabsEl.querySelectorAll('.file-tab')]) {
+    tab.remove();
+  }
+  for (const name of allFileNames()) {
+    const tab = document.createElement('button');
+    tab.className = 'file-tab';
+    tab.dataset.file = name;
+    if (name === activeFile) {
+      tab.classList.add('active');
+    }
+    tab.textContent = name;
+    tab.addEventListener('click', () => {
+      switchToFile(name);
+    });
+    if (name !== 'Main.java') {
+      const close = document.createElement('span');
+      close.className = 'file-close';
+      close.textContent = ' ×';
+      close.addEventListener('click', (event) => {
+        event.stopPropagation();
+        removeFile(name);
+      });
+      tab.appendChild(close);
+    }
+    fileTabsEl.insertBefore(tab, addFileEl);
+  }
+}
+
+addFileEl.addEventListener('click', () => {
+  const name = prompt('New file name (e.g. Helper.java)');
+  if (name !== null && name.trim() !== '') {
+    addFile(name.trim());
+  }
+});
+renderTabs();
+
+/** All files as compiler inputs (the active tab reads the live view). */
+function collectSources(): { path: string; text: string }[] {
+  const sources = [{ path: activeFile, text: getSource(editor) }];
+  for (const [name, state] of inactiveFiles) {
+    sources.push({ path: name, text: state.doc.toString() });
+  }
+  return sources;
+}
 
 // Stable automation hooks (Playwright drives the editor through these
 // rather than through CodeMirror's contenteditable internals).
@@ -58,6 +162,9 @@ declare global {
       getSource: () => string;
       toggleBreakpoint: (line: number) => void;
       breakpointLines: () => number[];
+      setFile: (name: string, text: string) => void;
+      selectFile: (name: string) => void;
+      activeFile: () => string;
     };
   }
 }
@@ -70,6 +177,14 @@ window.playground = {
     toggleBreakpointAtLine(editor, line);
   },
   breakpointLines: () => breakpointLines(editor),
+  setFile: (name, text) => {
+    addFile(name, text);
+    setSource(editor, text);
+  },
+  selectFile: (name) => {
+    switchToFile(name);
+  },
+  activeFile: () => activeFile,
 };
 
 function append(text: string, kind: 'normal' | 'error' = 'normal'): void {
@@ -93,17 +208,24 @@ function reportDiagnostics(diagnostics: Diagnostic[]): void {
   for (const diagnostic of diagnostics) {
     append(formatDiagnostic(diagnostic), diagnostic.severity === 'error' ? 'error' : 'normal');
   }
-  const squiggles: SourceSquiggle[] = diagnostics
-    .filter((diagnostic) => diagnostic.path === 'Main.java' && diagnostic.start)
-    .map((diagnostic) => ({
+  fileSquiggles.clear();
+  for (const diagnostic of diagnostics) {
+    if (!diagnostic.start) {
+      continue;
+    }
+    const squiggle: SourceSquiggle = {
       severity: diagnostic.severity,
       message: diagnostic.message,
-      startLine: diagnostic.start?.line ?? 1,
-      startColumn: diagnostic.start?.column ?? 1,
+      startLine: diagnostic.start.line,
+      startColumn: diagnostic.start.column,
       endLine: diagnostic.end?.line,
       endColumn: diagnostic.end?.column,
-    }));
-  showDiagnostics(editor, squiggles);
+    };
+    const existing = fileSquiggles.get(diagnostic.path) ?? [];
+    existing.push(squiggle);
+    fileSquiggles.set(diagnostic.path, existing);
+  }
+  showDiagnostics(editor, fileSquiggles.get(activeFile) ?? []);
 }
 
 // One long-lived engine worker for the page; each Compile & Run
@@ -125,7 +247,13 @@ async function main(): Promise<void> {
 }
 
 function currentBreakpoints(): { file: string; line: number }[] {
-  return breakpointLines(editor).map((line) => ({ file: 'Main.java', line }));
+  const breakpoints = breakpointLines(editor).map((line) => ({ file: activeFile, line }));
+  for (const [name, state] of inactiveFiles) {
+    for (const line of breakpointLinesInState(state)) {
+      breakpoints.push({ file: name, line });
+    }
+  }
+  return breakpoints;
 }
 
 function renderPause(snapshot: DebugPauseSnapshot): void {
@@ -225,8 +353,8 @@ async function debugProgram(): Promise<void> {
   consoleEl.textContent = '';
   try {
     const session = await sessionReady;
-    append('$ javac Main.java\n');
-    const compiled = await session.compile([{ path: 'Main.java', text: getSource(editor) }]);
+    append(`$ javac ${allFileNames().join(' ')}\n`);
+    const compiled = await session.compile(collectSources());
     reportDiagnostics(compiled.diagnostics);
     if (compiled.success) {
       append('$ java Main (debugger attached)\n');
@@ -243,6 +371,10 @@ async function debugProgram(): Promise<void> {
         },
         onPause: async (snapshot): Promise<DebugControlResponse> => {
           renderPause(snapshot);
+          const pausedFile = snapshot.frames[0]?.sourceFile;
+          if (pausedFile !== undefined && pausedFile !== activeFile) {
+            switchToFile(pausedFile);
+          }
           setPausedLine(editor, snapshot.frames[0]?.line ?? null);
           debugBarEl.hidden = false;
           const command = await nextDebugCommand();
@@ -284,8 +416,8 @@ async function runProgram(): Promise<void> {
   consoleEl.textContent = '';
   try {
     const session = await sessionReady;
-    append('$ javac Main.java\n');
-    const compiled = await session.compile([{ path: 'Main.java', text: getSource(editor) }]);
+    append(`$ javac ${allFileNames().join(' ')}\n`);
+    const compiled = await session.compile(collectSources());
     reportDiagnostics(compiled.diagnostics);
     if (compiled.success) {
       append('$ java Main\n');

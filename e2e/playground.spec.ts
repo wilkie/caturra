@@ -7,6 +7,9 @@ interface PlaygroundHooks {
   getSource: () => string;
   toggleBreakpoint: (line: number) => void;
   breakpointLines: () => number[];
+  setFile: (name: string, text: string) => void;
+  selectFile: (name: string) => void;
+  activeFile: () => string;
 }
 
 /** Replace the CodeMirror document (typing via contenteditable is flaky). */
@@ -56,6 +59,21 @@ async function colorPair(page: Page, selector: string): Promise<{ color: string;
     }
     return { color, bg: 'rgb(255, 255, 255)' };
   }, selector);
+}
+
+async function setFile(page: Page, name: string, text: string): Promise<void> {
+  await page.evaluate(
+    ([n, t]) => {
+      (window as unknown as { playground: PlaygroundHooks }).playground.setFile(n ?? '', t ?? '');
+    },
+    [name, text],
+  );
+}
+
+async function selectFile(page: Page, name: string): Promise<void> {
+  await page.evaluate((n) => {
+    (window as unknown as { playground: PlaygroundHooks }).playground.selectFile(n);
+  }, name);
 }
 
 async function toggleBreakpoint(page: Page, line: number): Promise<void> {
@@ -534,6 +552,71 @@ test.describe('playground', () => {
     await page.getByTestId('resume').click();
     await page.getByTestId('resume').click();
     await expect(page.getByTestId('console')).toContainText('6');
+  });
+
+  test('multiple files compile together and debug across tabs', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Greeter g = new Greeter("Ada");',
+        '        System.out.println(g.greet());',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await setFile(
+      page,
+      'Greeter.java',
+      [
+        'public class Greeter {',
+        '    private String name;',
+        '',
+        '    public Greeter(String name) {',
+        '        this.name = name;',
+        '    }',
+        '',
+        '    public String greet() {',
+        '        String message = "Hello, " + name + "!";',
+        '        return message;',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+
+    // A breakpoint inside the second file.
+    await toggleBreakpoint(page, 9); // String message = ...;
+    await selectFile(page, 'Main.java');
+    await page.getByTestId('debug').click();
+
+    // Paused in Greeter.java: the tab auto-switches, the frame shows
+    // the right file, and the field-expanded `this` is visible.
+    await expect(page.getByTestId('frames')).toContainText('Greeter.greet (Greeter.java:9)');
+    await expect(page.getByTestId('frames')).toContainText('this = Greeter@');
+    await expect(page.getByTestId('frames')).toContainText('name="Ada"');
+    const active = await page.evaluate(() =>
+      (window as unknown as { playground: PlaygroundHooks }).playground.activeFile(),
+    );
+    expect(active).toBe('Greeter.java');
+    await expect(page.locator('.cm-paused-line')).toContainText('String message');
+
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('Hello, Ada!');
+  });
+
+  test('diagnostics land in the right file tab', async ({ page }) => {
+    await page.goto('/');
+    await setFile(page, 'Broken.java', 'public class Broken { int x = nope; }');
+    await selectFile(page, 'Main.java');
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('Broken.java:1');
+    // No squiggle on Main.java (the active tab)...
+    await expect(page.locator('.cm-lintRange-error')).toHaveCount(0);
+    // ...but switching to Broken.java shows it.
+    await selectFile(page, 'Broken.java');
+    await expect(page.locator('.cm-lintRange-error')).toHaveCount(1);
   });
 
   test('gives friendly messages for future Java features', async ({ page }) => {

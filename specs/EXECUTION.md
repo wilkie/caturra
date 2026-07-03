@@ -93,6 +93,14 @@ frame's locals as typed parameters>) {{ return "" + (<expr>); }} }}`,
   needed. `this` is not synthesizable (keyword) — instance-frame
   watches use locals and statics. A `refresh` pseudo-command
   re-evaluates a replaced watch list without resuming.
+- Paused locals expand instance fields one level, sorted
+  (`Dog@1{age=3, buddy=Dog@2, name="Rex"}`); nested references stay
+  shallow. Locals appear only after their initializer runs (LVT
+  `start_pc` is post-store, like javac).
+- The playground supports multiple files as tabs (2026-07-03):
+  `Main.java` is fixed; each tab is a detached CodeMirror `EditorState`
+  so breakpoints and squiggles travel with their file; compiles send
+  every tab; pausing switches to the paused frame's tab automatically.
 - The playground editor is CodeMirror 6 (bundled locally — no CDN)
   with Java syntax and the traditional debug UX: clicking a line
   number toggles a red breakpoint dot in a dedicated gutter, the
