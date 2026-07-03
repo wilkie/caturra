@@ -293,6 +293,45 @@ impl Lexer<'_> {
     }
 
     fn number(&mut self, start: SourcePosition) {
+        // Hex, binary, and octal integer literals (with underscores).
+        // Java's rules: `0x1F`, `0b1010`, and a leading zero followed
+        // by digits is octal (`0777`); a lone `0`, `0.5`, and `0e3`
+        // stay decimal.
+        if self.peek() == Some('0') {
+            let radix = match self.peek_at(1) {
+                Some('x' | 'X') => Some((16u32, 2usize)),
+                Some('b' | 'B') => Some((2, 2)),
+                Some(c) if c.is_ascii_digit() || c == '_' => Some((8, 1)),
+                _ => None,
+            };
+            if let Some((radix, prefix_len)) = radix {
+                for _ in 0..prefix_len {
+                    self.bump();
+                }
+                let mut digits = String::new();
+                while self
+                    .peek()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    digits.push(self.bump().expect("peeked"));
+                }
+                let cleaned = digits.replace('_', "");
+                // Hex/binary literals may fill all 32 bits (0xFFFFFFFF
+                // is -1); parse unsigned then reinterpret.
+                match u32::from_str_radix(&cleaned, radix) {
+                    Ok(value) => {
+                        self.push(TokenKind::IntLiteral(i64::from(value.cast_signed())), start);
+                    }
+                    Err(_) => {
+                        self.error(
+                            format!("integer literal '0{digits}' is malformed or out of range"),
+                            start,
+                        );
+                    }
+                }
+                return;
+            }
+        }
         let mut digits = String::new();
         let mut is_double = false;
         while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
@@ -324,8 +363,6 @@ impl Lexer<'_> {
                 }
             }
         }
-        // TODO: hex/binary/octal literals, and the
-        // L/f/d suffixes.
         let digits = digits.replace('_', "");
         if is_double {
             match digits.parse::<f64>() {
@@ -351,7 +388,25 @@ impl Lexer<'_> {
             Some('\\') => Some('\\'),
             Some('\'') => Some('\''),
             Some('"') => Some('"'),
-            // TODO: \uXXXX escapes and octal escapes.
+            Some('u') => {
+                let mut code = String::new();
+                for _ in 0..4 {
+                    match self.bump() {
+                        Some(c) if c.is_ascii_hexdigit() => code.push(c),
+                        _ => {
+                            self.error("malformed \\u escape (needs 4 hex digits)", start);
+                            return None;
+                        }
+                    }
+                }
+                let unit = u32::from_str_radix(&code, 16).expect("hex digits");
+                char::from_u32(unit).or({
+                    // Surrogate code units can't be a Rust char; map to
+                    // the replacement character (raw surrogates only
+                    // matter for pathological inputs).
+                    Some('\u{FFFD}')
+                })
+            }
             Some(other) => {
                 self.error(format!("unknown escape sequence '\\{other}'"), start);
                 None

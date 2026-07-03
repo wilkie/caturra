@@ -590,6 +590,71 @@ impl<'run> Interpreter<'run> {
                                 frame.stack.push(top);
                             }
                         }
+                        op::DUP_X1 => {
+                            let len = frame.stack.len();
+                            if len < 2 {
+                                return Err(VmError::StackUnderflow);
+                            }
+                            let top = frame.stack[len - 1];
+                            frame.stack.insert(len - 2, top);
+                        }
+                        op::DUP_X2 => {
+                            // Form 2 when the value underneath is category
+                            // 2 (double/long occupy one JValue here).
+                            let len = frame.stack.len();
+                            if len < 2 {
+                                return Err(VmError::StackUnderflow);
+                            }
+                            let top = frame.stack[len - 1];
+                            let under_cat2 =
+                                matches!(frame.stack[len - 2], JValue::Double(_) | JValue::Long(_));
+                            let depth = if under_cat2 { 2 } else { 3 };
+                            if len < depth {
+                                return Err(VmError::StackUnderflow);
+                            }
+                            frame.stack.insert(len - depth, top);
+                        }
+                        op::DUP2_X1 => {
+                            // Form 2: a category-2 top over one category-1.
+                            let len = frame.stack.len();
+                            if len < 2 {
+                                return Err(VmError::StackUnderflow);
+                            }
+                            let top = frame.stack[len - 1];
+                            if matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                                frame.stack.insert(len - 2, top);
+                            } else {
+                                if len < 3 {
+                                    return Err(VmError::StackUnderflow);
+                                }
+                                let pair = [frame.stack[len - 2], frame.stack[len - 1]];
+                                frame.stack.insert(len - 3, pair[1]);
+                                frame.stack.insert(len - 3, pair[0]);
+                            }
+                        }
+                        op::DUP2_X2 => {
+                            let len = frame.stack.len();
+                            if len < 2 {
+                                return Err(VmError::StackUnderflow);
+                            }
+                            let top_cat2 =
+                                matches!(frame.stack[len - 1], JValue::Double(_) | JValue::Long(_));
+                            let top_width = if top_cat2 { 1 } else { 2 };
+                            if len < top_width + 1 {
+                                return Err(VmError::StackUnderflow);
+                            }
+                            let under_index = len - top_width - 1;
+                            let under_cat2 = matches!(
+                                frame.stack[under_index],
+                                JValue::Double(_) | JValue::Long(_)
+                            );
+                            let under_width = if under_cat2 { 1 } else { 2 };
+                            let insert_at = len - top_width - under_width;
+                            let copied: Vec<JValue> = frame.stack[len - top_width..].to_vec();
+                            for (offset, value) in copied.into_iter().enumerate() {
+                                frame.stack.insert(insert_at + offset, value);
+                            }
+                        }
                         op::SWAP => {
                             let len = frame.stack.len();
                             if len < 2 {
@@ -608,6 +673,19 @@ impl<'run> Interpreter<'run> {
                             let value = frame.pop_int()?;
                             frame.stack.push(JValue::Int(value.wrapping_neg()));
                         }
+                        // Shift counts mask to the low five bits (JVMS).
+                        op::ISHL => {
+                            frame.int_binop(|a, b| a.wrapping_shl(b.cast_unsigned() & 0x1F))?;
+                        }
+                        op::ISHR => {
+                            frame.int_binop(|a, b| a.wrapping_shr(b.cast_unsigned() & 0x1F))?;
+                        }
+                        op::IUSHR => frame.int_binop(|a, b| {
+                            (a.cast_unsigned().wrapping_shr(b.cast_unsigned() & 0x1F)).cast_signed()
+                        })?,
+                        op::IAND => frame.int_binop(|a, b| a & b)?,
+                        op::IOR => frame.int_binop(|a, b| a | b)?,
+                        op::IXOR => frame.int_binop(|a, b| a ^ b)?,
                         op::DADD => frame.double_binop(|a, b| a + b)?,
                         op::DSUB => frame.double_binop(|a, b| a - b)?,
                         op::DMUL => frame.double_binop(|a, b| a * b)?,

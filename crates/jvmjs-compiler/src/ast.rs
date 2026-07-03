@@ -180,6 +180,22 @@ pub enum Stmt {
         value: Expr,
         span: SourceSpan,
     },
+    /// `switch (selector) { case ...: ... default: ... }`.
+    Switch {
+        selector: Expr,
+        arms: Vec<SwitchArm>,
+        span: SourceSpan,
+    },
+}
+
+/// One `case`/`default` group and the statements under it (which fall
+/// through to the next group unless they break).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchArm {
+    /// The labels stacked on this arm; `None` is `default:`.
+    pub labels: Vec<Option<Expr>>,
+    pub body: Vec<Stmt>,
+    pub span: SourceSpan,
 }
 
 /// One `catch (Type name) { ... }` clause.
@@ -229,6 +245,18 @@ pub enum BinaryOp {
     And,
     /// `||` (short-circuit)
     Or,
+    /// `&` — bitwise on ints, non-short-circuit logical on booleans.
+    BitAnd,
+    /// `|`
+    BitOr,
+    /// `^`
+    BitXor,
+    /// `<<`
+    Shl,
+    /// `>>` (arithmetic)
+    Shr,
+    /// `>>>` (logical)
+    Ushr,
 }
 
 /// A unary operator.
@@ -238,6 +266,8 @@ pub enum UnaryOp {
     Neg,
     /// `!x`
     Not,
+    /// `~x`
+    BitNot,
 }
 
 /// An expression.
@@ -329,6 +359,23 @@ pub enum Expr {
         args: Vec<Expr>,
         span: SourceSpan,
     },
+    /// `cond ? then : else`.
+    Ternary {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        els: Box<Expr>,
+        span: SourceSpan,
+    },
+    /// `x++` / `--a[i]` in expression position (statement-only forms
+    /// still lower to compound assignments).
+    IncDec {
+        target: Box<Expr>,
+        /// `++` or `--`.
+        increment: bool,
+        /// Prefix yields the new value, postfix the old.
+        prefix: bool,
+        span: SourceSpan,
+    },
 }
 
 impl Expr {
@@ -348,7 +395,9 @@ impl Expr {
             | Expr::This { span }
             | Expr::NewObject { span, .. }
             | Expr::InstanceOf { span, .. }
-            | Expr::SuperMethodCall { span, .. } => *span,
+            | Expr::SuperMethodCall { span, .. }
+            | Expr::Ternary { span, .. }
+            | Expr::IncDec { span, .. } => *span,
         }
     }
 }

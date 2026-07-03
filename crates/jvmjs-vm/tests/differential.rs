@@ -1308,6 +1308,145 @@ public class DiffFormat {
 );
 
 differential_test!(
+    diff_expressions_milestone,
+    "DiffExprs",
+    r#"
+public class DiffExprs {
+    public static void main(String[] args) {
+        // Ternary, nesting, mixed numeric branches.
+        int a = 7;
+        System.out.println(a > 5 ? "big" : "small");
+        System.out.println(a % 2 == 0 ? a / 2 : a * 3 + 1);
+        double mixed = a > 0 ? 1 : 2.5;
+        System.out.println(mixed);
+        String s = a < 0 ? null : "present";
+        System.out.println(s);
+        System.out.println(a > 3 ? a > 6 ? "six+" : "four-six" : "small");
+
+        // Bitwise and shifts, precedence, compound forms.
+        int bits = 0b1010_1100;
+        System.out.println(bits + " " + 0x1F + " " + 0755 + " " + 1_000_000);
+        System.out.println((bits & 0x0F) + " " + (bits | 0x03) + " " + (bits ^ 0xFF));
+        System.out.println(~bits + " " + (bits << 2) + " " + (bits >> 2) + " " + (-8 >> 1) + " " + (-8 >>> 28));
+        System.out.println(1 << 33);
+        int acc = 0xF0;
+        acc &= 0x3C; System.out.print(acc + " ");
+        acc |= 0x03; System.out.print(acc + " ");
+        acc ^= 0xFF; System.out.print(acc + " ");
+        acc <<= 2;   System.out.print(acc + " ");
+        acc >>= 1;   System.out.print(acc + " ");
+        acc >>>= 1;  System.out.println(acc);
+        boolean flag = true & false | true ^ false;
+        System.out.println(flag + " " + (2 + 3 << 1) + " " + (1 | 2 & 3));
+
+        // Expression-position increment/decrement.
+        int x = 5;
+        int y = x++ + ++x;
+        System.out.println(x + " " + y);
+        int[] arr = {10, 20, 30};
+        int i = 0;
+        int grabbed = arr[i++] + arr[i++];
+        System.out.println(grabbed + " " + i);
+        arr[0] = --x * 2;
+        System.out.println(arr[0] + " " + x);
+        int old = arr[1]--;
+        System.out.println(old + " " + arr[1]);
+        double d = 1.5;
+        System.out.println(d++ + " " + d + " " + --d);
+        char c = 'a';
+        System.out.println(c++ + "" + c + (char) (c + 1));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_switch,
+    "DiffSwitch",
+    r#"
+public class DiffSwitch {
+    static String dayKind(int day) {
+        switch (day) {
+            case 1:
+            case 7:
+                return "weekend";
+            case 2:
+            case 3:
+            case 4:
+            case 5:
+            case 6:
+                return "weekday";
+            default:
+                return "invalid";
+        }
+    }
+
+    public static void main(String[] args) {
+        for (int day = 0; day <= 8; day++) {
+            System.out.print(dayKind(day).charAt(0));
+        }
+        System.out.println();
+
+        // Fall-through accumulates.
+        for (int level = 1; level <= 4; level++) {
+            String message = "";
+            switch (level) {
+                case 3:
+                    message += "high ";
+                case 2:
+                    message += "medium ";
+                case 1:
+                    message += "low";
+                    break;
+                default:
+                    message = "off the chart";
+            }
+            System.out.println(level + ": " + message);
+        }
+
+        // String switch with break and default position first.
+        String[] commands = { "start", "stop", "pause", "reset" };
+        for (String command : commands) {
+            switch (command) {
+                default:
+                    System.out.println("unknown: " + command);
+                    break;
+                case "start":
+                    System.out.println("go");
+                    break;
+                case "stop":
+                case "pause":
+                    System.out.println("halt-ish: " + command);
+                    break;
+            }
+        }
+
+        // char selector; switch inside a loop with continue past it.
+        int vowels = 0;
+        String text = "hello world";
+        for (int i = 0; i < text.length(); i++) {
+            switch (text.charAt(i)) {
+                case 'a': case 'e': case 'i': case 'o': case 'u':
+                    vowels++;
+                    break;
+                case ' ':
+                    continue;
+            }
+        }
+        System.out.println(vowels);
+
+        // No default: falls straight through when unmatched.
+        switch (99) {
+            case 1:
+                System.out.println("one");
+        }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

@@ -8,7 +8,7 @@
 
 use crate::ast::{
     AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, ImportDecl,
-    Literal, LocalDeclarator, MethodDecl, Param, Stmt, TypeRef, UnaryOp,
+    Literal, LocalDeclarator, MethodDecl, Param, Stmt, SwitchArm, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -34,7 +34,6 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
 fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
     match keyword {
         Keyword::Else => Some("'else' without a matching 'if'"),
-        Keyword::Switch => Some("switch statements are not yet supported by jvmjs"),
         Keyword::Var => Some("'var' is not supported by jvmjs; write the type explicitly"),
         Keyword::New => Some("object creation with 'new' is not yet supported by jvmjs"),
         Keyword::Int
@@ -747,6 +746,9 @@ impl Parser<'_> {
                 return self.return_statement().map(Some);
             }
             Some(TokenKind::Keyword(Keyword::Try)) => return self.try_statement().map(Some),
+            Some(TokenKind::Keyword(Keyword::Switch)) => {
+                return self.switch_statement().map(Some);
+            }
             Some(TokenKind::Keyword(Keyword::Throw)) => {
                 return self.throw_statement().map(Some);
             }
@@ -809,6 +811,30 @@ impl Parser<'_> {
         }
 
         let expr = self.expression()?;
+
+        // `x++;` parses as a postfix expression; as a statement it
+        // lowers to the compound assignment like before.
+        if let Expr::IncDec {
+            target,
+            increment,
+            span,
+            ..
+        } = &expr
+        {
+            if let Some(assign_target) = assignment_target(target) {
+                return Ok(increment_statement(
+                    assign_target,
+                    *increment,
+                    span.start,
+                    span.end,
+                ));
+            }
+            self.error_at(
+                target.span(),
+                "++/-- can only be applied to a variable or array element",
+            );
+            return Err(Abort);
+        }
 
         if let Some(op) = self.assignment_operator() {
             let Some(target) = assignment_target(&expr) else {
@@ -901,6 +927,69 @@ impl Parser<'_> {
             then,
             els,
             span: start,
+        })
+    }
+
+    /// `switch (selector) { case k: ... default: ... }`.
+    #[allow(clippy::too_many_lines)] // one grammar production
+    fn switch_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'switch'
+        self.expect_symbol("(", "after 'switch'")?;
+        let selector = self.expression()?;
+        self.expect_symbol(")", "after the switch selector")?;
+        self.expect_symbol("{", "to open the switch body")?;
+
+        let mut arms: Vec<SwitchArm> = Vec::new();
+        while !self.at_symbol("}") && self.peek().is_some() {
+            // One arm: stacked labels, then statements.
+            let arm_start = self.here();
+            let mut labels = Vec::new();
+            loop {
+                if self.eat_keyword(Keyword::Case) {
+                    let value = self.expression()?;
+                    self.expect_symbol(":", "after the case value")?;
+                    labels.push(Some(value));
+                } else if self.eat_keyword(Keyword::Default) {
+                    self.expect_symbol(":", "after 'default'")?;
+                    labels.push(None);
+                } else {
+                    break;
+                }
+            }
+            if labels.is_empty() {
+                self.error_here("expected 'case' or 'default' in the switch body");
+                return Err(Abort);
+            }
+            let mut body = Vec::new();
+            while !self.at_symbol("}")
+                && !self.at_keyword(Keyword::Case)
+                && !self.at_keyword(Keyword::Default)
+                && self.peek().is_some()
+            {
+                match self.statement() {
+                    Ok(Some(stmt)) => body.push(stmt),
+                    Ok(None) => {}
+                    Err(Abort) => self.recover_to_statement_boundary(),
+                }
+            }
+            arms.push(SwitchArm {
+                labels,
+                body,
+                span: SourceSpan {
+                    start: arm_start.start,
+                    end: self.here().start,
+                },
+            });
+        }
+        self.expect_symbol("}", "to close the switch body")?;
+        Ok(Stmt::Switch {
+            selector,
+            arms,
+            span: SourceSpan {
+                start: start.start,
+                end: self.here().start,
+            },
         })
     }
 
@@ -1160,6 +1249,12 @@ impl Parser<'_> {
             Some(TokenKind::Symbol("*=")) => Some(Some(BinaryOp::Mul)),
             Some(TokenKind::Symbol("/=")) => Some(Some(BinaryOp::Div)),
             Some(TokenKind::Symbol("%=")) => Some(Some(BinaryOp::Rem)),
+            Some(TokenKind::Symbol("&=")) => Some(Some(BinaryOp::BitAnd)),
+            Some(TokenKind::Symbol("|=")) => Some(Some(BinaryOp::BitOr)),
+            Some(TokenKind::Symbol("^=")) => Some(Some(BinaryOp::BitXor)),
+            Some(TokenKind::Symbol("<<=")) => Some(Some(BinaryOp::Shl)),
+            Some(TokenKind::Symbol(">>=")) => Some(Some(BinaryOp::Shr)),
+            Some(TokenKind::Symbol(">>>=")) => Some(Some(BinaryOp::Ushr)),
             _ => None,
         }
     }
@@ -1208,7 +1303,29 @@ impl Parser<'_> {
     // ----- expressions, by descending precedence -----
 
     fn expression(&mut self) -> Parsed<Expr> {
-        self.logical_or()
+        self.ternary()
+    }
+
+    /// `cond ? then : else` (right-associative, lowest precedence
+    /// above assignment).
+    fn ternary(&mut self) -> Parsed<Expr> {
+        let cond = self.logical_or()?;
+        if !self.eat_symbol("?") {
+            return Ok(cond);
+        }
+        let then = self.ternary()?;
+        self.expect_symbol(":", "in the conditional expression")?;
+        let els = self.ternary()?;
+        let span = SourceSpan {
+            start: cond.span().start,
+            end: els.span().end,
+        };
+        Ok(Expr::Ternary {
+            cond: Box::new(cond),
+            then: Box::new(then),
+            els: Box::new(els),
+            span,
+        })
     }
 
     fn binary_level(
@@ -1244,7 +1361,19 @@ impl Parser<'_> {
     }
 
     fn logical_and(&mut self) -> Parsed<Expr> {
-        self.binary_level(Self::equality, &[("&&", BinaryOp::And)])
+        self.binary_level(Self::bit_or, &[("&&", BinaryOp::And)])
+    }
+
+    fn bit_or(&mut self) -> Parsed<Expr> {
+        self.binary_level(Self::bit_xor, &[("|", BinaryOp::BitOr)])
+    }
+
+    fn bit_xor(&mut self) -> Parsed<Expr> {
+        self.binary_level(Self::bit_and, &[("^", BinaryOp::BitXor)])
+    }
+
+    fn bit_and(&mut self) -> Parsed<Expr> {
+        self.binary_level(Self::equality, &[("&", BinaryOp::BitAnd)])
     }
 
     fn equality(&mut self) -> Parsed<Expr> {
@@ -1256,7 +1385,7 @@ impl Parser<'_> {
 
     fn relational(&mut self) -> Parsed<Expr> {
         let mut expr = self.binary_level(
-            Self::additive,
+            Self::shift,
             &[
                 ("<=", BinaryOp::Le),
                 (">=", BinaryOp::Ge),
@@ -1279,6 +1408,17 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    fn shift(&mut self) -> Parsed<Expr> {
+        self.binary_level(
+            Self::additive,
+            &[
+                ("<<", BinaryOp::Shl),
+                (">>>", BinaryOp::Ushr),
+                (">>", BinaryOp::Shr),
+            ],
+        )
+    }
+
     fn additive(&mut self) -> Parsed<Expr> {
         self.binary_level(
             Self::multiplicative,
@@ -1297,8 +1437,37 @@ impl Parser<'_> {
         )
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per prefix operator
     fn unary(&mut self) -> Parsed<Expr> {
         let start = self.here();
+        if self.eat_symbol("~") {
+            let operand = self.unary()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Ok(Expr::Unary {
+                op: UnaryOp::BitNot,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+        // Prefix increment/decrement in expression position.
+        if self.at_symbol("++") || self.at_symbol("--") {
+            let increment = self.at_symbol("++");
+            self.pos += 1;
+            let operand = self.unary()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Ok(Expr::IncDec {
+                target: Box::new(operand),
+                increment,
+                prefix: true,
+                span,
+            });
+        }
         if self.eat_symbol("-") {
             let operand = self.unary()?;
             let span = SourceSpan {
@@ -1410,6 +1579,25 @@ impl Parser<'_> {
         let mut expr = self.primary_expression()?;
 
         loop {
+            // Postfix increment/decrement in expression position. The
+            // statement parser intercepts the statement-only form
+            // before expressions are involved, so reaching here means
+            // a value is wanted (`y = x++`, `a[i++]`).
+            if self.at_symbol("++") || self.at_symbol("--") {
+                let increment = self.at_symbol("++");
+                self.pos += 1;
+                let span = SourceSpan {
+                    start: expr.span().start,
+                    end: self.here().start,
+                };
+                expr = Expr::IncDec {
+                    target: Box::new(expr),
+                    increment,
+                    prefix: false,
+                    span,
+                };
+                continue;
+            }
             if self.eat_symbol(".") {
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
@@ -1844,14 +2032,15 @@ mod tests {
             r#"
             class Main {
                 static void run() {
-                    switch (1) { }
+                    synchronized (this) { }
                     System.out.println("still parsed");
                 }
             }
             "#,
         );
         let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        assert!(messages[0].contains("switch statements are not yet supported"));
+        assert!(!messages.is_empty(), "{messages:?}");
+        assert!(messages[0].contains("not yet supported"), "{messages:?}");
     }
 
     #[test]

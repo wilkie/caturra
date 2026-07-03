@@ -22,7 +22,7 @@ use jvmjs_classfile::{
 use crate::CompiledClass;
 use crate::ast::{
     AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, Literal,
-    LocalDeclarator, MethodDecl, Stmt, TypeRef, UnaryOp,
+    LocalDeclarator, MethodDecl, Stmt, SwitchArm, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
@@ -1366,6 +1366,27 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
     }
 }
 
+/// A compile-time constant int/char case label (literals, optionally
+/// negated).
+fn constant_int_value(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::Literal {
+            value: Literal::Int(v),
+            ..
+        } => Some(*v),
+        Expr::Literal {
+            value: Literal::Char(c),
+            ..
+        } => Some(i64::from(u32::from(*c))),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => constant_int_value(operand).map(|v| -v),
+        _ => None,
+    }
+}
+
 /// The span a statement's line marker should use (`None` for blocks —
 /// their inner statements mark themselves).
 fn statement_span(stmt: &Stmt) -> Option<SourceSpan> {
@@ -1384,7 +1405,8 @@ fn statement_span(stmt: &Stmt) -> Option<SourceSpan> {
         | Stmt::SuperCall { span, .. }
         | Stmt::ThisCall { span, .. }
         | Stmt::Try { span, .. }
-        | Stmt::Throw { span, .. } => Some(*span),
+        | Stmt::Throw { span, .. }
+        | Stmt::Switch { span, .. } => Some(*span),
         Stmt::Expr(expr) => Some(expr.span()),
     }
 }
@@ -1646,6 +1668,19 @@ fn stmt_completes_normally(stmt: &Stmt) -> bool {
         // JLS: a try statement completes normally iff (the try block or
         // at least one catch block can complete normally) and the
         // finally block, if any, can complete normally.
+        // A switch completes normally unless a default exists and every
+        // path ends abruptly; approximate: no default, any break, or
+        // the final arm falling out all mean normal completion.
+        Stmt::Switch { arms, .. } => {
+            let has_default = arms
+                .iter()
+                .any(|arm| arm.labels.iter().any(Option::is_none));
+            !has_default
+                || arms
+                    .last()
+                    .is_some_and(|arm| block_completes_normally(&arm.body))
+                || arms.iter().any(|arm| arm.body.iter().any(has_direct_break))
+        }
         Stmt::Try {
             body,
             catches,
@@ -2880,6 +2915,9 @@ fn describe_types(types: &[JType], table: &MethodTable) -> String {
 struct LoopLabels {
     break_label: Label,
     continue_label: Label,
+    /// `false` for switch entries: `break` binds to them but
+    /// `continue` skips past to the nearest real loop.
+    is_loop: bool,
 }
 
 /// Per-method-body emission state.
@@ -3024,16 +3062,18 @@ impl BodyGen<'_> {
                     let target = labels.break_label;
                     self.code.branch(op::GOTO, target, 0);
                 }
-                None => self.error(*span, "'break' can only be used inside a loop"),
+                None => self.error(*span, "'break' can only be used inside a loop or switch"),
             },
-            Stmt::Continue { span } => match self.loop_stack.last() {
-                Some(labels) => {
-                    let target = labels.continue_label;
-                    self.emit_pending_finallys(Some(self.loop_stack.len() - 1));
-                    self.code.branch(op::GOTO, target, 0);
+            Stmt::Continue { span } => {
+                match self.loop_stack.iter().rposition(|labels| labels.is_loop) {
+                    Some(index) => {
+                        let target = self.loop_stack[index].continue_label;
+                        self.emit_pending_finallys(Some(index));
+                        self.code.branch(op::GOTO, target, 0);
+                    }
+                    None => self.error(*span, "'continue' can only be used inside a loop"),
                 }
-                None => self.error(*span, "'continue' can only be used inside a loop"),
-            },
+            }
             Stmt::Return { value, span } => self.return_statement(value.as_ref(), *span),
             Stmt::SuperCall { span, .. } | Stmt::ThisCall { span, .. } => {
                 self.error(
@@ -3048,7 +3088,123 @@ impl BodyGen<'_> {
                 span,
             } => self.try_statement(body, catches, finally_body.as_deref(), *span),
             Stmt::Throw { value, span } => self.throw_statement(value, *span),
+            Stmt::Switch {
+                selector,
+                arms,
+                span,
+            } => self.switch_statement(selector, arms, *span),
         }
+    }
+
+    /// `switch` lowered to an evaluate-once selector plus a
+    /// compare-and-jump chain, with fall-through bodies and `break`
+    /// binding to the switch end. (Real javac emits tableswitch /
+    /// lookupswitch; the chain is semantically identical and the VM
+    /// has no performance stake.)
+    #[allow(clippy::too_many_lines)] // one lowering plan
+    fn switch_statement(&mut self, selector: &Expr, arms: &[SwitchArm], span: SourceSpan) {
+        let selector_ty = self.expr(selector);
+        let is_string = selector_ty == JType::Str;
+        let is_int = matches!(selector_ty, JType::Int | JType::Char);
+        if selector_ty != JType::Error && !is_string && !is_int {
+            self.error(
+                selector.span(),
+                format!(
+                    "incompatible types: {} cannot be converted to int (or String) for switch",
+                    selector_ty.describe(self.table)
+                ),
+            );
+        }
+        let selector_slot = self.next_slot;
+        self.next_slot += selector_ty.width().max(1);
+        self.emit_store(selector_slot, selector_ty);
+
+        let end = self.code.new_label();
+        let arm_labels: Vec<Label> = arms.iter().map(|_| self.code.new_label()).collect();
+        let mut default_arm: Option<usize> = None;
+        let mut seen_ints: Vec<i64> = Vec::new();
+        let mut seen_strings: Vec<String> = Vec::new();
+
+        // The dispatch chain: one comparison per case label.
+        for (index, arm) in arms.iter().enumerate() {
+            for label in &arm.labels {
+                let Some(value) = label else {
+                    if default_arm.is_some() {
+                        self.error(arm.span, "duplicate default label");
+                    }
+                    default_arm = Some(index);
+                    continue;
+                };
+                if is_string {
+                    let Expr::Literal {
+                        value: Literal::Str(text),
+                        ..
+                    } = value
+                    else {
+                        self.error(value.span(), "case labels must be constants");
+                        continue;
+                    };
+                    if seen_strings.iter().any(|s| s == text) {
+                        self.error(value.span(), "duplicate case label");
+                    }
+                    seen_strings.push(text.clone());
+                    // selector.equals("text")
+                    self.emit_load(selector_slot, selector_ty);
+                    let utf8 = self.pool.intern_utf8(text);
+                    let string_index = self.pool.intern(Constant::String { string_index: utf8 });
+                    self.code.push_ldc(string_index);
+                    let equals = intern_method_ref(
+                        self.pool,
+                        "java/lang/String",
+                        "equals",
+                        "(Ljava/lang/Object;)Z",
+                    );
+                    self.code.push_op_u16(op::INVOKEVIRTUAL, equals, 1);
+                    self.code.drop_stack(2);
+                    self.code.branch(op::IFNE, arm_labels[index], 1);
+                } else {
+                    let Some(constant) = constant_int_value(value) else {
+                        self.error(value.span(), "case labels must be constants");
+                        continue;
+                    };
+                    if seen_ints.contains(&constant) {
+                        self.error(value.span(), "duplicate case label");
+                    }
+                    seen_ints.push(constant);
+                    self.emit_load(selector_slot, selector_ty);
+                    self.push_int(i32::try_from(constant).unwrap_or_default());
+                    self.code.branch(op::IF_ICMPEQ, arm_labels[index], 2);
+                }
+            }
+        }
+        // No label matched: default arm or straight past the switch.
+        match default_arm {
+            Some(index) => self.code.branch(op::GOTO, arm_labels[index], 0),
+            None => self.code.branch(op::GOTO, end, 0),
+        }
+
+        // Bodies in order; fall-through is the natural next arm.
+        let before_flags = self.assigned_flags();
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label: end, // never targeted: continue skips switches
+            is_loop: false,
+        });
+        for (index, arm) in arms.iter().enumerate() {
+            self.code.bind(arm_labels[index]);
+            self.code.mark_line(arm.span.start.line);
+            self.scopes.push(Vec::new());
+            for stmt in &arm.body {
+                self.statement(stmt);
+            }
+            self.scopes.pop();
+        }
+        self.loop_stack.pop();
+        self.code.bind(end);
+        // Conservative definite assignment: paths through the switch
+        // vary, so restore the pre-switch state.
+        self.restore_assigned(&before_flags);
+        let _ = span;
     }
 
     /// `try { ... } catch (...) { ... } finally { ... }` — a JVMS
@@ -3393,6 +3549,7 @@ impl BodyGen<'_> {
         self.loop_stack.push(LoopLabels {
             break_label: end,
             continue_label: start,
+            is_loop: true,
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -3409,6 +3566,7 @@ impl BodyGen<'_> {
         self.loop_stack.push(LoopLabels {
             break_label: end,
             continue_label,
+            is_loop: true,
         });
         // A do-while body always runs once, so its assignments stick.
         self.statement(body);
@@ -3443,6 +3601,7 @@ impl BodyGen<'_> {
         self.loop_stack.push(LoopLabels {
             break_label: end,
             continue_label: update_label,
+            is_loop: true,
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -5037,6 +5196,7 @@ impl BodyGen<'_> {
         self.loop_stack.push(LoopLabels {
             break_label: end,
             continue_label,
+            is_loop: true,
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -5129,6 +5289,7 @@ impl BodyGen<'_> {
         self.loop_stack.push(LoopLabels {
             break_label: end,
             continue_label,
+            is_loop: true,
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -5636,6 +5797,10 @@ impl BodyGen<'_> {
             }
             | Expr::InstanceOf { .. } => JType::Boolean,
             Expr::Unary {
+                op: UnaryOp::BitNot,
+                ..
+            } => JType::Int,
+            Expr::Unary {
                 op: UnaryOp::Neg,
                 operand,
                 ..
@@ -5657,6 +5822,14 @@ impl BodyGen<'_> {
                 BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                     promote(self.type_of(lhs), self.type_of(rhs))
                 }
+                BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                    if self.type_of(lhs) == JType::Boolean {
+                        JType::Boolean
+                    } else {
+                        JType::Int
+                    }
+                }
+                BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => JType::Int,
                 _ => JType::Boolean,
             },
             Expr::This { .. } => {
@@ -5669,6 +5842,29 @@ impl BodyGen<'_> {
             Expr::NewObject {
                 class, type_args, ..
             } => self.type_of_new_object(class, type_args),
+            Expr::Ternary { then, els, .. } => {
+                let then_ty = self.type_of(then);
+                let els_ty = self.type_of(els);
+                if then_ty == els_ty {
+                    then_ty
+                } else if then_ty.is_numeric() && els_ty.is_numeric() {
+                    promote(then_ty, els_ty)
+                } else if then_ty == JType::Null {
+                    els_ty
+                } else if els_ty == JType::Null {
+                    then_ty
+                } else if widens(then_ty, els_ty, self.table) {
+                    els_ty
+                } else if widens(els_ty, then_ty, self.table) {
+                    then_ty
+                } else {
+                    JType::Error
+                }
+            }
+            Expr::IncDec { target, .. } => match self.type_of(target) {
+                ty if ty.is_numeric() => ty,
+                _ => JType::Error,
+            },
             Expr::SuperMethodCall { method, args, .. } => {
                 let current = self.table.class_name(self.current_class_id).to_owned();
                 let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass)
@@ -5688,6 +5884,7 @@ impl BodyGen<'_> {
 
     /// Emit code leaving the expression's value on the stack; returns
     /// its type ([`JType::Error`] if a diagnostic was reported).
+    #[allow(clippy::too_many_lines)] // one dispatch arm per expression kind
     fn expr(&mut self, expr: &Expr) -> JType {
         match expr {
             Expr::Literal { value, span } => self.literal(value, *span),
@@ -5766,6 +5963,18 @@ impl BodyGen<'_> {
                 args,
                 span,
             } => self.new_object(class, type_args, args, *span),
+            Expr::Ternary {
+                cond,
+                then,
+                els,
+                span,
+            } => self.ternary(cond, then, els, *span),
+            Expr::IncDec {
+                target,
+                increment,
+                prefix,
+                span,
+            } => self.inc_dec(target, *increment, *prefix, *span),
             Expr::InstanceOf { value, ty, span } => self.instance_of(value, ty, *span),
             Expr::SuperMethodCall { method, args, span } => {
                 match self.super_method_call(method, args, *span) {
@@ -6272,6 +6481,29 @@ impl BodyGen<'_> {
                     }
                 }
             }
+            UnaryOp::BitNot => {
+                let ty = self.expr(operand);
+                match ty {
+                    JType::Int | JType::Char => {
+                        // ~x is x ^ -1.
+                        self.code.push_op(op::ICONST_M1, 1);
+                        self.code.push_op(op::IXOR, 0);
+                        self.code.drop_stack(1);
+                        JType::Int
+                    }
+                    JType::Error => JType::Error,
+                    other => {
+                        self.error(
+                            span,
+                            format!(
+                                "operator '~' cannot be applied to {}",
+                                other.describe(self.table)
+                            ),
+                        );
+                        JType::Error
+                    }
+                }
+            }
             UnaryOp::Not => {
                 let ty = self.expr(operand);
                 if ty == JType::Error {
@@ -6394,9 +6626,218 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `cond ? then : else` — branches around the two value paths.
+    #[allow(clippy::too_many_lines)] // one join-typing ladder
+    fn ternary(&mut self, cond: &Expr, then: &Expr, els: &Expr, span: SourceSpan) -> JType {
+        let then_ty = self.type_of(then);
+        let els_ty = self.type_of(els);
+        let table = self.table;
+        let target = if then_ty == JType::Error || els_ty == JType::Error {
+            JType::Error
+        } else if then_ty == els_ty {
+            then_ty
+        } else if then_ty.is_numeric() && els_ty.is_numeric() {
+            promote(then_ty, els_ty)
+        } else if then_ty == JType::Null && els_ty.is_reference() {
+            els_ty
+        } else if els_ty == JType::Null && then_ty.is_reference() {
+            then_ty
+        } else if widens(then_ty, els_ty, table) {
+            els_ty
+        } else if widens(els_ty, then_ty, table) {
+            then_ty
+        } else {
+            self.error(
+                span,
+                format!(
+                    "incompatible types in conditional: {} and {}",
+                    then_ty.describe(self.table),
+                    els_ty.describe(self.table)
+                ),
+            );
+            JType::Error
+        };
+
+        let cond_ty = self.expr(cond);
+        if cond_ty != JType::Boolean && cond_ty != JType::Error {
+            self.error(
+                cond.span(),
+                format!(
+                    "incompatible types: {} cannot be converted to boolean",
+                    cond_ty.describe(self.table)
+                ),
+            );
+        }
+        let else_label = self.code.new_label();
+        let end = self.code.new_label();
+        self.code.branch(op::IFEQ, else_label, 1);
+        let actual = self.expr(then);
+        if target.is_numeric() {
+            self.numeric_conversion(actual, target);
+        }
+        self.code.branch(op::GOTO, end, 0);
+        // The stack model tracks a single path; rewind for the else.
+        self.code.drop_stack(target.width());
+        self.code.bind(else_label);
+        let actual = self.expr(els);
+        if target.is_numeric() {
+            self.numeric_conversion(actual, target);
+        }
+        self.code.bind(end);
+        target
+    }
+
+    /// `x++` / `--a[i]` in expression position: postfix leaves the old
+    /// value on the stack, prefix the new one.
+    #[allow(clippy::too_many_lines)] // three target shapes × two orders
+    fn inc_dec(&mut self, target: &Expr, increment: bool, prefix: bool, span: SourceSpan) -> JType {
+        let one_op = |emitter: &mut Self, ty: JType| {
+            if ty == JType::Double {
+                let index = emitter.pool.intern(Constant::Double(1.0));
+                emitter.code.push_op_u16(op::LDC2_W, index, 2);
+                emitter
+                    .code
+                    .push_op(if increment { op::DADD } else { op::DSUB }, 0);
+                emitter.code.drop_stack(2);
+            } else {
+                emitter.code.push_op(op::ICONST_1, 1);
+                emitter
+                    .code
+                    .push_op(if increment { op::IADD } else { op::ISUB }, 0);
+                emitter.code.drop_stack(1);
+                if ty == JType::Char {
+                    emitter.code.push_op(op::I2C, 0);
+                }
+            }
+        };
+
+        match target {
+            Expr::Name { path, .. } if path.len() == 1 => {
+                let Some(var) = self.lookup(&path[0]) else {
+                    self.error(span, format!("cannot find variable '{}'", path[0]));
+                    return JType::Error;
+                };
+                let (slot, ty) = (var.slot, var.ty);
+                if !ty.is_numeric() {
+                    self.error(
+                        span,
+                        format!(
+                            "++/-- needs a numeric variable, got {}",
+                            ty.describe(self.table)
+                        ),
+                    );
+                    return JType::Error;
+                }
+                self.emit_load(slot, ty);
+                if !prefix {
+                    // Keep the old value under the update.
+                    if ty == JType::Double {
+                        self.code.push_op(op::DUP2, 2);
+                    } else {
+                        self.code.push_op(op::DUP, 1);
+                    }
+                }
+                one_op(self, ty);
+                if prefix {
+                    if ty == JType::Double {
+                        self.code.push_op(op::DUP2, 2);
+                    } else {
+                        self.code.push_op(op::DUP, 1);
+                    }
+                }
+                self.emit_store(slot, ty);
+                ty
+            }
+            Expr::Index { array, index, .. } => {
+                let array_ty = self.expr(array);
+                let Some(elem_ty) = array_ty.element_type() else {
+                    self.error(span, "++/-- on a non-array element");
+                    return JType::Error;
+                };
+                if !elem_ty.is_numeric() {
+                    self.error(span, "++/-- needs a numeric element");
+                    return JType::Error;
+                }
+                let index_ty = self.expr(index);
+                self.numeric_conversion(index_ty, JType::Int);
+                // [arr, i] → dup2 → [arr, i, arr, i] → load elem.
+                self.code.push_op(op::DUP2, 2);
+                let (load, store) = match elem_ty {
+                    JType::Double => (op::DALOAD, op::DASTORE),
+                    JType::Char => (op::CALOAD, op::CASTORE),
+                    _ => (op::IALOAD, op::IASTORE),
+                };
+                self.code.push_op(load, elem_ty.width());
+                self.code.drop_stack(2);
+                if !prefix {
+                    // Old value tucked under [arr, i, old].
+                    if elem_ty == JType::Double {
+                        self.code.push_op(op::DUP2_X2, 2);
+                    } else {
+                        self.code.push_op(op::DUP_X2, 1);
+                    }
+                }
+                one_op(self, elem_ty);
+                if prefix {
+                    if elem_ty == JType::Double {
+                        self.code.push_op(op::DUP2_X2, 2);
+                    } else {
+                        self.code.push_op(op::DUP_X2, 1);
+                    }
+                }
+                self.code.push_op(store, 0);
+                self.code.drop_stack(2 + elem_ty.width());
+                elem_ty
+            }
+            _ => {
+                // Field targets (this.count++, obj.n--): reuse the
+                // statement lowering path via a synthetic compound
+                // assignment... which cannot yield a value; report the
+                // one unsupported shape honestly.
+                self.error(
+                    span,
+                    "++/-- as an expression works on variables and array elements \
+                     (use a statement form for fields)",
+                );
+                self.expr(target);
+                JType::Error
+            }
+        }
+    }
+
     fn binary(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
         match op {
             BinaryOp::And | BinaryOp::Or => self.logical(op, lhs, rhs, span),
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                self.bitwise(op, lhs, rhs, span)
+            }
+            BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => {
+                let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
+                let ok = |t: JType| matches!(t, JType::Int | JType::Char);
+                if lt != JType::Error && rt != JType::Error && (!ok(lt) || !ok(rt)) {
+                    self.error(
+                        span,
+                        format!(
+                            "operator '{}' cannot be applied to {} and {}",
+                            arithmetic_symbol(op),
+                            lt.describe(self.table),
+                            rt.describe(self.table)
+                        ),
+                    );
+                }
+                let actual = self.expr(lhs);
+                self.numeric_conversion(actual, JType::Int);
+                let actual = self.expr(rhs);
+                self.numeric_conversion(actual, JType::Int);
+                let opcode = match op {
+                    BinaryOp::Shl => op::ISHL,
+                    BinaryOp::Shr => op::ISHR,
+                    _ => op::IUSHR,
+                };
+                self.code.push_op(opcode, 0);
+                self.code.drop_stack(1);
+                JType::Int
+            }
             BinaryOp::Eq
             | BinaryOp::Ne
             | BinaryOp::Lt
@@ -6437,6 +6878,43 @@ impl BodyGen<'_> {
                 target
             }
         }
+    }
+
+    /// `& | ^`: bitwise on ints, non-short-circuit logical on
+    /// booleans (both operands always evaluate — the JLS semantics).
+    fn bitwise(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
+        let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
+        let boolean = lt == JType::Boolean && rt == JType::Boolean;
+        let integral =
+            matches!(lt, JType::Int | JType::Char) && matches!(rt, JType::Int | JType::Char);
+        if lt != JType::Error && rt != JType::Error && !boolean && !integral {
+            self.error(
+                span,
+                format!(
+                    "operator '{}' cannot be applied to {} and {}",
+                    arithmetic_symbol(op),
+                    lt.describe(self.table),
+                    rt.describe(self.table)
+                ),
+            );
+        }
+        let target = if boolean { JType::Boolean } else { JType::Int };
+        let actual = self.expr(lhs);
+        if integral {
+            self.numeric_conversion(actual, JType::Int);
+        }
+        let actual = self.expr(rhs);
+        if integral {
+            self.numeric_conversion(actual, JType::Int);
+        }
+        let opcode = match op {
+            BinaryOp::BitAnd => op::IAND,
+            BinaryOp::BitOr => op::IOR,
+            _ => op::IXOR,
+        };
+        self.code.push_op(opcode, 0);
+        self.code.drop_stack(1);
+        target
     }
 
     fn logical(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
@@ -6772,6 +7250,12 @@ impl BodyGen<'_> {
             (BinaryOp::Mul, _) => op::IMUL,
             (BinaryOp::Div, _) => op::IDIV,
             (BinaryOp::Rem, _) => op::IREM,
+            (BinaryOp::BitAnd, _) => op::IAND,
+            (BinaryOp::BitOr, _) => op::IOR,
+            (BinaryOp::BitXor, _) => op::IXOR,
+            (BinaryOp::Shl, _) => op::ISHL,
+            (BinaryOp::Shr, _) => op::ISHR,
+            (BinaryOp::Ushr, _) => op::IUSHR,
             _ => unreachable!("not an arithmetic operator"),
         };
         self.code.push_op(opcode, 0);
@@ -6879,6 +7363,12 @@ fn compound_symbol(op: BinaryOp) -> &'static str {
         BinaryOp::Mul => "*=",
         BinaryOp::Div => "/=",
         BinaryOp::Rem => "%=",
+        BinaryOp::BitAnd => "&=",
+        BinaryOp::BitOr => "|=",
+        BinaryOp::BitXor => "^=",
+        BinaryOp::Shl => "<<=",
+        BinaryOp::Shr => ">>=",
+        BinaryOp::Ushr => ">>>=",
         _ => "?=",
     }
 }
@@ -6890,6 +7380,12 @@ fn arithmetic_symbol(op: BinaryOp) -> &'static str {
         BinaryOp::Mul => "*",
         BinaryOp::Div => "/",
         BinaryOp::Rem => "%",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
+        BinaryOp::Ushr => ">>>",
         _ => "?",
     }
 }

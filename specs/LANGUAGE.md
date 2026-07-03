@@ -233,6 +233,20 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   Java-formatted stderr with a line-numbered stack trace captured at
   the throw point.
 
+- **Expressions & switch** (2026-07-03): the conditional operator
+  `?:` (with numeric promotion and reference joining), `switch` over
+  int/char/String (fall-through, stacked labels, default anywhere,
+  `break` binding to the switch while `continue` skips past it to the
+  enclosing loop; javac's "duplicate case label"; lowered to an
+  evaluate-once compare chain — semantically identical to
+  tableswitch), expression-position `++`/`--` on variables and array
+  elements (JVMS dup/dup_x sequences; field targets remain
+  statement-only for now), the bitwise and shift operator family
+  `& | ^ ~ << >> >>>` with Java precedence, compound forms, shift-count
+  masking, and non-short-circuit `& | ^` on booleans, plus hex
+  (`0x1F`), binary (`0b1010`), octal (`0755`), and underscore
+  (`1_000_000`) integer literals and `\uXXXX` escapes.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

@@ -61,8 +61,12 @@ pub const POP: u8 = 0x57;
 /// Pops one category-2 value (double/long) or two category-1 values.
 pub const POP2: u8 = 0x58;
 pub const DUP: u8 = 0x59;
+pub const DUP_X1: u8 = 0x5A;
+pub const DUP_X2: u8 = 0x5B;
 /// Duplicates one category-2 value or the top two category-1 values.
 pub const DUP2: u8 = 0x5C;
+pub const DUP2_X1: u8 = 0x5D;
+pub const DUP2_X2: u8 = 0x5E;
 pub const SWAP: u8 = 0x5F;
 
 // Arithmetic.
@@ -78,6 +82,14 @@ pub const IREM: u8 = 0x70;
 pub const DREM: u8 = 0x73;
 pub const INEG: u8 = 0x74;
 pub const DNEG: u8 = 0x77;
+
+// Bitwise and shifts (int).
+pub const ISHL: u8 = 0x78;
+pub const ISHR: u8 = 0x7A;
+pub const IUSHR: u8 = 0x7C;
+pub const IAND: u8 = 0x7E;
+pub const IOR: u8 = 0x80;
+pub const IXOR: u8 = 0x82;
 
 // Numeric conversions.
 pub const I2D: u8 = 0x87;

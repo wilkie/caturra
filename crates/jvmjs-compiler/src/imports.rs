@@ -442,6 +442,17 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                 }
             }
             Stmt::Throw { value, .. } => self.expr(value),
+            Stmt::Switch { selector, arms, .. } => {
+                self.expr(selector);
+                for arm in arms {
+                    for label in arm.labels.iter().flatten() {
+                        self.expr(label);
+                    }
+                    for stmt in &arm.body {
+                        self.stmt(stmt);
+                    }
+                }
+            }
             Stmt::Break { .. } | Stmt::Continue { .. } => {}
         }
     }
@@ -510,6 +521,14 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                     self.expr(arg);
                 }
             }
+            Expr::Ternary {
+                cond, then, els, ..
+            } => {
+                self.expr(cond);
+                self.expr(then);
+                self.expr(els);
+            }
+            Expr::IncDec { target, .. } => self.expr(target),
         }
     }
 }
