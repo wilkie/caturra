@@ -49,6 +49,11 @@ pub enum HeapObject {
     /// A reference array (e.g. `String[] args`, or the rows of a 2D
     /// array).
     RefArray(Vec<JValue>),
+    /// An instance of a user-defined class.
+    Instance {
+        class_name: String,
+        fields: std::collections::HashMap<String, JValue>,
+    },
 }
 
 /// The per-run object heap.

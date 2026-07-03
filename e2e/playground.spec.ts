@@ -138,6 +138,30 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('best of 4: 100');
   });
 
+  test('runs user-defined classes in the browser', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'class Dice {',
+          '    private int sides;',
+          '    Dice(int sides) { this.sides = sides; }',
+          '    int max() { return sides; }',
+          '}',
+          '',
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        Dice d = new Dice(20);',
+          '        System.out.println("d" + d.max());',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('d20');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page
@@ -146,15 +170,13 @@ test.describe('playground', () => {
         [
           'public class Main {',
           '    public static void main(String[] args) {',
-          '        String s = new String("hi");',
-          '        System.out.println(s);',
+          '        Scanner in = new Scanner(System.in);',
+          '        System.out.println(in.nextLine());',
           '    }',
           '}',
         ].join('\n'),
       );
     await page.getByTestId('run').click();
-    await expect(page.getByTestId('console')).toContainText(
-      "object creation with 'new' is not yet supported",
-    );
+    await expect(page.getByTestId('console')).toContainText('unknown type');
   });
 });

@@ -91,11 +91,11 @@ describe('javac (compile)', () => {
     const result = session.compile([
       {
         path: 'Main.java',
-        text: 'class Main { static void f() { Object o = new Object(); } }',
+        text: 'class Main { static void f() { String s = new String("hi"); } }',
       },
     ]);
     expect(result.success).toBe(false);
-    expect(result.diagnostics[0]?.message).toMatch(/'new' is not yet supported/);
+    expect(result.diagnostics[0]?.message).toMatch(/arrives with the class library/);
   });
 });
 
@@ -246,6 +246,51 @@ public class Stage4 {
     const result = session.run('Stage4', { onStdout: (text) => stdout.push(text) });
     expect(result.status).toBe('completed');
     expect(stdout.join('')).toBe('sum: 108 of 6\n7 0\nlost!\n');
+  });
+
+  it('runs a stage-5 program: classes, objects, toString', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Stage5.java',
+        text: `
+class Pet {
+    private String name;
+    private int treats;
+    static int adopted = 0;
+
+    Pet(String name) {
+        this.name = name;
+        adopted++;
+    }
+
+    void reward() { treats++; }
+
+    public String toString() { return name + " (" + treats + " treats)"; }
+}
+
+public class Stage5 {
+    public static void main(String[] args) {
+        Pet rex = new Pet("Rex");
+        Pet mochi = new Pet("Mochi");
+        rex.reward();
+        rex.reward();
+        mochi.reward();
+        System.out.println(rex);
+        System.out.println(mochi);
+        System.out.println("adopted: " + Pet.adopted);
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Stage5', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('Rex (2 treats)\nMochi (1 treats)\nadopted: 2\n');
   });
 
   it('routes System.err to the stderr callback', async () => {

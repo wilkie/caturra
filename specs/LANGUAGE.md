@@ -18,7 +18,7 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Accepted today (v0 slice + stages 1–4)
+## Accepted today (v0 slice + stages 1–5)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
@@ -81,6 +81,22 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   concatenating a whole array gets a friendly error instead of Java's
   `[I@hash` (revisited when `Object` lands).
 
+- **Classes with state** (stage 5): instance and static fields (with
+  initializers, `final`, and Java's default values), constructors with
+  overloading and the synthesized default constructor (JLS §8.8.9),
+  instance methods with virtual dispatch, `this` (explicit and implicit
+  — bare names resolve local → field → static field), `new ClassName(args)`,
+  cross-class member access with `private` enforced using javac's wording
+  ("x has private access in A", "non-static variable x cannot be referenced
+  from a static context"), static fields initialized by a synthesized
+  `<clinit>` run lazily on first class use, objects in arrays and as
+  parameters (reference semantics, `==` identity), and
+  `println(obj)`/concatenation calling `toString()` — null-safely, with the
+  VM supplying Java's `ClassName@hex` default when a class doesn't define
+  one. `this(...)` constructor chaining, `super`, `extends`, and
+  `instanceof` wait for stage 6; String methods (`s.equals(t)`,
+  `s.length()`) wait for the class library.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
@@ -94,9 +110,9 @@ friendly message for now.
   `invokedynamic`/`StringConcatFactory` — keeps the VM free of `indy` support.
 - No `StackMapTable` emission (see [RUNTIME.md](RUNTIME.md) — our VM is the
   only verifier).
-- No default `<init>` constructor is emitted until object instantiation lands
-  (v0 classes are never instantiated). This is a deviation from javac output
-  and is revisited with `new`.
+- Constructors emit the implicit `Object.<init>` super call followed by
+  instance-field initializers, and a default constructor is synthesized when
+  none is declared — matching javac's shape.
 
 ## Staging (each stage flips its diagnostics to real support)
 
@@ -112,7 +128,9 @@ friendly message for now.
    stdout.
 4. ~~Arrays (1D, then 2D), `for-each`.~~ **Done (2026-07-02)** — both
    dimensions at once, differential-verified against OpenJDK 11.
-5. Objects: fields, constructors, `new`, instance methods, `this`.
+5. ~~Objects: fields, constructors, `new`, instance methods, `this`.~~
+   **Done (2026-07-02)** — plus static fields/`<clinit>` and private-access
+   enforcement, differential-verified against OpenJDK 11.
 6. Inheritance: `extends`, `super`, overriding, polymorphic dispatch;
    `interface` / `abstract`.
 7. Generics as far as `ArrayList<E>` requires (erasure, autoboxing).

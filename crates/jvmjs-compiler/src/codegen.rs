@@ -21,8 +21,8 @@ use jvmjs_classfile::{
 
 use crate::CompiledClass;
 use crate::ast::{
-    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, Literal, LocalDeclarator, MethodDecl,
-    Stmt, TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, FieldDecl, Literal, LocalDeclarator,
+    MethodDecl, Stmt, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
@@ -58,21 +58,164 @@ fn emit_class(
     class.this_class = intern_class(&mut class.constant_pool, &decl.name);
     class.super_class = intern_class(&mut class.constant_pool, "java/lang/Object");
 
+    for field in &decl.fields {
+        let ty = table.resolve_type(&field.ty).unwrap_or(JType::Unsupported);
+        if ty == JType::Unsupported {
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("unknown type for field '{}'", field.name),
+                field.span,
+            ));
+        }
+        let mut flags = if field.is_private {
+            jvmjs_classfile::FieldAccessFlags::PRIVATE
+        } else {
+            jvmjs_classfile::FieldAccessFlags::PUBLIC
+        };
+        if field.is_static {
+            flags |= jvmjs_classfile::FieldAccessFlags::STATIC;
+        }
+        if field.is_final {
+            flags |= jvmjs_classfile::FieldAccessFlags::FINAL;
+        }
+        let name_index = class.constant_pool.intern_utf8(&field.name);
+        let descriptor_index = class.constant_pool.intern_utf8(&ty.descriptor(table));
+        class.fields.push(jvmjs_classfile::FieldInfo {
+            access_flags: jvmjs_classfile::FieldAccessFlags(flags),
+            name_index,
+            descriptor_index,
+            attributes: Vec::new(),
+        });
+    }
+
     for method in &decl.methods {
         let compiled = emit_method(
             path,
             diagnostics,
             table,
-            &decl.name,
+            decl,
             &mut class.constant_pool,
             method,
         );
         class.methods.push(compiled);
     }
+
+    // Default constructor when none is declared (JLS §8.8.9).
+    if !decl.methods.iter().any(|m| m.is_constructor) {
+        let default_ctor = MethodDecl {
+            name: decl.name.clone(),
+            is_static: false,
+            is_public: true,
+            is_private: false,
+            is_constructor: true,
+            return_type: TypeRef::Void,
+            params: Vec::new(),
+            body: Vec::new(),
+            span: decl.span,
+        };
+        let compiled = emit_method(
+            path,
+            diagnostics,
+            table,
+            decl,
+            &mut class.constant_pool,
+            &default_ctor,
+        );
+        class.methods.push(compiled);
+    }
+
+    // Static field initializers run in a synthesized <clinit>.
+    if decl.fields.iter().any(|f| f.is_static && f.init.is_some()) {
+        let compiled = emit_clinit(path, diagnostics, table, decl, &mut class.constant_pool);
+        class.methods.push(compiled);
+    }
     class
 }
 
-/// One method signature, as seen by call resolution.
+/// Synthesize `static {}`-style initialization for static fields.
+fn emit_clinit(
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+    table: &MethodTable,
+    decl: &ClassDecl,
+    pool: &mut ConstantPool,
+) -> MethodInfo {
+    let class_id = table.class_id(&decl.name).expect("class registered");
+    let mut body = BodyGen {
+        path,
+        diagnostics,
+        pool,
+        table,
+        current_class: &decl.name,
+        current_class_id: class_id,
+        in_static: true,
+        in_constructor: false,
+        return_type: None,
+        code: CodeBuilder::new(),
+        scopes: vec![Vec::new()],
+        next_slot: 0,
+        loop_stack: Vec::new(),
+    };
+    for field in &decl.fields {
+        if !field.is_static {
+            continue;
+        }
+        if let Some(init) = &field.init {
+            body.emit_field_initializer(field, init);
+        }
+    }
+    body.code.push_op(op::RETURN, 0);
+    let max_locals = body.next_slot;
+    let (bytecode, max_stack) = body.code.finish();
+    finish_method_info(
+        pool,
+        "<clinit>",
+        "()V",
+        MethodAccessFlags::STATIC,
+        max_stack,
+        max_locals,
+        bytecode,
+    )
+}
+
+/// Assemble the final [`MethodInfo`] from emitted parts.
+fn finish_method_info(
+    pool: &mut ConstantPool,
+    name: &str,
+    descriptor: &str,
+    flags: u16,
+    max_stack: u16,
+    max_locals: u16,
+    code: Vec<u8>,
+) -> MethodInfo {
+    let code_attribute = CodeAttribute {
+        max_stack,
+        max_locals,
+        code,
+        exception_table: Vec::new(),
+        attributes: Vec::new(),
+    };
+    let name_index = pool.intern_utf8(name);
+    let descriptor_index = pool.intern_utf8(descriptor);
+    let code_name_index = pool.intern_utf8(CODE_ATTRIBUTE);
+    MethodInfo {
+        access_flags: MethodAccessFlags(flags),
+        name_index,
+        descriptor_index,
+        attributes: vec![AttributeInfo {
+            name_index: code_name_index,
+            info: write_code_attribute(&code_attribute),
+        }],
+    }
+}
+
+/// A compact handle for a user-defined class; index into
+/// [`MethodTable::class_names`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClassId(u16);
+
+/// One method or constructor signature, as seen by call resolution.
+/// Constructors use the JVM name `<init>` and a void return.
 #[derive(Debug, Clone)]
 struct MethodSig {
     name: String,
@@ -80,31 +223,51 @@ struct MethodSig {
     /// `None` is `void`.
     ret: Option<JType>,
     is_static: bool,
+    is_private: bool,
 }
 
 impl MethodSig {
-    fn describe(&self) -> String {
-        let params: Vec<String> = self.params.iter().map(|p| p.describe()).collect();
+    fn describe(&self, table: &MethodTable) -> String {
+        let params: Vec<String> = self.params.iter().map(|p| p.describe(table)).collect();
         format!("{}({})", self.name, params.join(","))
     }
 
-    fn descriptor(&self) -> String {
+    fn descriptor(&self, table: &MethodTable) -> String {
         let mut out = String::from("(");
         for param in &self.params {
-            out.push_str(&param.descriptor());
+            out.push_str(&param.descriptor(table));
         }
         out.push(')');
         match self.ret {
             None => out.push('V'),
-            Some(ty) => out.push_str(&ty.descriptor()),
+            Some(ty) => out.push_str(&ty.descriptor(table)),
         }
         out
     }
 }
 
-/// All method signatures in the compilation, keyed by class name.
+/// One field of a user-defined class.
+#[derive(Debug, Clone)]
+struct FieldSig {
+    name: String,
+    ty: JType,
+    is_static: bool,
+    is_private: bool,
+    is_final: bool,
+}
+
+/// Everything call/field resolution knows about one class.
+struct ClassInfo {
+    id: ClassId,
+    methods: Vec<MethodSig>,
+    fields: Vec<FieldSig>,
+}
+
+/// All classes in the compilation.
 struct MethodTable {
-    classes: std::collections::HashMap<String, Vec<MethodSig>>,
+    /// Indexed by [`ClassId`].
+    class_names: Vec<String>,
+    classes: std::collections::HashMap<String, ClassInfo>,
 }
 
 /// Outcome of static overload resolution (JLS §15.12.2, without boxing
@@ -120,59 +283,181 @@ enum Resolution<'t> {
 }
 
 impl MethodTable {
+    /// Two passes: ids first, then member signatures.
+    #[allow(clippy::too_many_lines)]
     fn build(units: &[(String, CompilationUnit)], diagnostics: &mut Vec<Diagnostic>) -> Self {
-        let mut classes: std::collections::HashMap<String, Vec<MethodSig>> =
-            std::collections::HashMap::new();
+        // Pass 1: class names get ids so member types can refer to any
+        // class regardless of declaration order.
+        let mut table = Self {
+            class_names: Vec::new(),
+            classes: std::collections::HashMap::new(),
+        };
+        for (_, unit) in units {
+            for class in &unit.classes {
+                if table.classes.contains_key(&class.name) {
+                    continue; // duplicate classes are reported by compile()
+                }
+                let id = ClassId(u16::try_from(table.class_names.len()).unwrap_or(u16::MAX));
+                table.class_names.push(class.name.clone());
+                table.classes.insert(
+                    class.name.clone(),
+                    ClassInfo {
+                        id,
+                        methods: Vec::new(),
+                        fields: Vec::new(),
+                    },
+                );
+            }
+        }
+
+        // Pass 2: members, with types resolved against the full class
+        // list.
         for (path, unit) in units {
             for class in &unit.classes {
-                let methods = classes.entry(class.name.clone()).or_default();
-                for method in &class.methods {
-                    let sig = MethodSig {
-                        name: method.name.clone(),
-                        params: method
-                            .params
-                            .iter()
-                            .map(|p| type_from_ref(&p.ty).unwrap_or(JType::Unsupported))
-                            .collect(),
-                        ret: match &method.return_type {
-                            TypeRef::Void => None,
-                            other => Some(type_from_ref(other).unwrap_or(JType::Unsupported)),
-                        },
-                        is_static: method.is_static,
+                let mut methods = Vec::new();
+                let mut fields = Vec::new();
+
+                for field in &class.fields {
+                    let sig = FieldSig {
+                        name: field.name.clone(),
+                        ty: table.resolve_type(&field.ty).unwrap_or(JType::Unsupported),
+                        is_static: field.is_static,
+                        is_private: field.is_private,
+                        is_final: field.is_final,
                     };
-                    if methods
-                        .iter()
-                        .any(|m| m.name == sig.name && m.params == sig.params)
-                    {
+                    if fields.iter().any(|f: &FieldSig| f.name == sig.name) {
                         diagnostics.push(Diagnostic::error(
                             path,
                             format!(
-                                "method {} is already defined in class {}",
-                                sig.describe(),
-                                class.name
+                                "variable {} is already defined in class {}",
+                                sig.name, class.name
                             ),
+                            field.span,
+                        ));
+                    } else {
+                        fields.push(sig);
+                    }
+                }
+
+                for method in &class.methods {
+                    let sig = MethodSig {
+                        name: if method.is_constructor {
+                            String::from("<init>")
+                        } else {
+                            method.name.clone()
+                        },
+                        params: method
+                            .params
+                            .iter()
+                            .map(|p| table.resolve_type(&p.ty).unwrap_or(JType::Unsupported))
+                            .collect(),
+                        ret: match &method.return_type {
+                            TypeRef::Void => None,
+                            other => Some(table.resolve_type(other).unwrap_or(JType::Unsupported)),
+                        },
+                        is_static: method.is_static,
+                        is_private: method.is_private,
+                    };
+                    if methods
+                        .iter()
+                        .any(|m: &MethodSig| m.name == sig.name && m.params == sig.params)
+                    {
+                        let what = if method.is_constructor {
+                            format!("constructor {}", class.name)
+                        } else {
+                            format!("method {}", sig.describe(&table))
+                        };
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            format!("{what} is already defined in class {}", class.name),
                             method.span,
                         ));
                     } else {
                         methods.push(sig);
                     }
                 }
+
+                // A class with no declared constructor gets the default
+                // one (JLS §8.8.9).
+                if !methods.iter().any(|m| m.name == "<init>") {
+                    methods.push(MethodSig {
+                        name: String::from("<init>"),
+                        params: Vec::new(),
+                        ret: None,
+                        is_static: false,
+                        is_private: false,
+                    });
+                }
+
+                let info = table
+                    .classes
+                    .get_mut(&class.name)
+                    .expect("registered in pass 1");
+                info.methods = methods;
+                info.fields = fields;
             }
         }
-        Self { classes }
+        table
     }
 
     fn has_class(&self, name: &str) -> bool {
         self.classes.contains_key(name)
     }
 
+    fn class_id(&self, name: &str) -> Option<ClassId> {
+        self.classes.get(name).map(|c| c.id)
+    }
+
+    fn class_name(&self, id: ClassId) -> &str {
+        self.class_names
+            .get(usize::from(id.0))
+            .map_or("<unknown>", String::as_str)
+    }
+
+    /// Resolve a source-level type, mapping class names (including
+    /// array elements) to ids.
+    fn resolve_type(&self, ty: &TypeRef) -> Option<JType> {
+        match ty {
+            TypeRef::Named(name) if name != "String" => self.class_id(name).map(JType::Object),
+            TypeRef::Array(_) => {
+                // Peel dimensions, then resolve the base.
+                let mut dims: u8 = 0;
+                let mut current = ty;
+                while let TypeRef::Array(next) = current {
+                    dims = dims.checked_add(1)?;
+                    current = next;
+                }
+                let elem = match self.resolve_type(current)? {
+                    JType::Int => ElemType::Int,
+                    JType::Double => ElemType::Double,
+                    JType::Boolean => ElemType::Boolean,
+                    JType::Char => ElemType::Char,
+                    JType::Str => ElemType::Str,
+                    JType::Object(id) => ElemType::Object(id),
+                    _ => return None,
+                };
+                Some(JType::Array { elem, dims })
+            }
+            other => type_from_ref(other),
+        }
+    }
+
+    /// Look up a field in a class.
+    fn field(&self, class: &str, name: &str) -> Option<&FieldSig> {
+        self.classes
+            .get(class)?
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+    }
+
     /// Resolve `class.name(args)`: applicable-by-widening, exact match
     /// first, then the unique most-specific method.
     fn resolve(&self, class: &str, name: &str, args: &[JType]) -> Resolution<'_> {
-        let Some(methods) = self.classes.get(class) else {
+        let Some(info) = self.classes.get(class) else {
             return Resolution::UnknownName;
         };
-        let named: Vec<&MethodSig> = methods.iter().filter(|m| m.name == name).collect();
+        let named: Vec<&MethodSig> = info.methods.iter().filter(|m| m.name == name).collect();
         if named.is_empty() {
             return Resolution::UnknownName;
         }
@@ -209,7 +494,7 @@ impl MethodTable {
                 if most_specific.len() == 1 {
                     Resolution::Found(most_specific[0])
                 } else {
-                    Resolution::Ambiguous(applicable.iter().map(|m| m.describe()).collect())
+                    Resolution::Ambiguous(applicable.iter().map(|m| m.describe(self)).collect())
                 }
             }
         }
@@ -225,6 +510,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Boolean => Some(ElemType::Boolean),
         JType::Char => Some(ElemType::Char),
         JType::Str => Some(ElemType::Str),
+        JType::Object(id) => Some(ElemType::Object(id)),
         _ => None,
     }
 }
@@ -236,7 +522,10 @@ fn widens(from: JType, to: JType) -> bool {
             (from, to),
             (JType::Char, JType::Int)
                 | (JType::Int | JType::Char, JType::Double)
-                | (JType::Null, JType::Str | JType::Array { .. })
+                | (
+                    JType::Null,
+                    JType::Str | JType::Array { .. } | JType::Object(_)
+                )
         )
 }
 
@@ -249,16 +538,19 @@ enum ElemType {
     Boolean,
     Char,
     Str,
+    /// A user-defined class.
+    Object(ClassId),
 }
 
 impl ElemType {
-    fn descriptor(self) -> &'static str {
+    fn descriptor(self, table: &MethodTable) -> String {
         match self {
-            ElemType::Int => "I",
-            ElemType::Double => "D",
-            ElemType::Boolean => "Z",
-            ElemType::Char => "C",
-            ElemType::Str => "Ljava/lang/String;",
+            ElemType::Int => String::from("I"),
+            ElemType::Double => String::from("D"),
+            ElemType::Boolean => String::from("Z"),
+            ElemType::Char => String::from("C"),
+            ElemType::Str => String::from("Ljava/lang/String;"),
+            ElemType::Object(id) => format!("L{};", table.class_name(id)),
         }
     }
 
@@ -269,6 +561,7 @@ impl ElemType {
             ElemType::Boolean => JType::Boolean,
             ElemType::Char => JType::Char,
             ElemType::Str => JType::Str,
+            ElemType::Object(id) => JType::Object(id),
         }
     }
 }
@@ -290,6 +583,8 @@ enum JType {
         elem: ElemType,
         dims: u8,
     },
+    /// An instance of a user-defined class.
+    Object(ClassId),
     /// A type jvmjs doesn't handle yet.
     Unsupported,
     /// A diagnostic was already reported for this subtree.
@@ -297,7 +592,7 @@ enum JType {
 }
 
 impl JType {
-    fn describe(self) -> String {
+    fn describe(self, table: &MethodTable) -> String {
         match self {
             JType::Int => String::from("int"),
             JType::Double => String::from("double"),
@@ -306,12 +601,13 @@ impl JType {
             JType::Str => String::from("String"),
             JType::Null => String::from("null"),
             JType::Array { elem, dims } => {
-                let mut out = elem.base_type().describe();
+                let mut out = elem.base_type().describe(table);
                 for _ in 0..dims {
                     out.push_str("[]");
                 }
                 out
             }
+            JType::Object(id) => table.class_name(id).to_owned(),
             JType::Unsupported => String::from("an unsupported type"),
             JType::Error => String::from("an unknown type"),
         }
@@ -322,7 +618,10 @@ impl JType {
     }
 
     fn is_reference(self) -> bool {
-        matches!(self, JType::Str | JType::Null | JType::Array { .. })
+        matches!(
+            self,
+            JType::Str | JType::Null | JType::Array { .. } | JType::Object(_)
+        )
     }
 
     /// Width in operand-stack slots (JVMS §2.6.2).
@@ -343,7 +642,7 @@ impl JType {
     }
 
     /// The JVM field descriptor for this type.
-    fn descriptor(self) -> String {
+    fn descriptor(self, table: &MethodTable) -> String {
         match self {
             JType::Int => String::from("I"),
             JType::Double => String::from("D"),
@@ -352,9 +651,10 @@ impl JType {
             JType::Str | JType::Null => String::from("Ljava/lang/String;"),
             JType::Array { elem, dims } => {
                 let mut out = "[".repeat(usize::from(dims));
-                out.push_str(elem.descriptor());
+                out.push_str(&elem.descriptor(table));
                 out
             }
+            JType::Object(id) => format!("L{};", table.class_name(id)),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
             JType::Unsupported | JType::Error => String::from("Ljava/lang/Object;"),
@@ -410,20 +710,24 @@ fn emit_method(
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
     table: &MethodTable,
-    current_class: &str,
+    class_decl: &ClassDecl,
     pool: &mut ConstantPool,
     decl: &MethodDecl,
 ) -> MethodInfo {
+    let class_id = table.class_id(&class_decl.name).expect("class registered");
     let return_type = match &decl.return_type {
         TypeRef::Void => None,
-        other => Some(type_from_ref(other).unwrap_or(JType::Unsupported)),
+        other => Some(table.resolve_type(other).unwrap_or(JType::Unsupported)),
     };
     let mut body = BodyGen {
         path,
         diagnostics,
         pool,
         table,
-        current_class,
+        current_class: &class_decl.name,
+        current_class_id: class_id,
+        in_static: decl.is_static,
+        in_constructor: decl.is_constructor,
         return_type,
         code: CodeBuilder::new(),
         scopes: vec![Vec::new()],
@@ -432,7 +736,7 @@ fn emit_method(
     };
 
     for param in &decl.params {
-        let ty = type_from_ref(&param.ty).unwrap_or(JType::Unsupported);
+        let ty = table.resolve_type(&param.ty).unwrap_or(JType::Unsupported);
         let slot = body.next_slot;
         body.next_slot += ty.width();
         body.scopes[0].push((
@@ -444,6 +748,23 @@ fn emit_method(
                 assigned: true,
             },
         ));
+    }
+
+    if decl.is_constructor {
+        // Implicit super(): Object's constructor, then instance field
+        // initializers (JLS §12.5).
+        body.code.push_op(op::ALOAD_0, 1);
+        let object_init = intern_method_ref(body.pool, "java/lang/Object", "<init>", "()V");
+        body.code.push_op_u16(op::INVOKESPECIAL, object_init, 0);
+        body.code.drop_stack(1);
+        for field in &class_decl.fields {
+            if field.is_static {
+                continue;
+            }
+            if let Some(init) = &field.init {
+                body.emit_field_initializer(field, init);
+            }
+        }
     }
 
     for stmt in &decl.body {
@@ -461,40 +782,43 @@ fn emit_method(
     let max_locals = body.next_slot;
     let (bytecode, max_stack) = body.code.finish();
 
-    let descriptor = method_descriptor(path, diagnostics, decl);
+    let descriptor = method_descriptor(path, diagnostics, table, decl);
     let mut flags = 0;
     if decl.is_public {
         flags |= MethodAccessFlags::PUBLIC;
     }
+    if decl.is_private {
+        flags |= MethodAccessFlags::PRIVATE;
+    }
     if decl.is_static {
         flags |= MethodAccessFlags::STATIC;
     }
-
-    let code_attribute = CodeAttribute {
+    let jvm_name = if decl.is_constructor {
+        "<init>"
+    } else {
+        &decl.name
+    };
+    finish_method_info(
+        pool,
+        jvm_name,
+        &descriptor,
+        flags,
         max_stack,
         max_locals,
-        code: bytecode,
-        exception_table: Vec::new(),
-        attributes: Vec::new(),
-    };
-    let name_index = pool.intern_utf8(&decl.name);
-    let descriptor_index = pool.intern_utf8(&descriptor);
-    let code_name_index = pool.intern_utf8(CODE_ATTRIBUTE);
-    MethodInfo {
-        access_flags: MethodAccessFlags(flags),
-        name_index,
-        descriptor_index,
-        attributes: vec![AttributeInfo {
-            name_index: code_name_index,
-            info: write_code_attribute(&code_attribute),
-        }],
-    }
+        bytecode,
+    )
 }
 
-fn method_descriptor(path: &str, diagnostics: &mut Vec<Diagnostic>, decl: &MethodDecl) -> String {
+fn method_descriptor(
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+    table: &MethodTable,
+    decl: &MethodDecl,
+) -> String {
     fn push_type(
         path: &str,
         diagnostics: &mut Vec<Diagnostic>,
+        table: &MethodTable,
         out: &mut String,
         ty: &TypeRef,
         span: SourceSpan,
@@ -507,14 +831,18 @@ fn method_descriptor(path: &str, diagnostics: &mut Vec<Diagnostic>, decl: &Metho
             TypeRef::Char => out.push('C'),
             TypeRef::Array(inner) => {
                 out.push('[');
-                push_type(path, diagnostics, out, inner, span);
+                push_type(path, diagnostics, table, out, inner, span);
             }
             TypeRef::Named(name) => {
                 if name == "String" {
                     out.push_str("Ljava/lang/String;");
+                } else if table.has_class(name) {
+                    out.push('L');
+                    out.push_str(name);
+                    out.push(';');
                 } else {
                     // TODO(classlib): resolve simple names against the
-                    // compilation unit and the class library.
+                    // class library once it exists.
                     diagnostics.push(Diagnostic::error(
                         path,
                         format!("unknown type '{name}'"),
@@ -528,12 +856,20 @@ fn method_descriptor(path: &str, diagnostics: &mut Vec<Diagnostic>, decl: &Metho
 
     let mut descriptor = String::from("(");
     for param in &decl.params {
-        push_type(path, diagnostics, &mut descriptor, &param.ty, decl.span);
+        push_type(
+            path,
+            diagnostics,
+            table,
+            &mut descriptor,
+            &param.ty,
+            decl.span,
+        );
     }
     descriptor.push(')');
     push_type(
         path,
         diagnostics,
+        table,
         &mut descriptor,
         &decl.return_type,
         decl.span,
@@ -596,17 +932,31 @@ fn has_direct_break(stmt: &Stmt) -> bool {
     }
 }
 
-/// What a method call's receiver refers to.
-enum CallTarget {
-    /// `System.out` / `System.err`.
-    Stream(&'static str),
-    /// Static methods of the named class (bare calls target the
-    /// current class).
-    Static(String),
+/// How a field assignment reaches its object.
+enum FieldReceiver<'e> {
+    /// A static field — no receiver.
+    Static,
+    /// The implicit `this` (slot 0).
+    This,
+    /// An explicit receiver expression.
+    Object(&'e Expr),
 }
 
-fn describe_types(types: &[JType]) -> String {
-    let names: Vec<String> = types.iter().map(|t| t.describe()).collect();
+/// What a method call's receiver refers to.
+enum CallTarget<'e> {
+    /// `System.out` / `System.err`.
+    Stream(&'static str),
+    /// Static methods of the named class.
+    Static(String),
+    /// A bare call: a method of the current class (static or, via the
+    /// implicit `this`, instance).
+    Own,
+    /// A call on a receiver expression (`obj.method(...)`).
+    Instance(&'e Expr),
+}
+
+fn describe_types(types: &[JType], table: &MethodTable) -> String {
+    let names: Vec<String> = types.iter().map(|t| t.describe(table)).collect();
     names.join(",")
 }
 
@@ -624,6 +974,10 @@ struct BodyGen<'a> {
     pool: &'a mut ConstantPool,
     table: &'a MethodTable,
     current_class: &'a str,
+    current_class_id: ClassId,
+    /// Whether the enclosing method is static (constructors are not).
+    in_static: bool,
+    in_constructor: bool,
     /// Declared return type; `None` is `void`.
     return_type: Option<JType>,
     code: CodeBuilder,
@@ -678,6 +1032,9 @@ impl BodyGen<'_> {
                 AssignTarget::Var(name) => self.assign(name, *op, value, *span),
                 AssignTarget::Index { array, index } => {
                     self.assign_element(array, index, *op, value, *span);
+                }
+                AssignTarget::Field { object, name } => {
+                    self.assign_field_target(object, name, *op, value, *span);
                 }
             },
             Stmt::ForEach {
@@ -755,7 +1112,7 @@ impl BodyGen<'_> {
                 cond.span(),
                 format!(
                     "the {what} condition must be a boolean, got {}",
-                    ty.describe()
+                    ty.describe(self.table)
                 ),
             );
         }
@@ -904,7 +1261,7 @@ impl BodyGen<'_> {
         declarators: &[LocalDeclarator],
         span: SourceSpan,
     ) {
-        let Some(var_ty) = type_from_ref(ty) else {
+        let Some(var_ty) = self.table.resolve_type(ty) else {
             let what = match ty {
                 TypeRef::Named(name) => format!("unknown type '{name}'"),
                 TypeRef::Array(_) => String::from("arrays are not yet supported by jvmjs"),
@@ -937,7 +1294,7 @@ impl BodyGen<'_> {
                     } else {
                         self.error(
                             *span,
-                            format!("illegal initializer for {}", var_ty.describe()),
+                            format!("illegal initializer for {}", var_ty.describe(self.table)),
                         );
                     }
                 } else {
@@ -965,6 +1322,29 @@ impl BodyGen<'_> {
     }
 
     fn assign(&mut self, name: &str, op: Option<BinaryOp>, value: &Expr, span: SourceSpan) {
+        if self.lookup(name).is_none() {
+            // Implicit field of the current class.
+            if let Some(field) = self.table.field(self.current_class, name) {
+                let field = field.clone();
+                if !field.is_static && self.in_static {
+                    self.error(
+                        span,
+                        format!(
+                            "non-static variable {name} cannot be referenced from a \
+                             static context"
+                        ),
+                    );
+                    return;
+                }
+                let receiver = if field.is_static {
+                    FieldReceiver::Static
+                } else {
+                    FieldReceiver::This
+                };
+                self.assign_field(self.current_class_id, &receiver, &field, op, value, span);
+                return;
+            }
+        }
         let Some(var) = self.lookup(name) else {
             self.error(
                 span,
@@ -1027,8 +1407,8 @@ impl BodyGen<'_> {
                             format!(
                                 "operator '{}' cannot be applied to {} and {}",
                                 compound_symbol(op),
-                                var_ty.describe(),
-                                value_ty.describe()
+                                var_ty.describe(self.table),
+                                value_ty.describe(self.table)
                             ),
                         );
                     } else if var_ty == JType::Boolean {
@@ -1051,6 +1431,529 @@ impl BodyGen<'_> {
         }
     }
 
+    // ----- field assignment -----
+
+    /// `p.x = v`, `this.x = v`, `ClassName.staticField = v` (and the
+    /// compound forms).
+    fn assign_field_target(
+        &mut self,
+        object: &Expr,
+        name: &str,
+        op_kind: Option<BinaryOp>,
+        value: &Expr,
+        span: SourceSpan,
+    ) {
+        // `ClassName.field = v` — a static target.
+        if let Expr::Name { path, .. } = object
+            && path.len() == 1
+            && self.lookup(&path[0]).is_none()
+            && let Some(class_id) = self.table.class_id(&path[0])
+        {
+            let Some(field) = self.resolve_field(class_id, name, span) else {
+                self.expr(value);
+                self.code.discard();
+                return;
+            };
+            if !field.is_static {
+                self.error(
+                    span,
+                    format!(
+                        "non-static variable {name} cannot be referenced from a static context"
+                    ),
+                );
+                return;
+            }
+            self.assign_field(
+                class_id,
+                &FieldReceiver::Static,
+                &field,
+                op_kind,
+                value,
+                span,
+            );
+            return;
+        }
+
+        let object_ty = self.type_of(object);
+        let JType::Object(class_id) = object_ty else {
+            if matches!(object_ty, JType::Array { .. }) && name == "length" {
+                self.error(span, "cannot assign a value to final variable length");
+            } else if object_ty != JType::Error {
+                self.error(
+                    span,
+                    format!(
+                        "cannot find symbol: field '{name}' on {}",
+                        object_ty.describe(self.table)
+                    ),
+                );
+            }
+            return;
+        };
+        let Some(field) = self.resolve_field(class_id, name, span) else {
+            return;
+        };
+        if field.is_static {
+            self.error(
+                span,
+                format!("access static field {name} via the class name"),
+            );
+            return;
+        }
+        self.assign_field(
+            class_id,
+            &FieldReceiver::Object(object),
+            &field,
+            op_kind,
+            value,
+            span,
+        );
+    }
+
+    /// Shared emission for plain/compound field assignment once the
+    /// field and receiver kind are known.
+    #[allow(clippy::too_many_lines)]
+    fn assign_field(
+        &mut self,
+        class_id: ClassId,
+        receiver: &FieldReceiver<'_>,
+        field: &FieldSig,
+        op_kind: Option<BinaryOp>,
+        value: &Expr,
+        span: SourceSpan,
+    ) {
+        if field.is_final && !(self.in_constructor && class_id == self.current_class_id) {
+            self.error(
+                span,
+                format!("cannot assign a value to final variable {}", field.name),
+            );
+            return;
+        }
+        let class_name = self.table.class_name(class_id).to_owned();
+        let field_ref = intern_field_ref(
+            self.pool,
+            &class_name,
+            &field.name,
+            &field.ty.descriptor(self.table),
+        );
+        let is_static = field.is_static;
+
+        // Push the receiver (if any).
+        match receiver {
+            FieldReceiver::Static => {}
+            FieldReceiver::This => self.code.push_op(op::ALOAD_0, 1),
+            FieldReceiver::Object(object) => {
+                let ty = self.expr(object);
+                if ty == JType::Error {
+                    return;
+                }
+            }
+        }
+
+        match op_kind {
+            None => {
+                let value_ty = self.expr(value);
+                self.convert_for_assignment(value_ty, field.ty, value.span());
+                if is_static {
+                    self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
+                    self.code.drop_stack(field.ty.width());
+                } else {
+                    self.code.push_op_u16(op::PUTFIELD, field_ref, 0);
+                    self.code.drop_stack(1 + field.ty.width());
+                }
+            }
+            Some(op_kind) => {
+                // String += concatenation, or numeric compound.
+                if field.ty == JType::Str {
+                    if op_kind != BinaryOp::Add {
+                        self.error(span, "only '+=' can be applied to a String");
+                        return;
+                    }
+                    if !is_static {
+                        self.code.push_op(op::DUP, 1);
+                    }
+                    self.code.push_op_u16(
+                        if is_static {
+                            op::GETSTATIC
+                        } else {
+                            op::GETFIELD
+                        },
+                        field_ref,
+                        1,
+                    );
+                    if !is_static {
+                        self.code.drop_stack(1);
+                    }
+                    self.begin_concat_with_value_on_stack(JType::Str);
+                    let part_ty = self.expr(value);
+                    self.append_part(part_ty, value.span());
+                    self.finish_concat();
+                    if is_static {
+                        self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
+                        self.code.drop_stack(1);
+                    } else {
+                        self.code.push_op_u16(op::PUTFIELD, field_ref, 0);
+                        self.code.drop_stack(2);
+                    }
+                    return;
+                }
+                let value_ty = self.type_of(value);
+                if field.ty == JType::Boolean || !field.ty.is_numeric() || !value_ty.is_numeric() {
+                    if value_ty != JType::Error {
+                        self.error(
+                            span,
+                            format!(
+                                "operator '{}' cannot be applied to {} and {}",
+                                compound_symbol(op_kind),
+                                field.ty.describe(self.table),
+                                value_ty.describe(self.table)
+                            ),
+                        );
+                    }
+                    return;
+                }
+                let promoted = promote(field.ty, value_ty);
+                if !is_static {
+                    self.code.push_op(op::DUP, 1);
+                }
+                self.code.push_op_u16(
+                    if is_static {
+                        op::GETSTATIC
+                    } else {
+                        op::GETFIELD
+                    },
+                    field_ref,
+                    field.ty.width(),
+                );
+                if !is_static {
+                    self.code.drop_stack(1);
+                }
+                self.numeric_conversion(field.ty, promoted);
+                let actual = self.expr(value);
+                self.numeric_conversion(actual, promoted);
+                self.arithmetic_op(op_kind, promoted);
+                self.narrow_back(promoted, field.ty);
+                if is_static {
+                    self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
+                    self.code.drop_stack(field.ty.width());
+                } else {
+                    self.code.push_op_u16(op::PUTFIELD, field_ref, 0);
+                    self.code.drop_stack(1 + field.ty.width());
+                }
+            }
+        }
+    }
+
+    // ----- objects -----
+
+    /// Emit `this.field = <init>` / `Class.field = <init>` for a field
+    /// initializer (used by constructors and `<clinit>`).
+    fn emit_field_initializer(&mut self, field: &FieldDecl, init: &Expr) {
+        let ty = self
+            .table
+            .resolve_type(&field.ty)
+            .unwrap_or(JType::Unsupported);
+        if !field.is_static {
+            self.code.push_op(op::ALOAD_0, 1);
+        }
+        if let Expr::ArrayLiteral { elements, span } = init {
+            if matches!(ty, JType::Array { .. }) {
+                self.emit_array_literal(elements, ty, *span);
+            } else {
+                self.error(
+                    *span,
+                    format!("illegal initializer for {}", ty.describe(self.table)),
+                );
+            }
+        } else {
+            let init_ty = self.expr(init);
+            self.convert_for_assignment(init_ty, ty, init.span());
+        }
+        let field_ref = intern_field_ref(
+            self.pool,
+            self.current_class,
+            &field.name,
+            &ty.descriptor(self.table),
+        );
+        if field.is_static {
+            self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
+            self.code.drop_stack(ty.width());
+        } else {
+            self.code.push_op_u16(op::PUTFIELD, field_ref, 0);
+            self.code.drop_stack(1 + ty.width());
+        }
+    }
+
+    /// Look up a field of `class_id`, with a javac-style private-access
+    /// check. Returns a copied signature.
+    fn resolve_field(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        span: SourceSpan,
+    ) -> Option<FieldSig> {
+        let class_name = self.table.class_name(class_id).to_owned();
+        let Some(field) = self.table.field(&class_name, name) else {
+            self.error(
+                span,
+                format!("cannot find symbol: field '{name}' in class {class_name}"),
+            );
+            return None;
+        };
+        let field = field.clone();
+        if field.is_private && class_id != self.current_class_id {
+            self.error(span, format!("{name} has private access in {class_name}"));
+            return None;
+        }
+        Some(field)
+    }
+
+    /// Emit a read of a field of the current class through the implicit
+    /// or explicit receiver already handled by the caller.
+    fn emit_getfield(&mut self, class_id: ClassId, field: &FieldSig) -> JType {
+        let class_name = self.table.class_name(class_id).to_owned();
+        let field_ref = intern_field_ref(
+            self.pool,
+            &class_name,
+            &field.name,
+            &field.ty.descriptor(self.table),
+        );
+        if field.is_static {
+            self.code
+                .push_op_u16(op::GETSTATIC, field_ref, field.ty.width());
+        } else {
+            self.code
+                .push_op_u16(op::GETFIELD, field_ref, field.ty.width());
+            self.code.drop_stack(1);
+        }
+        field.ty
+    }
+
+    /// `new ClassName(args)`.
+    fn new_object(&mut self, class_name: &str, args: &[Expr], span: SourceSpan) -> JType {
+        let Some(class_id) = self.table.class_id(class_name) else {
+            let classlib = [
+                "String",
+                "Object",
+                "Scanner",
+                "ArrayList",
+                "Integer",
+                "Double",
+                "StringBuilder",
+            ];
+            if classlib.contains(&class_name) {
+                self.error(
+                    span,
+                    format!(
+                        "'new {class_name}(...)' is not yet supported by jvmjs — \
+                         {class_name} arrives with the class library"
+                    ),
+                );
+            } else {
+                self.error(span, format!("cannot find symbol: class {class_name}"));
+            }
+            return JType::Error;
+        };
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            for arg in args {
+                self.expr(arg);
+            }
+            return JType::Error;
+        }
+
+        let table = self.table;
+        let sig = match table.resolve(class_name, "<init>", &arg_types) {
+            Resolution::Found(sig) => sig.clone(),
+            Resolution::UnknownName | Resolution::NoneApplicable => {
+                self.error(
+                    span,
+                    format!(
+                        "constructor {class_name} in class {class_name} cannot be applied to \
+                         given types ({})",
+                        describe_types(&arg_types, self.table)
+                    ),
+                );
+                return JType::Error;
+            }
+            Resolution::Ambiguous(candidates) => {
+                self.error(
+                    span,
+                    format!(
+                        "reference to {class_name} is ambiguous: both {} match",
+                        candidates.join(" and ")
+                    ),
+                );
+                return JType::Error;
+            }
+        };
+        if sig.is_private && class_id != self.current_class_id {
+            self.error(
+                span,
+                format!("{class_name}() has private access in {class_name}"),
+            );
+            return JType::Error;
+        }
+
+        let class_index = intern_class(self.pool, class_name);
+        self.code.push_op_u16(op::NEW, class_index, 1);
+        self.code.push_op(op::DUP, 1);
+        for (arg, param) in args.iter().zip(&sig.params) {
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, *param);
+        }
+        let descriptor = sig.descriptor(self.table);
+        let init_ref = intern_method_ref(self.pool, class_name, "<init>", &descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
+        self.code.drop_stack(1 + args_width);
+        JType::Object(class_id)
+    }
+
+    /// Resolve and emit an instance method call with the receiver
+    /// expression. `None` means a diagnostic was reported.
+    #[allow(clippy::option_option)] // error / void / value are distinct outcomes
+    fn instance_call(
+        &mut self,
+        receiver: &Expr,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let receiver_ty = self.expr(receiver);
+        let class_id = match receiver_ty {
+            JType::Object(id) => id,
+            JType::Error => return None,
+            JType::Str => {
+                self.error(
+                    span,
+                    "String methods are not yet supported by jvmjs \
+                     (they arrive with the class library)",
+                );
+                return None;
+            }
+            other => {
+                self.error(
+                    span,
+                    format!("cannot call methods on {}", other.describe(self.table)),
+                );
+                return None;
+            }
+        };
+        self.emit_virtual_call_on_stacked_receiver(class_id, method, args, span)
+    }
+
+    /// The receiver object is already on the stack; resolve the
+    /// overload, emit arguments, and invoke.
+    #[allow(clippy::option_option)]
+    fn emit_virtual_call_on_stacked_receiver(
+        &mut self,
+        class_id: ClassId,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let class_name = self.table.class_name(class_id).to_owned();
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            for arg in args {
+                self.expr(arg);
+            }
+            return None;
+        }
+
+        let table = self.table;
+        let sig = match table.resolve(&class_name, method, &arg_types) {
+            Resolution::Found(sig) => sig.clone(),
+            Resolution::UnknownName => {
+                self.error(
+                    span,
+                    format!(
+                        "cannot find symbol: method {method}({}) in class {class_name}",
+                        describe_types(&arg_types, self.table)
+                    ),
+                );
+                return None;
+            }
+            Resolution::NoneApplicable => {
+                self.error(
+                    span,
+                    format!(
+                        "no suitable method found for {method}({}) in class {class_name}",
+                        describe_types(&arg_types, self.table)
+                    ),
+                );
+                return None;
+            }
+            Resolution::Ambiguous(candidates) => {
+                self.error(
+                    span,
+                    format!(
+                        "reference to {method} is ambiguous: both method {} match",
+                        candidates.join(" and method ")
+                    ),
+                );
+                return None;
+            }
+        };
+        if sig.is_private && class_id != self.current_class_id {
+            self.error(
+                span,
+                format!("{method}() has private access in {class_name}"),
+            );
+            return None;
+        }
+        if sig.is_static {
+            self.error(
+                span,
+                format!("static method {method}() should be called as {class_name}.{method}(...)"),
+            );
+            return None;
+        }
+
+        for (arg, param) in args.iter().zip(&sig.params) {
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, *param);
+        }
+        let descriptor = sig.descriptor(self.table);
+        let method_ref = intern_method_ref(self.pool, &class_name, method, &descriptor);
+        let ret_width = sig.ret.map_or(0, JType::width);
+        self.code
+            .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
+        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
+        self.code.drop_stack(1 + args_width);
+        Some(sig.ret)
+    }
+
+    /// Coerce a value on the stack into a `String` for printing or
+    /// concatenation: objects go through their `toString()` (the VM
+    /// supplies `ClassName@hex` when a class doesn't define one).
+    fn coerce_to_string_for_output(&mut self, ty: JType) -> JType {
+        if let JType::Object(class_id) = ty {
+            // String.valueOf semantics: null prints as "null" instead
+            // of throwing, so guard the toString call.
+            let class_name = self.table.class_name(class_id).to_owned();
+            let null_case = self.code.new_label();
+            let done = self.code.new_label();
+            self.code.push_op(op::DUP, 1);
+            self.code.branch(op::IFNULL, null_case, 1);
+            let method_ref =
+                intern_method_ref(self.pool, &class_name, "toString", "()Ljava/lang/String;");
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            self.code.branch(op::GOTO, done, 0);
+            self.code.bind(null_case);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+            let utf8 = self.pool.intern_utf8("null");
+            let index = self.pool.intern(Constant::String { string_index: utf8 });
+            self.code.push_ldc(index);
+            self.code.bind(done);
+            JType::Str
+        } else {
+            ty
+        }
+    }
+
     // ----- arrays -----
 
     /// Emit array reference + index for an element access, returning
@@ -1061,7 +1964,10 @@ impl BodyGen<'_> {
             if array_ty != JType::Error {
                 self.error(
                     array.span(),
-                    format!("array required, but {} found", array_ty.describe()),
+                    format!(
+                        "array required, but {} found",
+                        array_ty.describe(self.table)
+                    ),
                 );
             }
             return None;
@@ -1072,7 +1978,7 @@ impl BodyGen<'_> {
                 index.span(),
                 format!(
                     "incompatible types: {} cannot be converted to int (array index)",
-                    index_ty.describe()
+                    index_ty.describe(self.table)
                 ),
             );
         }
@@ -1153,8 +2059,8 @@ impl BodyGen<'_> {
                             format!(
                                 "operator '{}' cannot be applied to {} and {}",
                                 compound_symbol(op_kind),
-                                element.describe(),
-                                value_ty.describe()
+                                element.describe(self.table),
+                                value_ty.describe(self.table)
                             ),
                         );
                     }
@@ -1190,13 +2096,13 @@ impl BodyGen<'_> {
                     iterable.span(),
                     format!(
                         "for-each needs an array, but {} found (ArrayList arrives later)",
-                        iterable_ty.describe()
+                        iterable_ty.describe(self.table)
                     ),
                 );
             }
             return;
         };
-        let Some(var_ty) = type_from_ref(ty) else {
+        let Some(var_ty) = self.table.resolve_type(ty) else {
             self.error(span, "unknown type for the for-each variable");
             self.code.discard();
             return;
@@ -1280,64 +2186,93 @@ impl BodyGen<'_> {
             return;
         };
 
-        match self.call_target(receiver.as_deref(), *span) {
-            None => {}
-            Some(CallTarget::Stream(stream)) => self.print_call(stream, method, args, *span),
-            Some(CallTarget::Static(class)) => {
-                // The result of a call statement (if any) is discarded.
-                if let Some(Some(ty)) = self.static_call(&class, method, args, *span) {
-                    let opcode = if ty.width() == 2 { op::POP2 } else { op::POP };
-                    self.code.push_op(opcode, 0);
-                    self.code.drop_stack(ty.width());
-                }
+        let outcome = match self.call_target(receiver.as_deref(), *span) {
+            None => None,
+            Some(CallTarget::Stream(stream)) => {
+                self.print_call(stream, method, args, *span);
+                None
             }
+            Some(CallTarget::Static(class)) => self.static_call(&class, method, args, *span),
+            Some(CallTarget::Own) => self.own_call(method, args, *span),
+            Some(CallTarget::Instance(object)) => self.instance_call(object, method, args, *span),
+        };
+        // The result of a call statement (if any) is discarded.
+        if let Some(Some(ty)) = outcome {
+            let opcode = if ty.width() == 2 { op::POP2 } else { op::POP };
+            self.code.push_op(opcode, 0);
+            self.code.drop_stack(ty.width());
         }
     }
 
     /// Classify what a call's receiver refers to, reporting an error
     /// for unsupported shapes.
-    fn call_target(&mut self, receiver: Option<&Expr>, _span: SourceSpan) -> Option<CallTarget> {
+    fn call_target<'e>(
+        &mut self,
+        receiver: Option<&'e Expr>,
+        _span: SourceSpan,
+    ) -> Option<CallTarget<'e>> {
         match receiver {
-            None => Some(CallTarget::Static(self.current_class.to_owned())),
-            Some(Expr::Name {
-                path,
-                span: receiver_span,
-            }) => match path.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+            None => Some(CallTarget::Own),
+            Some(
+                expr @ Expr::Name {
+                    path,
+                    span: receiver_span,
+                },
+            ) => match path.iter().map(String::as_str).collect::<Vec<_>>()[..] {
                 ["System", "out"] => Some(CallTarget::Stream("out")),
                 ["System", "err"] => Some(CallTarget::Stream("err")),
                 [single] => {
                     if self.lookup(single).is_some() {
-                        self.error(
-                            *receiver_span,
-                            "method calls on values are not yet supported by jvmjs \
-                             (objects arrive in a later stage)",
-                        );
-                        None
+                        Some(CallTarget::Instance(expr))
                     } else if self.table.has_class(single) {
                         Some(CallTarget::Static(single.to_owned()))
+                    } else if self.table.field(self.current_class, single).is_some() {
+                        // A field of the current class used as receiver.
+                        Some(CallTarget::Instance(expr))
                     } else {
                         self.error(*receiver_span, format!("cannot find symbol: '{single}'"));
                         None
                     }
                 }
-                _ => {
-                    self.error(
-                        *receiver_span,
-                        "only System.out/System.err and ClassName.method(...) calls are \
-                         supported by jvmjs so far",
-                    );
-                    None
-                }
+                // Dotted receivers (p.pos.move()) are general
+                // expressions; name() knows how to read them.
+                _ => Some(CallTarget::Instance(expr)),
             },
-            Some(other) => {
-                self.error(
-                    other.span(),
-                    "method calls on values are not yet supported by jvmjs \
-                     (objects arrive in a later stage)",
-                );
-                None
-            }
+            Some(other) => Some(CallTarget::Instance(other)),
         }
+    }
+
+    /// A bare call `method(args)`: static → invokestatic; instance →
+    /// through the implicit `this`.
+    #[allow(clippy::option_option)]
+    fn own_call(&mut self, method: &str, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
+        // Peek resolution to decide static vs instance dispatch.
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        let table = self.table;
+        let is_instance = matches!(
+            table.resolve(self.current_class, method, &arg_types),
+            Resolution::Found(sig) if !sig.is_static
+        );
+        if is_instance {
+            if self.in_static {
+                self.error(
+                    span,
+                    format!(
+                        "non-static method {method}() cannot be referenced from a static \
+                         context (instance methods need an object)"
+                    ),
+                );
+                return None;
+            }
+            self.code.push_op(op::ALOAD_0, 1);
+            return self.emit_virtual_call_on_stacked_receiver(
+                self.current_class_id,
+                method,
+                args,
+                span,
+            );
+        }
+        self.static_call(self.current_class, method, args, span)
     }
 
     /// Resolve and emit a static method call. `None` means a
@@ -1368,7 +2303,7 @@ impl BodyGen<'_> {
                     span,
                     format!(
                         "cannot find symbol: method {method}({}) in class {class}",
-                        describe_types(&arg_types)
+                        describe_types(&arg_types, self.table)
                     ),
                 );
                 return None;
@@ -1378,7 +2313,7 @@ impl BodyGen<'_> {
                     span,
                     format!(
                         "no suitable method found for {method}({}) in class {class}",
-                        describe_types(&arg_types)
+                        describe_types(&arg_types, self.table)
                     ),
                 );
                 return None;
@@ -1410,7 +2345,7 @@ impl BodyGen<'_> {
                 span,
                 format!(
                     "method {} uses types not yet supported by jvmjs",
-                    sig.describe()
+                    sig.describe(self.table)
                 ),
             );
             return None;
@@ -1420,7 +2355,7 @@ impl BodyGen<'_> {
             let actual = self.expr(arg);
             self.numeric_conversion(actual, *param);
         }
-        let method_ref = intern_method_ref(self.pool, class, method, &sig.descriptor());
+        let method_ref = intern_method_ref(self.pool, class, method, &sig.descriptor(self.table));
         let ret_width = sig.ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
@@ -1457,6 +2392,7 @@ impl BodyGen<'_> {
             }
             [arg] => {
                 let arg_ty = self.expr(arg);
+                let arg_ty = self.coerce_to_string_for_output(arg_ty);
                 match self.print_descriptor(arg_ty, arg.span()) {
                     Some(descriptor) => descriptor,
                     None => return,
@@ -1481,7 +2417,8 @@ impl BodyGen<'_> {
             JType::Double => Some(String::from("(D)V")),
             JType::Boolean => Some(String::from("(Z)V")),
             JType::Char => Some(String::from("(C)V")),
-            JType::Str => Some(String::from("(Ljava/lang/String;)V")),
+            // Objects are coerced to String before this is consulted.
+            JType::Str | JType::Object(_) => Some(String::from("(Ljava/lang/String;)V")),
             JType::Null => {
                 self.error(
                     span,
@@ -1508,7 +2445,9 @@ impl BodyGen<'_> {
     // ----- expressions -----
 
     /// The static type of an expression, without emitting code. Must
-    /// agree with what [`Self::expr`] leaves on the stack.
+    /// agree with what [`Self::expr`] leaves on the stack. One arm per
+    /// expression kind keeps it in lockstep with `expr`.
+    #[allow(clippy::too_many_lines)]
     fn type_of(&mut self, expr: &Expr) -> JType {
         match expr {
             Expr::Literal { value, .. } => match value {
@@ -1520,7 +2459,13 @@ impl BodyGen<'_> {
                 Literal::Null => JType::Null,
             },
             Expr::Name { path, .. } if path.len() == 1 => {
-                self.lookup(&path[0]).map_or(JType::Error, |v| v.ty)
+                if let Some(var) = self.lookup(&path[0]) {
+                    return var.ty;
+                }
+                // Implicit this-field or static field of the current class.
+                self.table
+                    .field(self.current_class, &path[0])
+                    .map_or(JType::Error, |f| f.ty)
             }
             Expr::Name { path, .. }
                 if path.len() == 2
@@ -1531,18 +2476,37 @@ impl BodyGen<'_> {
             {
                 JType::Int
             }
+            Expr::Name { path, .. } if path.len() == 2 => {
+                // `x.field` on a local object, or `Class.staticField`.
+                if let Some(var) = self.lookup(&path[0]) {
+                    if let JType::Object(id) = var.ty {
+                        let owner = self.table.class_name(id).to_owned();
+                        return self
+                            .table
+                            .field(&owner, &path[1])
+                            .map_or(JType::Error, |f| f.ty);
+                    }
+                    return JType::Error;
+                }
+                self.table
+                    .field(&path[0], &path[1])
+                    .map_or(JType::Error, |f| f.ty)
+            }
             Expr::Name { .. } | Expr::ArrayLiteral { .. } => JType::Error,
             Expr::Index { array, .. } => self.type_of(array).element_type().unwrap_or(JType::Error),
-            Expr::Field { object, name, .. } => {
-                if name == "length" && matches!(self.type_of(object), JType::Array { .. }) {
-                    JType::Int
-                } else {
-                    JType::Error
+            Expr::Field { object, name, .. } => match self.type_of(object) {
+                JType::Array { .. } if name == "length" => JType::Int,
+                JType::Object(id) => {
+                    let owner = self.table.class_name(id).to_owned();
+                    self.table
+                        .field(&owner, name)
+                        .map_or(JType::Error, |f| f.ty)
                 }
-            }
+                _ => JType::Error,
+            },
             Expr::NewArray { elem, dims, .. } => {
                 match (
-                    type_from_ref(elem).and_then(elem_type_of),
+                    self.table.resolve_type(elem).and_then(elem_type_of),
                     u8::try_from(dims.len()),
                 ) {
                     (Some(element), Ok(count)) => JType::Array {
@@ -1568,7 +2532,10 @@ impl BodyGen<'_> {
                     {
                         path[0].clone()
                     }
-                    _ => return JType::Error,
+                    Some(other) => match self.type_of(other) {
+                        JType::Object(id) => self.table.class_name(id).to_owned(),
+                        _ => return JType::Error,
+                    },
                 };
                 let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                 let table = self.table;
@@ -1589,7 +2556,7 @@ impl BodyGen<'_> {
                 t if t.is_numeric() => JType::Int,
                 _ => JType::Error,
             },
-            Expr::Cast { ty, .. } => type_from_ref(ty).unwrap_or(JType::Error),
+            Expr::Cast { ty, .. } => self.table.resolve_type(ty).unwrap_or(JType::Error),
             Expr::Binary { op, lhs, rhs, .. } => match op {
                 BinaryOp::Add => {
                     let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
@@ -1604,6 +2571,17 @@ impl BodyGen<'_> {
                 }
                 _ => JType::Boolean,
             },
+            Expr::This { .. } => {
+                if self.in_static {
+                    JType::Error
+                } else {
+                    JType::Object(self.current_class_id)
+                }
+            }
+            Expr::NewObject { class, .. } => self
+                .table
+                .class_id(class)
+                .map_or(JType::Error, JType::Object),
         }
     }
 
@@ -1618,26 +2596,33 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
-            } => match self.call_target(receiver.as_deref(), *span) {
-                None => JType::Error,
-                Some(CallTarget::Stream(_)) => {
-                    self.error(*span, "print/println do not return a value");
-                    JType::Error
-                }
-                Some(CallTarget::Static(class)) => {
-                    match self.static_call(&class, method, args, *span) {
-                        None => JType::Error,
-                        Some(Some(ty)) => ty,
-                        Some(None) => {
-                            self.error(
-                                *span,
-                                format!("'{method}' returns void, so it cannot be used as a value"),
-                            );
-                            JType::Error
-                        }
+            } => {
+                let outcome = match self.call_target(receiver.as_deref(), *span) {
+                    None => None,
+                    Some(CallTarget::Stream(_)) => {
+                        self.error(*span, "print/println do not return a value");
+                        None
+                    }
+                    Some(CallTarget::Static(class)) => {
+                        self.static_call(&class, method, args, *span)
+                    }
+                    Some(CallTarget::Own) => self.own_call(method, args, *span),
+                    Some(CallTarget::Instance(object)) => {
+                        self.instance_call(object, method, args, *span)
+                    }
+                };
+                match outcome {
+                    None => JType::Error,
+                    Some(Some(ty)) => ty,
+                    Some(None) => {
+                        self.error(
+                            *span,
+                            format!("'{method}' returns void, so it cannot be used as a value"),
+                        );
+                        JType::Error
                     }
                 }
-            },
+            }
             Expr::Unary { op, operand, span } => self.unary(*op, operand, *span),
             Expr::Cast { ty, operand, span } => self.cast(ty, operand, *span),
             Expr::Binary { op, lhs, rhs, span } => self.binary(*op, lhs, rhs, *span),
@@ -1663,6 +2648,18 @@ impl BodyGen<'_> {
                 );
                 JType::Error
             }
+            Expr::This { span } => {
+                if self.in_static {
+                    self.error(
+                        *span,
+                        "non-static variable this cannot be referenced from a static context",
+                    );
+                    return JType::Error;
+                }
+                self.code.push_op(op::ALOAD_0, 1);
+                JType::Object(self.current_class_id)
+            }
+            Expr::NewObject { class, args, span } => self.new_object(class, args, *span),
         }
     }
 
@@ -1677,6 +2674,19 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return JType::Int;
         }
+        if let JType::Object(class_id) = object_ty {
+            let Some(field) = self.resolve_field(class_id, name, span) else {
+                return JType::Error;
+            };
+            if field.is_static {
+                self.error(
+                    span,
+                    format!("access static field {name} via the class name"),
+                );
+                return JType::Error;
+            }
+            return self.emit_getfield(class_id, &field);
+        }
         if object_ty == JType::Str && name == "length" {
             self.error(
                 span,
@@ -1687,7 +2697,10 @@ impl BodyGen<'_> {
         }
         self.error(
             span,
-            format!("cannot find field '{name}' on {}", object_ty.describe()),
+            format!(
+                "cannot find field '{name}' on {}",
+                object_ty.describe(self.table)
+            ),
         );
         JType::Error
     }
@@ -1704,7 +2717,7 @@ impl BodyGen<'_> {
             self.error(span, "too many array dimensions");
             return JType::Error;
         };
-        let Some(element) = type_from_ref(elem).and_then(elem_type_of) else {
+        let Some(element) = self.table.resolve_type(elem).and_then(elem_type_of) else {
             self.error(span, "unknown array element type");
             return JType::Error;
         };
@@ -1727,7 +2740,7 @@ impl BodyGen<'_> {
                     size.span(),
                     format!(
                         "incompatible types: {} cannot be converted to int (array size)",
-                        size_ty.describe()
+                        size_ty.describe(self.table)
                     ),
                 );
             }
@@ -1738,7 +2751,7 @@ impl BodyGen<'_> {
         } else {
             // Multi-dimensional (or partially-sized) creation.
             let class_index = {
-                let descriptor = array_ty.descriptor();
+                let descriptor = array_ty.descriptor(self.table);
                 intern_class(self.pool, &descriptor)
             };
             if sized.len() == 1 {
@@ -1747,7 +2760,7 @@ impl BodyGen<'_> {
                 let element_descriptor = array_ty
                     .element_type()
                     .expect("array has an element type")
-                    .descriptor();
+                    .descriptor(self.table);
                 let element_class = intern_class(self.pool, &element_descriptor);
                 self.code.push_op_u16(op::ANEWARRAY, element_class, 1);
                 self.code.drop_stack(1);
@@ -1776,13 +2789,19 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            ElemType::Object(id) => {
+                let class_name = self.table.class_name(id).to_owned();
+                let class = intern_class(self.pool, &class_name);
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             prim => {
                 let atype = match prim {
                     ElemType::Int => op::T_INT,
                     ElemType::Double => op::T_DOUBLE,
                     ElemType::Boolean => op::T_BOOLEAN,
                     ElemType::Char => op::T_CHAR,
-                    ElemType::Str => unreachable!(),
+                    ElemType::Str | ElemType::Object(_) => unreachable!(),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
                 self.code.bytes.push(atype);
@@ -1799,7 +2818,7 @@ impl BodyGen<'_> {
                 span,
                 format!(
                     "array initializer cannot be assigned to {}",
-                    array_ty.describe()
+                    array_ty.describe(self.table)
                 ),
             );
             return;
@@ -1812,7 +2831,7 @@ impl BodyGen<'_> {
         if let JType::Array { elem, dims: 1 } = array_ty {
             self.emit_new_1d(elem);
         } else {
-            let element_descriptor = element.descriptor();
+            let element_descriptor = element.descriptor(self.table);
             let element_class = intern_class(self.pool, &element_descriptor);
             self.code.push_op_u16(op::ANEWARRAY, element_class, 1);
             self.code.drop_stack(1);
@@ -1892,17 +2911,68 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return JType::Int;
         }
+        // `x.field` on a local object, or `Class.staticField`.
+        if path.len() == 2 {
+            if let Some(var) = self.lookup(&path[0]) {
+                if let JType::Object(id) = var.ty {
+                    let (slot, ty) = (var.slot, var.ty);
+                    self.emit_load(slot, ty);
+                    let Some(field) = self.resolve_field(id, &path[1], span) else {
+                        return JType::Error;
+                    };
+                    if field.is_static {
+                        // Java allows this with a warning; keep it simple.
+                        self.error(
+                            span,
+                            format!("access static field {} via the class name", field.name),
+                        );
+                        return JType::Error;
+                    }
+                    return self.emit_getfield(id, &field);
+                }
+            } else if let Some(class_id) = self.table.class_id(&path[0]) {
+                let Some(field) = self.resolve_field(class_id, &path[1], span) else {
+                    return JType::Error;
+                };
+                if !field.is_static {
+                    self.error(
+                        span,
+                        format!(
+                            "non-static variable {} cannot be referenced from a static context",
+                            field.name
+                        ),
+                    );
+                    return JType::Error;
+                }
+                return self.emit_getfield(class_id, &field);
+            }
+        }
         if path.len() != 1 {
-            self.error(
-                span,
-                format!(
-                    "'{}' is not a known variable (field access is not yet supported by jvmjs)",
-                    path.join(".")
-                ),
-            );
+            self.error(span, format!("cannot find symbol: '{}'", path.join(".")));
             return JType::Error;
         }
         let name = &path[0];
+        if self.lookup(name).is_none() {
+            // Implicit field of the current class.
+            if let Some(field) = self.table.field(self.current_class, name) {
+                let field = field.clone();
+                if field.is_static {
+                    return self.emit_getfield(self.current_class_id, &field);
+                }
+                if self.in_static {
+                    self.error(
+                        span,
+                        format!(
+                            "non-static variable {name} cannot be referenced from a \
+                             static context"
+                        ),
+                    );
+                    return JType::Error;
+                }
+                self.code.push_op(op::ALOAD_0, 1);
+                return self.emit_getfield(self.current_class_id, &field);
+            }
+        }
         let Some(var) = self.lookup(name) else {
             self.error(span, format!("cannot find variable '{name}'"));
             return JType::Error;
@@ -1943,7 +3013,10 @@ impl BodyGen<'_> {
                     other => {
                         self.error(
                             span,
-                            format!("operator '-' cannot be applied to {}", other.describe()),
+                            format!(
+                                "operator '-' cannot be applied to {}",
+                                other.describe(self.table)
+                            ),
                         );
                         JType::Error
                     }
@@ -1957,7 +3030,10 @@ impl BodyGen<'_> {
                 if ty != JType::Boolean {
                     self.error(
                         span,
-                        format!("operator '!' cannot be applied to {}", ty.describe()),
+                        format!(
+                            "operator '!' cannot be applied to {}",
+                            ty.describe(self.table)
+                        ),
                     );
                     return JType::Error;
                 }
@@ -1976,7 +3052,7 @@ impl BodyGen<'_> {
     }
 
     fn cast(&mut self, ty: &TypeRef, operand: &Expr, span: SourceSpan) -> JType {
-        let Some(target) = type_from_ref(ty) else {
+        let Some(target) = self.table.resolve_type(ty) else {
             self.error(span, "this cast target is not supported by jvmjs");
             self.expr(operand);
             return JType::Error;
@@ -2010,7 +3086,11 @@ impl BodyGen<'_> {
             (source, target) => {
                 self.error(
                     span,
-                    format!("cannot cast {} to {}", source.describe(), target.describe()),
+                    format!(
+                        "cannot cast {} to {}",
+                        source.describe(self.table),
+                        target.describe(self.table)
+                    ),
                 );
                 JType::Error
             }
@@ -2045,8 +3125,8 @@ impl BodyGen<'_> {
                         format!(
                             "operator '{}' cannot be applied to {} and {}",
                             arithmetic_symbol(op),
-                            lt.describe(),
-                            rt.describe()
+                            lt.describe(self.table),
+                            rt.describe(self.table)
                         ),
                     );
                     return JType::Error;
@@ -2070,7 +3150,7 @@ impl BodyGen<'_> {
                 format!(
                     "operator '{}' needs boolean operands, got {}",
                     if op == BinaryOp::And { "&&" } else { "||" },
-                    lt.describe()
+                    lt.describe(self.table)
                 ),
             );
         }
@@ -2089,7 +3169,7 @@ impl BodyGen<'_> {
                 format!(
                     "operator '{}' needs boolean operands, got {}",
                     if op == BinaryOp::And { "&&" } else { "||" },
-                    rt.describe()
+                    rt.describe(self.table)
                 ),
             );
         }
@@ -2121,8 +3201,8 @@ impl BodyGen<'_> {
                 format!(
                     "operator '{}' cannot be applied to {} and {}",
                     comparison_symbol(op),
-                    lt.describe(),
-                    rt.describe()
+                    lt.describe(self.table),
+                    rt.describe(self.table)
                 ),
             );
             return JType::Error;
@@ -2247,12 +3327,15 @@ impl BodyGen<'_> {
 
     /// Append the value on top of the stack (above the builder).
     fn append_part(&mut self, ty: JType, span: SourceSpan) {
+        let ty = self.coerce_to_string_for_output(ty);
         let descriptor = match ty {
             JType::Int => "(I)Ljava/lang/StringBuilder;",
             JType::Double => "(D)Ljava/lang/StringBuilder;",
             JType::Boolean => "(Z)Ljava/lang/StringBuilder;",
             JType::Char => "(C)Ljava/lang/StringBuilder;",
-            JType::Str | JType::Null => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+            JType::Str | JType::Null | JType::Object(_) => {
+                "(Ljava/lang/String;)Ljava/lang/StringBuilder;"
+            }
             JType::Array { .. } => {
                 self.error(
                     span,
@@ -2431,7 +3514,8 @@ impl BodyGen<'_> {
         match (from, to) {
             // Identity, char-to-int widening, and null-to-String all
             // need no code.
-            (JType::Error, _) | (JType::Char, JType::Int) | (JType::Null, JType::Str) => {}
+            (JType::Error, _) | (JType::Char, JType::Int) => {}
+            (JType::Null, to) if to.is_reference() => {}
             (f, t) if f == t => {}
             (JType::Int | JType::Char, JType::Double) => self.code.push_op(op::I2D, 1),
             (JType::Double, JType::Int | JType::Char) => {
@@ -2439,7 +3523,7 @@ impl BodyGen<'_> {
                     span,
                     format!(
                         "possible lossy conversion from double to {}; add an explicit cast",
-                        to.describe()
+                        to.describe(self.table)
                     ),
                 );
             }
@@ -2454,8 +3538,8 @@ impl BodyGen<'_> {
                     span,
                     format!(
                         "incompatible types: {} cannot be converted to {}",
-                        from.describe(),
-                        to.describe()
+                        from.describe(self.table),
+                        to.describe(self.table)
                     ),
                 );
             }

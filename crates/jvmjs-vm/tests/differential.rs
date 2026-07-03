@@ -344,6 +344,88 @@ public class Diff2D {
 );
 
 differential_test!(
+    diff_objects,
+    "DiffObjects",
+    r#"
+class Counter {
+    private int value;
+    private final int step;
+    static int instances = 0;
+
+    Counter(int step) {
+        this.step = step;
+        instances++;
+    }
+
+    void tick() { value += step; }
+    int get() { return value; }
+
+    public String toString() { return "Counter(" + value + " by " + step + ")"; }
+}
+
+public class DiffObjects {
+    public static void main(String[] args) {
+        Counter a = new Counter(3);
+        Counter b = new Counter(5);
+        for (int i = 0; i < 4; i++) {
+            a.tick();
+            b.tick();
+        }
+        System.out.println(a.get() + " " + b.get());
+        System.out.println(a);
+        System.out.println(Counter.instances);
+        Counter alias = a;
+        alias.tick();
+        System.out.println(a.get());
+        System.out.println(a == alias);
+        System.out.println(a == b);
+        Counter none = null;
+        System.out.println("gone: " + none);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_object_arrays_and_fields,
+    "DiffObjArr",
+    r#"
+class Pt {
+    int x;
+    int y;
+    Pt(int x, int y) { this.x = x; this.y = y; }
+    public String toString() { return "(" + x + "," + y + ")"; }
+}
+
+public class DiffObjArr {
+    static int taxicab(Pt a, Pt b) {
+        int dx = a.x - b.x;
+        int dy = a.y - b.y;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        return dx + dy;
+    }
+
+    public static void main(String[] args) {
+        Pt[] path = new Pt[3];
+        path[0] = new Pt(0, 0);
+        path[1] = new Pt(3, 4);
+        path[2] = new Pt(-2, 1);
+        int total = 0;
+        for (int i = 1; i < path.length; i++) {
+            total += taxicab(path[i - 1], path[i]);
+        }
+        System.out.println(total);
+        System.out.println(path[2]);
+        path[1].x += 10;
+        System.out.println(path[1]);
+        System.out.println(path[0] == path[1]);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

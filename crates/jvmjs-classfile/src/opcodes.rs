@@ -112,10 +112,17 @@ pub const ARETURN: u8 = 0xB0;
 pub const RETURN: u8 = 0xB1;
 
 pub const GETSTATIC: u8 = 0xB2;
+pub const PUTSTATIC: u8 = 0xB3;
+pub const GETFIELD: u8 = 0xB4;
+pub const PUTFIELD: u8 = 0xB5;
 pub const INVOKEVIRTUAL: u8 = 0xB6;
 pub const INVOKESPECIAL: u8 = 0xB7;
 pub const INVOKESTATIC: u8 = 0xB8;
 pub const NEW: u8 = 0xBB;
+
+// Null-reference branches.
+pub const IFNULL: u8 = 0xC6;
+pub const IFNONNULL: u8 = 0xC7;
 
 // Arrays.
 pub const NEWARRAY: u8 = 0xBC;

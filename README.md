@@ -33,12 +33,13 @@ filesystem, which the host page can seed and inspect (`writeFile`, `readTextFile
 
 ## Status
 
-**Stages 1–4 of the language are live** (see `specs/LANGUAGE.md`): programs
+**Stages 1–5 of the language are live** (see `specs/LANGUAGE.md`): programs
 with local variables, operators, casts, string concatenation, full control
-flow, **user-defined static methods** (parameters, returns, recursion,
-overloading, cross-class calls), and **arrays** — 1D and 2D, `{...}`
-initializers, `length`, element assignment, for-each, `String[] args` —
-compile with our compiler and run on our VM in the browser. Semantics are
+flow, **user-defined static methods**, **arrays** (1D/2D, initializers,
+for-each), and now **classes with objects** — fields, constructors,
+`new`, instance methods, `this`, static members, `private` enforcement,
+and `println(obj)` via `toString()` — compile with our compiler and run
+on our VM in the browser. Semantics are
 Java-exact and **verified against OpenJDK 11**: a differential test suite
 runs identical programs through `javac`+`java` and jvmjs and requires
 byte-identical stdout. Compiler errors use javac's wording, and runtime
@@ -57,8 +58,10 @@ out of bounds for length 3`). Implemented and tested:
   stdin over SharedArrayBuffer + Atomics ready for when `Scanner` lands
 - virtual filesystem + console IO plumbing across the whole stack
 
-Next per `specs/LANGUAGE.md` staging: objects — fields, constructors, `new`,
-instance methods, `this`. The class library strategy is in `specs/SCOPE.md`.
+Next per `specs/LANGUAGE.md` staging: inheritance (`extends`, `super`,
+overriding, polymorphism, `interface`/`abstract`), then the class library
+(`String` methods, `Math`, `Scanner`, `ArrayList`). The class library
+strategy is in `specs/SCOPE.md`.
 
 Dev note: with a JDK installed (`javac`/`java` on PATH), `cargo test`
 includes the differential suite; without one those tests skip.

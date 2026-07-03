@@ -57,6 +57,11 @@ pub fn invoke_special(
     method: &str,
     descriptor: &str,
 ) -> Result<(), VmError> {
+    // Object's constructor does nothing — every user constructor calls
+    // it as the implicit super().
+    if class == "java/lang/Object" && method == "<init>" && descriptor == "()V" {
+        return Ok(());
+    }
     match (heap.get(receiver), method, descriptor) {
         // StringBuilder is fully initialized at `new`; its no-arg
         // constructor has nothing left to do.

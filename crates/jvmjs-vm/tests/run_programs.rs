@@ -1137,6 +1137,257 @@ fn main_args_are_finally_usable() {
     assert_eq!(console.stdout_text(), "2\narg: hello\narg: world\n");
 }
 
+// ----- stage 5: objects -----
+
+#[test]
+fn classic_bank_account_class() {
+    let out = run_stdout(
+        r#"
+        class Account {
+            private String owner;
+            private double balance;
+            private static int accountCount = 0;
+
+            public Account(String owner, double start) {
+                this.owner = owner;
+                balance = start;
+                accountCount++;
+            }
+
+            public Account(String owner) {
+                this.owner = owner;
+                this.balance = 0.0;
+                accountCount++;
+            }
+
+            public void deposit(double amount) {
+                if (amount > 0) balance += amount;
+            }
+
+            public boolean withdraw(double amount) {
+                if (amount <= balance) {
+                    balance -= amount;
+                    return true;
+                }
+                return false;
+            }
+
+            public double getBalance() { return balance; }
+            public static int getCount() { return accountCount; }
+
+            public String toString() {
+                return owner + ": $" + balance;
+            }
+        }
+
+        public class Bank {
+            public static void main(String[] args) {
+                Account a = new Account("Ada", 100.0);
+                Account b = new Account("Grace");
+                a.deposit(50.0);
+                b.deposit(25.0);
+                System.out.println(a.withdraw(200.0));
+                System.out.println(a.withdraw(75.0));
+                System.out.println(a);
+                System.out.println(b);
+                System.out.println("accounts: " + Account.getCount());
+            }
+        }
+        "#,
+        "Bank",
+    );
+    assert_eq!(out, "false\ntrue\nAda: $75.0\nGrace: $25.0\naccounts: 2\n");
+}
+
+#[test]
+fn field_initializers_defaults_and_statics() {
+    let out = run_stdout(
+        r#"
+        class Config {
+            static int created = 0;
+            static final double VERSION = 2.5;
+            int id = next();
+            String label;
+            boolean enabled;
+
+            static int next() {
+                created++;
+                return created;
+            }
+        }
+
+        public class Defaults {
+            public static void main(String[] args) {
+                Config first = new Config();
+                Config second = new Config();
+                System.out.println(first.id + " " + second.id);
+                System.out.println(second.label + " " + second.enabled);
+                System.out.println(Config.VERSION);
+                System.out.println(Config.created);
+            }
+        }
+        "#,
+        "Defaults",
+    );
+    assert_eq!(out, "1 2\nnull false\n2.5\n2\n");
+}
+
+#[test]
+fn objects_are_references() {
+    let out = run_stdout(
+        r#"
+        class Point {
+            int x;
+            int y;
+
+            Point(int x, int y) {
+                this.x = x;
+                this.y = y;
+            }
+
+            void translate(int dx, int dy) {
+                x += dx;
+                y += dy;
+            }
+
+            public String toString() { return "(" + x + ", " + y + ")"; }
+        }
+
+        public class Refs {
+            static void moveIt(Point p) {
+                p.translate(10, 10);
+            }
+
+            public static void main(String[] args) {
+                Point a = new Point(1, 2);
+                Point alias = a;
+                moveIt(a);
+                System.out.println(alias);
+                System.out.println(a == alias);
+                System.out.println(a == new Point(11, 12));
+
+                Point[] path = new Point[2];
+                System.out.println(path[0]);
+                path[0] = a;
+                path[0].x = 99;
+                System.out.println(a.x);
+            }
+        }
+        "#,
+        "Refs",
+    );
+    assert_eq!(out, "(11, 12)\ntrue\nfalse\nnull\n99\n");
+}
+
+#[test]
+fn default_tostring_prints_class_at_hex() {
+    let out = run_stdout(
+        r#"
+        class Ghost { }
+
+        public class Spooky {
+            public static void main(String[] args) {
+                Ghost g = new Ghost();
+                System.out.println(g);
+                System.out.println("boo: " + g);
+            }
+        }
+        "#,
+        "Spooky",
+    );
+    let mut lines = out.lines();
+    let first = lines.next().expect("one line");
+    assert!(first.starts_with("Ghost@"), "{first}");
+    let second = lines.next().expect("two lines");
+    assert!(second.starts_with("boo: Ghost@"), "{second}");
+}
+
+#[test]
+fn npe_on_null_receiver_and_field() {
+    let (result, console) = compile_and_run(
+        r"
+        class Widget {
+            int size;
+            void grow() { size++; }
+        }
+
+        public class Broken {
+            public static void main(String[] args) {
+                Widget w = null;
+                w.grow();
+            }
+        }
+        ",
+        "Broken",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.lang.NullPointerException"),
+        "{}",
+        console.stderr_text()
+    );
+}
+
+#[test]
+fn stage5_compile_errors_match_javac_wording() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "class A { private int x; } class B { static void f() { A a = new A(); \
+             System.out.println(a.x); } }",
+            "x has private access in A",
+        ),
+        (
+            "class A { private void m() { } } class B { static void f() { A a = new A(); \
+             a.m(); } }",
+            "m() has private access in A",
+        ),
+        (
+            "class A { int x; static void f() { System.out.println(x); } }",
+            "non-static variable x cannot be referenced from a static context",
+        ),
+        (
+            "class A { int x; static void f() { System.out.println(this.x); } }",
+            "non-static variable this cannot be referenced from a static context",
+        ),
+        (
+            "class Pt { Pt(int x) { } } class B { static void f() { Pt p = new Pt(); } }",
+            "constructor Pt in class Pt cannot be applied to given types",
+        ),
+        (
+            "class A { int x; int x; }",
+            "variable x is already defined in class A",
+        ),
+        (
+            "class A { A(int v) { } A(int w) { } }",
+            "constructor A is already defined",
+        ),
+        (
+            "class A { final int x = 1; void f() { x = 2; } }",
+            "cannot assign a value to final variable x",
+        ),
+    ];
+    for (source, expected) in cases {
+        let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+            path: "T.java".into(),
+            text: (*source).into(),
+        }]);
+        assert!(!result.success(), "case '{source}' compiled unexpectedly");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(expected)),
+            "case '{source}': expected '{expected}' in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

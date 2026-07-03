@@ -22,8 +22,13 @@ pub(crate) struct Interpreter<'run> {
     pub classes: &'run HashMap<String, ClassFile>,
     pub console: &'run mut dyn ConsoleIo,
     pub heap: Heap,
-    pub statics: IntrinsicStatics,
+    pub intrinsic_statics: IntrinsicStatics,
     string_pool: HashMap<String, HeapRef>,
+    /// Static field values per user class, created on first use.
+    statics: HashMap<String, HashMap<String, JValue>>,
+    /// Classes whose initialization has started (JVMS §5.5: recursive
+    /// initialization by the same thread proceeds).
+    init_started: std::collections::HashSet<String>,
     remaining_instructions: u64,
     call_depth: u32,
     max_call_depth: u32,
@@ -40,8 +45,10 @@ impl<'run> Interpreter<'run> {
             classes,
             console,
             heap: Heap::new(),
-            statics: IntrinsicStatics::default(),
+            intrinsic_statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
+            statics: HashMap::new(),
+            init_started: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
             call_depth: 0,
             max_call_depth,
@@ -311,6 +318,13 @@ impl<'run> Interpreter<'run> {
                         pc = branch_target(addr, offset, bytes.len(), &malformed)?;
                     }
                 }
+                op::IFNULL | op::IFNONNULL => {
+                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                    let reference = frame.pop_ref()?;
+                    if reference.is_none() == (opcode == op::IFNULL) {
+                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                    }
+                }
                 op::GOTO => {
                     let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
                     pc = branch_target(addr, offset, bytes.len(), &malformed)?;
@@ -322,51 +336,38 @@ impl<'run> Interpreter<'run> {
                     let target = class
                         .constant_pool
                         .get_class_name(index)
-                        .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?;
-                    let object = intrinsics::instantiate(target).ok_or_else(|| {
-                        VmError::UnknownIntrinsic(format!("cannot instantiate {target}"))
-                    })?;
+                        .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
+                        .to_owned();
+                    let object = if self.classes.contains_key(&target) {
+                        self.ensure_initialized(&target)?;
+                        self.new_instance(&target)
+                    } else {
+                        intrinsics::instantiate(&target).ok_or_else(|| {
+                            VmError::UnknownIntrinsic(format!("cannot instantiate {target}"))
+                        })?
+                    };
                     let reference = self.heap.alloc(object);
                     frame.stack.push(JValue::Ref(Some(reference)));
                 }
                 op::INVOKESPECIAL => {
                     let index = read_u16(bytes, &mut pc, &malformed)?;
-                    let (target_class, method_name, descriptor) = class
-                        .constant_pool
-                        .get_member_ref(index)
-                        .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
-                        .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
-                    let arg_count = descriptor_arg_count(&descriptor)
-                        .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
-                    for _ in 0..arg_count {
-                        frame.pop()?;
-                    }
-                    let Some(receiver) = frame.pop_ref()? else {
-                        return Err(VmError::UncaughtException(String::from(
-                            "java.lang.NullPointerException",
-                        )));
-                    };
-                    intrinsics::invoke_special(
-                        &self.heap,
-                        receiver,
-                        &target_class,
-                        &method_name,
-                        &descriptor,
-                    )?;
+                    self.invoke_special_op(class, &mut frame, index, &malformed)?;
                 }
                 op::GETSTATIC => {
                     let index = read_u16(bytes, &mut pc, &malformed)?;
-                    let (field_class, field_name, _descriptor) = class
-                        .constant_pool
-                        .get_member_ref(index)
-                        .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
-                    let value = self
-                        .statics
-                        .static_field(&mut self.heap, field_class, field_name)
-                        .ok_or_else(|| {
-                            VmError::UnknownIntrinsic(format!("{field_class}.{field_name}"))
-                        })?;
-                    frame.stack.push(value);
+                    self.getstatic_op(class, &mut frame, index, &malformed)?;
+                }
+                op::PUTSTATIC => {
+                    let index = read_u16(bytes, &mut pc, &malformed)?;
+                    self.putstatic_op(class, &mut frame, index, &malformed)?;
+                }
+                op::GETFIELD => {
+                    let index = read_u16(bytes, &mut pc, &malformed)?;
+                    self.getfield_op(class, &mut frame, index, &malformed)?;
+                }
+                op::PUTFIELD => {
+                    let index = read_u16(bytes, &mut pc, &malformed)?;
+                    self.putfield_op(class, &mut frame, index, &malformed)?;
                 }
                 op::INVOKEVIRTUAL => {
                     let index = read_u16(bytes, &mut pc, &malformed)?;
@@ -528,6 +529,308 @@ impl<'run> Interpreter<'run> {
         }
     }
 
+    /// `getstatic` (kept out of the dispatch loop so its temporaries
+    /// don't inflate every interpreter frame in debug builds).
+    #[inline(never)]
+    fn getstatic_op(
+        &mut self,
+        class: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<(), VmError> {
+        let (field_class, field_name, _descriptor) = class
+            .constant_pool
+            .get_member_ref(index)
+            .map(|(c, f, d)| (c.to_owned(), f.to_owned(), d.to_owned()))
+            .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
+        let value = if self.classes.contains_key(&field_class) {
+            self.ensure_initialized(&field_class)?;
+            *self
+                .statics
+                .get(&field_class)
+                .and_then(|fields| fields.get(&field_name))
+                .ok_or_else(|| {
+                    malformed(format!("unknown static field {field_class}.{field_name}"))
+                })?
+        } else {
+            self.intrinsic_statics
+                .static_field(&mut self.heap, &field_class, &field_name)
+                .ok_or_else(|| VmError::UnknownIntrinsic(format!("{field_class}.{field_name}")))?
+        };
+        frame.stack.push(value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn putstatic_op(
+        &mut self,
+        class: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<(), VmError> {
+        let (field_class, field_name, _descriptor) = class
+            .constant_pool
+            .get_member_ref(index)
+            .map(|(c, f, d)| (c.to_owned(), f.to_owned(), d.to_owned()))
+            .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
+        if !self.classes.contains_key(&field_class) {
+            return Err(VmError::UnknownIntrinsic(format!(
+                "{field_class}.{field_name}"
+            )));
+        }
+        self.ensure_initialized(&field_class)?;
+        let value = frame.pop()?;
+        let slot = self
+            .statics
+            .get_mut(&field_class)
+            .and_then(|fields| fields.get_mut(&field_name))
+            .ok_or_else(|| malformed(format!("unknown static field {field_class}.{field_name}")))?;
+        *slot = value;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn getfield_op(
+        &mut self,
+        class: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<(), VmError> {
+        let (_, field_name, _) = class
+            .constant_pool
+            .get_member_ref(index)
+            .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
+        let field_name = field_name.to_owned();
+        let reference = frame.pop_ref()?.ok_or_else(|| {
+            VmError::UncaughtException(format!(
+                "java.lang.NullPointerException: cannot read field \"{field_name}\" \
+                 because the object is null"
+            ))
+        })?;
+        let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get(reference)
+        else {
+            return Err(malformed(String::from("getfield on a non-object")));
+        };
+        let value = *fields
+            .get(&field_name)
+            .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
+        frame.stack.push(value);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn putfield_op(
+        &mut self,
+        class: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<(), VmError> {
+        let (_, field_name, _) = class
+            .constant_pool
+            .get_member_ref(index)
+            .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
+        let field_name = field_name.to_owned();
+        let value = frame.pop()?;
+        let reference = frame.pop_ref()?.ok_or_else(|| {
+            VmError::UncaughtException(format!(
+                "java.lang.NullPointerException: cannot assign field \"{field_name}\" \
+                 because the object is null"
+            ))
+        })?;
+        let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get_mut(reference)
+        else {
+            return Err(malformed(String::from("putfield on a non-object")));
+        };
+        fields.insert(field_name, value);
+        Ok(())
+    }
+
+    /// `invokespecial`: user constructors and intrinsic `<init>`s.
+    #[inline(never)]
+    fn invoke_special_op(
+        &mut self,
+        class: &ClassFile,
+        frame: &mut Frame,
+        index: u16,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<(), VmError> {
+        let (target_class, method_name, descriptor) = class
+            .constant_pool
+            .get_member_ref(index)
+            .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
+            .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
+        let widths = descriptor_arg_widths(&descriptor)
+            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+        let mut args = Vec::with_capacity(widths.len());
+        for _ in &widths {
+            args.push(frame.pop()?);
+        }
+        args.reverse();
+        let Some(receiver) = frame.pop_ref()? else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        if let Some(target) = classes.get(&target_class) {
+            // A user constructor.
+            let ctor = target
+                .methods
+                .iter()
+                .find(|m| {
+                    target.constant_pool.get_utf8(m.name_index) == Some(method_name.as_str())
+                        && target.constant_pool.get_utf8(m.descriptor_index)
+                            == Some(descriptor.as_str())
+                })
+                .ok_or_else(|| {
+                    malformed(format!(
+                        "no constructor {method_name}{descriptor} in {target_class}"
+                    ))
+                })?;
+            let mut locals = Vec::with_capacity(1 + args.len());
+            locals.push(JValue::Ref(Some(receiver)));
+            for (value, width) in args.iter().zip(&widths) {
+                locals.push(*value);
+                if *width == 2 {
+                    locals.push(JValue::Int(0));
+                }
+            }
+            self.execute(target, ctor, locals)?;
+        } else {
+            intrinsics::invoke_special(
+                &self.heap,
+                receiver,
+                &target_class,
+                &method_name,
+                &descriptor,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Run a user class's static initialization on first use
+    /// (JVMS §5.5): default static field values, then `<clinit>`.
+    fn ensure_initialized(&mut self, class_name: &str) -> Result<(), VmError> {
+        if self.init_started.contains(class_name) {
+            return Ok(());
+        }
+        self.init_started.insert(class_name.to_owned());
+
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let Some(class) = classes.get(class_name) else {
+            return Ok(());
+        };
+        let mut fields = HashMap::new();
+        for field in &class.fields {
+            if !field
+                .access_flags
+                .contains(jvmjs_classfile::FieldAccessFlags::STATIC)
+            {
+                continue;
+            }
+            let name = class
+                .constant_pool
+                .get_utf8(field.name_index)
+                .unwrap_or_default()
+                .to_owned();
+            let descriptor = class
+                .constant_pool
+                .get_utf8(field.descriptor_index)
+                .unwrap_or_default();
+            fields.insert(name, default_for_descriptor(descriptor));
+        }
+        self.statics.insert(class_name.to_owned(), fields);
+
+        if let Some(clinit) = find_static_method(class, "<clinit>", "()V") {
+            self.execute(class, clinit, Vec::new())?;
+        }
+        Ok(())
+    }
+
+    /// Allocate an instance of a user class with defaulted fields.
+    fn new_instance(&mut self, class_name: &str) -> crate::value::HeapObject {
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let class = classes.get(class_name).expect("checked by caller");
+        let mut fields = HashMap::new();
+        for field in &class.fields {
+            if field
+                .access_flags
+                .contains(jvmjs_classfile::FieldAccessFlags::STATIC)
+            {
+                continue;
+            }
+            let name = class
+                .constant_pool
+                .get_utf8(field.name_index)
+                .unwrap_or_default()
+                .to_owned();
+            let descriptor = class
+                .constant_pool
+                .get_utf8(field.descriptor_index)
+                .unwrap_or_default();
+            fields.insert(name, default_for_descriptor(descriptor));
+        }
+        crate::value::HeapObject::Instance {
+            class_name: class_name.to_owned(),
+            fields,
+        }
+    }
+
+    /// Dispatch an instance method on a user-defined object, with the
+    /// default `toString` when the class doesn't define one.
+    fn invoke_user_virtual(
+        &mut self,
+        receiver: HeapRef,
+        instance_class: &str,
+        method_name: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Option<JValue>, VmError> {
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let class = classes
+            .get(instance_class)
+            .ok_or_else(|| VmError::MalformedClass {
+                name: instance_class.to_owned(),
+                reason: String::from("instance of an unloaded class"),
+            })?;
+        let method = class.methods.iter().find(|m| {
+            !m.access_flags
+                .contains(jvmjs_classfile::MethodAccessFlags::STATIC)
+                && class.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                && class.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+        });
+        let Some(method) = method else {
+            // Object.toString() default: "ClassName@<hex>".
+            if method_name == "toString" && descriptor == "()Ljava/lang/String;" {
+                let text = format!("{instance_class}@{receiver:x}");
+                let reference = self.heap.alloc_string(&text);
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
+            return Err(VmError::UnknownIntrinsic(format!(
+                "{instance_class}.{method_name}{descriptor}"
+            )));
+        };
+
+        self.ensure_initialized(instance_class)?;
+        let widths = descriptor_arg_widths(descriptor).ok_or_else(|| VmError::MalformedClass {
+            name: instance_class.to_owned(),
+            reason: format!("bad descriptor {descriptor}"),
+        })?;
+        let mut locals = Vec::with_capacity(1 + args.len());
+        locals.push(JValue::Ref(Some(receiver)));
+        for (value, width) in args.iter().zip(&widths) {
+            locals.push(*value);
+            if *width == 2 {
+                locals.push(JValue::Int(0));
+            }
+        }
+        self.execute(class, method, locals)
+    }
+
     /// Recursively allocate a (possibly partial) multi-dimensional
     /// array described by `descriptor` (e.g. `[[I`) with the given
     /// leading dimension counts.
@@ -583,6 +886,7 @@ impl<'run> Interpreter<'run> {
                 "{class_name}.{method_name}{descriptor}"
             )));
         };
+        self.ensure_initialized(class_name)?;
         let method = find_static_method(class, method_name, descriptor).ok_or_else(|| {
             VmError::MalformedClass {
                 name: class_name.to_owned(),
@@ -635,15 +939,25 @@ impl<'run> Interpreter<'run> {
             )));
         };
 
-        let result = intrinsics::invoke_virtual(
-            &mut self.heap,
-            self.console,
-            receiver,
-            &target_class,
-            &method_name,
-            &descriptor,
-            &args,
-        )?;
+        // User-defined objects dispatch on the instance's actual class;
+        // everything else is an intrinsic (PrintStream, StringBuilder).
+        let instance_class = match self.heap.get(receiver) {
+            Some(crate::value::HeapObject::Instance { class_name, .. }) => Some(class_name.clone()),
+            _ => None,
+        };
+        let result = if let Some(instance_class) = instance_class {
+            self.invoke_user_virtual(receiver, &instance_class, &method_name, &descriptor, &args)?
+        } else {
+            intrinsics::invoke_virtual(
+                &mut self.heap,
+                self.console,
+                receiver,
+                &target_class,
+                &method_name,
+                &descriptor,
+                &args,
+            )?
+        };
         if let Some(value) = result {
             frame.stack.push(value);
         }
@@ -776,6 +1090,17 @@ impl Frame {
         let a = self.pop_double()?;
         self.stack.push(JValue::Double(apply(a, b)));
         Ok(())
+    }
+}
+
+/// The default value for a field of the given descriptor (JLS §4.12.5).
+fn default_for_descriptor(descriptor: &str) -> JValue {
+    match descriptor.chars().next() {
+        Some('D') => JValue::Double(0.0),
+        Some('I' | 'Z' | 'C' | 'B' | 'S') => JValue::Int(0),
+        Some('J') => JValue::Long(0),
+        Some('F') => JValue::Float(0.0),
+        _ => JValue::NULL,
     }
 }
 

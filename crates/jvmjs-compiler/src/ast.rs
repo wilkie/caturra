@@ -15,16 +15,35 @@ pub struct CompilationUnit {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassDecl {
     pub name: String,
+    pub fields: Vec<FieldDecl>,
     pub methods: Vec<MethodDecl>,
     pub span: SourceSpan,
 }
 
-/// A method declaration.
+/// A field declaration (one declarator; `int x, y;` produces two).
+#[allow(clippy::struct_excessive_bools)] // mirrors Java modifiers
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDecl {
+    pub name: String,
+    pub ty: TypeRef,
+    pub is_static: bool,
+    pub is_private: bool,
+    pub is_final: bool,
+    pub init: Option<Expr>,
+    pub span: SourceSpan,
+}
+
+/// A method or constructor declaration. Constructors have
+/// `is_constructor` set, `name` equal to the class name, and a `Void`
+/// return type.
+#[allow(clippy::struct_excessive_bools)] // mirrors Java modifiers
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodDecl {
     pub name: String,
     pub is_static: bool,
     pub is_public: bool,
+    pub is_private: bool,
+    pub is_constructor: bool,
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
@@ -128,10 +147,13 @@ pub struct LocalDeclarator {
 /// The left side of an assignment.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssignTarget {
-    /// `x = ...`
+    /// `x = ...` — a local, an implicit `this` field, or a static
+    /// field of the current class (resolved during codegen).
     Var(String),
     /// `a[i] = ...` (nested for `m[i][j]`: `array` is itself an index).
     Index { array: Box<Expr>, index: Box<Expr> },
+    /// `p.x = ...`, `this.x = ...`, `ClassName.staticField = ...`.
+    Field { object: Box<Expr>, name: String },
 }
 
 /// A binary operator.
@@ -228,6 +250,16 @@ pub enum Expr {
         elements: Vec<Expr>,
         span: SourceSpan,
     },
+    /// The `this` keyword (instance contexts only).
+    This {
+        span: SourceSpan,
+    },
+    /// `new ClassName(args)`.
+    NewObject {
+        class: String,
+        args: Vec<Expr>,
+        span: SourceSpan,
+    },
 }
 
 impl Expr {
@@ -243,7 +275,9 @@ impl Expr {
             | Expr::Index { span, .. }
             | Expr::Field { span, .. }
             | Expr::NewArray { span, .. }
-            | Expr::ArrayLiteral { span, .. } => *span,
+            | Expr::ArrayLiteral { span, .. }
+            | Expr::This { span }
+            | Expr::NewObject { span, .. } => *span,
         }
     }
 }

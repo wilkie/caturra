@@ -7,8 +7,8 @@
 //! problem, not just the first.
 
 use crate::ast::{
-    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, Literal, LocalDeclarator, MethodDecl,
-    Param, Stmt, TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, FieldDecl, Literal, LocalDeclarator,
+    MethodDecl, Param, Stmt, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -38,7 +38,12 @@ fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
         Keyword::Try | Keyword::Throw => Some("exception handling is not yet supported by jvmjs"),
         Keyword::Var => Some("'var' is not supported by jvmjs; write the type explicitly"),
         Keyword::New => Some("object creation with 'new' is not yet supported by jvmjs"),
-        Keyword::Int | Keyword::Double | Keyword::Boolean | Keyword::Char | Keyword::Final => None,
+        Keyword::Int
+        | Keyword::Double
+        | Keyword::Boolean
+        | Keyword::Char
+        | Keyword::Final
+        | Keyword::This => None,
         _ => Some("this statement is not yet supported by jvmjs"),
     }
 }
@@ -67,16 +72,47 @@ fn increment_statement(
 }
 
 /// Convert an expression to an assignment target, if it has the right
-/// shape (`x` or `a[i]`).
+/// shape (`x`, `a[i]`, `p.x`, `this.x`).
 fn assignment_target(expr: &Expr) -> Option<AssignTarget> {
     match expr {
         Expr::Name { path, .. } if path.len() == 1 => Some(AssignTarget::Var(path[0].clone())),
+        Expr::Name { path, span } if path.len() > 1 => {
+            // `p.x` / `ClassName.staticField`: peel the last segment.
+            let (field, object_path) = path.split_last().expect("len > 1");
+            Some(AssignTarget::Field {
+                object: Box::new(Expr::Name {
+                    path: object_path.to_vec(),
+                    span: *span,
+                }),
+                name: field.clone(),
+            })
+        }
         Expr::Index { array, index, .. } => Some(AssignTarget::Index {
             array: array.clone(),
             index: index.clone(),
         }),
+        Expr::Field { object, name, .. } => Some(AssignTarget::Field {
+            object: object.clone(),
+            name: name.clone(),
+        }),
         _ => None,
     }
+}
+
+/// Parsed member modifiers.
+#[allow(clippy::struct_excessive_bools)] // mirrors Java modifiers
+#[derive(Debug, Default, Clone, Copy)]
+struct Modifiers {
+    is_public: bool,
+    is_private: bool,
+    is_static: bool,
+    is_final: bool,
+}
+
+/// One parsed class member.
+enum Member {
+    Fields(Vec<FieldDecl>),
+    Method(MethodDecl),
 }
 
 /// Internal marker: a construct failed to parse and a diagnostic was
@@ -251,25 +287,30 @@ impl Parser<'_> {
     /// Modifier keywords before a class or member. Returns
     /// `(is_public, is_static)`; other modifiers parse and are ignored
     /// for now.
-    fn modifiers(&mut self) -> (bool, bool) {
-        let mut is_public = false;
-        let mut is_static = false;
+    fn modifiers(&mut self) -> Modifiers {
+        let mut modifiers = Modifiers::default();
         loop {
             match self.peek() {
                 Some(TokenKind::Keyword(Keyword::Public)) => {
-                    is_public = true;
+                    modifiers.is_public = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Static)) => {
-                    is_static = true;
+                    modifiers.is_static = true;
                     self.pos += 1;
                 }
-                Some(TokenKind::Keyword(
-                    Keyword::Private | Keyword::Protected | Keyword::Final | Keyword::Abstract,
-                )) => {
+                Some(TokenKind::Keyword(Keyword::Private)) => {
+                    modifiers.is_private = true;
                     self.pos += 1;
                 }
-                _ => return (is_public, is_static),
+                Some(TokenKind::Keyword(Keyword::Final)) => {
+                    modifiers.is_final = true;
+                    self.pos += 1;
+                }
+                Some(TokenKind::Keyword(Keyword::Protected | Keyword::Abstract)) => {
+                    self.pos += 1;
+                }
+                _ => return modifiers,
             }
         }
     }
@@ -308,6 +349,7 @@ impl Parser<'_> {
 
         self.expect_symbol("{", "to open the class body")?;
         let mut methods = Vec::new();
+        let mut fields = Vec::new();
         while !self.at_symbol("}") {
             if self.peek().is_none() {
                 self.error_at(
@@ -316,8 +358,11 @@ impl Parser<'_> {
                 );
                 break;
             }
-            if let Ok(method) = self.member() {
-                methods.push(method);
+            if let Ok(member) = self.member(&name) {
+                match member {
+                    Member::Method(method) => methods.push(method),
+                    Member::Fields(mut declared) => fields.append(&mut declared),
+                }
             } else {
                 self.recover_to_statement_boundary();
                 self.eat_symbol(";");
@@ -327,6 +372,7 @@ impl Parser<'_> {
 
         Ok(ClassDecl {
             name,
+            fields,
             methods,
             span: SourceSpan {
                 start: start.start,
@@ -335,23 +381,87 @@ impl Parser<'_> {
         })
     }
 
-    fn member(&mut self) -> Parsed<MethodDecl> {
+    fn member(&mut self, class_name: &str) -> Parsed<Member> {
         let start = self.here();
-        let (is_public, is_static) = self.modifiers();
-        let return_type = self.type_ref()?;
-        let (name, name_span) = self.expect_ident("for the class member")?;
+        let modifiers = self.modifiers();
 
-        if !self.at_symbol("(") {
-            self.error_at(
-                SourceSpan {
+        // Constructor: `ClassName(...)` with no return type.
+        if let Some(TokenKind::Identifier(name)) = self.peek()
+            && name == class_name
+            && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
+        {
+            let (name, name_span) = self.expect_ident("for the constructor")?;
+            let (params, body) = self.method_rest(name_span)?;
+            return Ok(Member::Method(MethodDecl {
+                name,
+                is_static: false,
+                is_public: modifiers.is_public,
+                is_private: modifiers.is_private,
+                is_constructor: true,
+                return_type: TypeRef::Void,
+                params,
+                body,
+                span: SourceSpan {
                     start: start.start,
                     end: name_span.end,
                 },
-                "field declarations are not yet supported by jvmjs",
-            );
-            return Err(Abort);
+            }));
         }
 
+        let member_type = self.type_ref()?;
+        let (name, name_span) = self.expect_ident("for the class member")?;
+
+        if !self.at_symbol("(") {
+            // Field declaration(s): `int x = 1, y;`.
+            let mut fields = Vec::new();
+            let mut current = (name, name_span);
+            loop {
+                let init = if self.eat_symbol("=") {
+                    if self.at_symbol("{") {
+                        Some(self.array_literal()?)
+                    } else {
+                        Some(self.expression()?)
+                    }
+                } else {
+                    None
+                };
+                fields.push(FieldDecl {
+                    name: current.0,
+                    ty: member_type.clone(),
+                    is_static: modifiers.is_static,
+                    is_private: modifiers.is_private,
+                    is_final: modifiers.is_final,
+                    init,
+                    span: current.1,
+                });
+                if !self.eat_symbol(",") {
+                    break;
+                }
+                current = self.expect_ident("for the field")?;
+            }
+            self.expect_symbol(";", "to end the field declaration")?;
+            return Ok(Member::Fields(fields));
+        }
+
+        let (params, body) = self.method_rest(name_span)?;
+        Ok(Member::Method(MethodDecl {
+            name,
+            is_static: modifiers.is_static,
+            is_public: modifiers.is_public,
+            is_private: modifiers.is_private,
+            is_constructor: false,
+            return_type: member_type,
+            params,
+            body,
+            span: SourceSpan {
+                start: start.start,
+                end: name_span.end,
+            },
+        }))
+    }
+
+    /// Parameter list and body, shared by methods and constructors.
+    fn method_rest(&mut self, name_span: SourceSpan) -> Parsed<(Vec<Param>, Vec<Stmt>)> {
         self.expect_symbol("(", "to open the parameter list")?;
         let mut params = Vec::new();
         if !self.at_symbol(")") {
@@ -375,19 +485,7 @@ impl Parser<'_> {
         }
         self.expect_symbol("{", "to open the method body")?;
         let body = self.block_body();
-
-        Ok(MethodDecl {
-            name,
-            is_static,
-            is_public,
-            return_type,
-            params,
-            body,
-            span: SourceSpan {
-                start: start.start,
-                end: name_span.end,
-            },
-        })
+        Ok((params, body))
     }
 
     fn type_ref(&mut self) -> Parsed<TypeRef> {
@@ -1096,12 +1194,17 @@ impl Parser<'_> {
         };
 
         if self.at_symbol("(") {
-            self.error_at(
-                start,
-                "object creation with 'new' is not yet supported by jvmjs \
-                 (arrays work: new int[10])",
-            );
-            return Err(Abort);
+            // `new ClassName(args)` — object creation.
+            let TypeRef::Named(class) = base else {
+                self.error_at(start, "primitive types cannot be constructed with 'new'");
+                return Err(Abort);
+            };
+            let args = self.arguments()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: self.here().start,
+            };
+            return Ok(Expr::NewObject { class, args, span });
         }
 
         let mut dims: Vec<Option<Expr>> = Vec::new();
@@ -1249,8 +1352,20 @@ impl Parser<'_> {
                 Ok(inner)
             }
             Some(TokenKind::Keyword(Keyword::New)) => self.new_expression(),
-            Some(TokenKind::Keyword(Keyword::This | Keyword::Super)) => {
-                self.error_here("'this' and 'super' are not yet supported by jvmjs");
+            Some(TokenKind::Keyword(Keyword::This)) => {
+                let span = self.here();
+                self.pos += 1;
+                if self.at_symbol("(") {
+                    self.error_at(
+                        span,
+                        "constructor chaining with this(...) is not yet supported by jvmjs",
+                    );
+                    return Err(Abort);
+                }
+                Ok(Expr::This { span })
+            }
+            Some(TokenKind::Keyword(Keyword::Super)) => {
+                self.error_here("'super' is not yet supported by jvmjs");
                 Err(Abort)
             }
             _ => {
@@ -1698,21 +1813,52 @@ mod tests {
     }
 
     #[test]
-    fn recovery_continues_after_bad_member() {
-        let errors = parse_errors(
+    fn parses_fields_constructors_and_this() {
+        let unit = parse_ok(
             r#"
-            class Main {
-                int field = 3;
-                static void ok() { System.out.println("fine"); }
+            class Account {
+                private double balance;
+                private static int count = 0;
+                public final String id = "A";
+
+                public Account(double start) {
+                    this.balance = start;
+                }
+
+                public double getBalance() { return this.balance; }
+            }
+            class Uses {
+                static void f() {
+                    Account a = new Account(100.0);
+                    System.out.println(a.getBalance());
+                }
             }
             "#,
         );
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0]
-                .message
-                .contains("field declarations are not yet supported")
-        );
+        let account = &unit.classes[0];
+        assert_eq!(account.fields.len(), 3);
+        assert!(account.fields[0].is_private && !account.fields[0].is_static);
+        assert!(account.fields[1].is_static && account.fields[1].init.is_some());
+        assert!(account.fields[2].is_final);
+        let ctor = &account.methods[0];
+        assert!(ctor.is_constructor);
+        assert_eq!(ctor.params.len(), 1);
+        // this.balance = start; parses as a field assignment on `this`.
+        let Stmt::Assign {
+            target: AssignTarget::Field { object, name },
+            ..
+        } = &ctor.body[0]
+        else {
+            panic!("expected field assignment, got {:?}", ctor.body[0]);
+        };
+        assert!(matches!(**object, Expr::This { .. }));
+        assert_eq!(name, "balance");
+        // new Account(100.0) in the second class.
+        let uses_body = &unit.classes[1].methods[0].body;
+        let Stmt::LocalDecl { declarators, .. } = &uses_body[0] else {
+            panic!("expected declaration");
+        };
+        assert!(matches!(declarators[0].init, Some(Expr::NewObject { .. })));
     }
 
     #[test]
