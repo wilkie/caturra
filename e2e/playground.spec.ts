@@ -1,4 +1,29 @@
 import { expect, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+
+/** The editor's automation hooks installed by the playground page. */
+interface PlaygroundHooks {
+  setSource: (text: string) => void;
+  getSource: () => string;
+  toggleBreakpoint: (line: number) => void;
+  breakpointLines: () => number[];
+}
+
+/** Replace the CodeMirror document (typing via contenteditable is flaky). */
+async function setSource(page: Page, text: string): Promise<void> {
+  await page.waitForFunction(
+    () => (window as unknown as { playground?: PlaygroundHooks }).playground !== undefined,
+  );
+  await page.evaluate((t) => {
+    (window as unknown as { playground: PlaygroundHooks }).playground.setSource(t);
+  }, text);
+}
+
+async function toggleBreakpoint(page: Page, line: number): Promise<void> {
+  await page.evaluate((l) => {
+    (window as unknown as { playground: PlaygroundHooks }).playground.toggleBreakpoint(l);
+  }, line);
+}
 
 test.describe('playground', () => {
   test('loads the WASM engine in a worker and shows its version', async ({ page }) => {
@@ -23,7 +48,7 @@ test.describe('playground', () => {
 
   test('reports source errors with locations', async ({ page }) => {
     await page.goto('/');
-    await page.getByTestId('source').fill('class Main { String s = "oops; }');
+    await setSource(page, 'class Main { String s = "oops; }');
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
       'Main.java:1:25: error: unterminated string literal',
@@ -32,20 +57,19 @@ test.describe('playground', () => {
 
   test('runs a stage-1 program with locals, operators, and concat', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        int a = 6, b = 7;',
-          '        String answer = "a * b = " + a * b;',
-          '        System.out.println(answer);',
-          '        System.out.println(a * b == 42 && a < b);',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        int a = 6, b = 7;',
+        '        String answer = "a * b = " + a * b;',
+        '        System.out.println(answer);',
+        '        System.out.println(a * b == 42 && a < b);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     const consoleOutput = page.getByTestId('console');
     await expect(consoleOutput).toContainText('a * b = 42');
@@ -54,18 +78,17 @@ test.describe('playground', () => {
 
   test('reports runtime exceptions like java does', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        int zero = 0;',
-          '        System.out.println(1 / zero);',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        int zero = 0;',
+        '        System.out.println(1 / zero);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
       'java.lang.ArithmeticException: / by zero',
@@ -74,139 +97,133 @@ test.describe('playground', () => {
 
   test('runs loops with control flow in the browser', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        String out = "";',
-          '        for (int i = 1; i <= 5; i++) {',
-          '            if (i == 3) continue;',
-          '            out += i;',
-          '        }',
-          '        System.out.println(out);',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        String out = "";',
+        '        for (int i = 1; i <= 5; i++) {',
+        '            if (i == 3) continue;',
+        '            out += i;',
+        '        }',
+        '        System.out.println(out);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('1245');
   });
 
   test('runs recursive methods in the browser', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    static int fib(int n) {',
-          '        if (n < 2) return n;',
-          '        return fib(n - 1) + fib(n - 2);',
-          '    }',
-          '',
-          '    public static void main(String[] args) {',
-          '        System.out.println("fib(12) = " + fib(12));',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    static int fib(int n) {',
+        '        if (n < 2) return n;',
+        '        return fib(n - 1) + fib(n - 2);',
+        '    }',
+        '',
+        '    public static void main(String[] args) {',
+        '        System.out.println("fib(12) = " + fib(12));',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('fib(12) = 144');
   });
 
   test('runs array programs in the browser', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        int[] scores = {90, 85, 77, 100};',
-          '        int best = scores[0];',
-          '        for (int s : scores) {',
-          '            if (s > best) best = s;',
-          '        }',
-          '        System.out.println("best of " + scores.length + ": " + best);',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        int[] scores = {90, 85, 77, 100};',
+        '        int best = scores[0];',
+        '        for (int s : scores) {',
+        '            if (s > best) best = s;',
+        '        }',
+        '        System.out.println("best of " + scores.length + ": " + best);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('best of 4: 100');
   });
 
   test('runs user-defined classes in the browser', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'class Dice {',
-          '    private int sides;',
-          '    Dice(int sides) { this.sides = sides; }',
-          '    int max() { return sides; }',
-          '}',
-          '',
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        Dice d = new Dice(20);',
-          '        System.out.println("d" + d.max());',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'class Dice {',
+        '    private int sides;',
+        '    Dice(int sides) { this.sides = sides; }',
+        '    int max() { return sides; }',
+        '}',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Dice d = new Dice(20);',
+        '        System.out.println("d" + d.max());',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('d20');
   });
 
   test('runs polymorphic hierarchies in the browser', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'interface Noise { String sound(); }',
-          'class Cat implements Noise {',
-          '    public String sound() { return "meow"; }',
-          '}',
-          'class Cow implements Noise {',
-          '    public String sound() { return "moo"; }',
-          '}',
-          '',
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        Noise[] farm = { new Cat(), new Cow() };',
-          '        for (Noise n : farm) System.out.print(n.sound() + " ");',
-          '        System.out.println();',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'interface Noise { String sound(); }',
+        'class Cat implements Noise {',
+        '    public String sound() { return "meow"; }',
+        '}',
+        'class Cow implements Noise {',
+        '    public String sound() { return "moo"; }',
+        '}',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Noise[] farm = { new Cat(), new Cow() };',
+        '        for (Noise n : farm) System.out.print(n.sound() + " ");',
+        '        System.out.println();',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('meow moo');
   });
 
   test('Scanner reads the stdin box through SharedArrayBuffer', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'import java.util.Scanner;',
-          '',
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        Scanner in = new Scanner(System.in);',
-          '        String name = in.nextLine();',
-          '        int age = in.nextInt();',
-          '        System.out.println("Hello " + name + ", age " + (age + 1) + " next year!");',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'import java.util.Scanner;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Scanner in = new Scanner(System.in);',
+        '        String name = in.nextLine();',
+        '        int age = in.nextInt();',
+        '        System.out.println("Hello " + name + ", age " + (age + 1) + " next year!");',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('stdin').fill('Ada\n36');
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('Hello Ada, age 37 next year!');
@@ -214,73 +231,70 @@ test.describe('playground', () => {
 
   test('runs ArrayList programs in the browser', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'import java.util.ArrayList;',
-          '',
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        ArrayList<Integer> squares = new ArrayList<>();',
-          '        for (int i = 1; i <= 4; i++) squares.add(i * i);',
-          '        System.out.println(squares);',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'import java.util.ArrayList;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        ArrayList<Integer> squares = new ArrayList<>();',
+        '        for (int i = 1; i <= 4; i++) squares.add(i * i);',
+        '        System.out.println(squares);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('[1, 4, 9, 16]');
   });
 
   test('reads and writes virtual files in the browser', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'import java.io.File;',
-          'import java.io.PrintWriter;',
-          'import java.util.Scanner;',
-          '',
-          'public class Main {',
-          '    public static void main(String[] args) throws Exception {',
-          '        PrintWriter out = new PrintWriter("notes.txt");',
-          '        out.println("virtual filesystem");',
-          '        out.close();',
-          '        Scanner in = new Scanner(new File("notes.txt"));',
-          '        System.out.println("read back: " + in.nextLine());',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'import java.io.File;',
+        'import java.io.PrintWriter;',
+        'import java.util.Scanner;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) throws Exception {',
+        '        PrintWriter out = new PrintWriter("notes.txt");',
+        '        out.println("virtual filesystem");',
+        '        out.close();',
+        '        Scanner in = new Scanner(new File("notes.txt"));',
+        '        System.out.println("read back: " + in.nextLine());',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText('read back: virtual filesystem');
   });
 
   test('debugger pauses at a breakpoint, shows locals, steps, resumes', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    static int twice(int n) {',
-          '        return n * 2;',
-          '    }',
-          '',
-          '    public static void main(String[] args) {',
-          '        int total = 0;',
-          '        for (int i = 1; i <= 2; i++) {',
-          '            total += twice(i);',
-          '        }',
-          '        System.out.println("total " + total);',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    static int twice(int n) {',
+        '        return n * 2;',
+        '    }',
+        '',
+        '    public static void main(String[] args) {',
+        '        int total = 0;',
+        '        for (int i = 1; i <= 2; i++) {',
+        '            total += twice(i);',
+        '        }',
+        '        System.out.println("total " + total);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     // Flag line 9 (`total += twice(i);`) the traditional way.
-    await page.getByTestId('breakpoints').fill('9');
+    await toggleBreakpoint(page, 9);
     await page.getByTestId('debug').click();
 
     // First arrival: paused with locals i=1, total=0.
@@ -307,19 +321,18 @@ test.describe('playground', () => {
 
   test('debugger stop button terminates the program', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        System.out.println("before");',
-          '        System.out.println("after");',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
-    await page.getByTestId('breakpoints').fill('4');
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        System.out.println("before");',
+        '        System.out.println("after");',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await toggleBreakpoint(page, 4);
     await page.getByTestId('debug').click();
     await expect(page.getByTestId('frames')).toContainText('Main.main (Main.java:4)');
     await page.getByTestId('stop').click();
@@ -329,20 +342,88 @@ test.describe('playground', () => {
     expect(consoleText).not.toContain('after');
   });
 
+  test('clicking a line number toggles a breakpoint dot and the debugger honors it', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        int a = 1;',
+        '        int b = 2;',
+        '        System.out.println(a + b);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+
+    // A real gutter interaction: click the "4" line number.
+    await page.locator('.cm-lineNumbers .cm-gutterElement', { hasText: /^4$/ }).click();
+    await expect(page.locator('.cm-breakpoint-dot')).toHaveCount(1);
+
+    // Clicking again clears it; once more re-sets it for the run.
+    await page.locator('.cm-lineNumbers .cm-gutterElement', { hasText: /^4$/ }).click();
+    await expect(page.locator('.cm-breakpoint-dot')).toHaveCount(0);
+    await page.locator('.cm-lineNumbers .cm-gutterElement', { hasText: /^4$/ }).click();
+
+    await page.getByTestId('debug').click();
+    await expect(page.getByTestId('frames')).toContainText('Main.main (Main.java:4)');
+    // The paused line is highlighted in the editor.
+    await expect(page.locator('.cm-paused-line')).toHaveCount(1);
+    await expect(page.locator('.cm-paused-line')).toContainText('int b = 2;');
+
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('3');
+    await expect(page.locator('.cm-paused-line')).toHaveCount(0);
+  });
+
+  test('breakpoints toggled while paused take effect on resume', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        System.out.println("one");',
+        '        System.out.println("two");',
+        '        System.out.println("three");',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await toggleBreakpoint(page, 3);
+    await page.getByTestId('debug').click();
+    await expect(page.getByTestId('frames')).toContainText('Main.java:3');
+
+    // While paused, add a breakpoint on line 5 and drop the one on 3.
+    await toggleBreakpoint(page, 5);
+    await toggleBreakpoint(page, 3);
+    await page.getByTestId('resume').click();
+
+    // It pauses again — at the new line, after printing one and two.
+    await expect(page.getByTestId('frames')).toContainText('Main.java:5');
+    const consoleText = await page.getByTestId('console').textContent();
+    expect(consoleText).toContain('two');
+    expect(consoleText).not.toContain('three');
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('three');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
-    await page
-      .getByTestId('source')
-      .fill(
-        [
-          'public class Main {',
-          '    public static void main(String[] args) {',
-          '        long big = 5000000000L;',
-          '        System.out.println(big);',
-          '    }',
-          '}',
-        ].join('\n'),
-      );
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        long big = 5000000000L;',
+        '        System.out.println(big);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
       'only int, double, boolean, and char primitives are supported',

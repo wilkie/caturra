@@ -5,6 +5,14 @@ import {
   type DebugPauseSnapshot,
   type Diagnostic,
 } from '@jvmjs/core';
+import {
+  breakpointLines,
+  createEditor,
+  getSource,
+  setPausedLine,
+  setSource,
+  toggleBreakpointAtLine,
+} from './editor.js';
 
 const DEFAULT_PROGRAM = `public class Main {
     public static void main(String[] args) {
@@ -21,18 +29,40 @@ function mustGet<T extends Element>(selector: string, type: new () => T): T {
   return element;
 }
 
-const sourceEl = mustGet('#source', HTMLTextAreaElement);
+const sourceEl = mustGet('#source', HTMLDivElement);
 const stdinEl = mustGet('#stdin', HTMLTextAreaElement);
 const consoleEl = mustGet('#console', HTMLPreElement);
 const runEl = mustGet('#run', HTMLButtonElement);
 const versionEl = mustGet('#engine-version', HTMLSpanElement);
-const breakpointsEl = mustGet('#breakpoints', HTMLInputElement);
 const debugEl = mustGet('#debug', HTMLButtonElement);
 const debugBarEl = mustGet('#debug-bar', HTMLDivElement);
 const pausedViewEl = mustGet('#paused-view', HTMLDivElement);
 const framesEl = mustGet('#frames', HTMLPreElement);
 
-sourceEl.value = DEFAULT_PROGRAM;
+const editor = createEditor(sourceEl, DEFAULT_PROGRAM);
+
+// Stable automation hooks (Playwright drives the editor through these
+// rather than through CodeMirror's contenteditable internals).
+declare global {
+  interface Window {
+    playground: {
+      setSource: (text: string) => void;
+      getSource: () => string;
+      toggleBreakpoint: (line: number) => void;
+      breakpointLines: () => number[];
+    };
+  }
+}
+window.playground = {
+  setSource: (text) => {
+    setSource(editor, text);
+  },
+  getSource: () => getSource(editor),
+  toggleBreakpoint: (line) => {
+    toggleBreakpointAtLine(editor, line);
+  },
+  breakpointLines: () => breakpointLines(editor),
+};
 
 function append(text: string, kind: 'normal' | 'error' = 'normal'): void {
   const span = document.createElement('span');
@@ -68,11 +98,8 @@ async function main(): Promise<void> {
   });
 }
 
-function parseBreakpointLines(): number[] {
-  return breakpointsEl.value
-    .split(',')
-    .map((part) => Number.parseInt(part.trim(), 10))
-    .filter((line) => Number.isFinite(line) && line > 0);
+function currentBreakpoints(): { file: string; line: number }[] {
+  return breakpointLines(editor).map((line) => ({ file: 'Main.java', line }));
 }
 
 function renderPause(snapshot: DebugPauseSnapshot): void {
@@ -122,7 +149,7 @@ async function debugProgram(): Promise<void> {
   try {
     const session = await sessionReady;
     append('$ javac Main.java\n');
-    const compiled = await session.compile([{ path: 'Main.java', text: sourceEl.value }]);
+    const compiled = await session.compile([{ path: 'Main.java', text: getSource(editor) }]);
     for (const diagnostic of compiled.diagnostics) {
       append(formatDiagnostic(diagnostic), diagnostic.severity === 'error' ? 'error' : 'normal');
     }
@@ -131,7 +158,7 @@ async function debugProgram(): Promise<void> {
       const stdinLines = stdinEl.value === '' ? [] : stdinEl.value.split('\n');
       const result = await session.runDebug('Main', {
         stdin: stdinLines,
-        breakpoints: parseBreakpointLines().map((line) => ({ file: 'Main.java', line })),
+        breakpoints: currentBreakpoints(),
         onStdout: (text) => {
           append(text);
         },
@@ -140,14 +167,19 @@ async function debugProgram(): Promise<void> {
         },
         onPause: async (snapshot): Promise<DebugControlResponse> => {
           renderPause(snapshot);
+          setPausedLine(editor, snapshot.frames[0]?.line ?? null);
           debugBarEl.hidden = false;
           const command = await nextDebugCommand();
           pausedViewEl.hidden = true;
-          return { command };
+          setPausedLine(editor, null);
+          // Send the gutter's current state along: breakpoints toggled
+          // while paused take effect on resume.
+          return { command, breakpoints: currentBreakpoints() };
         },
       });
       debugBarEl.hidden = true;
       pausedViewEl.hidden = true;
+      setPausedLine(editor, null);
       if (result.status === 'error') {
         append(`${result.error ?? 'unknown VM error'}\n`, 'error');
       } else if (result.status === 'stopped') {
@@ -170,7 +202,7 @@ async function runProgram(): Promise<void> {
   try {
     const session = await sessionReady;
     append('$ javac Main.java\n');
-    const compiled = await session.compile([{ path: 'Main.java', text: sourceEl.value }]);
+    const compiled = await session.compile([{ path: 'Main.java', text: getSource(editor) }]);
     for (const diagnostic of compiled.diagnostics) {
       append(formatDiagnostic(diagnostic), diagnostic.severity === 'error' ? 'error' : 'normal');
     }

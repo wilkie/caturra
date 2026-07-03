@@ -55,11 +55,15 @@ label {
   flex: 1;
 }
 
+#console,
+#stdin {
+  padding: 0.75rem;
+}
+
 #source,
 #console,
 #stdin {
   margin: 0;
-  padding: 0.75rem;
   font-family: ui-monospace, 'Cascadia Code', monospace;
   font-size: 0.9rem;
   border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
@@ -103,4 +107,51 @@ label {
   margin: 0;
   font-size: 0.85rem;
   white-space: pre-wrap;
+}
+
+/* ----- CodeMirror editor ----- */
+
+#source .cm-editor {
+  height: 100%;
+  font-size: 0.9rem;
+}
+
+#source .cm-editor.cm-focused {
+  outline: none;
+}
+
+#source .cm-scroller {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+}
+
+.hint {
+  font-weight: normal;
+  opacity: 0.65;
+  font-size: 0.8rem;
+}
+
+/* Line numbers are click targets for breakpoints. */
+.cm-lineNumbers .cm-gutterElement {
+  cursor: pointer;
+  min-width: 2.2em;
+}
+
+.cm-breakpoint-gutter .cm-gutterElement {
+  width: 0.9em;
+  cursor: pointer;
+}
+
+.cm-breakpoint-spacer {
+  visibility: hidden;
+  font-size: 0.8em;
+}
+
+.cm-breakpoint-dot {
+  color: #d92d20;
+  font-size: 0.8em;
+  line-height: 1;
+}
+
+.cm-paused-line {
+  background: color-mix(in srgb, #f9c74f 35%, transparent);
 }

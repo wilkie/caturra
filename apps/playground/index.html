@@ -13,12 +13,10 @@
     </header>
     <main>
       <section class="editor-pane">
-        <label for="source">Main.java</label>
-        <textarea id="source" data-testid="source" spellcheck="false"></textarea>
+        <label>Main.java <span class="hint">(click a line number to set a breakpoint)</span></label>
+        <div id="source" data-testid="source"></div>
         <label for="stdin">Program input (one line per Scanner read)</label>
         <textarea id="stdin" data-testid="stdin" rows="3" spellcheck="false"></textarea>
-        <label for="breakpoints">Breakpoints (line numbers, comma-separated)</label>
-        <input id="breakpoints" data-testid="breakpoints" placeholder="e.g. 3, 7" />
         <div class="run-row">
           <button id="run" data-testid="run" disabled>Compile &amp; Run</button>
           <button id="debug" data-testid="debug" disabled>Debug</button>

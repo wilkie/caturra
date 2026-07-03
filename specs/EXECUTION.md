@@ -80,7 +80,12 @@ standard class-file metadata so the pipeline stays honest:
   clicks resolve the command. `requestPause()` sets a shared interrupt
   flag — also the stop button for runaway loops. Requires cross-origin
   isolation, like stdin.
-- The playground has a minimal panel (line-number breakpoints, step
-  buttons, frames/locals view). A real editor gutter (CodeMirror) is
-  the intended next step; breakpoints are already keyed by (file, line)
-  so the UI change is purely presentational.
+- The playground editor is CodeMirror 6 (bundled locally — no CDN)
+  with Java syntax and the traditional debug UX: clicking a line
+  number toggles a red breakpoint dot in a dedicated gutter, the
+  paused line is highlighted and scrolled into view, and gutter edits
+  made while paused ride back on the resume command's breakpoint
+  replacement. Playwright drives the editor through
+  `window.playground` hooks (setSource/toggleBreakpoint) rather than
+  CodeMirror's contenteditable internals; one test exercises the real
+  line-number click path.
