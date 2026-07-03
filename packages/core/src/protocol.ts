@@ -33,6 +33,7 @@ export type WorkerRequest =
       mainClass: string;
       args: string[];
       breakpoints: DebugBreakpoint[];
+      watches: string[];
       /** Blocking command channel: the worker parks here while paused. */
       debugBuffer: SharedArrayBuffer;
       /** Pause-button flag, polled by the engine between instructions. */

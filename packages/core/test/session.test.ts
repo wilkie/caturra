@@ -503,7 +503,7 @@ public class Deep {
     expect(pauses[0]?.reason).toBe('breakpoint');
     expect(pauses[0]?.frames[0]?.methodName).toBe('main');
     expect(pauses[0]?.frames[0]?.line).toBe(10);
-    const locals0 = new Map(pauses[0]?.frames[0]?.locals);
+    const locals0 = new Map(pauses[0]?.frames[0]?.locals.map((l) => [l.name, l.value]));
     expect(locals0.get('i')).toBe('1');
     expect(locals0.get('sum')).toBe('0');
 
@@ -511,7 +511,7 @@ public class Deep {
     expect(pauses[1]?.reason).toBe('step');
     expect(pauses[1]?.frames[0]?.methodName).toBe('twice');
     expect(pauses[1]?.frames.length).toBe(2);
-    const locals1 = new Map(pauses[1]?.frames[0]?.locals);
+    const locals1 = new Map(pauses[1]?.frames[0]?.locals.map((l) => [l.name, l.value]));
     expect(locals1.get('n')).toBe('1');
 
     // Third pause: stepped out, back in main.
@@ -541,6 +541,60 @@ public class Deep {
     });
     expect(result.status).toBe('stopped');
     expect(stdout.join('')).toBe('');
+  });
+
+  it('evaluates watch expressions at pauses, including refresh rounds', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'W.java',
+        text: `import java.util.ArrayList;
+
+public class W {
+    public static void main(String[] args) {
+        ArrayList<String> names = new ArrayList<>();
+        int count = 0;
+        for (int i = 0; i < 2; i++) {
+            names.add("n" + i);
+            count++;
+        }
+        System.out.println(count);
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.success).toBe(true);
+
+    const rounds: import('../src/index.js').WatchResult[][] = [];
+    let addedWatch = false;
+    const result = session.runDebug('W', {
+      breakpoints: [{ file: 'W.java', line: 9 }], // count++;
+      watches: ['names.size()', 'count * 100'],
+      onPause: (snapshot) => {
+        rounds.push(snapshot.watchResults);
+        if (!addedWatch) {
+          // Add a watch while paused: refresh re-evaluates in place.
+          addedWatch = true;
+          return {
+            command: 'refresh',
+            watches: ['names.size()', 'count * 100', 'names.get(0).toUpperCase()'],
+          };
+        }
+        return { command: 'continue' };
+      },
+    });
+    expect(result.status).toBe('completed');
+
+    // Round 1: initial watches at the first pause.
+    expect(rounds[0]?.map((w) => w.value)).toEqual(['1', '0']);
+    // Round 2: same pause after refresh, with the added watch live.
+    expect(rounds[1]?.map((w) => w.value)).toEqual(['1', '0', 'N0']);
+    // Round 3: second loop iteration, values advanced.
+    expect(rounds[2]?.map((w) => w.value)).toEqual(['2', '100', 'N0']);
+
+    // Typed locals ride along in the snapshot.
+    expect(result.status).toBe('completed');
   });
 
   it('routes System.err to the stderr callback', async () => {

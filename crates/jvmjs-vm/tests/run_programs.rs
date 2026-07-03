@@ -11,7 +11,9 @@ use jvmjs_classfile::{
     AttributeInfo, CODE_ATTRIBUTE, ClassFile, CodeAttribute, Constant, MethodAccessFlags,
     MethodInfo, write_code_attribute,
 };
-use jvmjs_vm::{Breakpoint, DebugCommand, DebugControl, DebugHost, DebugSnapshot, PauseReason};
+use jvmjs_vm::{
+    Breakpoint, DebugCommand, DebugControl, DebugHost, DebugSnapshot, PauseReason, WatchEvaluator,
+};
 use jvmjs_vm::{BufferedConsole, ExitStatus, VirtualFileSystem, Vm, VmError, VmOptions};
 
 /// Assemble a class equivalent to:
@@ -2263,7 +2265,7 @@ impl ScriptedHost {
 }
 
 impl DebugHost for ScriptedHost {
-    fn on_pause(&mut self, snapshot: &DebugSnapshot) -> DebugControl {
+    fn on_pause(&mut self, snapshot: &DebugSnapshot, _: &mut dyn WatchEvaluator) -> DebugControl {
         self.pauses.push(snapshot.clone());
         let command = self
             .script
@@ -2348,9 +2350,9 @@ fn breakpoint_pauses_each_arrival_with_named_locals() {
         assert_eq!(top.line, Some(10));
         // Named locals with values at the pause point.
         let get = |name: &str| {
-            top.locals.iter().find(|(n, _)| n == name).map_or_else(
+            top.locals.iter().find(|l| l.name == name).map_or_else(
                 || panic!("missing local {name}: {:?}", top.locals),
-                |(_, v)| v.clone(),
+                |l| l.value.clone(),
             )
         };
         let i = i32::try_from(index).expect("small index") + 1;
@@ -2387,8 +2389,8 @@ fn step_into_descends_and_step_out_returns() {
     let x = inside.frames[0]
         .locals
         .iter()
-        .find(|(n, _)| n == "x")
-        .map(|(_, v)| v.clone());
+        .find(|l| l.name == "x")
+        .map(|l| l.value.clone());
     assert_eq!(x.as_deref(), Some("1"));
 
     // Pause 3: stepped out, back in main.
@@ -2440,7 +2442,11 @@ fn interrupt_pauses_a_running_loop() {
         paused: bool,
     }
     impl DebugHost for InterruptingHost {
-        fn on_pause(&mut self, snapshot: &DebugSnapshot) -> DebugControl {
+        fn on_pause(
+            &mut self,
+            snapshot: &DebugSnapshot,
+            _: &mut dyn WatchEvaluator,
+        ) -> DebugControl {
             assert_eq!(snapshot.reason, PauseReason::Interrupt);
             self.paused = true;
             DebugControl {
@@ -2602,6 +2608,148 @@ fn local_variable_shadows_the_java_package() {
         "Obscured",
     );
     assert_eq!(out, "7\n");
+}
+
+// ----- watch expressions -----
+
+/// Mimics the wasm boundary's watch orchestration: synthesize a class
+/// whose static method's parameters mirror the paused frame's locals,
+/// compile it with the program sources, and evaluate in the VM.
+fn eval_watch(
+    expression: &str,
+    program: &str,
+    snapshot: &DebugSnapshot,
+    watch: &mut dyn WatchEvaluator,
+) -> Result<String, String> {
+    let frame = snapshot.frames.first().ok_or("no frame")?;
+    let usable: Vec<_> = frame
+        .locals
+        .iter()
+        .filter(|l| l.name != "this" && !l.type_name.is_empty())
+        .collect();
+    let params = usable
+        .iter()
+        .map(|l| format!("{} {}", l.type_name, l.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let names: Vec<String> = usable.iter().map(|l| l.name.clone()).collect();
+    let source = format!(
+        "class __JvmjsWatch {{ static String __eval({params}) {{ return \"\" + ({expression}); }} }}"
+    );
+    let compilation = jvmjs_compiler::compile(&[
+        jvmjs_compiler::SourceFile {
+            path: "Program.java".into(),
+            text: program.into(),
+        },
+        jvmjs_compiler::SourceFile {
+            path: "__JvmjsWatch.java".into(),
+            text: source,
+        },
+    ]);
+    if !compilation.success() {
+        return Err(compilation
+            .diagnostics
+            .iter()
+            .find(|d| d.path == "__JvmjsWatch.java")
+            .map_or_else(
+                || String::from("watch does not compile"),
+                |d| d.message.clone(),
+            ));
+    }
+    let class = compilation
+        .classes
+        .iter()
+        .find(|c| c.binary_name == "__JvmjsWatch")
+        .ok_or("watch class missing")?;
+    watch.evaluate(&class.class_file, "__eval", &names)
+}
+
+#[test]
+fn watch_expressions_see_live_state() {
+    const PROGRAM: &str = r"
+import java.util.ArrayList;
+
+public class WatchMe {
+    static int scale(int n) { return n * 10; }
+
+    public static void main(String[] args) {
+        ArrayList<Integer> nums = new ArrayList<>();
+        int total = 0;
+        for (int i = 1; i <= 3; i++) {
+            total += i;
+            nums.add(i);
+        }
+        System.out.println(total);
+    }
+}
+";
+
+    struct WatchingHost {
+        observations: Vec<Vec<Result<String, String>>>,
+    }
+    impl DebugHost for WatchingHost {
+        fn on_pause(
+            &mut self,
+            snapshot: &DebugSnapshot,
+            watch: &mut dyn WatchEvaluator,
+        ) -> DebugControl {
+            let round = [
+                "total * 2 + i",
+                "nums",
+                "nums.size()",
+                "WatchMe.scale(i)",
+                "totall + 1",
+            ]
+            .iter()
+            .map(|expr| eval_watch(expr, PROGRAM, snapshot, watch))
+            .collect();
+            self.observations.push(round);
+            DebugControl {
+                command: DebugCommand::Continue,
+                breakpoints: None,
+            }
+        }
+    }
+
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "WatchMe.java".into(),
+        text: PROGRAM.into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let mut host = WatchingHost {
+        observations: Vec::new(),
+    };
+    // Line 11: `total += i;` inside the loop.
+    let breakpoints = [Breakpoint {
+        file: "WatchMe.java".into(),
+        line: 11,
+    }];
+    let result = vm.run_main_debug("WatchMe", &[], &breakpoints, &mut host);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "6\n");
+    assert_eq!(host.observations.len(), 3);
+
+    // Iteration 2 (i=2, total=1 before +=, nums=[1]).
+    let round = &host.observations[1];
+    assert_eq!(round[0].as_deref(), Ok("4")); // 1*2 + 2
+    assert_eq!(round[1].as_deref(), Ok("[1]"));
+    assert_eq!(round[2].as_deref(), Ok("1"));
+    assert_eq!(round[3].as_deref(), Ok("20")); // scale(2)
+    // The bad watch reports the compiler's javac-style message.
+    let error = round[4].as_ref().unwrap_err();
+    assert!(error.contains("cannot find variable 'totall'"), "{error}");
+
+    // Values advance between pauses: iteration 3 sees updated state.
+    assert_eq!(host.observations[2][1].as_deref(), Ok("[1, 2]"));
+
+    // The program's own output was not polluted by watch evaluation.
+    assert_eq!(console.stdout_text(), "6\n");
 }
 
 #[test]

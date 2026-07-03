@@ -33,6 +33,12 @@
         <div id="paused-view" data-testid="paused-view" hidden>
           <label>Paused</label>
           <pre id="frames" data-testid="frames"></pre>
+          <label for="watch-input">Watches</label>
+          <div class="watch-row">
+            <input id="watch-input" data-testid="watch-input" placeholder="e.g. total * 2" />
+            <button id="watch-add" data-testid="watch-add">Add</button>
+          </div>
+          <ul id="watches" data-testid="watches"></ul>
         </div>
         <label for="console">Console</label>
         <pre id="console" data-testid="console"></pre>

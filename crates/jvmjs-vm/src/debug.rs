@@ -51,6 +51,17 @@ pub struct DebugControl {
     pub breakpoints: Option<Vec<Breakpoint>>,
 }
 
+/// One named local at a pause point.
+#[derive(Debug, Clone)]
+pub struct LocalSnapshot {
+    pub name: String,
+    /// Java source type, fully qualified outside `java.lang` (empty
+    /// when unrepresentable) — enough to synthesize code against.
+    pub type_name: String,
+    /// Rendered value for display.
+    pub value: String,
+}
+
 /// One paused frame, innermost first in [`DebugSnapshot::frames`].
 #[derive(Debug, Clone)]
 pub struct DebugFrameSnapshot {
@@ -59,8 +70,8 @@ pub struct DebugFrameSnapshot {
     pub source_file: String,
     /// Current 1-based source line, when line info covers the pc.
     pub line: Option<u32>,
-    /// Named locals live at the pc: `(name, rendered value)`.
-    pub locals: Vec<(String, String)>,
+    /// Named locals live at the pc.
+    pub locals: Vec<LocalSnapshot>,
 }
 
 /// Everything the host needs to render a paused program.
@@ -70,11 +81,37 @@ pub struct DebugSnapshot {
     pub frames: Vec<DebugFrameSnapshot>,
 }
 
+/// Evaluates watch expressions against the paused program, provided by
+/// the VM to [`DebugHost::on_pause`].
+///
+/// The host compiles a watch expression into a class holding one
+/// static method whose parameters mirror (by name) the innermost
+/// frame's locals; the VM invokes it with the live values — heap
+/// references and statics shared, so `list.size()` sees the real
+/// list. Runs under a small instruction budget; errors (compile
+/// problems, exceptions, budget) come back as `Err(message)`.
+pub trait WatchEvaluator {
+    /// Invoke `class.{method_name}` with the named locals of the
+    /// innermost paused frame as arguments, returning the rendered
+    /// result.
+    fn evaluate(
+        &mut self,
+        class: &jvmjs_classfile::ClassFile,
+        method_name: &str,
+        param_names: &[String],
+    ) -> Result<String, String>;
+}
+
 /// The host side of a debug session. Supplied to
 /// [`crate::Vm::run_main_debug`].
 pub trait DebugHost {
     /// Execution is paused; block until the user picks a command.
-    fn on_pause(&mut self, snapshot: &DebugSnapshot) -> DebugControl;
+    /// `watch` evaluates expressions against the paused state.
+    fn on_pause(
+        &mut self,
+        snapshot: &DebugSnapshot,
+        watch: &mut dyn WatchEvaluator,
+    ) -> DebugControl;
 
     /// Polled periodically while running: return `true` to request a
     /// pause (a pause button; also how a stop button interrupts an

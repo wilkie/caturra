@@ -50,18 +50,121 @@ struct JsCompileResult {
 struct JsDebugHost<'js> {
     on_pause: &'js js_sys::Function,
     poll_interrupt: Option<&'js js_sys::Function>,
+    /// Active watch expressions, replaceable from pause responses.
+    watches: Vec<String>,
+    /// The program's source files, needed to compile watch classes
+    /// against the user's own classes.
+    sources: &'js [SourceFile],
+}
+
+impl JsDebugHost<'_> {
+    /// Compile and run every active watch against the paused frame.
+    fn evaluate_watches(
+        &self,
+        snapshot: &jvmjs_vm::DebugSnapshot,
+        watch: &mut dyn jvmjs_vm::WatchEvaluator,
+    ) -> Vec<(String, Result<String, String>)> {
+        self.watches
+            .iter()
+            .map(|expression| {
+                (
+                    expression.clone(),
+                    evaluate_watch(expression, snapshot, self.sources, watch),
+                )
+            })
+            .collect()
+    }
+}
+
+/// Synthesize, compile, and evaluate one watch expression in the
+/// innermost paused frame.
+fn evaluate_watch(
+    expression: &str,
+    snapshot: &jvmjs_vm::DebugSnapshot,
+    sources: &[SourceFile],
+    watch: &mut dyn jvmjs_vm::WatchEvaluator,
+) -> Result<String, String> {
+    let frame = snapshot
+        .frames
+        .first()
+        .ok_or_else(|| String::from("no paused frame"))?;
+
+    // Parameters mirror the frame's locals by name; `this` is a
+    // keyword and locals without a source form can't be referenced.
+    let usable: Vec<&jvmjs_vm::LocalSnapshot> = frame
+        .locals
+        .iter()
+        .filter(|l| l.name != "this" && !l.type_name.is_empty())
+        .collect();
+    let params = usable
+        .iter()
+        .map(|l| format!("{} {}", l.type_name, l.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let param_names: Vec<String> = usable.iter().map(|l| l.name.clone()).collect();
+
+    // `"" + (expr)` sidesteps not knowing the expression's type: the
+    // compiler's concat machinery renders every printable type.
+    let watch_source = format!(
+        "class __JvmjsWatch {{\n    static String __eval({params}) \
+         {{\n        return \"\" + ({expression});\n    }}\n}}\n"
+    );
+    let mut all = sources.to_vec();
+    all.push(SourceFile {
+        path: String::from("__JvmjsWatch.java"),
+        text: watch_source,
+    });
+
+    let compilation = jvmjs_compiler::compile(&all);
+    if !compilation.success() {
+        // Report the first diagnostic in the watch itself (javac
+        // wording — same messages the editor shows).
+        let message = compilation
+            .diagnostics
+            .iter()
+            .find(|d| d.path == "__JvmjsWatch.java")
+            .map_or_else(
+                || String::from("the watch expression does not compile"),
+                |d| d.message.clone(),
+            );
+        return Err(message);
+    }
+    let class = compilation
+        .classes
+        .iter()
+        .find(|c| c.binary_name == "__JvmjsWatch")
+        .ok_or_else(|| String::from("watch class missing from compilation"))?;
+
+    watch.evaluate(&class.class_file, "__eval", &param_names)
 }
 
 impl jvmjs_vm::DebugHost for JsDebugHost<'_> {
-    fn on_pause(&mut self, snapshot: &jvmjs_vm::DebugSnapshot) -> jvmjs_vm::DebugControl {
-        let payload = snapshot_to_json(snapshot);
-        let response = self
-            .on_pause
-            .call1(&JsValue::NULL, &JsValue::from_str(&payload))
-            .ok()
-            .and_then(|v| v.as_string())
-            .unwrap_or_default();
-        parse_debug_control(&response)
+    fn on_pause(
+        &mut self,
+        snapshot: &jvmjs_vm::DebugSnapshot,
+        watch: &mut dyn jvmjs_vm::WatchEvaluator,
+    ) -> jvmjs_vm::DebugControl {
+        // Evaluate the active watch list, then keep the host informed
+        // through as many refresh rounds as it asks for (each round
+        // may replace the watch list — e.g. the user added one while
+        // paused — and wants fresh values back).
+        loop {
+            let results = self.evaluate_watches(snapshot, watch);
+            let payload = snapshot_to_json(snapshot, &results);
+            let response = self
+                .on_pause
+                .call1(&JsValue::NULL, &JsValue::from_str(&payload))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default();
+            let (control, refresh) = parse_debug_control(&response);
+            if let Some(watches) = control.watches {
+                self.watches = watches;
+            }
+            if !refresh {
+                return control.control;
+            }
+        }
     }
 
     fn interrupt_requested(&mut self) -> bool {
@@ -73,6 +176,14 @@ impl jvmjs_vm::DebugHost for JsDebugHost<'_> {
 }
 
 #[derive(Serialize)]
+struct JsLocal<'s> {
+    name: &'s str,
+    #[serde(rename = "type")]
+    type_name: &'s str,
+    value: &'s str,
+}
+
+#[derive(Serialize)]
 struct JsSnapshotFrame<'s> {
     #[serde(rename = "className")]
     class_name: &'s str,
@@ -81,16 +192,28 @@ struct JsSnapshotFrame<'s> {
     #[serde(rename = "sourceFile")]
     source_file: &'s str,
     line: Option<u32>,
-    locals: Vec<(&'s str, &'s str)>,
+    locals: Vec<JsLocal<'s>>,
+}
+
+#[derive(Serialize)]
+struct JsWatchResult<'s> {
+    expression: &'s str,
+    value: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
 struct JsSnapshot<'s> {
     reason: &'static str,
     frames: Vec<JsSnapshotFrame<'s>>,
+    #[serde(rename = "watchResults")]
+    watch_results: Vec<JsWatchResult<'s>>,
 }
 
-fn snapshot_to_json(snapshot: &jvmjs_vm::DebugSnapshot) -> String {
+fn snapshot_to_json(
+    snapshot: &jvmjs_vm::DebugSnapshot,
+    watch_results: &[(String, Result<String, String>)],
+) -> String {
     let js = JsSnapshot {
         reason: match snapshot.reason {
             jvmjs_vm::PauseReason::Breakpoint => "breakpoint",
@@ -108,8 +231,20 @@ fn snapshot_to_json(snapshot: &jvmjs_vm::DebugSnapshot) -> String {
                 locals: f
                     .locals
                     .iter()
-                    .map(|(n, v)| (n.as_str(), v.as_str()))
+                    .map(|l| JsLocal {
+                        name: &l.name,
+                        type_name: &l.type_name,
+                        value: &l.value,
+                    })
                     .collect(),
+            })
+            .collect(),
+        watch_results: watch_results
+            .iter()
+            .map(|(expression, outcome)| JsWatchResult {
+                expression,
+                value: outcome.as_ref().ok().cloned(),
+                error: outcome.as_ref().err().cloned(),
             })
             .collect(),
     };
@@ -126,6 +261,15 @@ struct JsBreakpoint {
 struct JsDebugControl {
     command: String,
     breakpoints: Option<Vec<JsBreakpoint>>,
+    watches: Option<Vec<String>>,
+}
+
+/// A parsed pause response: the VM-facing control plus the watch-list
+/// replacement, and whether this was a refresh round (re-evaluate and
+/// re-present without resuming).
+struct ParsedControl {
+    control: jvmjs_vm::DebugControl,
+    watches: Option<Vec<String>>,
 }
 
 fn parse_breakpoints(json: &str) -> Vec<jvmjs_vm::Breakpoint> {
@@ -139,14 +283,18 @@ fn parse_breakpoints(json: &str) -> Vec<jvmjs_vm::Breakpoint> {
         .collect()
 }
 
-fn parse_debug_control(json: &str) -> jvmjs_vm::DebugControl {
+fn parse_debug_control(json: &str) -> (ParsedControl, bool) {
     let parsed: Option<JsDebugControl> = serde_json::from_str(json).ok();
-    let (command, breakpoints) = parsed.map_or((String::from("terminate"), None), |c| {
-        (c.command, c.breakpoints)
-    });
-    jvmjs_vm::DebugControl {
+    let (command, breakpoints, watches) = parsed
+        .map_or((String::from("terminate"), None, None), |c| {
+            (c.command, c.breakpoints, c.watches)
+        });
+    let refresh = command == "refresh";
+    let control = jvmjs_vm::DebugControl {
         command: match command.as_str() {
-            "continue" => jvmjs_vm::DebugCommand::Continue,
+            // A refresh round never reaches the VM; Continue is a
+            // placeholder for the loop.
+            "continue" | "refresh" => jvmjs_vm::DebugCommand::Continue,
             "stepOver" => jvmjs_vm::DebugCommand::StepOver,
             "stepInto" => jvmjs_vm::DebugCommand::StepInto,
             "stepOut" => jvmjs_vm::DebugCommand::StepOut,
@@ -160,7 +308,8 @@ fn parse_debug_control(json: &str) -> jvmjs_vm::DebugControl {
                 })
                 .collect()
         }),
-    }
+    };
+    (ParsedControl { control, watches }, refresh)
 }
 
 #[derive(Debug, Serialize)]
@@ -202,6 +351,9 @@ impl ConsoleIo for JsConsole<'_> {
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct JvmSession {
+    /// Sources of the last successful compile — watch expressions are
+    /// compiled together with them so they can reference user classes.
+    sources: Vec<SourceFile>,
     vfs: VirtualFileSystem,
     classes: Vec<jvmjs_compiler::CompiledClass>,
 }
@@ -220,6 +372,7 @@ impl JvmSession {
         console_error_panic_hook::set_once();
         Self {
             vfs: VirtualFileSystem::new(),
+            sources: Vec::new(),
             classes: Vec::new(),
         }
     }
@@ -273,6 +426,7 @@ impl JvmSession {
 
         if result.success {
             self.classes = compilation.classes;
+            self.sources = sources;
         }
 
         serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -346,6 +500,7 @@ impl JvmSession {
         main_class: &str,
         args: Vec<String>,
         breakpoints_json: &str,
+        watches_json: &str,
         stdout: &js_sys::Function,
         stderr: &js_sys::Function,
         stdin: Option<js_sys::Function>,
@@ -372,6 +527,8 @@ impl JvmSession {
         let mut host = JsDebugHost {
             on_pause,
             poll_interrupt: poll_interrupt.as_ref(),
+            watches: serde_json::from_str(watches_json).unwrap_or_default(),
+            sources: &self.sources,
         };
         let result = match vm.run_main_debug(main_class, &args, &breakpoints, &mut host) {
             Ok(jvmjs_vm::vm::ExitStatus::Completed) => JsRunResult {

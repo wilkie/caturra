@@ -158,3 +158,33 @@ label {
     color-mix(in srgb, #f9c74f 22%, transparent)
   );
 }
+
+.watch-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+#watch-input {
+  flex: 1;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.85rem;
+}
+
+#watches {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.85rem;
+}
+
+#watches li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.1rem 0;
+}
+
+.watch-error {
+  color: light-dark(#b00020, #ff6b6b);
+}

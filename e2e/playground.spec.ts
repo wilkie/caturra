@@ -493,6 +493,49 @@ test.describe('playground', () => {
     await expect(page.locator('.cm-lintRange-error')).toHaveCount(0);
   });
 
+  test('watch expressions evaluate at pauses and update while stepping', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'import java.util.ArrayList;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        ArrayList<Integer> nums = new ArrayList<>();',
+        '        int total = 0;',
+        '        for (int i = 1; i <= 3; i++) {',
+        '            nums.add(i * i);',
+        '            total += i;',
+        '        }',
+        '        System.out.println(total);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await toggleBreakpoint(page, 9); // total += i;
+    await page.getByTestId('debug').click();
+    await expect(page.getByTestId('frames')).toContainText('Main.java:9');
+
+    // Add a watch while paused: evaluates immediately, still paused.
+    await page.getByTestId('watch-input').fill('nums.size() * 10 + total');
+    await page.getByTestId('watch-add').click();
+    await expect(page.getByTestId('watches')).toContainText('nums.size() * 10 + total = 10');
+
+    // Continue to the next arrival: the value tracks live state.
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('watches')).toContainText('nums.size() * 10 + total = 21');
+
+    // A bad watch shows the compiler's message inline.
+    await page.getByTestId('watch-input').fill('nosuch + 1');
+    await page.getByTestId('watch-add').click();
+    await expect(page.getByTestId('watches')).toContainText("cannot find variable 'nosuch'");
+
+    await page.getByTestId('resume').click();
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('6');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await setSource(

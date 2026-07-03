@@ -69,6 +69,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       return (await session()).runDebug(request.mainClass, {
         args: request.args,
         breakpoints: request.breakpoints,
+        watches: request.watches,
         onStdout: (text) => {
           scope.postMessage({ id, type: 'stdout', text });
         },

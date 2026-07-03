@@ -150,6 +150,9 @@ impl<'host> Vm<'host> {
         args: &[String],
         debug: Option<(&[Breakpoint], &mut dyn DebugHost)>,
     ) -> Result<ExitStatus, VmError> {
+        // Watch classes compiled during pauses live here so paused-time
+        // frames can borrow them for the rest of the run.
+        let watch_arena = typed_arena::Arena::new();
         let class = self
             .classes
             .get(class_name)
@@ -175,7 +178,7 @@ impl<'host> Vm<'host> {
             self.options.random_seed,
         );
         if let Some((breakpoints, host)) = debug {
-            interpreter.attach_debugger(host, breakpoints);
+            interpreter.attach_debugger(host, breakpoints, &watch_arena);
         }
         let arg_refs: Vec<JValue> = args
             .iter()

@@ -15,6 +15,7 @@ use jvmjs_classfile::{
 
 use crate::debug::{
     Breakpoint, DebugCommand, DebugFrameSnapshot, DebugHost, DebugSnapshot, PauseReason,
+    WatchEvaluator,
 };
 use crate::intrinsics::{self, IntrinsicStatics};
 use crate::io::ConsoleIo;
@@ -55,6 +56,9 @@ pub(crate) struct Interpreter<'run> {
     code_cache: HashMap<usize, Rc<MethodCode>>,
     /// Debugger state, present only for debug runs.
     debug: Option<DebugState<'run>>,
+    /// Arena keeping compiled watch classes alive for the run (their
+    /// frames borrow them at `'run`), set for debug runs.
+    watch_arena: Option<&'run typed_arena::Arena<ClassFile>>,
 }
 
 /// Where the active frame is, for stack traces and snapshots.
@@ -111,11 +115,18 @@ impl<'run> Interpreter<'run> {
             current_location: None,
             code_cache: HashMap::new(),
             debug: None,
+            watch_arena: None,
         }
     }
 
     /// Attach a debugger for this run.
-    pub fn attach_debugger(&mut self, host: &'run mut dyn DebugHost, breakpoints: &[Breakpoint]) {
+    pub fn attach_debugger(
+        &mut self,
+        host: &'run mut dyn DebugHost,
+        breakpoints: &[Breakpoint],
+        watch_arena: &'run typed_arena::Arena<ClassFile>,
+    ) {
+        self.watch_arena = Some(watch_arena);
         self.debug = Some(DebugState {
             host,
             breakpoints: breakpoints
@@ -245,8 +256,20 @@ impl<'run> Interpreter<'run> {
         let reason = reason?;
 
         let snapshot = self.build_snapshot(frame, reason);
-        let debug = self.debug.as_mut().expect("still debugging");
-        let control = debug.host.on_pause(&snapshot);
+        // Take the debugger out so the host can borrow the interpreter
+        // (as the watch evaluator) while we call it — which also makes
+        // watch execution run without debug hooks, exactly right
+        // (watches don't hit breakpoints).
+        let debug = self.debug.take().expect("still debugging");
+        let control = {
+            let mut watch = FrameWatchEvaluator {
+                interp: self,
+                active: frame,
+            };
+            debug.host.on_pause(&snapshot, &mut watch)
+        };
+        self.debug = Some(debug);
+        let debug = self.debug.as_mut().expect("just restored");
         if let Some(new_breakpoints) = control.breakpoints {
             debug.breakpoints = new_breakpoints
                 .into_iter()
@@ -283,13 +306,17 @@ impl<'run> Interpreter<'run> {
             .local_vars
             .iter()
             .filter(|(_, _, _, start_pc)| *start_pc <= pc)
-            .map(|(name, _, slot, _)| {
+            .map(|(name, source_type, slot, _)| {
                 let value = frame
                     .locals
                     .get(usize::from(*slot))
                     .copied()
                     .unwrap_or(JValue::NULL);
-                (name.clone(), self.render_value(value))
+                crate::debug::LocalSnapshot {
+                    name: name.clone(),
+                    type_name: source_type.clone(),
+                    value: self.render_value(value),
+                }
             })
             .collect();
         DebugFrameSnapshot {
@@ -1552,6 +1579,102 @@ impl<'run> Interpreter<'run> {
     }
 }
 
+/// The VM side of watch evaluation: invokes a compiled watch method
+/// against the paused frame's locals, sharing the live heap/statics.
+struct FrameWatchEvaluator<'a, 'run> {
+    interp: &'a mut Interpreter<'run>,
+    active: &'a Frame<'run>,
+}
+
+/// Instruction allowance per watch evaluation — generous for
+/// expressions, tight enough that an accidental `while(true)` in a
+/// watch reports quickly instead of hanging the pause.
+const WATCH_INSTRUCTION_BUDGET: u64 = 10_000_000;
+
+impl WatchEvaluator for FrameWatchEvaluator<'_, '_> {
+    fn evaluate(
+        &mut self,
+        class: &ClassFile,
+        method_name: &str,
+        param_names: &[String],
+    ) -> Result<String, String> {
+        let interp = &mut *self.interp;
+        let arena = interp
+            .watch_arena
+            .ok_or_else(|| String::from("watch evaluation is unavailable"))?;
+        // The frame will borrow the class at 'run; park it in the
+        // run-scoped arena to satisfy that.
+        let class: &ClassFile = arena.alloc(class.clone());
+
+        let method = class
+            .methods
+            .iter()
+            .find(|m| class.constant_pool.get_utf8(m.name_index) == Some(method_name))
+            .ok_or_else(|| format!("watch method {method_name} missing"))?;
+        let descriptor = class
+            .constant_pool
+            .get_utf8(method.descriptor_index)
+            .unwrap_or("()Ljava/lang/String;");
+        let widths = descriptor_arg_widths(descriptor)
+            .ok_or_else(|| String::from("bad watch descriptor"))?;
+
+        // Arguments: the paused frame's current values, by name.
+        let mut locals = Vec::with_capacity(param_names.len());
+        for (name, width) in param_names.iter().zip(&widths) {
+            let slot = self
+                .active
+                .code
+                .local_vars
+                .iter()
+                .find(|(n, _, _, _)| n == name)
+                .map(|(_, _, slot, _)| *slot)
+                .ok_or_else(|| format!("no local named {name}"))?;
+            let value = self
+                .active
+                .locals
+                .get(usize::from(slot))
+                .copied()
+                .unwrap_or(JValue::NULL);
+            locals.push(value);
+            if *width == 2 {
+                locals.push(JValue::Int(0));
+            }
+        }
+
+        // Run isolated from the paused program's control state: fresh
+        // frame stack, capped budget; heap/statics/console are shared
+        // (that is the point — watches see live state).
+        let saved_frames = std::mem::take(&mut interp.frames);
+        let saved_location = interp.current_location.take();
+        let saved_budget = interp.remaining_instructions;
+        interp.remaining_instructions = saved_budget.min(WATCH_INSTRUCTION_BUDGET);
+
+        let result = interp.execute(class, method, locals);
+
+        let spent = saved_budget.min(WATCH_INSTRUCTION_BUDGET) - interp.remaining_instructions;
+        interp.remaining_instructions = saved_budget.saturating_sub(spent);
+        interp.frames = saved_frames;
+        interp.current_location = saved_location;
+
+        match result {
+            Ok(Some(JValue::Ref(Some(reference)))) => interp
+                .heap
+                .string_text(reference)
+                .ok_or_else(|| String::from("watch produced a non-string result")),
+            Ok(_) => Err(String::from("watch produced no value")),
+            Err(VmError::UncaughtException(message)) => {
+                // First line only: the trace points into synthesized
+                // code, which would confuse more than help.
+                Err(message.lines().next().unwrap_or("exception").to_owned())
+            }
+            Err(VmError::InstructionBudgetExceeded) => {
+                Err(String::from("the watch expression ran too long"))
+            }
+            Err(other) => Err(other.to_string()),
+        }
+    }
+}
+
 /// The outcome of dispatching a virtual call on a user object.
 enum UserDispatch<'run> {
     /// Push this frame and continue executing inside it.
@@ -1580,11 +1703,65 @@ struct MethodCode {
     /// `boundary_lines[pc]` is the source line starting at `pc`, or 0 —
     /// O(1) per-instruction lookup in the dispatch loop.
     boundary_lines: Vec<u16>,
-    /// Named locals from `LocalVariableTable`:
-    /// `(name, descriptor, slot, live-from pc)`.
+    /// Named locals from `LocalVariableTable` (+`...TypeTable`):
+    /// `(name, java source type, slot, live-from pc)`. The source type
+    /// is fully qualified outside `java.lang` so synthesized watch
+    /// code compiles without imports; empty when unrepresentable.
     local_vars: Vec<(String, String, u16, u16)>,
     /// The class's `SourceFile` (falls back to `ClassName.java`).
     source_file: String,
+}
+
+/// A JVM descriptor or generic signature rendered as Java source, fully
+/// qualified outside `java.lang` (so synthesized code needs no
+/// imports). Empty string when the type has no source form here.
+fn source_type_of(descriptor: &str) -> String {
+    match descriptor {
+        "I" => return String::from("int"),
+        "D" => return String::from("double"),
+        "Z" => return String::from("boolean"),
+        "C" => return String::from("char"),
+        "Ljava/lang/String;" => return String::from("String"),
+        "Ljava/util/Scanner;" => return String::from("java.util.Scanner"),
+        "Ljava/io/File;" => return String::from("java.io.File"),
+        "Ljava/io/PrintWriter;" => return String::from("java.io.PrintWriter"),
+        _ => {}
+    }
+    if let Some(rest) = descriptor.strip_prefix('[') {
+        let elem = source_type_of(rest);
+        if elem.is_empty() {
+            return String::new();
+        }
+        return format!("{elem}[]");
+    }
+    if let Some(elem) = descriptor
+        .strip_prefix("Ljava/util/ArrayList<")
+        .and_then(|s| s.strip_suffix(">;"))
+    {
+        let elem = match elem {
+            "I" => "Integer",
+            "D" => "Double",
+            "Z" => "Boolean",
+            "C" => "Character",
+            _ => {
+                return match source_type_of(elem).as_str() {
+                    "" => String::new(),
+                    other => format!("java.util.ArrayList<{other}>"),
+                };
+            }
+        };
+        return format!("java.util.ArrayList<{elem}>");
+    }
+    // A user class: `LFoo;` → `Foo` (single shared namespace, no
+    // package prefix). Library classes were matched above.
+    if let Some(name) = descriptor
+        .strip_prefix('L')
+        .and_then(|s| s.strip_suffix(';'))
+        && !name.contains('/')
+    {
+        return name.to_owned();
+    }
+    String::new()
 }
 
 /// Parse a method's `Code` attribute and debug tables.
@@ -1603,7 +1780,8 @@ fn parse_method_code(class: &ClassFile, method: &MethodInfo) -> Result<MethodCod
         .map_err(|e| malformed(format!("bad Code attribute: {e}")))?;
 
     let mut boundary_lines = vec![0u16; attr.code.len()];
-    let mut local_vars = Vec::new();
+    let mut local_vars: Vec<(String, String, u16, u16)> = Vec::new();
+    let mut signatures: Vec<(String, String)> = Vec::new();
     for nested in &attr.attributes {
         match class.constant_pool.get_utf8(nested.name_index) {
             Some(jvmjs_classfile::debug::LINE_NUMBER_TABLE_ATTRIBUTE) => {
@@ -1633,8 +1811,34 @@ fn parse_method_code(class: &ClassFile, method: &MethodInfo) -> Result<MethodCod
                     local_vars.push((name, descriptor, entry.index, entry.start_pc));
                 }
             }
+            Some(jvmjs_classfile::debug::LOCAL_VARIABLE_TYPE_TABLE_ATTRIBUTE) => {
+                for entry in jvmjs_classfile::debug::decode_local_variable_table(&nested.info)
+                    .unwrap_or_default()
+                {
+                    let name = class
+                        .constant_pool
+                        .get_utf8(entry.name_index)
+                        .unwrap_or("?")
+                        .to_owned();
+                    let signature = class
+                        .constant_pool
+                        .get_utf8(entry.descriptor_index)
+                        .unwrap_or("")
+                        .to_owned();
+                    signatures.push((name, signature));
+                }
+            }
             _ => {}
         }
+    }
+    // Second pass: descriptors (or generic signatures) → Java source
+    // types, so debugger hosts can synthesize code referencing them.
+    for (name, descriptor, _, _) in &mut local_vars {
+        let signature = signatures
+            .iter()
+            .find(|(n, _)| n == name)
+            .map_or(descriptor.as_str(), |(_, s)| s.as_str());
+        *descriptor = source_type_of(signature);
     }
 
     let source_file = class

@@ -46,6 +46,8 @@ export interface WorkerRunOptions {
 /** Options for {@link JvmWorkerSession.runDebug}. */
 export interface WorkerDebugRunOptions extends WorkerRunOptions {
   breakpoints?: DebugBreakpoint[];
+  /** Watch expressions evaluated at every pause. */
+  watches?: string[];
   /**
    * Called at every pause. May be async: the engine stays parked until
    * the returned promise resolves with a command (e.g. after the user
@@ -208,6 +210,7 @@ export class JvmWorkerSession {
       mainClass,
       args: options.args ?? [],
       breakpoints: options.breakpoints ?? [],
+      watches: options.watches ?? [],
       debugBuffer,
       interruptFlag,
       stdinBuffer,

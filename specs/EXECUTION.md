@@ -80,6 +80,19 @@ standard class-file metadata so the pipeline stays honest:
   clicks resolve the command. `requestPause()` sets a shared interrupt
   flag — also the stop button for runaway loops. Requires cross-origin
   isolation, like stdin.
+- Watch expressions (2026-07-03): at each pause the wasm boundary
+  synthesizes `class __JvmjsWatch {{ static String __eval(<the paused
+frame's locals as typed parameters>) {{ return "" + (<expr>); }} }}`,
+  compiles it together with the program sources (so watches can call
+  user methods and read statics — and bad watches get javac wording),
+  and the VM invokes it against the live frame values with heap and
+  statics shared. Isolation: fresh frame stack, ~10M instruction cap,
+  debug hooks off; results ride in the pause payload. Parameter types
+  come from the debug tables (`LocalVariableTypeTable` recovers
+  `ArrayList<E>` from erasure), fully qualified so no imports are
+  needed. `this` is not synthesizable (keyword) — instance-frame
+  watches use locals and statics. A `refresh` pseudo-command
+  re-evaluates a replaced watch list without resuming.
 - The playground editor is CodeMirror 6 (bundled locally — no CDN)
   with Java syntax and the traditional debug UX: clicking a line
   number toggles a red breakpoint dot in a dedicated gutter, the

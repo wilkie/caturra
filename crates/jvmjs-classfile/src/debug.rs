@@ -8,6 +8,11 @@
 pub const SOURCE_FILE_ATTRIBUTE: &str = "SourceFile";
 pub const LINE_NUMBER_TABLE_ATTRIBUTE: &str = "LineNumberTable";
 pub const LOCAL_VARIABLE_TABLE_ATTRIBUTE: &str = "LocalVariableTable";
+/// Generic signatures for locals whose erased descriptor loses type
+/// arguments (`ArrayList<Integer>`); same entry layout as
+/// `LocalVariableTable` with a signature index in place of the
+/// descriptor (JVMS §4.7.14).
+pub const LOCAL_VARIABLE_TYPE_TABLE_ATTRIBUTE: &str = "LocalVariableTypeTable";
 
 /// One `LocalVariableTable` entry: a named variable live in `[start_pc,
 /// start_pc + length)` at local slot `index`.

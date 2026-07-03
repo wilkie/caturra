@@ -40,6 +40,12 @@ const debugEl = mustGet('#debug', HTMLButtonElement);
 const debugBarEl = mustGet('#debug-bar', HTMLDivElement);
 const pausedViewEl = mustGet('#paused-view', HTMLDivElement);
 const framesEl = mustGet('#frames', HTMLPreElement);
+const watchInputEl = mustGet('#watch-input', HTMLInputElement);
+const watchAddEl = mustGet('#watch-add', HTMLButtonElement);
+const watchesEl = mustGet('#watches', HTMLUListElement);
+
+/** Watch expressions, kept across runs so re-debugging keeps them. */
+const watchExpressions: string[] = [];
 
 const editor = createEditor(sourceEl, DEFAULT_PROGRAM);
 
@@ -127,16 +133,48 @@ function renderPause(snapshot: DebugPauseSnapshot): void {
   for (const [index, frame] of snapshot.frames.entries()) {
     const at = frame.line === null ? frame.sourceFile : `${frame.sourceFile}:${String(frame.line)}`;
     lines.push(`${index === 0 ? '→' : ' '} ${frame.className}.${frame.methodName} (${at})`);
-    for (const [name, value] of frame.locals) {
-      lines.push(`      ${name} = ${value}`);
+    for (const local of frame.locals) {
+      lines.push(`      ${local.name} = ${local.value}`);
     }
   }
   framesEl.textContent = lines.join('\n');
+  renderWatches(snapshot.watchResults);
   pausedViewEl.hidden = false;
 }
 
-/** Wait for one debug-bar click and translate it to a command. */
-function nextDebugCommand(): Promise<DebugCommandName> {
+function renderWatches(results: DebugPauseSnapshot['watchResults']): void {
+  watchesEl.textContent = '';
+  for (const [index, result] of results.entries()) {
+    const item = document.createElement('li');
+    const text = document.createElement('span');
+    text.textContent =
+      result.error != null
+        ? `${result.expression} — ${result.error}`
+        : `${result.expression} = ${result.value ?? ''}`;
+    if (result.error != null) {
+      text.className = 'watch-error';
+    }
+    const remove = document.createElement('button');
+    remove.textContent = '×';
+    remove.title = 'Remove watch';
+    remove.addEventListener('click', () => {
+      watchExpressions.splice(index, 1);
+      // Wake the pending command wait as a refresh round.
+      pendingRefresh?.();
+    });
+    item.append(text, remove);
+    watchesEl.appendChild(item);
+  }
+}
+
+/** Set while paused: resolves the command wait with a refresh round. */
+let pendingRefresh: (() => void) | undefined;
+
+/**
+ * Wait for one debug-bar click (a command) or a watch edit (a refresh
+ * round that re-evaluates in place).
+ */
+function nextDebugCommand(): Promise<DebugCommandName | 'refresh'> {
   return new Promise((resolve) => {
     const buttons: [string, DebugCommandName][] = [
       ['#resume', 'continue'],
@@ -146,19 +184,38 @@ function nextDebugCommand(): Promise<DebugCommandName> {
       ['#stop', 'terminate'],
     ];
     const cleanups: (() => void)[] = [];
+    const finish = (command: DebugCommandName | 'refresh'): void => {
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+      pendingRefresh = undefined;
+      resolve(command);
+    };
     for (const [selector, command] of buttons) {
       const button = mustGet(selector, HTMLButtonElement);
       const onClick = (): void => {
-        for (const cleanup of cleanups) {
-          cleanup();
-        }
-        resolve(command);
+        finish(command);
       };
       button.addEventListener('click', onClick);
       cleanups.push(() => {
         button.removeEventListener('click', onClick);
       });
     }
+    const onAdd = (): void => {
+      const expression = watchInputEl.value.trim();
+      if (expression !== '') {
+        watchExpressions.push(expression);
+        watchInputEl.value = '';
+        finish('refresh');
+      }
+    };
+    watchAddEl.addEventListener('click', onAdd);
+    cleanups.push(() => {
+      watchAddEl.removeEventListener('click', onAdd);
+    });
+    pendingRefresh = () => {
+      finish('refresh');
+    };
   });
 }
 
@@ -177,6 +234,7 @@ async function debugProgram(): Promise<void> {
       const result = await session.runDebug('Main', {
         stdin: stdinLines,
         breakpoints: currentBreakpoints(),
+        watches: [...watchExpressions],
         onStdout: (text) => {
           append(text);
         },
@@ -188,11 +246,18 @@ async function debugProgram(): Promise<void> {
           setPausedLine(editor, snapshot.frames[0]?.line ?? null);
           debugBarEl.hidden = false;
           const command = await nextDebugCommand();
+          if (command === 'refresh') {
+            // Stay paused: replace the watch list and re-evaluate.
+            return { command, watches: [...watchExpressions] };
+          }
           pausedViewEl.hidden = true;
           setPausedLine(editor, null);
-          // Send the gutter's current state along: breakpoints toggled
-          // while paused take effect on resume.
-          return { command, breakpoints: currentBreakpoints() };
+          // Send the gutter's and watch panel's current state along.
+          return {
+            command,
+            breakpoints: currentBreakpoints(),
+            watches: [...watchExpressions],
+          };
         },
       });
       debugBarEl.hidden = true;

@@ -224,7 +224,7 @@ fn finish_method_info(
     max_locals: u16,
     code: Vec<u8>,
     line_numbers: &[(u16, u16)],
-    local_var_debug: &[(String, String, u16, u16)],
+    local_var_debug: &[(String, String, Option<String>, u16, u16)],
 ) -> MethodInfo {
     let code_len = u16::try_from(code.len()).unwrap_or(u16::MAX);
     let mut code_attributes = Vec::new();
@@ -238,7 +238,7 @@ fn finish_method_info(
     if !local_var_debug.is_empty() {
         let entries: Vec<jvmjs_classfile::debug::LocalVariableEntry> = local_var_debug
             .iter()
-            .map(|(var_name, var_descriptor, slot, start_pc)| {
+            .map(|(var_name, var_descriptor, _, slot, start_pc)| {
                 jvmjs_classfile::debug::LocalVariableEntry {
                     start_pc: *start_pc,
                     length: code_len.saturating_sub(*start_pc),
@@ -253,6 +253,31 @@ fn finish_method_info(
             name_index,
             info: jvmjs_classfile::debug::encode_local_variable_table(&entries),
         });
+
+        // Generic locals additionally carry their full signature
+        // (JVMS §4.7.14) so tooling can recover `ArrayList<Integer>`.
+        let typed: Vec<jvmjs_classfile::debug::LocalVariableEntry> = local_var_debug
+            .iter()
+            .filter_map(|(var_name, _, signature, slot, start_pc)| {
+                signature
+                    .as_ref()
+                    .map(|signature| jvmjs_classfile::debug::LocalVariableEntry {
+                        start_pc: *start_pc,
+                        length: code_len.saturating_sub(*start_pc),
+                        name_index: pool.intern_utf8(var_name),
+                        descriptor_index: pool.intern_utf8(signature),
+                        index: *slot,
+                    })
+            })
+            .collect();
+        if !typed.is_empty() {
+            let name_index =
+                pool.intern_utf8(jvmjs_classfile::debug::LOCAL_VARIABLE_TYPE_TABLE_ATTRIBUTE);
+            code_attributes.push(AttributeInfo {
+                name_index,
+                info: jvmjs_classfile::debug::encode_local_variable_table(&typed),
+            });
+        }
     }
     let code_attribute = CodeAttribute {
         max_stack,
@@ -1379,7 +1404,8 @@ fn method_descriptor(
                 push_type(path, diagnostics, table, out, inner, span);
             }
             TypeRef::Generic { base, .. } => {
-                if base == "ArrayList" {
+                let simple = crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                if simple == "ArrayList" {
                     out.push_str("Ljava/util/ArrayList;");
                 } else {
                     diagnostics.push(Diagnostic::error(
@@ -2068,10 +2094,12 @@ struct BodyGen<'a> {
     next_slot: u16,
     /// Innermost-last enclosing loops, for `break`/`continue`.
     loop_stack: Vec<LoopLabels>,
-    /// `(name, descriptor, slot, live-from offset)` per declared local,
-    /// for the `LocalVariableTable` debug attribute. Slots are never
-    /// reused, so live ranges safely extend to the end of the method.
-    local_var_debug: Vec<(String, String, u16, u16)>,
+    /// `(name, descriptor, generic signature, slot, live-from offset)`
+    /// per declared local, for the `LocalVariableTable` (and, when the
+    /// signature is present, `LocalVariableTypeTable`) debug
+    /// attributes. Slots are never reused, so live ranges safely
+    /// extend to the end of the method.
+    local_var_debug: Vec<(String, String, Option<String>, u16, u16)>,
 }
 
 impl BodyGen<'_> {
@@ -2080,12 +2108,20 @@ impl BodyGen<'_> {
             .push(Diagnostic::error(self.path, message, span));
     }
 
-    /// Record a declared local for the `LocalVariableTable`.
+    /// Record a declared local for the `LocalVariableTable` (and, for
+    /// generic types, the `LocalVariableTypeTable` signature).
     fn record_local_debug(&mut self, name: &str, ty: JType, slot: u16) {
         let descriptor = ty.descriptor(self.table);
+        let signature = match ty {
+            JType::List(elem) => Some(format!(
+                "Ljava/util/ArrayList<{}>;",
+                ElemType::base_type(elem).descriptor(self.table)
+            )),
+            _ => None,
+        };
         let start = self.code.offset();
         self.local_var_debug
-            .push((name.to_owned(), descriptor, slot, start));
+            .push((name.to_owned(), descriptor, signature, slot, start));
     }
 
     /// `["java","lang","Math","abs"]` → `["Math","abs"]`: collapse a

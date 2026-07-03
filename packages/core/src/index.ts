@@ -62,11 +62,26 @@ export interface DebugBreakpoint {
 /** How to proceed after a pause. */
 export type DebugCommandName = 'continue' | 'stepOver' | 'stepInto' | 'stepOut' | 'terminate';
 
-/** The host's answer to a pause. */
+/**
+ * The host's answer to a pause. The `refresh` pseudo-command replaces
+ * the watch list and re-evaluates without resuming — `onPause` is
+ * called again with fresh results.
+ */
 export interface DebugControlResponse {
-  command: DebugCommandName;
+  command: DebugCommandName | 'refresh';
   /** Full replacement of the breakpoint set (edits made while paused). */
   breakpoints?: DebugBreakpoint[];
+  /** Full replacement of the watch expressions. */
+  watches?: string[];
+}
+
+/** One named local at a pause point. */
+export interface DebugLocal {
+  name: string;
+  /** Java source type (empty when not representable). */
+  type: string;
+  /** Rendered value for display. */
+  value: string;
 }
 
 /** One paused frame, innermost first in {@link DebugPauseSnapshot}. */
@@ -76,19 +91,32 @@ export interface DebugFrame {
   sourceFile: string;
   /** Current 1-based source line, when line info covers the pc. */
   line: number | null;
-  /** Named locals live at the pause point: `[name, renderedValue]`. */
-  locals: [string, string][];
+  /** Named locals live at the pause point. */
+  locals: DebugLocal[];
+}
+
+/** One watch expression's outcome at a pause. */
+export interface WatchResult {
+  expression: string;
+  /** Rendered value, when evaluation succeeded. */
+  value?: string | null;
+  /** Compile or runtime error message otherwise (javac wording). */
+  error?: string | null;
 }
 
 /** Everything needed to render a paused program. */
 export interface DebugPauseSnapshot {
   reason: 'breakpoint' | 'step' | 'interrupt';
   frames: DebugFrame[];
+  /** Active watch expressions evaluated against this pause. */
+  watchResults: WatchResult[];
 }
 
 /** Options for {@link JvmSession.runDebug}. */
 export interface DebugRunOptions extends RunOptions {
   breakpoints?: DebugBreakpoint[];
+  /** Watch expressions evaluated at every pause. */
+  watches?: string[];
   /**
    * Called at every pause; must return the command synchronously (in
    * the worker this blocks on a SharedArrayBuffer until the user
@@ -182,6 +210,7 @@ export class JvmSession {
       mainClass,
       options.args ?? [],
       JSON.stringify(options.breakpoints ?? []),
+      JSON.stringify(options.watches ?? []),
       (text: string) => options.onStdout?.(text),
       (text: string) => options.onStderr?.(text),
       options.readStdin ?? null,
