@@ -1740,6 +1740,7 @@ impl<'run> Interpreter<'run> {
                 &mut self.rng,
                 class_name,
                 method_name,
+                descriptor,
                 args,
             )?;
             if let Some(value) = result {

@@ -1039,6 +1039,62 @@ public class DiffUserExc {
 );
 
 differential_test!(
+    diff_string_full_api,
+    "DiffStrFull",
+    r#"
+public class DiffStrFull {
+    public static void main(String[] args) {
+        String s = "The Quick Brown Fox";
+
+        System.out.println(s.strip() + "|" + "  pad  ".strip() + "|");
+        System.out.println("  pad  ".stripLeading() + "|");
+        System.out.println("  pad  ".stripTrailing() + "|");
+        System.out.println("".isBlank() + " " + "  ".isBlank() + " " + "x".isBlank());
+        System.out.println("ab".repeat(3) + " " + "x".repeat(0) + "|");
+        System.out.println("foo".concat("bar"));
+        System.out.println("HELLO".compareToIgnoreCase("hello"));
+        System.out.println("apple".compareToIgnoreCase("Banana"));
+        System.out.println(s.contentEquals("The Quick Brown Fox"));
+        System.out.println("hello".hashCode() + " " + "".hashCode() + " " + s.hashCode());
+
+        System.out.println(s.indexOf('o') + " " + s.indexOf('o', 13) + " " + s.indexOf('z'));
+        System.out.println(s.indexOf("o", 5) + " " + s.indexOf("Quick", 99));
+        System.out.println(s.lastIndexOf('o') + " " + s.lastIndexOf('o', 12));
+        System.out.println(s.lastIndexOf("o") + " " + s.lastIndexOf("The") + " " + s.lastIndexOf("zzz"));
+        System.out.println("".indexOf("") + " " + "abc".indexOf("", 2) + " " + "abc".lastIndexOf(""));
+
+        String csv = "a,b,,c,,";
+        String[] p1 = csv.split(",", 3);
+        System.out.println(p1.length + " [" + p1[2] + "]");
+        String[] p2 = csv.split(",", -1);
+        System.out.println(p2.length);
+        String[] p3 = csv.split(",", 1);
+        System.out.println(p3.length + " [" + p3[0] + "]");
+
+        System.out.println(s.startsWith("Quick", 4) + " " + s.startsWith("Quick", 5));
+        System.out.println(s.subSequence(4, 9));
+
+        char[] chars = "wave".toCharArray();
+        chars[0] = 'c';
+        System.out.println(String.valueOf(chars) + " " + String.copyValueOf(chars));
+        char[] target = new char[10];
+        "abcdef".getChars(1, 4, target, 2);
+        System.out.println(String.valueOf(target[2]) + target[3] + target[4]);
+
+        System.out.println(s.toString() == s);
+        String i1 = ("Qu" + "ick").intern();
+        System.out.println(i1 == "Quick");
+
+        System.out.println(String.valueOf(42) + String.valueOf(2.5) + String.valueOf('x') + String.valueOf(true));
+
+        System.out.println("cafe".codePointAt(1) + " " + "cafe".codePointBefore(2));
+        System.out.println("cafe".codePointCount(0, 4) + " " + "cafe".offsetByCodePoints(0, 3));
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

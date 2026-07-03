@@ -3007,6 +3007,22 @@ fn try_catch_compile_errors_match_javac() {
             "class M { static void f() { try { int x = 1; } } }",
             "'try' needs at least one 'catch' clause or a 'finally' block",
         ),
+        (
+            r#"class M { static void f() { boolean b = "ab".matches("a."); } }"#,
+            "String.matches exists in Java, but regular expressions are not supported by jvmjs",
+        ),
+        (
+            r#"class M { static void f() { String s = "a".replaceAll("a", "b"); } }"#,
+            "String.replaceAll exists in Java, but regular expressions are not supported",
+        ),
+        (
+            r#"class M { static void f() { String s = String.format("%d", 1); } }"#,
+            "String.format exists in Java, but varargs are not supported by jvmjs",
+        ),
+        (
+            r#"class M { static void f() { "abc".lines(); } }"#,
+            "String.lines exists in Java, but streams are not supported by jvmjs",
+        ),
     ];
     for (source, expected) in cases {
         let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

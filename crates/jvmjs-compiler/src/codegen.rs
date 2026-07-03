@@ -1716,6 +1716,8 @@ enum BParam {
     Boolean,
     Char,
     Str,
+    /// `char[]`.
+    CharArray,
     /// The list's element type (autoboxed at the boundary).
     Elem,
 }
@@ -1731,6 +1733,8 @@ enum BRet {
     Str,
     /// `String[]` (e.g. `String.split`).
     StrArray,
+    /// `char[]` (e.g. `String.toCharArray`).
+    CharArray,
     /// The list's element type.
     Elem,
 }
@@ -1852,6 +1856,233 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
     },
+    BuiltinMethod {
+        name: "strip",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "stripLeading",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "stripTrailing",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "isBlank",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "repeat",
+        params: &[BParam::Int],
+        ret: BRet::Str,
+        descriptor: "(I)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "concat",
+        params: &[BParam::Str],
+        ret: BRet::Str,
+        descriptor: "(Ljava/lang/String;)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "compareToIgnoreCase",
+        params: &[BParam::Str],
+        ret: BRet::Int,
+        descriptor: "(Ljava/lang/String;)I",
+    },
+    BuiltinMethod {
+        name: "contentEquals",
+        params: &[BParam::Str],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/CharSequence;)Z",
+    },
+    BuiltinMethod {
+        name: "hashCode",
+        params: &[],
+        ret: BRet::Int,
+        descriptor: "()I",
+    },
+    BuiltinMethod {
+        name: "indexOf",
+        params: &[BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(I)I",
+    },
+    BuiltinMethod {
+        name: "indexOf",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(II)I",
+    },
+    BuiltinMethod {
+        name: "indexOf",
+        params: &[BParam::Str, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(Ljava/lang/String;I)I",
+    },
+    BuiltinMethod {
+        name: "lastIndexOf",
+        params: &[BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(I)I",
+    },
+    BuiltinMethod {
+        name: "lastIndexOf",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(II)I",
+    },
+    BuiltinMethod {
+        name: "lastIndexOf",
+        params: &[BParam::Str],
+        ret: BRet::Int,
+        descriptor: "(Ljava/lang/String;)I",
+    },
+    BuiltinMethod {
+        name: "lastIndexOf",
+        params: &[BParam::Str, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(Ljava/lang/String;I)I",
+    },
+    BuiltinMethod {
+        name: "split",
+        params: &[BParam::Str, BParam::Int],
+        ret: BRet::StrArray,
+        descriptor: "(Ljava/lang/String;I)[Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "startsWith",
+        params: &[BParam::Str, BParam::Int],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/String;I)Z",
+    },
+    BuiltinMethod {
+        name: "subSequence",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Str,
+        descriptor: "(II)Ljava/lang/CharSequence;",
+    },
+    BuiltinMethod {
+        name: "toCharArray",
+        params: &[],
+        ret: BRet::CharArray,
+        descriptor: "()[C",
+    },
+    BuiltinMethod {
+        name: "getChars",
+        params: &[BParam::Int, BParam::Int, BParam::CharArray, BParam::Int],
+        ret: BRet::Void,
+        descriptor: "(II[CI)V",
+    },
+    BuiltinMethod {
+        name: "toString",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "intern",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "codePointAt",
+        params: &[BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(I)I",
+    },
+    BuiltinMethod {
+        name: "codePointBefore",
+        params: &[BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(I)I",
+    },
+    BuiltinMethod {
+        name: "codePointCount",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(II)I",
+    },
+    BuiltinMethod {
+        name: "offsetByCodePoints",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(II)I",
+    },
+];
+
+/// `String` static methods (`String.valueOf(...)`).
+const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::Int],
+        ret: BRet::Str,
+        descriptor: "(I)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::Double],
+        ret: BRet::Str,
+        descriptor: "(D)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::Char],
+        ret: BRet::Str,
+        descriptor: "(C)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::Boolean],
+        ret: BRet::Str,
+        descriptor: "(Z)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::CharArray],
+        ret: BRet::Str,
+        descriptor: "([C)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "copyValueOf",
+        params: &[BParam::CharArray],
+        ret: BRet::Str,
+        descriptor: "([C)Ljava/lang/String;",
+    },
+];
+
+/// Real Java 11 `String` members jvmjs cannot model, with the honest
+/// reason — students find these in documentation, and "cannot find
+/// symbol" would read as a bug.
+const UNSUPPORTED_STRING_METHODS: &[(&str, &str)] = &[
+    ("matches", "regular expressions are not supported by jvmjs"),
+    (
+        "replaceAll",
+        "regular expressions are not supported by jvmjs",
+    ),
+    (
+        "replaceFirst",
+        "regular expressions are not supported by jvmjs",
+    ),
+    ("getBytes", "byte arrays are not supported by jvmjs"),
+    ("chars", "streams are not supported by jvmjs"),
+    ("codePoints", "streams are not supported by jvmjs"),
+    ("lines", "streams are not supported by jvmjs"),
+];
+
+/// Unsupported `String` statics (varargs-based).
+const UNSUPPORTED_STRING_STATICS: &[(&str, &str)] = &[
+    ("format", "varargs are not supported by jvmjs"),
+    ("join", "varargs are not supported by jvmjs"),
 ];
 
 const SCANNER_METHODS: &[BuiltinMethod] = &[
@@ -2277,6 +2508,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
         "Character" => Some(("java/lang/Character", CHARACTER_METHODS)),
+        "String" => Some(("java/lang/String", STRING_STATIC_METHODS)),
         _ => None,
     }
 }
@@ -2306,6 +2538,10 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
         BParam::Boolean => JType::Boolean,
         BParam::Char => JType::Char,
         BParam::Str => JType::Str,
+        BParam::CharArray => JType::Array {
+            elem: ElemType::Char,
+            dims: 1,
+        },
         BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
     }
 }
@@ -2351,6 +2587,10 @@ fn bret_type(ret: BRet, elem: Option<ElemType>) -> Option<JType> {
         BRet::Str => Some(JType::Str),
         BRet::StrArray => Some(JType::Array {
             elem: ElemType::Str,
+            dims: 1,
+        }),
+        BRet::CharArray => Some(JType::Array {
+            elem: ElemType::Char,
             dims: 1,
         }),
         BRet::Elem => Some(elem.map_or(JType::Error, ElemType::base_type)),
@@ -3998,6 +4238,17 @@ impl BodyGen<'_> {
                         receiver_ty.describe(self.table)
                     ),
                 );
+            } else if receiver_ty == JType::Str
+                && let Some((_, reason)) = UNSUPPORTED_STRING_METHODS
+                    .iter()
+                    .find(|(name, _)| *name == method)
+            {
+                // A real Java method we cannot model: say so honestly
+                // instead of a misleading "cannot find symbol".
+                self.error(
+                    span,
+                    format!("String.{method} exists in Java, but {reason}"),
+                );
             } else {
                 self.error(
                     span,
@@ -4045,13 +4296,24 @@ impl BodyGen<'_> {
             return None;
         }
         let Some(chosen) = pick_builtin(methods, method, &arg_types, None, self.table) else {
-            self.error(
-                span,
-                format!(
-                    "cannot find symbol: method {method}({}) in class {class}",
-                    describe_types(&arg_types, self.table)
-                ),
-            );
+            if class == "String"
+                && let Some((_, reason)) = UNSUPPORTED_STRING_STATICS
+                    .iter()
+                    .find(|(name, _)| *name == method)
+            {
+                self.error(
+                    span,
+                    format!("String.{method} exists in Java, but {reason}"),
+                );
+            } else {
+                self.error(
+                    span,
+                    format!(
+                        "cannot find symbol: method {method}({}) in class {class}",
+                        describe_types(&arg_types, self.table)
+                    ),
+                );
+            }
             return None;
         };
         let mut args_width: u16 = 0;

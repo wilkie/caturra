@@ -115,6 +115,18 @@ impl Heap {
         self.objects.get_mut(reference as usize)
     }
 
+    /// The first string object with these exact code units, if any
+    /// (linear scan — `String.intern()` at educational heap sizes).
+    #[must_use]
+    pub fn find_string(&self, units: &[u16]) -> Option<HeapRef> {
+        self.objects
+            .iter()
+            .position(
+                |object| matches!(object, HeapObject::JavaString(existing) if existing == units),
+            )
+            .and_then(|index| u32::try_from(index).ok())
+    }
+
     /// Read a Java string back as Rust text (lossy on unpaired
     /// surrogates, which is what console output wants).
     #[must_use]

@@ -320,10 +320,11 @@ fn string_method(
             Ok(Some(JValue::Int(i32::from(*unit))))
         }
         ("substring", [JValue::Int(begin)]) => substring(heap, &units, *begin, len),
-        ("substring", [JValue::Int(begin), JValue::Int(end)]) => {
+        // subSequence is substring by another name (CharSequence view).
+        ("substring" | "subSequence", [JValue::Int(begin), JValue::Int(end)]) => {
             substring_range(heap, &units, *begin, *end)
         }
-        ("indexOf", [needle]) => {
+        ("indexOf", [needle @ JValue::Ref(_)]) => {
             let needle = arg_units(needle)?;
             Ok(Some(JValue::Int(index_of(&units, &needle))))
         }
@@ -403,8 +404,384 @@ fn string_method(
             let reference = heap.alloc_string(text.trim_matches(|c| c <= ' '));
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        ("strip" | "stripLeading" | "stripTrailing", []) => {
+            let text = String::from_utf16_lossy(&units);
+            let stripped = match method {
+                "strip" => text.trim_matches(char::is_whitespace),
+                "stripLeading" => text.trim_start_matches(char::is_whitespace),
+                _ => text.trim_end_matches(char::is_whitespace),
+            };
+            let reference = heap.alloc_string(stripped);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("isBlank", []) => {
+            let blank = String::from_utf16_lossy(&units)
+                .chars()
+                .all(char::is_whitespace);
+            Ok(Some(JValue::Int(i32::from(blank))))
+        }
+        ("repeat", [JValue::Int(count)]) => {
+            if *count < 0 {
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: count is negative: {count}"
+                )));
+            }
+            let mut repeated =
+                Vec::with_capacity(units.len() * usize::try_from(*count).unwrap_or(0));
+            for _ in 0..*count {
+                repeated.extend_from_slice(&units);
+            }
+            let reference = heap.alloc(HeapObject::JavaString(repeated));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("concat", [other]) => {
+            let mut joined = units.clone();
+            joined.extend(arg_units(other)?);
+            let reference = heap.alloc(HeapObject::JavaString(joined));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("compareToIgnoreCase", [other]) => {
+            let other = arg_units(other)?;
+            let fold = |unit: u16| -> u16 {
+                char::from_u32(u32::from(unit)).map_or(unit, |c| {
+                    let upper = c.to_uppercase().next().unwrap_or(c);
+                    let lower = upper.to_lowercase().next().unwrap_or(upper);
+                    u16::try_from(u32::from(lower) & 0xFFFF).unwrap_or(unit)
+                })
+            };
+            let folded_self: Vec<u16> = units.iter().map(|u| fold(*u)).collect();
+            let folded_other: Vec<u16> = other.iter().map(|u| fold(*u)).collect();
+            Ok(Some(JValue::Int(compare_utf16(
+                &folded_self,
+                &folded_other,
+            ))))
+        }
+        ("contentEquals", [other]) => {
+            let other = arg_units(other)?;
+            Ok(Some(JValue::Int(i32::from(units == other))))
+        }
+        ("hashCode", []) => {
+            let mut hash: i32 = 0;
+            for unit in &units {
+                hash = hash.wrapping_mul(31).wrapping_add(i32::from(*unit));
+            }
+            Ok(Some(JValue::Int(hash)))
+        }
+        ("indexOf", [JValue::Int(ch)]) => Ok(Some(JValue::Int(index_of_char(&units, *ch, 0)))),
+        ("indexOf", [JValue::Int(ch), JValue::Int(from)]) => {
+            Ok(Some(JValue::Int(index_of_char(&units, *ch, *from))))
+        }
+        ("indexOf", [needle, JValue::Int(from)]) => {
+            let needle = arg_units(needle)?;
+            Ok(Some(JValue::Int(index_of_from(&units, &needle, *from))))
+        }
+        ("lastIndexOf", [JValue::Int(ch)]) => {
+            Ok(Some(JValue::Int(last_index_of_char(&units, *ch, i32::MAX))))
+        }
+        ("lastIndexOf", [JValue::Int(ch), JValue::Int(from)]) => {
+            Ok(Some(JValue::Int(last_index_of_char(&units, *ch, *from))))
+        }
+        ("lastIndexOf", [needle]) => {
+            let needle = arg_units(needle)?;
+            Ok(Some(JValue::Int(last_index_of_from(
+                &units,
+                &needle,
+                i32::MAX,
+            ))))
+        }
+        ("lastIndexOf", [needle, JValue::Int(from)]) => {
+            let needle = arg_units(needle)?;
+            Ok(Some(JValue::Int(last_index_of_from(
+                &units, &needle, *from,
+            ))))
+        }
+        ("split", [delimiter, JValue::Int(limit)]) => {
+            let delimiter = arg_units(delimiter)?;
+            let parts = split_units_limit(&units, &delimiter, *limit);
+            let refs: Vec<JValue> = parts
+                .into_iter()
+                .map(|part| JValue::Ref(Some(heap.alloc(HeapObject::JavaString(part)))))
+                .collect();
+            let reference = heap.alloc(HeapObject::RefArray(refs));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("startsWith", [prefix, JValue::Int(offset)]) => {
+            let prefix = arg_units(prefix)?;
+            let starts = usize::try_from(*offset)
+                .ok()
+                .and_then(|at| units.get(at..))
+                .is_some_and(|rest| rest.starts_with(&prefix));
+            Ok(Some(JValue::Int(i32::from(starts))))
+        }
+        ("toCharArray", []) => {
+            let values: Vec<i32> = units.iter().map(|u| i32::from(*u)).collect();
+            let reference = heap.alloc(HeapObject::IntArray(values));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        (
+            "getChars",
+            [
+                JValue::Int(begin),
+                JValue::Int(end),
+                JValue::Ref(Some(target)),
+                JValue::Int(at),
+            ],
+        ) => {
+            let source = usize::try_from(*begin)
+                .ok()
+                .zip(usize::try_from(*end).ok())
+                .filter(|(b, e)| b <= e && *e <= units.len())
+                .map(|(b, e)| units[b..e].to_vec())
+                .ok_or_else(|| {
+                    throw(format!(
+                        "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {end}, \
+                         length {}",
+                        units.len()
+                    ))
+                })?;
+            let at = usize::try_from(*at).map_err(|_| {
+                throw(format!(
+                    "java.lang.ArrayIndexOutOfBoundsException: Index {at} out of bounds"
+                ))
+            })?;
+            let Some(HeapObject::IntArray(values)) = heap.get_mut(*target) else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            if at + source.len() > values.len() {
+                let bad = at + source.len() - 1;
+                let len = values.len();
+                return Err(throw(format!(
+                    "java.lang.ArrayIndexOutOfBoundsException: Index {bad} out of bounds \
+                     for length {len}"
+                )));
+            }
+            for (index, unit) in source.iter().enumerate() {
+                values[at + index] = i32::from(*unit);
+            }
+            Ok(None)
+        }
+        ("toString", []) => Ok(Some(JValue::Ref(Some(receiver)))),
+        ("intern", []) => {
+            let canonical = heap.find_string(&units).unwrap_or(receiver);
+            Ok(Some(JValue::Ref(Some(canonical))))
+        }
+        ("codePointAt", [JValue::Int(index)]) => {
+            code_point_at(&units, *index).map(|cp| Some(JValue::Int(cp)))
+        }
+        ("codePointBefore", [JValue::Int(index)]) => {
+            let before = index - 1;
+            if before < 0 {
+                return Err(throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: index {index}"
+                )));
+            }
+            // A low surrogate preceded by a high one forms a pair.
+            let at = usize::try_from(before).unwrap_or(usize::MAX);
+            if at > 0
+                && units.get(at).is_some_and(|u| (0xDC00..0xE000).contains(u))
+                && units
+                    .get(at - 1)
+                    .is_some_and(|u| (0xD800..0xDC00).contains(u))
+            {
+                return code_point_at(&units, before - 1).map(|cp| Some(JValue::Int(cp)));
+            }
+            code_point_at(&units, before).map(|cp| Some(JValue::Int(cp)))
+        }
+        ("codePointCount", [JValue::Int(begin), JValue::Int(end)]) => {
+            let range = usize::try_from(*begin)
+                .ok()
+                .zip(usize::try_from(*end).ok())
+                .filter(|(b, e)| b <= e && *e <= units.len())
+                .ok_or_else(|| {
+                    throw(format!(
+                        "java.lang.IndexOutOfBoundsException: begin {begin}, end {end}, \
+                         length {}",
+                        units.len()
+                    ))
+                })?;
+            let count = char::decode_utf16(units[range.0..range.1].iter().copied()).count();
+            Ok(Some(JValue::Int(i32::try_from(count).unwrap_or(i32::MAX))))
+        }
+        ("offsetByCodePoints", [JValue::Int(index), JValue::Int(offset)]) => {
+            let mut at = usize::try_from(*index)
+                .map_err(|_| throw(format!("java.lang.IndexOutOfBoundsException: {index}")))?;
+            if at > units.len() {
+                return Err(throw(format!(
+                    "java.lang.IndexOutOfBoundsException: {index}"
+                )));
+            }
+            let mut remaining = *offset;
+            while remaining > 0 {
+                if at >= units.len() {
+                    return Err(throw(format!(
+                        "java.lang.IndexOutOfBoundsException: {offset}"
+                    )));
+                }
+                at += if units.get(at).is_some_and(|u| (0xD800..0xDC00).contains(u))
+                    && units
+                        .get(at + 1)
+                        .is_some_and(|u| (0xDC00..0xE000).contains(u))
+                {
+                    2
+                } else {
+                    1
+                };
+                remaining -= 1;
+            }
+            while remaining < 0 {
+                if at == 0 {
+                    return Err(throw(format!(
+                        "java.lang.IndexOutOfBoundsException: {offset}"
+                    )));
+                }
+                at -= if at >= 2
+                    && units
+                        .get(at - 1)
+                        .is_some_and(|u| (0xDC00..0xE000).contains(u))
+                    && units
+                        .get(at - 2)
+                        .is_some_and(|u| (0xD800..0xDC00).contains(u))
+                {
+                    2
+                } else {
+                    1
+                };
+                remaining += 1;
+            }
+            Ok(Some(JValue::Int(i32::try_from(at).unwrap_or(i32::MAX))))
+        }
         _ => Err(VmError::UnknownIntrinsic(format!("String.{method}"))),
     }
+}
+
+/// `String.codePointAt`: the code point at a UTF-16 index (pairs
+/// combine; unpaired surrogates return themselves, like Java).
+fn code_point_at(units: &[u16], index: i32) -> Result<i32, VmError> {
+    let at = usize::try_from(index)
+        .ok()
+        .filter(|i| *i < units.len())
+        .ok_or_else(|| {
+            throw(format!(
+                "java.lang.StringIndexOutOfBoundsException: index {index}"
+            ))
+        })?;
+    let unit = units[at];
+    if (0xD800..0xDC00).contains(&unit)
+        && let Some(low) = units.get(at + 1)
+        && (0xDC00..0xE000).contains(low)
+    {
+        let combined = 0x10000 + ((u32::from(unit) - 0xD800) << 10) + (u32::from(*low) - 0xDC00);
+        return Ok(i32::try_from(combined).unwrap_or(i32::MAX));
+    }
+    Ok(i32::from(unit))
+}
+
+/// `indexOf(int ch, int from)` — the char as its UTF-16 encoding.
+fn index_of_char(haystack: &[u16], ch: i32, from: i32) -> i32 {
+    let Some(encoded) = encode_char(ch) else {
+        return -1;
+    };
+    index_of_from(haystack, &encoded, from)
+}
+
+fn last_index_of_char(haystack: &[u16], ch: i32, from: i32) -> i32 {
+    let Some(encoded) = encode_char(ch) else {
+        return -1;
+    };
+    last_index_of_from(haystack, &encoded, from)
+}
+
+fn encode_char(ch: i32) -> Option<Vec<u16>> {
+    let ch = u32::try_from(ch).ok()?;
+    let c = char::from_u32(ch)?;
+    let mut buffer = [0u16; 2];
+    Some(c.encode_utf16(&mut buffer).to_vec())
+}
+
+/// `indexOf(needle, fromIndex)` with Java's clamping.
+fn index_of_from(haystack: &[u16], needle: &[u16], from: i32) -> i32 {
+    let start = usize::try_from(from.max(0)).unwrap_or(0);
+    if needle.is_empty() {
+        return i32::try_from(start.min(haystack.len())).unwrap_or(i32::MAX);
+    }
+    if start >= haystack.len() || needle.len() > haystack.len() - start {
+        return -1;
+    }
+    for at in start..=(haystack.len() - needle.len()) {
+        if &haystack[at..at + needle.len()] == needle {
+            return i32::try_from(at).unwrap_or(i32::MAX);
+        }
+    }
+    -1
+}
+
+/// `lastIndexOf(needle, fromIndex)`: rightmost match at or before
+/// `from`, with Java's clamping.
+fn last_index_of_from(haystack: &[u16], needle: &[u16], from: i32) -> i32 {
+    if from < 0 {
+        return -1;
+    }
+    let limit = usize::try_from(from)
+        .unwrap_or(usize::MAX)
+        .min(haystack.len().saturating_sub(needle.len()));
+    if needle.is_empty() {
+        return i32::try_from(
+            usize::try_from(from)
+                .unwrap_or(usize::MAX)
+                .min(haystack.len()),
+        )
+        .unwrap_or(i32::MAX);
+    }
+    if needle.len() > haystack.len() {
+        return -1;
+    }
+    for at in (0..=limit).rev() {
+        if haystack[at..].starts_with(needle) {
+            return i32::try_from(at).unwrap_or(i32::MAX);
+        }
+    }
+    -1
+}
+
+/// `String.split(delimiter, limit)` with Java's limit semantics over a
+/// literal delimiter: positive caps the part count (the last keeps the
+/// rest), zero drops trailing empties, negative keeps them.
+fn split_units_limit(haystack: &[u16], delimiter: &[u16], limit: i32) -> Vec<Vec<u16>> {
+    if limit == 0 {
+        return split_units(haystack, delimiter);
+    }
+    let mut parts: Vec<Vec<u16>> = Vec::new();
+    if delimiter.is_empty() {
+        for unit in haystack {
+            if limit > 0 && i32::try_from(parts.len()).unwrap_or(i32::MAX) == limit - 1 {
+                break;
+            }
+            parts.push(vec![*unit]);
+        }
+        let consumed: usize = parts.len();
+        if consumed < haystack.len() {
+            parts.push(haystack[consumed..].to_vec());
+        } else if limit < 0 || parts.is_empty() {
+            parts.push(Vec::new());
+        }
+        return parts;
+    }
+    let mut start = 0;
+    let mut at = 0;
+    while at + delimiter.len() <= haystack.len() {
+        if limit > 0 && i32::try_from(parts.len()).unwrap_or(i32::MAX) == limit - 1 {
+            break;
+        }
+        if &haystack[at..at + delimiter.len()] == delimiter {
+            parts.push(haystack[start..at].to_vec());
+            at += delimiter.len();
+            start = at;
+        } else {
+            at += 1;
+        }
+    }
+    parts.push(haystack[start..].to_vec());
+    parts
 }
 
 fn substring(
@@ -923,11 +1300,13 @@ impl JavaRng {
 
 /// Intrinsic static methods (`Math.*`, `Integer.parseInt`,
 /// `Double.parseDouble`).
+#[allow(clippy::too_many_lines)] // one arm per static intrinsic
 pub fn invoke_static(
     heap: &mut Heap,
     rng: &mut JavaRng,
     class: &str,
     method: &str,
+    descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
     let string_arg = |value: &JValue| -> Result<String, VmError> {
@@ -998,6 +1377,35 @@ pub fn invoke_static(
                 }
                 _ => Err(VmError::UnknownIntrinsic(format!("Character.{method}"))),
             }
+        }
+        ("java/lang/String", "valueOf" | "copyValueOf", [value]) => {
+            // The descriptor disambiguates int/char/boolean, which all
+            // arrive as JValue::Int.
+            let text = match (descriptor, value) {
+                ("(C)Ljava/lang/String;", JValue::Int(v)) => {
+                    char::from_u32(u32::try_from(*v).unwrap_or(0))
+                        .unwrap_or('\u{FFFD}')
+                        .to_string()
+                }
+                ("(Z)Ljava/lang/String;", JValue::Int(v)) => {
+                    String::from(if *v != 0 { "true" } else { "false" })
+                }
+                (_, JValue::Int(v)) => v.to_string(),
+                (_, JValue::Double(v)) => java_double_to_string(*v),
+                (_, JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::IntArray(values)) => values
+                        .iter()
+                        .map(|v| {
+                            char::from_u32(u32::try_from(*v).unwrap_or(0)).unwrap_or('\u{FFFD}')
+                        })
+                        .collect(),
+                    _ => heap.string_text(*reference).unwrap_or_default(),
+                },
+                (_, JValue::Ref(None)) => String::from("null"),
+                _ => String::new(),
+            };
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
         }
         ("java/lang/Integer", "parseInt", [value]) => {
             let text = string_arg(value)?;

@@ -112,14 +112,19 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   public (no packages).
 
 - **The class library** (stage 7, intrinsics per SCOPE.md):
-  - `String` methods over UTF-16: `length`, `charAt`, `substring` (both),
-    `indexOf`, `equals`/`equalsIgnoreCase`, `compareTo`, `contains`,
-    `startsWith`/`endsWith`, `toUpperCase`/`toLowerCase`, `trim`,
-    `isEmpty`, `replace` (both overloads), and `split` — the split
-    delimiter is treated literally, not as a regex (a documented
-    deviation visible only for metacharacter delimiters like `"."`);
-    trailing empty strings drop like Java's. With Java 11 exception
-    wording
+  - The full Java 11 `String` API over UTF-16 (2026-07-03), because
+    students look methods up in documentation and expect them to exist:
+    every instance method except the regex family
+    (`matches`/`replaceAll`/`replaceFirst`), the stream family
+    (`chars`/`codePoints`/`lines`), and `getBytes` — those report an
+    honest "String.matches exists in Java, but regular expressions are
+    not supported by jvmjs" rather than a misleading cannot-find-symbol.
+    Statics: `valueOf` (all overloads incl. `char[]`), `copyValueOf`;
+    `format`/`join` report the varargs limitation. `split` treats its
+    delimiter literally, not as a regex (a documented deviation visible
+    only for metacharacter delimiters like `"."`), with Java's full
+    limit semantics; `intern` preserves reference identity; `hashCode`
+    is Java's exact algorithm. With Java 11 exception wording
     (`StringIndexOutOfBoundsException: String index out of range: 5`).
     `equals` accepts only strings/null (a documented narrowing of
     `equals(Object)`).
