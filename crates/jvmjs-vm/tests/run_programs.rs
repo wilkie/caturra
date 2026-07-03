@@ -211,6 +211,226 @@ fn string_literals_are_interned_within_a_run() {
     assert_eq!(console.stdout_text(), "same\nsame\n");
 }
 
+// ----- stage 1: locals, operators, string concatenation -----
+
+/// Compile, run, and return stdout, asserting a clean completion.
+fn run_stdout(source: &str, main: &str) -> String {
+    let (result, console) = compile_and_run(source, main);
+    assert!(
+        matches!(result, Ok(ExitStatus::Completed)),
+        "{result:?}; stderr: {}",
+        console.stderr_text()
+    );
+    console.stdout_text()
+}
+
+#[test]
+fn arithmetic_follows_java_semantics() {
+    let out = run_stdout(
+        r"
+        public class Arith {
+            public static void main(String[] args) {
+                int a = 7, b = 2;
+                System.out.println(a + b);
+                System.out.println(a - b);
+                System.out.println(a * b);
+                System.out.println(a / b);
+                System.out.println(a % b);
+                System.out.println(-a);
+                System.out.println(a / 2.0);
+                System.out.println(1 + 2 * 3);
+                System.out.println((1 + 2) * 3);
+                System.out.println(2147483647 + 1);
+            }
+        }
+        ",
+        "Arith",
+    );
+    assert_eq!(out, "9\n5\n14\n3\n1\n-7\n3.5\n7\n9\n-2147483648\n");
+}
+
+#[test]
+fn division_by_zero_throws_like_java() {
+    let (result, console) = compile_and_run(
+        r"
+        public class Div {
+            public static void main(String[] args) {
+                int zero = 0;
+                System.out.println(1 / zero);
+            }
+        }
+        ",
+        "Div",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.lang.ArithmeticException: / by zero"),
+        "{}",
+        console.stderr_text()
+    );
+    // Double division by zero is Infinity, not an exception.
+    let out = run_stdout(
+        r"
+        public class DDiv {
+            public static void main(String[] args) {
+                double zero = 0.0;
+                System.out.println(1.0 / zero);
+            }
+        }
+        ",
+        "DDiv",
+    );
+    assert_eq!(out, "Infinity\n");
+}
+
+#[test]
+fn comparisons_and_logic_short_circuit() {
+    let out = run_stdout(
+        r"
+        public class Logic {
+            public static void main(String[] args) {
+                int x = 5;
+                System.out.println(x > 3);
+                System.out.println(x <= 4);
+                System.out.println(x == 5 && x != 5);
+                System.out.println(x == 5 || x != 5);
+                System.out.println(!(x > 3));
+                int zero = 0;
+                System.out.println(zero != 0 && 10 / zero > 1);
+                System.out.println(zero == 0 || 10 / zero > 1);
+                System.out.println(1.5 > 1.4);
+                System.out.println(0.0 / zero == 0.0 / zero);
+            }
+        }
+        ",
+        "Logic",
+    );
+    // The two short-circuit lines must not throw ArithmeticException,
+    // and NaN == NaN is false.
+    assert_eq!(
+        out,
+        "true\nfalse\nfalse\ntrue\nfalse\nfalse\ntrue\ntrue\nfalse\n"
+    );
+}
+
+#[test]
+fn assignment_compound_and_increment() {
+    let out = run_stdout(
+        r"
+        public class Assign {
+            public static void main(String[] args) {
+                int x = 10;
+                x += 5;
+                x -= 3;
+                x *= 2;
+                x /= 4;
+                x %= 4;
+                System.out.println(x);
+                x++;
+                ++x;
+                x--;
+                System.out.println(x);
+                double d = 1.5;
+                d *= 2;
+                System.out.println(d);
+                int narrowed = 7;
+                narrowed += 0.5;
+                System.out.println(narrowed);
+                char c = 'a';
+                c++;
+                System.out.println(c);
+            }
+        }
+        ",
+        "Assign",
+    );
+    // x: 10+5-3=12*2=24/4=6%4=2; then ++,++,-- -> 3.
+    // narrowed: (int)(7 + 0.5) = 7. c: 'a'+1 = 'b'.
+    assert_eq!(out, "2\n3\n3.0\n7\nb\n");
+}
+
+#[test]
+fn string_concatenation_matches_java() {
+    let out = run_stdout(
+        r#"
+        public class Concat {
+            public static void main(String[] args) {
+                int x = 42;
+                double d = 2.0;
+                boolean flag = true;
+                char c = '!';
+                String s = "x = " + x;
+                System.out.println(s);
+                System.out.println("d = " + d);
+                System.out.println(flag + " story" + c);
+                System.out.println(1 + 2 + "a");
+                System.out.println("a" + 1 + 2);
+                String nothing = null;
+                System.out.println("value: " + nothing);
+                s += "!";
+                System.out.println(s);
+            }
+        }
+        "#,
+        "Concat",
+    );
+    assert_eq!(
+        out,
+        "x = 42\nd = 2.0\ntrue story!\n3a\na12\nvalue: null\nx = 42!\n"
+    );
+}
+
+#[test]
+fn casts_and_promotions() {
+    let out = run_stdout(
+        r"
+        public class Casts {
+            public static void main(String[] args) {
+                double d = 9.99;
+                System.out.println((int) d);
+                System.out.println((int) -9.99);
+                int i = 65;
+                System.out.println((char) i);
+                System.out.println((double) i);
+                char c = 'A';
+                int fromChar = c + 1;
+                System.out.println(fromChar);
+                System.out.println((char) (c + 1));
+            }
+        }
+        ",
+        "Casts",
+    );
+    assert_eq!(out, "9\n-9\nA\n65.0\n66\nB\n");
+}
+
+#[test]
+fn string_reference_equality_of_literals() {
+    // Literals are interned, so == is true for identical literals; a
+    // runtime-built string is a different object.
+    let out = run_stdout(
+        r#"
+        public class Eq {
+            public static void main(String[] args) {
+                String a = "hi";
+                String b = "hi";
+                System.out.println(a == b);
+                String c = a + "!";
+                String d = "hi!";
+                System.out.println(c == d);
+            }
+        }
+        "#,
+        "Eq",
+    );
+    assert_eq!(out, "true\nfalse\n");
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

@@ -37,6 +37,8 @@ pub enum StdStream {
 pub enum HeapObject {
     /// A `java.lang.String`: UTF-16 code units for exact Java semantics.
     JavaString(Vec<u16>),
+    /// A `java.lang.StringBuilder` (used by compiled string concatenation).
+    StringBuilder(Vec<u16>),
     /// The intrinsic object behind `System.out` / `System.err`.
     PrintStream(StdStream),
     /// A reference array (e.g. `String[] args`).
@@ -70,6 +72,11 @@ impl Heap {
     #[must_use]
     pub fn get(&self, reference: HeapRef) -> Option<&HeapObject> {
         self.objects.get(reference as usize)
+    }
+
+    #[must_use]
+    pub fn get_mut(&mut self, reference: HeapRef) -> Option<&mut HeapObject> {
+        self.objects.get_mut(reference as usize)
     }
 
     /// Read a Java string back as Rust text (lossy on unpaired

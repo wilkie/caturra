@@ -30,6 +30,48 @@ test.describe('playground', () => {
     );
   });
 
+  test('runs a stage-1 program with locals, operators, and concat', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        int a = 6, b = 7;',
+          '        String answer = "a * b = " + a * b;',
+          '        System.out.println(answer);',
+          '        System.out.println(a * b == 42 && a < b);',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    const consoleOutput = page.getByTestId('console');
+    await expect(consoleOutput).toContainText('a * b = 42');
+    await expect(consoleOutput).toContainText('true');
+  });
+
+  test('reports runtime exceptions like java does', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        int zero = 0;',
+          '        System.out.println(1 / zero);',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText(
+      'java.lang.ArithmeticException: / by zero',
+    );
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page

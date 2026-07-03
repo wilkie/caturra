@@ -6,7 +6,10 @@
 //! syntax error — and the parser recovers so one file reports every
 //! problem, not just the first.
 
-use crate::ast::{ClassDecl, CompilationUnit, Expr, Literal, MethodDecl, Param, Stmt, TypeRef};
+use crate::ast::{
+    BinaryOp, ClassDecl, CompilationUnit, Expr, Literal, LocalDeclarator, MethodDecl, Param, Stmt,
+    TypeRef, UnaryOp,
+};
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
 
@@ -24,6 +27,47 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
     };
     let unit = parser.compilation_unit();
     (unit, parser.diagnostics)
+}
+
+/// The friendly message for statement-starting keywords jvmjs doesn't
+/// support yet; `None` when the keyword can begin a real statement.
+fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
+    match keyword {
+        Keyword::If | Keyword::Else => Some("if statements are not yet supported by jvmjs"),
+        Keyword::While | Keyword::Do => Some("while loops are not yet supported by jvmjs"),
+        Keyword::For => Some("for loops are not yet supported by jvmjs"),
+        Keyword::Return => Some("return statements are not yet supported by jvmjs"),
+        Keyword::Switch => Some("switch statements are not yet supported by jvmjs"),
+        Keyword::Try | Keyword::Throw => Some("exception handling is not yet supported by jvmjs"),
+        Keyword::Break | Keyword::Continue => Some("break/continue are not yet supported by jvmjs"),
+        Keyword::Var => Some("'var' is not supported by jvmjs; write the type explicitly"),
+        Keyword::New => Some("object creation with 'new' is not yet supported by jvmjs"),
+        Keyword::Int | Keyword::Double | Keyword::Boolean | Keyword::Char | Keyword::Final => None,
+        _ => Some("this statement is not yet supported by jvmjs"),
+    }
+}
+
+/// Lower `x++` / `x--` to `x += 1` / `x -= 1`.
+fn increment_statement(
+    name: String,
+    increment: bool,
+    start: SourcePosition,
+    end: SourcePosition,
+) -> Stmt {
+    let span = SourceSpan { start, end };
+    Stmt::Assign {
+        name,
+        op: Some(if increment {
+            BinaryOp::Add
+        } else {
+            BinaryOp::Sub
+        }),
+        value: Expr::Literal {
+            value: Literal::Int(1),
+            span,
+        },
+        span,
+    }
 }
 
 /// Internal marker: a construct failed to parse and a diagnostic was
@@ -411,84 +455,314 @@ impl Parser<'_> {
             return Ok(Some(Stmt::Block(self.block_body())));
         }
 
-        if let Some(TokenKind::Keyword(keyword)) = self.peek() {
-            let message = match keyword {
-                Keyword::If | Keyword::Else => Some("if statements are not yet supported by jvmjs"),
-                Keyword::While | Keyword::Do => Some("while loops are not yet supported by jvmjs"),
-                Keyword::For => Some("for loops are not yet supported by jvmjs"),
-                Keyword::Return => Some("return statements are not yet supported by jvmjs"),
-                Keyword::Switch => Some("switch statements are not yet supported by jvmjs"),
-                Keyword::Try | Keyword::Throw => {
-                    Some("exception handling is not yet supported by jvmjs")
-                }
-                Keyword::Break | Keyword::Continue => {
-                    Some("break/continue are not yet supported by jvmjs")
-                }
-                Keyword::Int
-                | Keyword::Double
-                | Keyword::Boolean
-                | Keyword::Char
-                | Keyword::Var
-                | Keyword::Final => {
-                    Some("local variable declarations are not yet supported by jvmjs")
-                }
-                Keyword::New => Some("object creation with 'new' is not yet supported by jvmjs"),
-                _ => Some("this statement is not yet supported by jvmjs"),
-            };
-            if let Some(message) = message {
-                self.error_here(message);
-                return Err(Abort);
-            }
+        if let Some(TokenKind::Keyword(keyword)) = self.peek()
+            && let Some(message) = unsupported_statement_keyword(*keyword)
+        {
+            self.error_here(message);
+            return Err(Abort);
         }
 
-        // `String s = ...` — a declaration starting with a class type.
-        if matches!(self.peek(), Some(TokenKind::Identifier(_)))
-            && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
-        {
-            self.error_here("local variable declarations are not yet supported by jvmjs");
-            return Err(Abort);
+        if self.at_declaration_start() {
+            return self.local_declaration().map(Some);
+        }
+
+        // `x++;` / `++x;` and assignments.
+        if self.at_symbol("++") || self.at_symbol("--") {
+            let start = self.here();
+            let increment = self.at_symbol("++");
+            self.pos += 1;
+            let (name, name_span) = self.expect_ident("after the increment operator")?;
+            self.expect_symbol(";", "to end the statement")?;
+            return Ok(Some(increment_statement(
+                name,
+                increment,
+                start.start,
+                name_span.end,
+            )));
         }
 
         let expr = self.expression()?;
 
-        if self.at_symbol("=")
-            || matches!(self.peek(), Some(TokenKind::Symbol(s)) if s.len() >= 2 && s.ends_with('=') && !matches!(*s, "==" | "!=" | "<=" | ">="))
-        {
-            self.error_here("assignment is not yet supported by jvmjs");
-            return Err(Abort);
+        if let Some(op) = self.assignment_operator() {
+            let Expr::Name { path, span } = &expr else {
+                self.error_at(
+                    expr.span(),
+                    "the left side of an assignment must be a variable",
+                );
+                return Err(Abort);
+            };
+            if path.len() != 1 {
+                self.error_at(
+                    *span,
+                    "only simple variables can be assigned (fields come later)",
+                );
+                return Err(Abort);
+            }
+            let name = path[0].clone();
+            let start = span.start;
+            self.pos += 1;
+            let value = self.expression()?;
+            let end = value.span().end;
+            self.expect_symbol(";", "to end the statement")?;
+            return Ok(Some(Stmt::Assign {
+                name,
+                op,
+                value,
+                span: SourceSpan { start, end },
+            }));
         }
 
+        if self.at_symbol("++") || self.at_symbol("--") {
+            let increment = self.at_symbol("++");
+            self.pos += 1;
+            let Expr::Name { path, span } = &expr else {
+                self.error_at(expr.span(), "++/-- can only be applied to a variable");
+                return Err(Abort);
+            };
+            if path.len() != 1 {
+                self.error_at(*span, "++/-- can only be applied to a simple variable");
+                return Err(Abort);
+            }
+            let stmt = increment_statement(path[0].clone(), increment, span.start, span.end);
+            self.expect_symbol(";", "to end the statement")?;
+            return Ok(Some(stmt));
+        }
+
+        if !matches!(expr, Expr::Call { .. }) {
+            self.error_at(expr.span(), "this expression is not a statement in Java");
+            return Err(Abort);
+        }
         self.expect_symbol(";", "to end the statement")?;
         Ok(Some(Stmt::Expr(expr)))
     }
 
-    fn expression(&mut self) -> Parsed<Expr> {
-        let expr = self.postfix_expression()?;
+    /// Whether the cursor starts a local declaration:
+    /// `final? <type> name ...` — a primitive-type keyword, `final`, or
+    /// a class type followed by a name (or `[]`).
+    fn at_declaration_start(&self) -> bool {
+        matches!(
+            self.peek(),
+            Some(TokenKind::Keyword(
+                Keyword::Int | Keyword::Double | Keyword::Boolean | Keyword::Char | Keyword::Final
+            ))
+        ) || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
+            && matches!(self.peek_at(1), Some(TokenKind::Identifier(_))))
+            || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
+                && matches!(self.peek_at(1), Some(TokenKind::Symbol("[")))
+                && matches!(self.peek_at(2), Some(TokenKind::Symbol("]"))))
+    }
 
-        if let Some(TokenKind::Symbol(op)) = self.peek()
-            && matches!(
-                *op,
-                "+" | "-"
-                    | "*"
-                    | "/"
-                    | "%"
-                    | "=="
-                    | "!="
-                    | "<"
-                    | ">"
-                    | "<="
-                    | ">="
-                    | "&&"
-                    | "||"
-                    | "++"
-                    | "--"
-            )
-        {
-            self.error_here(format!("the '{op}' operator is not yet supported by jvmjs"));
+    /// The assignment operator at the cursor, if any: `Some(None)` for
+    /// `=`, `Some(Some(op))` for compound forms. Does not consume.
+    #[allow(clippy::option_option)]
+    fn assignment_operator(&self) -> Option<Option<BinaryOp>> {
+        match self.peek() {
+            Some(TokenKind::Symbol("=")) => Some(None),
+            Some(TokenKind::Symbol("+=")) => Some(Some(BinaryOp::Add)),
+            Some(TokenKind::Symbol("-=")) => Some(Some(BinaryOp::Sub)),
+            Some(TokenKind::Symbol("*=")) => Some(Some(BinaryOp::Mul)),
+            Some(TokenKind::Symbol("/=")) => Some(Some(BinaryOp::Div)),
+            Some(TokenKind::Symbol("%=")) => Some(Some(BinaryOp::Rem)),
+            _ => None,
+        }
+    }
+
+    fn local_declaration(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        let is_final = self.eat_keyword(Keyword::Final);
+        let ty = self.type_ref()?;
+        if matches!(ty, TypeRef::Array(_)) {
+            self.error_at(start, "arrays are not yet supported by jvmjs");
             return Err(Abort);
         }
 
-        Ok(expr)
+        let mut declarators = Vec::new();
+        loop {
+            let (name, name_span) = self.expect_ident("for the variable")?;
+            let init = if self.eat_symbol("=") {
+                Some(self.expression()?)
+            } else {
+                None
+            };
+            declarators.push(LocalDeclarator {
+                name,
+                init,
+                span: name_span,
+            });
+            if !self.eat_symbol(",") {
+                break;
+            }
+        }
+        let end = self.here().start;
+        self.expect_symbol(";", "to end the declaration")?;
+        Ok(Stmt::LocalDecl {
+            ty,
+            is_final,
+            declarators,
+            span: SourceSpan {
+                start: start.start,
+                end,
+            },
+        })
+    }
+
+    // ----- expressions, by descending precedence -----
+
+    fn expression(&mut self) -> Parsed<Expr> {
+        self.logical_or()
+    }
+
+    fn binary_level(
+        &mut self,
+        next: fn(&mut Self) -> Parsed<Expr>,
+        table: &[(&str, BinaryOp)],
+    ) -> Parsed<Expr> {
+        let mut lhs = next(self)?;
+        'outer: loop {
+            for (symbol, op) in table {
+                if self.at_symbol(symbol) {
+                    self.pos += 1;
+                    let rhs = next(self)?;
+                    let span = SourceSpan {
+                        start: lhs.span().start,
+                        end: rhs.span().end,
+                    };
+                    lhs = Expr::Binary {
+                        op: *op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                        span,
+                    };
+                    continue 'outer;
+                }
+            }
+            return Ok(lhs);
+        }
+    }
+
+    fn logical_or(&mut self) -> Parsed<Expr> {
+        self.binary_level(Self::logical_and, &[("||", BinaryOp::Or)])
+    }
+
+    fn logical_and(&mut self) -> Parsed<Expr> {
+        self.binary_level(Self::equality, &[("&&", BinaryOp::And)])
+    }
+
+    fn equality(&mut self) -> Parsed<Expr> {
+        self.binary_level(
+            Self::relational,
+            &[("==", BinaryOp::Eq), ("!=", BinaryOp::Ne)],
+        )
+    }
+
+    fn relational(&mut self) -> Parsed<Expr> {
+        self.binary_level(
+            Self::additive,
+            &[
+                ("<=", BinaryOp::Le),
+                (">=", BinaryOp::Ge),
+                ("<", BinaryOp::Lt),
+                (">", BinaryOp::Gt),
+            ],
+        )
+    }
+
+    fn additive(&mut self) -> Parsed<Expr> {
+        self.binary_level(
+            Self::multiplicative,
+            &[("+", BinaryOp::Add), ("-", BinaryOp::Sub)],
+        )
+    }
+
+    fn multiplicative(&mut self) -> Parsed<Expr> {
+        self.binary_level(
+            Self::unary,
+            &[
+                ("*", BinaryOp::Mul),
+                ("/", BinaryOp::Div),
+                ("%", BinaryOp::Rem),
+            ],
+        )
+    }
+
+    fn unary(&mut self) -> Parsed<Expr> {
+        let start = self.here();
+        if self.eat_symbol("-") {
+            let operand = self.unary()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: operand.span().end,
+            };
+            // Fold negated numeric literals so `-2147483648` (which
+            // only exists as a negated literal) is representable.
+            return Ok(match operand {
+                Expr::Literal {
+                    value: Literal::Int(v),
+                    ..
+                } => Expr::Literal {
+                    value: Literal::Int(-v),
+                    span,
+                },
+                Expr::Literal {
+                    value: Literal::Double(v),
+                    ..
+                } => Expr::Literal {
+                    value: Literal::Double(-v),
+                    span,
+                },
+                operand => Expr::Unary {
+                    op: UnaryOp::Neg,
+                    operand: Box::new(operand),
+                    span,
+                },
+            });
+        }
+        if self.eat_symbol("!") {
+            let operand = self.unary()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+        if self.eat_symbol("+") {
+            // Unary plus is a no-op.
+            return self.unary();
+        }
+        if self.at_symbol("++") || self.at_symbol("--") {
+            self.error_here("++/-- inside an expression is not yet supported by jvmjs");
+            return Err(Abort);
+        }
+        // Primitive cast: `(int) x` — unambiguous because a primitive
+        // keyword can't start a parenthesized expression.
+        if self.at_symbol("(")
+            && matches!(
+                self.peek_at(1),
+                Some(TokenKind::Keyword(
+                    Keyword::Int | Keyword::Double | Keyword::Boolean | Keyword::Char
+                ))
+            )
+            && matches!(self.peek_at(2), Some(TokenKind::Symbol(")")))
+        {
+            self.pos += 1;
+            let ty = self.type_ref()?;
+            self.expect_symbol(")", "to close the cast")?;
+            let operand = self.unary()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Ok(Expr::Cast {
+                ty,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+        self.postfix_expression()
     }
 
     fn postfix_expression(&mut self) -> Parsed<Expr> {
@@ -717,7 +991,6 @@ mod tests {
             r#"
             class Main {
                 static void run() {
-                    int x = 5;
                     if (true) { }
                     System.out.println("still parsed");
                 }
@@ -725,20 +998,204 @@ mod tests {
             "#,
         );
         let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        assert!(messages[0].contains("local variable declarations are not yet supported"));
-        assert!(messages[1].contains("if statements are not yet supported"));
-        // Recovery: only the two unsupported statements are reported.
-        assert_eq!(errors.len(), 2, "{messages:?}");
+        assert!(messages[0].contains("if statements are not yet supported"));
+        assert_eq!(errors.len(), 1, "{messages:?}");
     }
 
     #[test]
-    fn operators_are_reported_not_yet_supported() {
-        let errors =
-            parse_errors(r"class Main { static void run() { System.out.println(1 + 2); } }");
+    fn parses_local_declarations() {
+        let unit = parse_ok(
+            r#"
+            class Main {
+                static void run() {
+                    int a = 1, b;
+                    final double d = 2.5;
+                    String s = "hi";
+                    char c = 'x';
+                    boolean flag = true;
+                }
+            }
+            "#,
+        );
+        let body = &unit.classes[0].methods[0].body;
+        assert_eq!(body.len(), 5);
+        let Stmt::LocalDecl {
+            ty,
+            is_final,
+            declarators,
+            ..
+        } = &body[0]
+        else {
+            panic!("expected a declaration, got {:?}", body[0]);
+        };
+        assert_eq!(*ty, TypeRef::Int);
+        assert!(!is_final);
+        assert_eq!(declarators.len(), 2);
+        assert_eq!(declarators[0].name, "a");
+        assert!(declarators[0].init.is_some());
+        assert!(declarators[1].init.is_none());
+        let Stmt::LocalDecl { is_final: true, .. } = &body[1] else {
+            panic!("expected final declaration");
+        };
+    }
+
+    #[test]
+    fn parses_assignments_and_increments() {
+        let unit = parse_ok(
+            r"
+            class Main {
+                static void run() {
+                    int x = 0;
+                    x = 5;
+                    x += 2;
+                    x++;
+                    --x;
+                }
+            }
+            ",
+        );
+        let body = &unit.classes[0].methods[0].body;
+        let Stmt::Assign { name, op: None, .. } = &body[1] else {
+            panic!("expected plain assignment");
+        };
+        assert_eq!(name, "x");
+        let Stmt::Assign {
+            op: Some(BinaryOp::Add),
+            ..
+        } = &body[2]
+        else {
+            panic!("expected compound assignment");
+        };
+        // x++ and --x both lower to compound assignments by 1.
+        let Stmt::Assign {
+            op: Some(BinaryOp::Add),
+            value,
+            ..
+        } = &body[3]
+        else {
+            panic!("expected x++ lowering");
+        };
+        assert!(matches!(
+            value,
+            Expr::Literal {
+                value: Literal::Int(1),
+                ..
+            }
+        ));
+        let Stmt::Assign {
+            op: Some(BinaryOp::Sub),
+            ..
+        } = &body[4]
+        else {
+            panic!("expected --x lowering");
+        };
+    }
+
+    #[test]
+    fn precedence_binds_multiplication_tighter_than_addition() {
+        let unit = parse_ok(r"class M { static void f() { System.out.println(1 + 2 * 3); } }");
+        let Stmt::Expr(Expr::Call { args, .. }) = &unit.classes[0].methods[0].body[0] else {
+            panic!("expected call");
+        };
+        let Expr::Binary {
+            op: BinaryOp::Add,
+            rhs,
+            ..
+        } = &args[0]
+        else {
+            panic!("expected + at the top, got {:?}", args[0]);
+        };
+        assert!(matches!(
+            **rhs,
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn precedence_comparisons_and_logic() {
+        let unit = parse_ok(
+            r"class M { static void f() { System.out.println(1 < 2 && 3 >= 2 || !false); } }",
+        );
+        let Stmt::Expr(Expr::Call { args, .. }) = &unit.classes[0].methods[0].body[0] else {
+            panic!("expected call");
+        };
+        // || at the top; && below it; comparisons below that.
+        let Expr::Binary {
+            op: BinaryOp::Or,
+            lhs,
+            rhs,
+            ..
+        } = &args[0]
+        else {
+            panic!("expected || at the top, got {:?}", args[0]);
+        };
+        assert!(matches!(
+            **lhs,
+            Expr::Binary {
+                op: BinaryOp::And,
+                ..
+            }
+        ));
+        assert!(matches!(
+            **rhs,
+            Expr::Unary {
+                op: UnaryOp::Not,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn negative_int_min_literal_folds() {
+        let unit = parse_ok(r"class M { static void f() { System.out.println(-2147483648); } }");
+        let Stmt::Expr(Expr::Call { args, .. }) = &unit.classes[0].methods[0].body[0] else {
+            panic!("expected call");
+        };
         assert!(
-            errors[0]
-                .message
-                .contains("'+' operator is not yet supported")
+            matches!(&args[0], Expr::Literal { value: Literal::Int(v), .. } if *v == -2_147_483_648)
+        );
+    }
+
+    #[test]
+    fn parses_primitive_casts() {
+        let unit = parse_ok(r"class M { static void f() { System.out.println((int) 2.9); } }");
+        let Stmt::Expr(Expr::Call { args, .. }) = &unit.classes[0].methods[0].body[0] else {
+            panic!("expected call");
+        };
+        let Expr::Cast {
+            ty: TypeRef::Int, ..
+        } = &args[0]
+        else {
+            panic!("expected cast, got {:?}", args[0]);
+        };
+    }
+
+    #[test]
+    fn parenthesized_expression_is_not_a_cast() {
+        let unit = parse_ok(r"class M { static void f() { System.out.println((1 + 2) * 3); } }");
+        let Stmt::Expr(Expr::Call { args, .. }) = &unit.classes[0].methods[0].body[0] else {
+            panic!("expected call");
+        };
+        assert!(matches!(
+            &args[0],
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn expression_statements_must_be_calls() {
+        let errors = parse_errors(r"class M { static void f() { int x = 1; x + 1; } }");
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("not a statement"),
+            "{}",
+            errors[0].message
         );
     }
 

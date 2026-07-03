@@ -89,12 +89,10 @@ describe('javac (compile)', () => {
   it('gives friendly diagnostics for not-yet-supported Java', async () => {
     const session = await createJvmSession();
     const result = session.compile([
-      { path: 'Main.java', text: 'class Main { static void f() { int x = 1; } }' },
+      { path: 'Main.java', text: 'class Main { static void f() { while (true) { } } }' },
     ]);
     expect(result.success).toBe(false);
-    expect(result.diagnostics[0]?.message).toMatch(
-      /local variable declarations are not yet supported/,
-    );
+    expect(result.diagnostics[0]?.message).toMatch(/while loops are not yet supported/);
   });
 });
 
@@ -109,6 +107,37 @@ describe('java (run)', () => {
     expect(result.status).toBe('completed');
     expect(result.exitCode).toBe(0);
     expect(stdout.join('')).toBe('Hello, World!\n');
+  });
+
+  it('runs a stage-1 program: locals, operators, and concatenation', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Stage1.java',
+        text: `
+public class Stage1 {
+    public static void main(String[] args) {
+        int celsius = 25;
+        double fahrenheit = celsius * 9 / 5.0 + 32;
+        String report = "temp: " + fahrenheit + " F";
+        boolean warm = fahrenheit > 70.0 && celsius < 100;
+        System.out.println(report);
+        System.out.println(warm);
+        celsius += 5;
+        celsius++;
+        System.out.println((char) (64 + celsius / 31));
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Stage1', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('temp: 77.0 F\ntrue\nA\n');
   });
 
   it('routes System.err to the stderr callback', async () => {

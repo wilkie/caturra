@@ -18,21 +18,40 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Vertical slice (v0) — accepted today
+## Accepted today (v0 slice + stage 1)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
 - Class declaration: modifiers, name, `{ ... }` body of method declarations.
 - Method declaration: modifiers (`public` / `static` etc.), `void` or named /
   primitive / array return type, parameter list, block body.
-- Statements: blocks and expression statements.
-- Expressions: literals (`int`, `double`, `String`, `char`, `boolean`, `null`),
-  dotted names (`System.out`), and method calls on dotted names.
+- Statements: blocks, expression statements (method calls only, as in Java),
+  local variable declarations (`int a = 1, b;`, `final double d = 2.5;`,
+  `String s = "hi";`) with linear definite-assignment checking, assignment
+  (`=`, `+=`, `-=`, `*=`, `/=`, `%=`), and statement-position `++`/`--`
+  (prefix or postfix), which lower to `+= 1` / `-= 1`.
+- Expressions, with Java precedence:
+  - literals (`int`, `double`, `String`, `char`, `boolean`, `null`), with
+    `-2147483648` folding so `Integer.MIN_VALUE` is writable;
+  - local variable reads;
+  - arithmetic `+ - * / %` and unary `-` with binary numeric promotion
+    (JLS §5.6.2), 32-bit wrapping int semantics, `ArithmeticException` on
+    int division by zero, IEEE double semantics (`Infinity`, `NaN`);
+  - comparisons `< <= > >= == !=` (numeric, boolean equality, and reference
+    equality on strings — literals are interned, so the classic `==` vs
+    `equals` lesson works) with Java NaN behavior;
+  - short-circuit `&&` / `||` and `!`;
+  - primitive casts `(int) (double) (char) (boolean)` including Java's d2i
+    saturation and i2c truncation;
+  - string concatenation with `+`/`+=` (compiled to `StringBuilder` chains),
+    formatting `int`/`double`/`char`/`boolean`/`null` exactly as Java does.
 - Callable surface: `System.out` / `System.err` `print` / `println` with zero
-  arguments or one literal argument.
+  arguments or one argument of any supported expression type.
 
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
+Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
+friendly message for now.
 
 ## Codegen choices
 
@@ -46,10 +65,10 @@ file full of future-Java still reports one clear message per construct.
   (v0 classes are never instantiated). This is a deviation from javac output
   and is revisited with `new`.
 
-## Staging after v0 (each stage flips its diagnostics to real support)
+## Staging (each stage flips its diagnostics to real support)
 
-1. Local variables, assignment, arithmetic/comparison/logical operators,
-   string concatenation.
+1. ~~Local variables, assignment, arithmetic/comparison/logical operators,
+   string concatenation.~~ **Done (2026-07-02).**
 2. Control flow: `if`/`else`, `while`, `for`, `break`/`continue`.
 3. Static methods with parameters and returns (user-defined), recursion.
 4. Arrays (1D, then 2D), `for-each`.

@@ -52,13 +52,17 @@ impl<'run> Interpreter<'run> {
         reference
     }
 
-    /// Execute one method to completion (v0: no user-method calls yet,
-    /// so there is exactly one frame).
+    /// Execute one method to completion (no user-method calls yet, so
+    /// there is exactly one frame).
+    ///
+    /// The dispatch loop is one long match by design; splitting it per
+    /// opcode family would only scatter the instruction set.
+    #[allow(clippy::too_many_lines)]
     pub fn execute(
         &mut self,
         class: &ClassFile,
         method: &MethodInfo,
-        locals: Vec<JValue>,
+        mut locals: Vec<JValue>,
     ) -> Result<(), VmError> {
         let class_name = class.class_name().unwrap_or("<unknown>").to_owned();
         let malformed = |reason: String| VmError::MalformedClass {
@@ -74,6 +78,9 @@ impl<'run> Interpreter<'run> {
         let code = read_code_attribute(&code_info.info)
             .map_err(|e| malformed(format!("bad Code attribute: {e}")))?;
 
+        if locals.len() < usize::from(code.max_locals) {
+            locals.resize(usize::from(code.max_locals), JValue::Int(0));
+        }
         let mut frame = Frame {
             locals,
             stack: Vec::new(),
@@ -87,10 +94,13 @@ impl<'run> Interpreter<'run> {
             }
             self.remaining_instructions -= 1;
 
-            let opcode = *bytes.get(pc).ok_or_else(|| {
-                malformed(format!("execution ran off the end of bytecode at pc {pc}"))
+            let addr = pc;
+            let opcode = *bytes.get(addr).ok_or_else(|| {
+                malformed(format!(
+                    "execution ran off the end of bytecode at pc {addr}"
+                ))
             })?;
-            pc += 1;
+            pc = addr + 1;
 
             match opcode {
                 op::NOP => {}
@@ -118,6 +128,184 @@ impl<'run> Interpreter<'run> {
                     let index = read_u16(bytes, &mut pc, &malformed)?;
                     let value = self.load_constant(class, index, &malformed)?;
                     frame.stack.push(value);
+                }
+
+                // ----- locals -----
+                op::ILOAD | op::DLOAD | op::ALOAD => {
+                    let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                    frame.load(slot, &malformed)?;
+                }
+                op::ILOAD_0..=op::ILOAD_3 => {
+                    frame.load(usize::from(opcode - op::ILOAD_0), &malformed)?;
+                }
+                op::DLOAD_0..=op::DLOAD_3 => {
+                    frame.load(usize::from(opcode - op::DLOAD_0), &malformed)?;
+                }
+                op::ALOAD_0..=op::ALOAD_3 => {
+                    frame.load(usize::from(opcode - op::ALOAD_0), &malformed)?;
+                }
+                op::ISTORE | op::DSTORE | op::ASTORE => {
+                    let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                    frame.store(slot, &malformed)?;
+                }
+                op::ISTORE_0..=op::ISTORE_3 => {
+                    frame.store(usize::from(opcode - op::ISTORE_0), &malformed)?;
+                }
+                op::DSTORE_0..=op::DSTORE_3 => {
+                    frame.store(usize::from(opcode - op::DSTORE_0), &malformed)?;
+                }
+                op::ASTORE_0..=op::ASTORE_3 => {
+                    frame.store(usize::from(opcode - op::ASTORE_0), &malformed)?;
+                }
+
+                // ----- stack manipulation -----
+                op::POP => {
+                    frame.pop()?;
+                }
+                op::DUP => {
+                    let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
+                    frame.stack.push(top);
+                }
+                op::SWAP => {
+                    let len = frame.stack.len();
+                    if len < 2 {
+                        return Err(VmError::StackUnderflow);
+                    }
+                    frame.stack.swap(len - 1, len - 2);
+                }
+
+                // ----- arithmetic (Java wrapping semantics) -----
+                op::IADD => frame.int_binop(i32::wrapping_add)?,
+                op::ISUB => frame.int_binop(i32::wrapping_sub)?,
+                op::IMUL => frame.int_binop(i32::wrapping_mul)?,
+                op::IDIV => frame.int_division(i32::wrapping_div)?,
+                op::IREM => frame.int_division(i32::wrapping_rem)?,
+                op::INEG => {
+                    let value = frame.pop_int()?;
+                    frame.stack.push(JValue::Int(value.wrapping_neg()));
+                }
+                op::DADD => frame.double_binop(|a, b| a + b)?,
+                op::DSUB => frame.double_binop(|a, b| a - b)?,
+                op::DMUL => frame.double_binop(|a, b| a * b)?,
+                op::DDIV => frame.double_binop(|a, b| a / b)?,
+                op::DREM => frame.double_binop(|a, b| a % b)?,
+                op::DNEG => {
+                    let value = frame.pop_double()?;
+                    frame.stack.push(JValue::Double(-value));
+                }
+
+                // ----- conversions -----
+                op::I2D => {
+                    let value = frame.pop_int()?;
+                    frame.stack.push(JValue::Double(f64::from(value)));
+                }
+                op::D2I => {
+                    let value = frame.pop_double()?;
+                    // `as` matches JVM d2i: NaN -> 0, saturating bounds.
+                    frame.stack.push(JValue::Int(value as i32));
+                }
+                op::I2C => {
+                    let value = frame.pop_int()?;
+                    // i2c truncates to 16 bits and zero-extends.
+                    let truncated = (value.cast_unsigned() & 0xFFFF).cast_signed();
+                    frame.stack.push(JValue::Int(truncated));
+                }
+
+                // ----- comparisons and branches -----
+                op::DCMPL | op::DCMPG => {
+                    let b = frame.pop_double()?;
+                    let a = frame.pop_double()?;
+                    let result = if a.is_nan() || b.is_nan() {
+                        if opcode == op::DCMPG { 1 } else { -1 }
+                    } else if a < b {
+                        -1
+                    } else {
+                        i32::from(a > b)
+                    };
+                    frame.stack.push(JValue::Int(result));
+                }
+                op::IFEQ..=op::IFLE => {
+                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                    let value = frame.pop_int()?;
+                    let jump = match opcode {
+                        op::IFEQ => value == 0,
+                        op::IFNE => value != 0,
+                        op::IFLT => value < 0,
+                        op::IFGE => value >= 0,
+                        op::IFGT => value > 0,
+                        _ => value <= 0,
+                    };
+                    if jump {
+                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                    }
+                }
+                op::IF_ICMPEQ..=op::IF_ICMPLE => {
+                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                    let b = frame.pop_int()?;
+                    let a = frame.pop_int()?;
+                    let jump = match opcode {
+                        op::IF_ICMPEQ => a == b,
+                        op::IF_ICMPNE => a != b,
+                        op::IF_ICMPLT => a < b,
+                        op::IF_ICMPGE => a >= b,
+                        op::IF_ICMPGT => a > b,
+                        _ => a <= b,
+                    };
+                    if jump {
+                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                    }
+                }
+                op::IF_ACMPEQ | op::IF_ACMPNE => {
+                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                    let b = frame.pop_ref()?;
+                    let a = frame.pop_ref()?;
+                    let jump = (a == b) == (opcode == op::IF_ACMPEQ);
+                    if jump {
+                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                    }
+                }
+                op::GOTO => {
+                    let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                    pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                }
+
+                // ----- objects -----
+                op::NEW => {
+                    let index = read_u16(bytes, &mut pc, &malformed)?;
+                    let target = class
+                        .constant_pool
+                        .get_class_name(index)
+                        .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?;
+                    let object = intrinsics::instantiate(target).ok_or_else(|| {
+                        VmError::UnknownIntrinsic(format!("cannot instantiate {target}"))
+                    })?;
+                    let reference = self.heap.alloc(object);
+                    frame.stack.push(JValue::Ref(Some(reference)));
+                }
+                op::INVOKESPECIAL => {
+                    let index = read_u16(bytes, &mut pc, &malformed)?;
+                    let (target_class, method_name, descriptor) = class
+                        .constant_pool
+                        .get_member_ref(index)
+                        .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
+                        .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
+                    let arg_count = descriptor_arg_count(&descriptor)
+                        .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+                    for _ in 0..arg_count {
+                        frame.pop()?;
+                    }
+                    let Some(receiver) = frame.pop_ref()? else {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.NullPointerException",
+                        )));
+                    };
+                    intrinsics::invoke_special(
+                        &self.heap,
+                        receiver,
+                        &target_class,
+                        &method_name,
+                        &descriptor,
+                    )?;
                 }
                 op::GETSTATIC => {
                     let index = read_u16(bytes, &mut pc, &malformed)?;
@@ -179,7 +367,7 @@ impl<'run> Interpreter<'run> {
         };
 
         let result = intrinsics::invoke_virtual(
-            &self.heap,
+            &mut self.heap,
             self.console,
             receiver,
             &target_class,
@@ -226,7 +414,6 @@ impl<'run> Interpreter<'run> {
 }
 
 struct Frame {
-    #[allow(dead_code)] // locals are read once loads land (stage 1).
     locals: Vec<JValue>,
     stack: Vec<JValue>,
 }
@@ -235,6 +422,98 @@ impl Frame {
     fn pop(&mut self) -> Result<JValue, VmError> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
     }
+
+    fn pop_int(&mut self) -> Result<i32, VmError> {
+        match self.pop()? {
+            JValue::Int(value) => Ok(value),
+            other => Err(VmError::UncaughtException(format!(
+                "java.lang.VerifyError: expected an int on the stack, found {other:?}"
+            ))),
+        }
+    }
+
+    fn pop_double(&mut self) -> Result<f64, VmError> {
+        match self.pop()? {
+            JValue::Double(value) => Ok(value),
+            other => Err(VmError::UncaughtException(format!(
+                "java.lang.VerifyError: expected a double on the stack, found {other:?}"
+            ))),
+        }
+    }
+
+    fn pop_ref(&mut self) -> Result<Option<HeapRef>, VmError> {
+        match self.pop()? {
+            JValue::Ref(reference) => Ok(reference),
+            other => Err(VmError::UncaughtException(format!(
+                "java.lang.VerifyError: expected a reference on the stack, found {other:?}"
+            ))),
+        }
+    }
+
+    fn load(&mut self, slot: usize, malformed: &impl Fn(String) -> VmError) -> Result<(), VmError> {
+        let value = *self
+            .locals
+            .get(slot)
+            .ok_or_else(|| malformed(format!("load from out-of-range local slot {slot}")))?;
+        self.stack.push(value);
+        Ok(())
+    }
+
+    fn store(
+        &mut self,
+        slot: usize,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<(), VmError> {
+        let value = self.pop()?;
+        let target = self
+            .locals
+            .get_mut(slot)
+            .ok_or_else(|| malformed(format!("store to out-of-range local slot {slot}")))?;
+        *target = value;
+        Ok(())
+    }
+
+    fn int_binop(&mut self, apply: impl Fn(i32, i32) -> i32) -> Result<(), VmError> {
+        let b = self.pop_int()?;
+        let a = self.pop_int()?;
+        self.stack.push(JValue::Int(apply(a, b)));
+        Ok(())
+    }
+
+    /// `idiv`/`irem`: like [`Self::int_binop`] plus Java's division-by-zero
+    /// exception.
+    fn int_division(&mut self, apply: impl Fn(i32, i32) -> i32) -> Result<(), VmError> {
+        let b = self.pop_int()?;
+        let a = self.pop_int()?;
+        if b == 0 {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.ArithmeticException: / by zero",
+            )));
+        }
+        self.stack.push(JValue::Int(apply(a, b)));
+        Ok(())
+    }
+
+    fn double_binop(&mut self, apply: impl Fn(f64, f64) -> f64) -> Result<(), VmError> {
+        let b = self.pop_double()?;
+        let a = self.pop_double()?;
+        self.stack.push(JValue::Double(apply(a, b)));
+        Ok(())
+    }
+}
+
+/// Resolve a branch offset relative to the branch opcode's address.
+fn branch_target(
+    addr: usize,
+    offset: i16,
+    code_len: usize,
+    malformed: &impl Fn(String) -> VmError,
+) -> Result<usize, VmError> {
+    let target = i64::try_from(addr).expect("code fits i64") + i64::from(offset);
+    usize::try_from(target)
+        .ok()
+        .filter(|t| *t < code_len)
+        .ok_or_else(|| malformed(format!("branch at pc {addr} to out-of-range {target}")))
 }
 
 fn read_u8(

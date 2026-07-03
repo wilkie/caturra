@@ -56,6 +56,58 @@ pub enum TypeRef {
 pub enum Stmt {
     Block(Vec<Stmt>),
     Expr(Expr),
+    /// `int a = 1, b;` — one declared type, one or more declarators.
+    LocalDecl {
+        ty: TypeRef,
+        is_final: bool,
+        declarators: Vec<LocalDeclarator>,
+        span: SourceSpan,
+    },
+    /// `x = e;`, `x += e;` (op = `Some(Add)`), and `x++;` (lowered to
+    /// `x += 1`). Plain assignment has `op = None`.
+    Assign {
+        name: String,
+        op: Option<BinaryOp>,
+        value: Expr,
+        span: SourceSpan,
+    },
+}
+
+/// One `name = init` (or bare `name`) in a local declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalDeclarator {
+    pub name: String,
+    pub init: Option<Expr>,
+    pub span: SourceSpan,
+}
+
+/// A binary operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+    /// `&&` (short-circuit)
+    And,
+    /// `||` (short-circuit)
+    Or,
+}
+
+/// A unary operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    /// `-x`
+    Neg,
+    /// `!x`
+    Not,
 }
 
 /// An expression.
@@ -77,13 +129,35 @@ pub enum Expr {
         args: Vec<Expr>,
         span: SourceSpan,
     },
+    Binary {
+        op: BinaryOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        span: SourceSpan,
+    },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+        span: SourceSpan,
+    },
+    /// A primitive cast: `(int) x`.
+    Cast {
+        ty: TypeRef,
+        operand: Box<Expr>,
+        span: SourceSpan,
+    },
 }
 
 impl Expr {
     #[must_use]
     pub fn span(&self) -> SourceSpan {
         match self {
-            Expr::Literal { span, .. } | Expr::Name { span, .. } | Expr::Call { span, .. } => *span,
+            Expr::Literal { span, .. }
+            | Expr::Name { span, .. }
+            | Expr::Call { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::Unary { span, .. }
+            | Expr::Cast { span, .. } => *span,
         }
     }
 }

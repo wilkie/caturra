@@ -39,11 +39,39 @@ impl IntrinsicStatics {
     }
 }
 
+/// Instantiate an intrinsic class (the `new` opcode). Returns `None`
+/// for classes the VM doesn't know how to construct.
+#[must_use]
+pub fn instantiate(class: &str) -> Option<HeapObject> {
+    match class {
+        "java/lang/StringBuilder" => Some(HeapObject::StringBuilder(Vec::new())),
+        _ => None,
+    }
+}
+
+/// Invoke an intrinsic constructor (`invokespecial <init>`).
+pub fn invoke_special(
+    heap: &Heap,
+    receiver: HeapRef,
+    class: &str,
+    method: &str,
+    descriptor: &str,
+) -> Result<(), VmError> {
+    match (heap.get(receiver), method, descriptor) {
+        // StringBuilder is fully initialized at `new`; its no-arg
+        // constructor has nothing left to do.
+        (Some(HeapObject::StringBuilder(_)), "<init>", "()V") => Ok(()),
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "{class}.{method}{descriptor}"
+        ))),
+    }
+}
+
 /// Invoke an intrinsic instance method. Returns `Ok(None)` for `void`,
 /// `Ok(Some(value))` for a result, or `Err` if the member is not an
 /// intrinsic the VM knows.
 pub fn invoke_virtual(
-    heap: &Heap,
+    heap: &mut Heap,
     console: &mut dyn ConsoleIo,
     receiver: HeapRef,
     class: &str,
@@ -58,6 +86,7 @@ pub fn invoke_virtual(
 
     match (receiver_object, method) {
         (HeapObject::PrintStream(stream), "print" | "println") => {
+            let stream = *stream;
             let mut text = print_argument_text(heap, descriptor, args)?;
             if method == "println" {
                 text.push('\n');
@@ -69,10 +98,54 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
+        (HeapObject::StringBuilder(_), "append") => {
+            let appended = append_argument_text(heap, descriptor, args)?;
+            let Some(HeapObject::StringBuilder(units)) = heap.get_mut(receiver) else {
+                unreachable!("receiver kind checked above");
+            };
+            units.extend(appended.encode_utf16());
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        (HeapObject::StringBuilder(units), "toString") => {
+            let units = units.clone();
+            let text = heap.alloc(HeapObject::JavaString(units));
+            Ok(Some(JValue::Ref(Some(text))))
+        }
         _ => Err(VmError::UnknownIntrinsic(format!(
             "{class}.{method}{descriptor}"
         ))),
     }
+}
+
+/// Render a `StringBuilder.append` argument the way Java would.
+fn append_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result<String, VmError> {
+    let text = match (descriptor, args) {
+        ("(I)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => v.to_string(),
+        ("(Z)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => {
+            if *v != 0 { "true" } else { "false" }.to_owned()
+        }
+        ("(C)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => {
+            let unit = u32::try_from(*v).unwrap_or(u32::from(u16::MAX));
+            char::from_u32(unit).map_or_else(|| String::from('\u{FFFD}'), String::from)
+        }
+        ("(D)Ljava/lang/StringBuilder;", [JValue::Double(v)]) => java_double_to_string(*v),
+        ("(Ljava/lang/String;)Ljava/lang/StringBuilder;", [JValue::Ref(reference)]) => {
+            match reference {
+                None => String::from("null"),
+                Some(reference) => heap.string_text(*reference).ok_or_else(|| {
+                    VmError::UnknownIntrinsic(String::from(
+                        "append argument is not a string object",
+                    ))
+                })?,
+            }
+        }
+        _ => {
+            return Err(VmError::UnknownIntrinsic(format!(
+                "StringBuilder.append overload {descriptor}"
+            )));
+        }
+    };
+    Ok(text)
 }
 
 /// Render a print/println argument the way Java would.
@@ -151,7 +224,7 @@ mod tests {
         };
         let text = heap.alloc_string("Hello, World!");
         invoke_virtual(
-            &heap,
+            &mut heap,
             &mut console,
             out,
             "java/io/PrintStream",
@@ -184,7 +257,7 @@ mod tests {
             panic!("expected a reference");
         };
         invoke_virtual(
-            &heap,
+            &mut heap,
             &mut console,
             err,
             "java/io/PrintStream",
@@ -195,6 +268,51 @@ mod tests {
         .unwrap();
         assert_eq!(console.stderr_text(), "7\n");
         assert_eq!(console.stdout_text(), "");
+    }
+
+    #[test]
+    fn stringbuilder_appends_and_converts() {
+        let mut heap = Heap::new();
+        let mut console = BufferedConsole::new();
+        let builder =
+            heap.alloc(instantiate("java/lang/StringBuilder").expect("known intrinsic class"));
+        invoke_special(&heap, builder, "java/lang/StringBuilder", "<init>", "()V").unwrap();
+
+        let hello = heap.alloc_string("x = ");
+        invoke_virtual(
+            &mut heap,
+            &mut console,
+            builder,
+            "java/lang/StringBuilder",
+            "append",
+            "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+            &[JValue::Ref(Some(hello))],
+        )
+        .unwrap();
+        invoke_virtual(
+            &mut heap,
+            &mut console,
+            builder,
+            "java/lang/StringBuilder",
+            "append",
+            "(I)Ljava/lang/StringBuilder;",
+            &[JValue::Int(42)],
+        )
+        .unwrap();
+        let result = invoke_virtual(
+            &mut heap,
+            &mut console,
+            builder,
+            "java/lang/StringBuilder",
+            "toString",
+            "()Ljava/lang/String;",
+            &[],
+        )
+        .unwrap();
+        let Some(JValue::Ref(Some(text))) = result else {
+            panic!("expected a string reference, got {result:?}");
+        };
+        assert_eq!(heap.string_text(text).as_deref(), Some("x = 42"));
     }
 
     #[test]

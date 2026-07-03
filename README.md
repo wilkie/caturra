@@ -33,9 +33,12 @@ filesystem, which the host page can seed and inspect (`writeFile`, `readTextFile
 
 ## Status
 
-**The vertical slice works end to end**: Hello World (and every
-`print`/`println` overload) compiles with our compiler and runs on our VM, in
-the browser, inside a Web Worker. Implemented and tested:
+**Stage 1 of the language is live** (see `specs/LANGUAGE.md`): programs with
+local variables, arithmetic/comparison/logical operators, casts, and string
+concatenation compile with our compiler and run on our VM in the browser —
+with Java-exact semantics (int wrapping, `ArithmeticException` on `/ 0`,
+NaN comparisons, `Double.toString` formatting, literal interning, short-circuit
+evaluation). Implemented and tested:
 
 - class file model, constant pool, `Code` attribute, binary read/write round-trip
 - compiler: lexer (complete token surface) → recursive-descent parser →
@@ -49,9 +52,8 @@ the browser, inside a Web Worker. Implemented and tested:
   stdin over SharedArrayBuffer + Atomics ready for when `Scanner` lands
 - virtual filesystem + console IO plumbing across the whole stack
 
-Next per `specs/LANGUAGE.md` staging: local variables, operators, and string
-concatenation; then control flow; then user-defined methods. The class library
-strategy is in `specs/SCOPE.md`.
+Next per `specs/LANGUAGE.md` staging: control flow (`if`/`while`/`for`), then
+user-defined methods. The class library strategy is in `specs/SCOPE.md`.
 
 Deployment note: pages embedding jvmjs need `Cross-Origin-Opener-Policy:
 same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers for

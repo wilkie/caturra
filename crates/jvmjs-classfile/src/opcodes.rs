@@ -19,6 +19,76 @@ pub const SIPUSH: u8 = 0x11;
 pub const LDC: u8 = 0x12;
 pub const LDC_W: u8 = 0x13;
 pub const LDC2_W: u8 = 0x14;
+
+// Local variable loads (with 0-3 short forms).
+pub const ILOAD: u8 = 0x15;
+pub const DLOAD: u8 = 0x18;
+pub const ALOAD: u8 = 0x19;
+pub const ILOAD_0: u8 = 0x1A;
+pub const ILOAD_3: u8 = 0x1D;
+pub const DLOAD_0: u8 = 0x26;
+pub const DLOAD_3: u8 = 0x29;
+pub const ALOAD_0: u8 = 0x2A;
+pub const ALOAD_3: u8 = 0x2D;
+
+// Local variable stores (with 0-3 short forms).
+pub const ISTORE: u8 = 0x36;
+pub const DSTORE: u8 = 0x39;
+pub const ASTORE: u8 = 0x3A;
+pub const ISTORE_0: u8 = 0x3B;
+pub const ISTORE_3: u8 = 0x3E;
+pub const DSTORE_0: u8 = 0x47;
+pub const DSTORE_3: u8 = 0x4A;
+pub const ASTORE_0: u8 = 0x4B;
+pub const ASTORE_3: u8 = 0x4E;
+
+// Stack manipulation.
+pub const POP: u8 = 0x57;
+pub const DUP: u8 = 0x59;
+pub const SWAP: u8 = 0x5F;
+
+// Arithmetic.
+pub const IADD: u8 = 0x60;
+pub const DADD: u8 = 0x63;
+pub const ISUB: u8 = 0x64;
+pub const DSUB: u8 = 0x67;
+pub const IMUL: u8 = 0x68;
+pub const DMUL: u8 = 0x6B;
+pub const IDIV: u8 = 0x6C;
+pub const DDIV: u8 = 0x6F;
+pub const IREM: u8 = 0x70;
+pub const DREM: u8 = 0x73;
+pub const INEG: u8 = 0x74;
+pub const DNEG: u8 = 0x77;
+
+// Numeric conversions.
+pub const I2D: u8 = 0x87;
+pub const D2I: u8 = 0x8E;
+pub const I2C: u8 = 0x92;
+
+// Comparisons.
+pub const DCMPL: u8 = 0x97;
+pub const DCMPG: u8 = 0x98;
+
+// Branches. IFEQ..GOTO is a contiguous range used for scanning.
+pub const IFEQ: u8 = 0x99;
+pub const IFNE: u8 = 0x9A;
+pub const IFLT: u8 = 0x9B;
+pub const IFGE: u8 = 0x9C;
+pub const IFGT: u8 = 0x9D;
+pub const IFLE: u8 = 0x9E;
+pub const IF_ICMPEQ: u8 = 0x9F;
+pub const IF_ICMPNE: u8 = 0xA0;
+pub const IF_ICMPLT: u8 = 0xA1;
+pub const IF_ICMPGE: u8 = 0xA2;
+pub const IF_ICMPGT: u8 = 0xA3;
+pub const IF_ICMPLE: u8 = 0xA4;
+pub const IF_ACMPEQ: u8 = 0xA5;
+pub const IF_ACMPNE: u8 = 0xA6;
+pub const GOTO: u8 = 0xA7;
+
 pub const RETURN: u8 = 0xB1;
 pub const GETSTATIC: u8 = 0xB2;
 pub const INVOKEVIRTUAL: u8 = 0xB6;
+pub const INVOKESPECIAL: u8 = 0xB7;
+pub const NEW: u8 = 0xBB;

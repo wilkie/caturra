@@ -161,7 +161,7 @@ mod tests {
     fn unsupported_features_fail_with_friendly_messages() {
         let result = compile(&[SourceFile {
             path: String::from("Main.java"),
-            text: String::from("class Main { static void run() { int x = 1; } }"),
+            text: String::from("class Main { static void run() { while (true) { } } }"),
         }]);
         assert!(!result.success());
         assert!(result.classes.is_empty());
