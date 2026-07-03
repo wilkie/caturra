@@ -387,6 +387,45 @@ public class Stage7 {
     expect(stdout.join('')).toBe("[HEY!, HO!, LET'S-GO!]\n40\nHEY\n");
   });
 
+  it('runs a stage-8 program: file IO full circle through the VFS', async () => {
+    const session = await createJvmSession();
+    // The host seeds an input file...
+    session.writeFile('/grades.txt', '90 85 77 100');
+    const compiled = session.compile([
+      {
+        path: 'Curve.java',
+        text: `
+import java.io.File;
+import java.io.PrintWriter;
+import java.util.Scanner;
+
+public class Curve {
+    public static void main(String[] args) throws Exception {
+        Scanner in = new Scanner(new File("/grades.txt"));
+        PrintWriter out = new PrintWriter("/curved.txt");
+        int count = 0;
+        while (in.hasNextInt()) {
+            out.println(Math.min(100, in.nextInt() + 5));
+            count++;
+        }
+        out.close();
+        System.out.println("curved " + count + " grades");
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Curve', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('curved 4 grades\n');
+    // ...and reads Java's output back.
+    expect(session.readTextFile('/curved.txt')).toBe('95\n90\n82\n100\n');
+  });
+
   it('routes System.err to the stderr callback', async () => {
     const session = await createJvmSession();
     const compiled = session.compile([

@@ -8,6 +8,7 @@
 
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapObject, HeapRef, JValue, StdStream};
+use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
 /// Lazily allocated intrinsic singletons (`System.out`, `System.err`).
@@ -58,29 +59,109 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             eof: false,
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
+        "java/io/File" => Some(HeapObject::File(String::new())),
+        "java/io/PrintWriter" => Some(HeapObject::Writer {
+            path: String::new(),
+        }),
         _ => None,
     }
 }
 
 /// Invoke an intrinsic constructor (`invokespecial <init>`).
 pub fn invoke_special(
-    heap: &Heap,
+    heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
     receiver: HeapRef,
     class: &str,
     method: &str,
     descriptor: &str,
+    args: &[JValue],
 ) -> Result<(), VmError> {
     // Object's constructor does nothing — every user constructor calls
     // it as the implicit super().
     if class == "java/lang/Object" && method == "<init>" && descriptor == "()V" {
         return Ok(());
     }
-    match (heap.get(receiver), method, descriptor) {
-        // These are fully initialized at `new`; their constructors
-        // have nothing left to do (the Scanner ignores the stream
-        // object — stdin is the only source).
-        (Some(HeapObject::StringBuilder(_) | HeapObject::ArrayList(_)), "<init>", "()V")
-        | (Some(HeapObject::Scanner { .. }), "<init>", "(Ljava/io/InputStream;)V") => Ok(()),
+
+    let string_arg = |heap: &Heap, value: &JValue| -> Result<String, VmError> {
+        match value {
+            JValue::Ref(Some(reference)) => heap
+                .string_text(*reference)
+                .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
+            JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+            _ => Err(throw("java.lang.VerifyError: expected a String argument")),
+        }
+    };
+    let file_arg = |heap: &Heap, value: &JValue| -> Result<String, VmError> {
+        match value {
+            JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                Some(HeapObject::File(path)) => Ok(path.clone()),
+                _ => Err(throw("java.lang.ClassCastException: not a File")),
+            },
+            JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+            _ => Err(throw("java.lang.VerifyError: expected a File argument")),
+        }
+    };
+
+    match (method, descriptor) {
+        // Fully initialized at `new` (the Scanner over System.in
+        // ignores the stream object — stdin is the only stream).
+        ("<init>", "()V" | "(Ljava/io/InputStream;)V") => Ok(()),
+        ("<init>", "(Ljava/lang/String;)V") => {
+            let text = string_arg(heap, &args[0])?;
+            match heap.get_mut(receiver) {
+                Some(HeapObject::File(path)) => {
+                    *path = text;
+                    Ok(())
+                }
+                Some(HeapObject::Writer { path }) => {
+                    // PrintWriter(String) truncates on open (like Java)
+                    // and writes through as the program prints.
+                    path.clone_from(&text);
+                    vfs.write_file(&text, Vec::new())
+                        .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
+                    Ok(())
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!(
+                    "{class}.{method}{descriptor}"
+                ))),
+            }
+        }
+        ("<init>", "(Ljava/io/File;)V") => {
+            let target = file_arg(heap, &args[0])?;
+            match heap.get(receiver) {
+                Some(HeapObject::Writer { .. }) => {
+                    vfs.write_file(&target, Vec::new())
+                        .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
+                    if let Some(HeapObject::Writer { path }) = heap.get_mut(receiver) {
+                        *path = target;
+                    }
+                    Ok(())
+                }
+                Some(HeapObject::Scanner { .. }) => {
+                    // Scanner(File): slurp the whole file up front.
+                    let content = vfs
+                        .read_file(&target)
+                        .map_err(|_| {
+                            throw(format!(
+                                "java.io.FileNotFoundException: {target} \
+                                 (No such file or directory)"
+                            ))
+                        })?
+                        .to_vec();
+                    let text = String::from_utf8_lossy(&content).into_owned();
+                    if let Some(HeapObject::Scanner { buffer, eof, pos }) = heap.get_mut(receiver) {
+                        *buffer = text;
+                        *pos = 0;
+                        *eof = true;
+                    }
+                    Ok(())
+                }
+                _ => Err(VmError::UnknownIntrinsic(format!(
+                    "{class}.{method}{descriptor}"
+                ))),
+            }
+        }
         _ => Err(VmError::UnknownIntrinsic(format!(
             "{class}.{method}{descriptor}"
         ))),
@@ -90,9 +171,11 @@ pub fn invoke_special(
 /// Invoke an intrinsic instance method. Returns `Ok(None)` for `void`,
 /// `Ok(Some(value))` for a result, or `Err` if the member is not an
 /// intrinsic the VM knows.
+#[allow(clippy::too_many_arguments)] // one boundary call from the dispatch loop
 pub fn invoke_virtual(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
+    vfs: &mut VirtualFileSystem,
     receiver: HeapRef,
     class: &str,
     method: &str,
@@ -134,6 +217,10 @@ pub fn invoke_virtual(
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
+        (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
+        (HeapObject::Writer { .. }, _) => {
+            writer_method(heap, vfs, receiver, method, descriptor, args)
+        }
         _ => Err(VmError::UnknownIntrinsic(format!(
             "{class}.{method}{descriptor}"
         ))),
@@ -599,6 +686,80 @@ fn display_jvalue(heap: &Heap, value: JValue) -> String {
     }
 }
 
+/// `java.io.File` methods over the virtual filesystem.
+fn file_method(
+    heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
+    receiver: HeapRef,
+    method: &str,
+) -> Result<Option<JValue>, VmError> {
+    let path = match heap.get(receiver) {
+        Some(HeapObject::File(path)) => path.clone(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let boolean = |b: bool| Ok(Some(JValue::Int(i32::from(b))));
+    match method {
+        "exists" => boolean(vfs.exists(&path)),
+        "isFile" => boolean(vfs.is_file(&path)),
+        "isDirectory" => boolean(vfs.is_directory(&path)),
+        "delete" => boolean(vfs.remove(&path).is_ok()),
+        "mkdir" => boolean(!vfs.exists(&path) && vfs.mkdir(&path).is_ok()),
+        "createNewFile" => {
+            if vfs.exists(&path) {
+                boolean(false)
+            } else {
+                boolean(vfs.write_file(&path, Vec::new()).is_ok())
+            }
+        }
+        // Java returns long; jvmjs surfaces int (virtual files are small).
+        "length" => Ok(Some(JValue::Int(
+            i32::try_from(vfs.len(&path)).unwrap_or(i32::MAX),
+        ))),
+        "getName" => {
+            let normalized = VirtualFileSystem::normalize(&path);
+            let name = normalized.rsplit('/').next().unwrap_or_default();
+            let reference = heap.alloc_string(name);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        // getPath / toString return the path as written.
+        "getPath" | "toString" => {
+            let reference = heap.alloc_string(&path);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("File.{method}"))),
+    }
+}
+
+/// `java.io.PrintWriter` methods: formatting matches `PrintStream`, but
+/// output appends to the writer's file in the virtual filesystem.
+fn writer_method(
+    heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
+    receiver: HeapRef,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let path = match heap.get(receiver) {
+        Some(HeapObject::Writer { path }) => path.clone(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    match method {
+        "print" | "println" => {
+            let mut text = print_argument_text(heap, descriptor, args)?;
+            if method == "println" {
+                text.push('\n');
+            }
+            vfs.append_file(&path, text.as_bytes())
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(None)
+        }
+        // Write-through means close/flush have nothing left to do.
+        "close" | "flush" => Ok(None),
+        _ => Err(VmError::UnknownIntrinsic(format!("PrintWriter.{method}"))),
+    }
+}
+
 /// Java's `java.util.Random` LCG, used for `Math.random()`.
 #[derive(Debug)]
 pub struct JavaRng {
@@ -792,6 +953,7 @@ mod tests {
         let mut heap = Heap::new();
         let mut statics = IntrinsicStatics::default();
         let mut console = BufferedConsole::new();
+        let mut vfs = VirtualFileSystem::new();
 
         let JValue::Ref(Some(out)) = statics
             .static_field(&mut heap, "java/lang/System", "out")
@@ -803,6 +965,7 @@ mod tests {
         invoke_virtual(
             &mut heap,
             &mut console,
+            &mut vfs,
             out,
             "java/io/PrintStream",
             "println",
@@ -827,6 +990,7 @@ mod tests {
         let mut heap = Heap::new();
         let mut statics = IntrinsicStatics::default();
         let mut console = BufferedConsole::new();
+        let mut vfs = VirtualFileSystem::new();
         let JValue::Ref(Some(err)) = statics
             .static_field(&mut heap, "java/lang/System", "err")
             .unwrap()
@@ -836,6 +1000,7 @@ mod tests {
         invoke_virtual(
             &mut heap,
             &mut console,
+            &mut vfs,
             err,
             "java/io/PrintStream",
             "println",
@@ -851,14 +1016,25 @@ mod tests {
     fn stringbuilder_appends_and_converts() {
         let mut heap = Heap::new();
         let mut console = BufferedConsole::new();
+        let mut vfs = VirtualFileSystem::new();
         let builder =
             heap.alloc(instantiate("java/lang/StringBuilder").expect("known intrinsic class"));
-        invoke_special(&heap, builder, "java/lang/StringBuilder", "<init>", "()V").unwrap();
+        invoke_special(
+            &mut heap,
+            &mut vfs,
+            builder,
+            "java/lang/StringBuilder",
+            "<init>",
+            "()V",
+            &[],
+        )
+        .unwrap();
 
         let hello = heap.alloc_string("x = ");
         invoke_virtual(
             &mut heap,
             &mut console,
+            &mut vfs,
             builder,
             "java/lang/StringBuilder",
             "append",
@@ -869,6 +1045,7 @@ mod tests {
         invoke_virtual(
             &mut heap,
             &mut console,
+            &mut vfs,
             builder,
             "java/lang/StringBuilder",
             "append",
@@ -879,6 +1056,7 @@ mod tests {
         let result = invoke_virtual(
             &mut heap,
             &mut console,
+            &mut vfs,
             builder,
             "java/lang/StringBuilder",
             "toString",

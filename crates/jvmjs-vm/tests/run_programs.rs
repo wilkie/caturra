@@ -1937,6 +1937,148 @@ fn math_random_is_deterministic_per_seed() {
     }
 }
 
+// ----- stage 8: file IO over the virtual filesystem -----
+
+#[test]
+fn print_writer_writes_and_scanner_reads_back() {
+    let out = run_stdout(
+        r#"
+        import java.io.File;
+        import java.io.PrintWriter;
+        import java.util.Scanner;
+
+        public class RoundTrip {
+            public static void main(String[] args) throws Exception {
+                PrintWriter out = new PrintWriter("scores.txt");
+                out.println("Ada 95");
+                out.println("Alan 88");
+                out.print(2);
+                out.close();
+
+                File f = new File("scores.txt");
+                System.out.println(f.exists() + " " + f.getName());
+
+                Scanner in = new Scanner(f);
+                while (in.hasNextLine()) {
+                    System.out.println("> " + in.nextLine());
+                }
+            }
+        }
+        "#,
+        "RoundTrip",
+    );
+    assert_eq!(out, "true scores.txt\n> Ada 95\n> Alan 88\n> 2\n");
+}
+
+#[test]
+fn scanner_file_tokenizing_and_file_ops() {
+    let out = run_stdout(
+        r#"
+        import java.io.File;
+        import java.io.PrintWriter;
+        import java.util.Scanner;
+
+        public class Grades {
+            public static void main(String[] args) throws Exception {
+                PrintWriter w = new PrintWriter(new File("nums.txt"));
+                w.println("10 20 30");
+                w.println("2.5");
+                w.close();
+
+                Scanner in = new Scanner(new File("nums.txt"));
+                int total = 0;
+                for (int i = 0; i < 3; i++) total += in.nextInt();
+                double scale = in.nextDouble();
+                System.out.println(total * scale);
+
+                File f = new File("nums.txt");
+                System.out.println(f.length() > 0);
+                System.out.println(f.isFile() + " " + f.isDirectory());
+                System.out.println(f.delete());
+                System.out.println(f.exists());
+                System.out.println(f.delete());
+
+                File dir = new File("logs");
+                System.out.println(dir.mkdir());
+                System.out.println(dir.isDirectory());
+                File fresh = new File("logs/new.txt");
+                System.out.println(fresh.createNewFile() + " " + fresh.length());
+            }
+        }
+        "#,
+        "Grades",
+    );
+    assert_eq!(
+        out,
+        "150.0\ntrue\ntrue false\ntrue\nfalse\nfalse\ntrue\ntrue\ntrue 0\n"
+    );
+}
+
+#[test]
+fn missing_file_throws_like_java() {
+    let (result, console) = compile_and_run(
+        r#"
+        import java.io.File;
+        import java.util.Scanner;
+
+        public class Missing {
+            public static void main(String[] args) throws Exception {
+                Scanner in = new Scanner(new File("ghost.txt"));
+                System.out.println(in.nextLine());
+            }
+        }
+        "#,
+        "Missing",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.io.FileNotFoundException: ghost.txt (No such file or directory)"),
+        "{}",
+        console.stderr_text()
+    );
+}
+
+#[test]
+fn vfs_seeded_files_are_visible_to_java() {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Reader.java".into(),
+        text: r#"
+        import java.io.File;
+        import java.util.Scanner;
+
+        public class Reader {
+            public static void main(String[] args) throws Exception {
+                Scanner in = new Scanner(new File("/data/input.txt"));
+                int total = 0;
+                while (in.hasNextInt()) total += in.nextInt();
+                System.out.println(total);
+            }
+        }
+        "#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+
+    let mut vfs = VirtualFileSystem::new();
+    vfs.write_file("/data/input.txt", "5 10 15 20".as_bytes().to_vec())
+        .unwrap();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("Reader", &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "50\n");
+    // And output written by Java is visible to the host afterwards.
+    assert!(vfs.exists("/data/input.txt"));
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

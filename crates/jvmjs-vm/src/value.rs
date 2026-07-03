@@ -67,6 +67,11 @@ pub enum HeapObject {
     ArrayList(Vec<JValue>),
     /// The marker object behind `System.in`.
     InputStream,
+    /// A `java.io.File`: a path into the virtual filesystem.
+    File(String),
+    /// A `java.io.PrintWriter` into the virtual filesystem
+    /// (write-through: output is durable without `close()`).
+    Writer { path: String },
 }
 
 /// The per-run object heap.

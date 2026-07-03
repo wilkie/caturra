@@ -536,6 +536,17 @@ impl Parser<'_> {
         }
         self.expect_symbol(")", "to close the parameter list")?;
 
+        // `throws FileNotFoundException, ...` — accepted and ignored
+        // (jvmjs does not enforce checked exceptions).
+        if self.eat_keyword(Keyword::Throws) {
+            loop {
+                self.expect_ident("after 'throws'")?;
+                if !self.eat_symbol(",") {
+                    break;
+                }
+            }
+        }
+
         if self.eat_symbol(";") {
             if !allow_abstract {
                 self.error_at(name_span, "constructors need a body");

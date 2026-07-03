@@ -33,15 +33,17 @@ filesystem, which the host page can seed and inspect (`writeFile`, `readTextFile
 
 ## Status
 
-**Stages 1–7 are live — the CSA language surface is complete** (see `specs/LANGUAGE.md`): programs
+**All eight stages are live — the full CSA surface from `specs/SCOPE.md` is implemented** (see `specs/LANGUAGE.md`): programs
 with local variables, operators, casts, string concatenation, full control
 flow, **user-defined static methods**, **arrays** (1D/2D, initializers,
 for-each), **classes with objects**, **inheritance** (`extends`, `super`, overriding,
 `interface`/`abstract`, `instanceof`, casts), and now the **class
 library** — `String` methods, `Math`, `Integer`/`Double`,
-`ArrayList<E>` with autoboxing and for-each, and `Scanner` reading real
+`ArrayList<E>` with autoboxing and for-each, `Scanner` reading real
 console input (in the browser: the SharedArrayBuffer blocking-stdin
-path) — compile with our compiler and run on our VM. Semantics are
+path), and `java.io.File`/`PrintWriter` over the virtual filesystem
+(seedable and inspectable from JavaScript) — compile with our compiler
+and run on our VM. Semantics are
 Java-exact and **verified against OpenJDK 11**: a differential test suite
 runs identical programs through `javac`+`java` and jvmjs and requires
 byte-identical stdout. Compiler errors use javac's wording, and runtime
@@ -60,8 +62,9 @@ out of bounds for length 3`). Implemented and tested:
   stdin over SharedArrayBuffer + Atomics ready for when `Scanner` lands
 - virtual filesystem + console IO plumbing across the whole stack
 
-Remaining for full SCOPE.md coverage: `java.io.File` and basic
-readers/writers over the virtual filesystem (stage 8).
+With the language and library surface complete, the open frontiers are
+polish: an explicit-frame interpreter for deep recursion
+(`specs/RUNTIME.md`), richer diagnostics, and playground UX.
 
 Dev note: with a JDK installed (`javac`/`java` on PATH), `cargo test`
 includes the differential suite; without one those tests skip.

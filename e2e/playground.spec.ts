@@ -233,6 +233,31 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('[1, 4, 9, 16]');
   });
 
+  test('reads and writes virtual files in the browser', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'import java.io.File;',
+          'import java.io.PrintWriter;',
+          'import java.util.Scanner;',
+          '',
+          'public class Main {',
+          '    public static void main(String[] args) throws Exception {',
+          '        PrintWriter out = new PrintWriter("notes.txt");',
+          '        out.println("virtual filesystem");',
+          '        out.close();',
+          '        Scanner in = new Scanner(new File("notes.txt"));',
+          '        System.out.println("read back: " + in.nextLine());',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('read back: virtual filesystem');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page

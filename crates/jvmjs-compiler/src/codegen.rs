@@ -727,10 +727,12 @@ impl MethodTable {
                 if let Some(id) = self.class_id(name) {
                     return Some(JType::Object(id));
                 }
-                if name == "Scanner" {
-                    return Some(JType::Scanner);
+                match name.as_str() {
+                    "Scanner" => Some(JType::Scanner),
+                    "File" => Some(JType::File),
+                    "PrintWriter" => Some(JType::Writer),
+                    _ => None,
                 }
-                None
             }
             TypeRef::Generic { base, args } => {
                 if base == "ArrayList" && args.len() == 1 && !self.has_class(base) {
@@ -976,6 +978,11 @@ enum JType {
     Object(ClassId),
     /// `java.util.Scanner` (intrinsic).
     Scanner,
+    /// `java.io.File` (intrinsic, backed by the virtual filesystem).
+    File,
+    /// `java.io.PrintWriter` (intrinsic, writes into the virtual
+    /// filesystem).
+    Writer,
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
@@ -1003,6 +1010,8 @@ impl JType {
             }
             JType::Object(id) => table.class_name(id).to_owned(),
             JType::Scanner => String::from("Scanner"),
+            JType::File => String::from("File"),
+            JType::Writer => String::from("PrintWriter"),
             JType::List(elem) => {
                 format!("ArrayList<{}>", wrapper_name(elem, table))
             }
@@ -1023,6 +1032,8 @@ impl JType {
                 | JType::Array { .. }
                 | JType::Object(_)
                 | JType::Scanner
+                | JType::File
+                | JType::Writer
                 | JType::List(_)
         )
     }
@@ -1059,6 +1070,8 @@ impl JType {
             }
             JType::Object(id) => format!("L{};", table.class_name(id)),
             JType::Scanner => String::from("Ljava/util/Scanner;"),
+            JType::File => String::from("Ljava/io/File;"),
+            JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::List(_) => String::from("Ljava/util/ArrayList;"),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
@@ -1394,6 +1407,8 @@ fn has_direct_break(stmt: &Stmt) -> bool {
 enum BParam {
     Int,
     Double,
+    Boolean,
+    Char,
     Str,
     /// The list's element type (autoboxed at the boundary).
     Elem,
@@ -1609,6 +1624,146 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
+const FILE_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "exists",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "isFile",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "isDirectory",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "delete",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "mkdir",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "createNewFile",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    // Java returns long; jvmjs has no long surface, so int (documented
+    // deviation — virtual files are small).
+    BuiltinMethod {
+        name: "length",
+        params: &[],
+        ret: BRet::Int,
+        descriptor: "()J",
+    },
+    BuiltinMethod {
+        name: "getName",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "getPath",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+];
+
+const WRITER_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "println",
+        params: &[],
+        ret: BRet::Void,
+        descriptor: "()V",
+    },
+    BuiltinMethod {
+        name: "println",
+        params: &[BParam::Str],
+        ret: BRet::Void,
+        descriptor: "(Ljava/lang/String;)V",
+    },
+    BuiltinMethod {
+        name: "println",
+        params: &[BParam::Int],
+        ret: BRet::Void,
+        descriptor: "(I)V",
+    },
+    BuiltinMethod {
+        name: "println",
+        params: &[BParam::Double],
+        ret: BRet::Void,
+        descriptor: "(D)V",
+    },
+    BuiltinMethod {
+        name: "println",
+        params: &[BParam::Boolean],
+        ret: BRet::Void,
+        descriptor: "(Z)V",
+    },
+    BuiltinMethod {
+        name: "println",
+        params: &[BParam::Char],
+        ret: BRet::Void,
+        descriptor: "(C)V",
+    },
+    BuiltinMethod {
+        name: "print",
+        params: &[BParam::Str],
+        ret: BRet::Void,
+        descriptor: "(Ljava/lang/String;)V",
+    },
+    BuiltinMethod {
+        name: "print",
+        params: &[BParam::Int],
+        ret: BRet::Void,
+        descriptor: "(I)V",
+    },
+    BuiltinMethod {
+        name: "print",
+        params: &[BParam::Double],
+        ret: BRet::Void,
+        descriptor: "(D)V",
+    },
+    BuiltinMethod {
+        name: "print",
+        params: &[BParam::Boolean],
+        ret: BRet::Void,
+        descriptor: "(Z)V",
+    },
+    BuiltinMethod {
+        name: "print",
+        params: &[BParam::Char],
+        ret: BRet::Void,
+        descriptor: "(C)V",
+    },
+    BuiltinMethod {
+        name: "close",
+        params: &[],
+        ret: BRet::Void,
+        descriptor: "()V",
+    },
+    BuiltinMethod {
+        name: "flush",
+        params: &[],
+        ret: BRet::Void,
+        descriptor: "()V",
+    },
+];
+
 const MATH_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
         name: "abs",
@@ -1685,6 +1840,8 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
     match ty {
         JType::Str => Some(("java/lang/String", STRING_METHODS)),
         JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
+        JType::File => Some(("java/io/File", FILE_METHODS)),
+        JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         _ => None,
     }
@@ -1713,6 +1870,8 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
     match param {
         BParam::Int => JType::Int,
         BParam::Double => JType::Double,
+        BParam::Boolean => JType::Boolean,
+        BParam::Char => JType::Char,
         BParam::Str => JType::Str,
         BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
     }
@@ -2630,6 +2789,8 @@ impl BodyGen<'_> {
         }
         match class {
             "Scanner" => JType::Scanner,
+            "File" => JType::File,
+            "PrintWriter" => JType::Writer,
             "ArrayList" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Error, JType::List),
                 _ => JType::Error,
@@ -2650,6 +2811,8 @@ impl BodyGen<'_> {
             match class_name {
                 "Scanner" => return self.new_scanner(args, span),
                 "ArrayList" => return self.new_array_list(type_args, args, span),
+                "File" => return self.new_file(args, span),
+                "PrintWriter" => return self.new_writer(args, span),
                 _ => {}
             }
         }
@@ -2658,15 +2821,7 @@ impl BodyGen<'_> {
             return JType::Error;
         }
         let Some(class_id) = self.table.class_id(class_name) else {
-            let classlib = [
-                "String",
-                "Object",
-                "Scanner",
-                "ArrayList",
-                "Integer",
-                "Double",
-                "StringBuilder",
-            ];
+            let classlib = ["String", "Object", "Integer", "Double", "StringBuilder"];
             if classlib.contains(&class_name) {
                 self.error(
                     span,
@@ -2747,36 +2902,108 @@ impl BodyGen<'_> {
         JType::Object(class_id)
     }
 
-    /// `new Scanner(System.in)`.
+    /// `new Scanner(System.in)` or `new Scanner(fileExpr)`.
     fn new_scanner(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let reads_stdin = matches!(
             args,
             [Expr::Name { path, .. }]
                 if path.len() == 2 && path[0] == "System" && path[1] == "in"
         );
-        if !reads_stdin {
-            self.error(
-                span,
-                "only 'new Scanner(System.in)' is supported by jvmjs \
-                 (file scanning arrives with java.io.File)",
-            );
-            return JType::Error;
-        }
         let scanner_class = intern_class(self.pool, "java/util/Scanner");
         self.code.push_op_u16(op::NEW, scanner_class, 1);
         self.code.push_op(op::DUP, 1);
-        let stdin_field =
-            intern_field_ref(self.pool, "java/lang/System", "in", "Ljava/io/InputStream;");
-        self.code.push_op_u16(op::GETSTATIC, stdin_field, 1);
-        let init_ref = intern_method_ref(
-            self.pool,
-            "java/util/Scanner",
-            "<init>",
-            "(Ljava/io/InputStream;)V",
+
+        if reads_stdin {
+            let stdin_field =
+                intern_field_ref(self.pool, "java/lang/System", "in", "Ljava/io/InputStream;");
+            self.code.push_op_u16(op::GETSTATIC, stdin_field, 1);
+            let init_ref = intern_method_ref(
+                self.pool,
+                "java/util/Scanner",
+                "<init>",
+                "(Ljava/io/InputStream;)V",
+            );
+            self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+            self.code.drop_stack(2);
+            return JType::Scanner;
+        }
+
+        // Scanner over a File.
+        if let [file] = args {
+            let file_ty = self.expr(file);
+            if file_ty == JType::Error {
+                return JType::Error;
+            }
+            if file_ty == JType::File {
+                let init_ref = intern_method_ref(
+                    self.pool,
+                    "java/util/Scanner",
+                    "<init>",
+                    "(Ljava/io/File;)V",
+                );
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+                return JType::Scanner;
+            }
+        }
+        self.error(
+            span,
+            "Scanner reads System.in or a File: new Scanner(System.in) / \
+             new Scanner(new File(\"data.txt\"))",
         );
-        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
-        self.code.drop_stack(2);
-        JType::Scanner
+        JType::Error
+    }
+
+    /// `new File(pathString)`.
+    fn new_file(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let file_class = intern_class(self.pool, "java/io/File");
+        self.code.push_op_u16(op::NEW, file_class, 1);
+        self.code.push_op(op::DUP, 1);
+        if let [path] = args {
+            let path_ty = self.expr(path);
+            if path_ty == JType::Error {
+                return JType::Error;
+            }
+            if path_ty == JType::Str {
+                let init_ref =
+                    intern_method_ref(self.pool, "java/io/File", "<init>", "(Ljava/lang/String;)V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+                return JType::File;
+            }
+        }
+        self.error(span, "File takes one String path: new File(\"data.txt\")");
+        JType::Error
+    }
+
+    /// `new PrintWriter(pathString)` or `new PrintWriter(fileExpr)`.
+    fn new_writer(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let writer_class = intern_class(self.pool, "java/io/PrintWriter");
+        self.code.push_op_u16(op::NEW, writer_class, 1);
+        self.code.push_op(op::DUP, 1);
+        if let [target] = args {
+            let target_ty = self.expr(target);
+            if target_ty == JType::Error {
+                return JType::Error;
+            }
+            let descriptor = match target_ty {
+                JType::Str => Some("(Ljava/lang/String;)V"),
+                JType::File => Some("(Ljava/io/File;)V"),
+                _ => None,
+            };
+            if let Some(descriptor) = descriptor {
+                let init_ref =
+                    intern_method_ref(self.pool, "java/io/PrintWriter", "<init>", descriptor);
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+                return JType::Writer;
+            }
+        }
+        self.error(
+            span,
+            "PrintWriter takes a path or a File: new PrintWriter(\"out.txt\")",
+        );
+        JType::Error
     }
 
     /// `new ArrayList<E>()` (diamond allowed when the declaration names
@@ -2845,7 +3072,7 @@ impl BodyGen<'_> {
         let class_id = match receiver_ty {
             JType::Object(id) => id,
             JType::Error => return None,
-            JType::Str | JType::Scanner | JType::List(_) => {
+            JType::Str | JType::Scanner | JType::File | JType::Writer | JType::List(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
             }
             other => {
@@ -3051,6 +3278,17 @@ impl BodyGen<'_> {
     /// concatenation: objects go through their `toString()` (the VM
     /// supplies `ClassName@hex` when a class doesn't define one).
     fn coerce_to_string_for_output(&mut self, ty: JType) -> JType {
+        if ty == JType::File {
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/io/File",
+                "toString",
+                "()Ljava/lang/String;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return JType::Str;
+        }
         if matches!(ty, JType::List(_)) {
             let method_ref = intern_method_ref(
                 self.pool,
@@ -3655,8 +3893,13 @@ impl BodyGen<'_> {
             JType::Str | JType::Object(_) | JType::List(_) => {
                 Some(String::from("(Ljava/lang/String;)V"))
             }
-            JType::Scanner => {
-                self.error(span, "printing a Scanner is not supported");
+            // File is coerced to its path string upstream.
+            JType::File => Some(String::from("(Ljava/lang/String;)V")),
+            JType::Scanner | JType::Writer => {
+                self.error(
+                    span,
+                    format!("printing a {} is not supported", ty.describe(self.table)),
+                );
                 None
             }
             JType::Null => {
@@ -3793,7 +4036,11 @@ impl BodyGen<'_> {
                     }
                     Some(other) => match self.type_of(other) {
                         JType::Object(id) => self.table.class_name(id).to_owned(),
-                        receiver_ty @ (JType::Str | JType::Scanner | JType::List(_)) => {
+                        receiver_ty @ (JType::Str
+                        | JType::Scanner
+                        | JType::File
+                        | JType::Writer
+                        | JType::List(_)) => {
                             let elem = match receiver_ty {
                                 JType::List(elem) => Some(elem),
                                 _ => None,
@@ -4793,11 +5040,17 @@ impl BodyGen<'_> {
             JType::Double => "(D)Ljava/lang/StringBuilder;",
             JType::Boolean => "(Z)Ljava/lang/StringBuilder;",
             JType::Char => "(C)Ljava/lang/StringBuilder;",
-            JType::Str | JType::Null | JType::Object(_) | JType::List(_) => {
+            JType::Str | JType::Null | JType::Object(_) | JType::List(_) | JType::File => {
                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"
             }
-            JType::Scanner => {
-                self.error(span, "concatenating a Scanner is not supported");
+            JType::Scanner | JType::Writer => {
+                self.error(
+                    span,
+                    format!(
+                        "concatenating a {} is not supported",
+                        ty.describe(self.table)
+                    ),
+                );
                 return;
             }
             JType::Array { .. } => {
@@ -4935,9 +5188,13 @@ impl BodyGen<'_> {
     fn emit_load(&mut self, slot: u16, ty: JType) {
         let (base, short_base) = match ty {
             JType::Double => (op::DLOAD, op::DLOAD_0),
-            JType::Str | JType::Null | JType::Array { .. } | JType::Scanner | JType::List(_) => {
-                (op::ALOAD, op::ALOAD_0)
-            }
+            JType::Str
+            | JType::Null
+            | JType::Array { .. }
+            | JType::Scanner
+            | JType::File
+            | JType::Writer
+            | JType::List(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
         self.local_op(base, short_base, slot);
@@ -4947,9 +5204,13 @@ impl BodyGen<'_> {
     fn emit_store(&mut self, slot: u16, ty: JType) {
         let (base, short_base) = match ty {
             JType::Double => (op::DSTORE, op::DSTORE_0),
-            JType::Str | JType::Null | JType::Array { .. } | JType::Scanner | JType::List(_) => {
-                (op::ASTORE, op::ASTORE_0)
-            }
+            JType::Str
+            | JType::Null
+            | JType::Array { .. }
+            | JType::Scanner
+            | JType::File
+            | JType::Writer
+            | JType::List(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };
         self.local_op(base, short_base, slot);

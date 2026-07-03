@@ -676,6 +676,45 @@ public class DiffScan {
 }
 
 differential_test!(
+    diff_file_io,
+    "DiffFiles",
+    r#"
+import java.io.File;
+import java.io.PrintWriter;
+import java.util.Scanner;
+
+public class DiffFiles {
+    public static void main(String[] args) throws Exception {
+        PrintWriter out = new PrintWriter("diff-io.txt");
+        for (int i = 1; i <= 3; i++) {
+            out.println("line " + i + " = " + (i * 1.5));
+        }
+        out.print("end");
+        out.close();
+
+        File f = new File("diff-io.txt");
+        System.out.println(f.exists());
+        System.out.println(f.getName());
+
+        Scanner in = new Scanner(f);
+        while (in.hasNextLine()) {
+            System.out.println("[" + in.nextLine() + "]");
+        }
+
+        Scanner tokens = new Scanner(new File("diff-io.txt"));
+        System.out.println(tokens.next());
+        System.out.println(tokens.next());
+        System.out.println(tokens.next());
+        System.out.println(tokens.next());
+
+        System.out.println(f.delete());
+        System.out.println(f.exists());
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

@@ -14,6 +14,7 @@ use jvmjs_classfile::{
 use crate::intrinsics::{self, IntrinsicStatics};
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, JValue};
+use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
 /// State for one `run`: the loaded classes, heap, interned strings,
@@ -21,6 +22,7 @@ use crate::vm::VmError;
 pub(crate) struct Interpreter<'run> {
     pub classes: &'run HashMap<String, ClassFile>,
     pub console: &'run mut dyn ConsoleIo,
+    pub vfs: &'run mut VirtualFileSystem,
     pub heap: Heap,
     pub intrinsic_statics: IntrinsicStatics,
     string_pool: HashMap<String, HeapRef>,
@@ -39,6 +41,7 @@ impl<'run> Interpreter<'run> {
     pub fn new(
         classes: &'run HashMap<String, ClassFile>,
         console: &'run mut dyn ConsoleIo,
+        vfs: &'run mut VirtualFileSystem,
         max_instructions: u64,
         max_call_depth: u32,
         random_seed: Option<u64>,
@@ -46,6 +49,7 @@ impl<'run> Interpreter<'run> {
         Self {
             classes,
             console,
+            vfs,
             heap: Heap::new(),
             intrinsic_statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
@@ -763,11 +767,13 @@ impl<'run> Interpreter<'run> {
             }
         } else {
             intrinsics::invoke_special(
-                &self.heap,
+                &mut self.heap,
+                self.vfs,
                 receiver,
                 &target_class,
                 &method_name,
                 &descriptor,
+                &args,
             )?;
         }
         Ok(())
@@ -1091,6 +1097,7 @@ impl<'run> Interpreter<'run> {
             intrinsics::invoke_virtual(
                 &mut self.heap,
                 self.console,
+                self.vfs,
                 receiver,
                 &target_class,
                 &method_name,

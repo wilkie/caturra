@@ -18,7 +18,7 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Accepted today (v0 slice + stages 1–7)
+## Accepted today (v0 slice + stages 1–8: the full SCOPE.md surface)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
@@ -137,6 +137,17 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     always in scope); `package` remains unsupported.
   - User classes shadow intrinsic names (a class called `Scanner` wins).
 
+- **File IO over the virtual filesystem** (stage 8): `new File(path)`
+  with `exists/isFile/isDirectory/delete/mkdir/createNewFile/getName/`
+  `getPath` (`length()` returns int, not long — virtual files are
+  small), `new Scanner(file)` slurping VFS content with
+  `FileNotFoundException: path (No such file or directory)`,
+  `new PrintWriter(path|file)` truncating on open and **writing
+  through** (a kind deviation: output is durable even without
+  `close()`), and `throws` clauses parsed and ignored (checked
+  exceptions are not enforced). The host seeds and inspects files via
+  the `JvmSession` VFS API, so JS ⇄ Java file exchange works.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
@@ -177,8 +188,8 @@ friendly message for now.
 7. ~~Generics as far as `ArrayList<E>` requires (erasure, autoboxing).~~
    **Done (2026-07-02)** together with the intrinsic class library
    (String/Math/Integer/Double/Scanner/ArrayList), differential-verified
-   against OpenJDK 11 including Scanner over piped stdin. Remaining for
-   full SCOPE.md coverage: `java.io.File` + readers/writers over the
-   virtual filesystem (stage 8).
+   against OpenJDK 11 including Scanner over piped stdin.
+8. ~~`java.io.File` + readers/writers over the virtual filesystem.~~
+   **Done (2026-07-02).** The SCOPE.md surface is fully covered.
 
 The staging order optimizes for what CSA course units need earliest.

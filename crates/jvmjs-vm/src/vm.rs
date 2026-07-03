@@ -125,10 +125,6 @@ impl<'host> Vm<'host> {
     }
 
     /// Run `public static void main(String[] args)` of the named class.
-    ///
-    /// TODO(interpreter): `<clinit>` does not run yet (no statics in the
-    /// current language stage), and `java.io.File` intrinsics are not
-    /// wired to `self.vfs` yet (`File` lands with the classlib).
     pub fn run_main(&mut self, class_name: &str, args: &[String]) -> Result<ExitStatus, VmError> {
         let class = self
             .classes
@@ -146,11 +142,10 @@ impl<'host> Vm<'host> {
             })
             .ok_or_else(|| VmError::NoMainMethod(class_name.to_owned()))?;
 
-        let _ = self.vfs.is_empty(); // wired to File intrinsics with the classlib
-
         let mut interpreter = Interpreter::new(
             &self.classes,
             self.console,
+            self.vfs,
             self.options.max_instructions,
             self.options.max_call_depth,
             self.options.random_seed,
