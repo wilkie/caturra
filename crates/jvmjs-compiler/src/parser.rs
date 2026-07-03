@@ -933,18 +933,24 @@ impl Parser<'_> {
             });
         }
 
-        if self.at_keyword(Keyword::Finally) {
-            let span = self.here();
-            self.error_at(span, "finally is not yet supported by jvmjs");
-            return Err(Abort);
-        }
-        if catches.is_empty() {
-            self.error_at(start, "'try' needs at least one 'catch' clause");
+        let finally_body = if self.at_keyword(Keyword::Finally) {
+            self.pos += 1;
+            self.expect_symbol("{", "after 'finally'")?;
+            Some(self.block_body())
+        } else {
+            None
+        };
+        if catches.is_empty() && finally_body.is_none() {
+            self.error_at(
+                start,
+                "'try' needs at least one 'catch' clause or a 'finally' block",
+            );
             return Err(Abort);
         }
         Ok(Stmt::Try {
             body,
             catches,
+            finally_body,
             span: SourceSpan {
                 start: start.start,
                 end: self.here().start,

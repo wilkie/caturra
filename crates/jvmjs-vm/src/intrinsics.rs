@@ -113,7 +113,9 @@ pub fn invoke_special(
 
     match (method, descriptor) {
         // Fully initialized at `new` (the Scanner over System.in
-        // ignores the stream object — stdin is the only stream).
+        // ignores the stream object — stdin is the only stream). The
+        // no-arg case also covers `super()` into a library throwable
+        // from a user exception class.
         ("<init>", "()V" | "(Ljava/io/InputStream;)V") => Ok(()),
         ("<init>", "(Ljava/lang/String;)V") => {
             let text = string_arg(heap, &args[0])?;
@@ -124,6 +126,18 @@ pub fn invoke_special(
                 }
                 Some(HeapObject::Exception { message, .. }) => {
                     *message = Some(text);
+                    Ok(())
+                }
+                // A user exception class chaining `super("message")`
+                // into its library throwable parent: stash the message
+                // in a reserved field.
+                Some(HeapObject::Instance { .. })
+                    if jvmjs_classfile::exceptions::is_exception_class(class) =>
+                {
+                    let reference = heap.alloc_string(&text);
+                    if let Some(HeapObject::Instance { fields, .. }) = heap.get_mut(receiver) {
+                        fields.insert(String::from("__message"), JValue::Ref(Some(reference)));
+                    }
                     Ok(())
                 }
                 Some(HeapObject::Writer { path }) => {

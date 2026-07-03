@@ -926,6 +926,119 @@ public class DiffCatch {
 );
 
 differential_test!(
+    diff_finally,
+    "DiffFinally",
+    r#"
+public class DiffFinally {
+    static String log = "";
+
+    static int viaReturn(int n) {
+        try {
+            return 100 / n;
+        } catch (ArithmeticException e) {
+            log += "[caught " + e.getMessage() + "]";
+            return -1;
+        } finally {
+            log += "[fin]";
+        }
+    }
+
+    public static void main(String[] args) {
+        int a = viaReturn(4);
+        int b = viaReturn(0);
+        System.out.println(a + " " + b);
+        System.out.println(log);
+
+        for (int i = 0; i < 4; i++) {
+            try {
+                if (i % 2 == 0) {
+                    continue;
+                }
+                if (i == 3) {
+                    break;
+                }
+                System.out.println("body " + i);
+            } finally {
+                System.out.println("cleanup " + i);
+            }
+        }
+
+        try {
+            try {
+                throw new IllegalStateException("boom");
+            } finally {
+                System.out.println("inner cleanup");
+            }
+        } catch (IllegalStateException e) {
+            System.out.println("outer: " + e.getMessage());
+        }
+        System.out.println("end");
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_user_exceptions,
+    "DiffUserExc",
+    r#"
+class InsufficientFundsException extends Exception {
+    private double shortfall;
+
+    InsufficientFundsException(String message, double shortfall) {
+        super(message);
+        this.shortfall = shortfall;
+    }
+
+    double getShortfall() { return shortfall; }
+}
+
+class Account {
+    private double balance;
+
+    Account(double balance) { this.balance = balance; }
+
+    void withdraw(double amount) throws InsufficientFundsException {
+        if (amount > balance) {
+            throw new InsufficientFundsException(
+                "cannot withdraw " + amount, amount - balance);
+        }
+        balance -= amount;
+        System.out.println("balance now " + balance);
+    }
+}
+
+public class DiffUserExc {
+    public static void main(String[] args) {
+        Account account = new Account(100.0);
+        try {
+            account.withdraw(30.0);
+            account.withdraw(90.0);
+            account.withdraw(10.0);
+        } catch (InsufficientFundsException e) {
+            System.out.println("declined: " + e.getMessage());
+            System.out.println("short by " + e.getShortfall());
+        } finally {
+            System.out.println("audited");
+        }
+
+        try {
+            try {
+                throw new InsufficientFundsException("nested", 1.0);
+            } catch (Exception e) {
+                System.out.println("rethrowing " + e.getMessage());
+                throw e;
+            }
+        } catch (Exception e) {
+            System.out.println("outer " + e.getMessage());
+        }
+        System.out.println("end");
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

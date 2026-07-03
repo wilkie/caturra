@@ -48,6 +48,7 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
     (classes, diagnostics)
 }
 
+#[allow(clippy::too_many_lines)] // one class-assembly sequence
 fn emit_class(
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
@@ -56,7 +57,13 @@ fn emit_class(
 ) -> ClassFile {
     let mut class = ClassFile::new_java11();
     class.this_class = intern_class(&mut class.constant_pool, &decl.name);
-    let super_name = decl.superclass.as_deref().unwrap_or("java/lang/Object");
+    let super_name = decl
+        .superclass
+        .as_deref()
+        .map_or("java/lang/Object", |name| {
+            // `extends Exception` etc: the parent is a library throwable.
+            jvmjs_classfile::exceptions::internal_name_of(name).unwrap_or(name)
+        });
     class.super_class = intern_class(&mut class.constant_pool, super_name);
 
     // SourceFile attribute: which compilation unit this class came
@@ -184,6 +191,7 @@ fn emit_clinit(
         scopes: vec![Vec::new()],
         next_slot: 0,
         loop_stack: Vec::new(),
+        finally_stack: Vec::new(),
         local_var_debug: Vec::new(),
     };
     for field in &decl.fields {
@@ -354,6 +362,9 @@ struct FieldSig {
 struct ClassInfo {
     id: ClassId,
     superclass: Option<ClassId>,
+    /// `extends Exception` etc: a library throwable parent (internal
+    /// name). Mutually exclusive with `superclass`.
+    library_superclass: Option<&'static str>,
     interfaces: Vec<ClassId>,
     is_abstract: bool,
     is_interface: bool,
@@ -402,6 +413,7 @@ impl MethodTable {
                     ClassInfo {
                         id,
                         superclass: None,
+                        library_superclass: None,
                         interfaces: Vec::new(),
                         is_abstract: false,
                         is_interface: false,
@@ -493,14 +505,22 @@ impl MethodTable {
                     });
                 }
 
+                let mut library_superclass = None;
                 let superclass = class.superclass.as_ref().and_then(|name| {
                     let id = table.class_id(name);
                     if id.is_none() {
-                        diagnostics.push(Diagnostic::error(
-                            path,
-                            format!("cannot find symbol: class {name}"),
-                            class.span,
-                        ));
+                        // `extends Exception` and friends: a library
+                        // throwable parent.
+                        if let Some(internal) = jvmjs_classfile::exceptions::internal_name_of(name)
+                        {
+                            library_superclass = Some(internal);
+                        } else {
+                            diagnostics.push(Diagnostic::error(
+                                path,
+                                format!("cannot find symbol: class {name}"),
+                                class.span,
+                            ));
+                        }
                     }
                     id
                 });
@@ -527,6 +547,7 @@ impl MethodTable {
                 info.methods = methods;
                 info.fields = fields;
                 info.superclass = superclass;
+                info.library_superclass = library_superclass;
                 info.interfaces = interface_ids;
                 info.is_abstract = class.is_abstract;
                 info.is_interface = class.is_interface;
@@ -856,6 +877,30 @@ impl MethodTable {
         }
     }
 
+    /// The library throwable this class descends from, if any: walks
+    /// the user `extends` chain to its `library_superclass`.
+    fn library_throwable_ancestor(&self, class: ClassId) -> Option<&'static str> {
+        let mut current = Some(class);
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                return None;
+            }
+            let info = self.info_by_id(id)?;
+            if let Some(library) = info.library_superclass {
+                return Some(library);
+            }
+            current = info.superclass;
+        }
+        None
+    }
+
+    /// Whether instances of this user class can be thrown/caught.
+    fn is_throwable(&self, class: ClassId) -> bool {
+        self.library_throwable_ancestor(class).is_some()
+    }
+
     /// Look up a field in a class or its ancestors, returning the
     /// owning class alongside.
     fn field(&self, class: &str, name: &str) -> Option<(ClassId, &FieldSig)> {
@@ -963,6 +1008,66 @@ fn exception_id(internal: &str) -> Option<u8> {
         .and_then(|index| u8::try_from(index + 1).ok())
 }
 
+/// A catch clause's resolved type: a library throwable or a
+/// user-defined exception class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatchKind {
+    Library(u8),
+    User(ClassId),
+}
+
+impl CatchKind {
+    fn jtype(self) -> JType {
+        match self {
+            CatchKind::Library(id) => JType::Exception(id),
+            CatchKind::User(id) => JType::Object(id),
+        }
+    }
+
+    /// The class-file name for the exception-table entry.
+    fn table_name(self, table: &MethodTable) -> String {
+        match self {
+            CatchKind::Library(id) => exception_internal(id).to_owned(),
+            CatchKind::User(id) => table.class_name(id).to_owned(),
+        }
+    }
+
+    /// The simple display name (javac's already-caught wording).
+    fn simple_name(self, table: &MethodTable) -> String {
+        match self {
+            CatchKind::Library(id) => exception_internal(id)
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+            CatchKind::User(id) => table.class_name(id).to_owned(),
+        }
+    }
+
+    /// Whether `self` is `other` or a subclass of it (so an earlier
+    /// `other` clause masks a later `self`).
+    fn is_masked_by(self, other: CatchKind, table: &MethodTable) -> bool {
+        match (self, other) {
+            (CatchKind::Library(a), CatchKind::Library(b)) => {
+                jvmjs_classfile::exceptions::is_exception_subclass(
+                    exception_internal(a),
+                    exception_internal(b),
+                )
+            }
+            (CatchKind::User(a), CatchKind::User(b)) => table.is_subtype(a, b),
+            (CatchKind::User(a), CatchKind::Library(b)) => {
+                table.library_throwable_ancestor(a).is_some_and(|ancestor| {
+                    jvmjs_classfile::exceptions::is_exception_subclass(
+                        ancestor,
+                        exception_internal(b),
+                    )
+                })
+            }
+            (CatchKind::Library(_), CatchKind::User(_)) => false,
+        }
+    }
+}
+
 fn exception_internal(id: u8) -> &'static str {
     if id == 0 {
         return "java/lang/Throwable";
@@ -1040,6 +1145,16 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     exception_internal(sub),
                     exception_internal(sup),
                 )
+        )
+        || matches!(
+            (from, to),
+            (JType::Object(sub), JType::Exception(sup))
+                if table.library_throwable_ancestor(sub).is_some_and(|ancestor| {
+                    jvmjs_classfile::exceptions::is_exception_subclass(
+                        ancestor,
+                        exception_internal(sup),
+                    )
+                })
         )
         || (from == JType::Null && to.is_reference())
 }
@@ -1309,6 +1424,7 @@ fn emit_method(
         scopes: vec![Vec::new()],
         next_slot: u16::from(!decl.is_static),
         loop_stack: Vec::new(),
+        finally_stack: Vec::new(),
         local_var_debug: Vec::new(),
     };
 
@@ -1527,13 +1643,22 @@ fn stmt_completes_normally(stmt: &Stmt) -> bool {
         Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Throw { .. } => {
             false
         }
-        // JLS: a try-catch completes normally iff the try block or at
-        // least one catch block can complete normally.
-        Stmt::Try { body, catches, .. } => {
-            block_completes_normally(body)
+        // JLS: a try statement completes normally iff (the try block or
+        // at least one catch block can complete normally) and the
+        // finally block, if any, can complete normally.
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            (block_completes_normally(body)
                 || catches
                     .iter()
-                    .any(|clause| block_completes_normally(&clause.body))
+                    .any(|clause| block_completes_normally(&clause.body)))
+                && finally_body
+                    .as_ref()
+                    .is_none_or(|stmts| block_completes_normally(stmts))
         }
         Stmt::Block(statements) => block_completes_normally(statements),
         Stmt::If {
@@ -2287,6 +2412,10 @@ struct BodyGen<'a> {
     next_slot: u16,
     /// Innermost-last enclosing loops, for `break`/`continue`.
     loop_stack: Vec<LoopLabels>,
+    /// Enclosing `finally` blocks (innermost last): the statements to
+    /// duplicate on abrupt exits, with the loop depth at try entry so
+    /// `break`/`continue` only run guards inside the exited loop.
+    finally_stack: Vec<(Vec<Stmt>, usize)>,
     /// `(name, descriptor, generic signature, slot, live-from offset)`
     /// per declared local, for the `LocalVariableTable` (and, when the
     /// signature is present, `LocalVariableTypeTable`) debug
@@ -2399,7 +2528,9 @@ impl BodyGen<'_> {
                 ..
             } => self.for_statement(init.as_deref(), cond.as_ref(), update, body),
             Stmt::Break { span } => match self.loop_stack.last() {
-                Some(labels) => {
+                Some(_labels) => {
+                    self.emit_pending_finallys(Some(self.loop_stack.len() - 1));
+                    let labels = self.loop_stack.last().expect("checked above");
                     let target = labels.break_label;
                     self.code.branch(op::GOTO, target, 0);
                 }
@@ -2408,6 +2539,7 @@ impl BodyGen<'_> {
             Stmt::Continue { span } => match self.loop_stack.last() {
                 Some(labels) => {
                     let target = labels.continue_label;
+                    self.emit_pending_finallys(Some(self.loop_stack.len() - 1));
                     self.code.branch(op::GOTO, target, 0);
                 }
                 None => self.error(*span, "'continue' can only be used inside a loop"),
@@ -2422,48 +2554,53 @@ impl BodyGen<'_> {
             Stmt::Try {
                 body,
                 catches,
+                finally_body,
                 span,
-            } => self.try_statement(body, catches, *span),
+            } => self.try_statement(body, catches, finally_body.as_deref(), *span),
             Stmt::Throw { value, span } => self.throw_statement(value, *span),
         }
     }
 
-    /// `try { ... } catch (...) { ... }` — a JVMS exception table entry
-    /// per catch clause, handlers after the protected range:
-    ///
-    /// ```text
-    /// start:   ...body...
-    /// end:     goto after
-    /// handler: astore e; ...catch body...; goto after
-    /// after:
-    /// ```
-    fn try_statement(&mut self, body: &[Stmt], catches: &[CatchClause], span: SourceSpan) {
+    /// `try { ... } catch (...) { ... } finally { ... }` — a JVMS
+    /// exception table entry per catch clause plus a catch-all for the
+    /// finally, handlers after the protected range. The finally body is
+    /// duplicated on every exit path (javac's strategy).
+    #[allow(clippy::too_many_lines)] // one emission plan, clearest linear
+    fn try_statement(
+        &mut self,
+        body: &[Stmt],
+        catches: &[CatchClause],
+        finally_body: Option<&[Stmt]>,
+        span: SourceSpan,
+    ) {
         // Resolve catch types first: exception classes only, and no
         // clause may be masked by an earlier broader one (javac:
         // "exception X has already been caught").
-        let mut resolved: Vec<Option<u8>> = Vec::with_capacity(catches.len());
+        let mut resolved: Vec<Option<CatchKind>> = Vec::with_capacity(catches.len());
         for (index, clause) in catches.iter().enumerate() {
-            let id = self.resolve_catch_type(clause);
-            if let Some(id) = id {
+            let kind = self.resolve_catch_type(clause);
+            if let Some(kind) = kind {
                 for earlier in resolved.iter().take(index).flatten() {
-                    if jvmjs_classfile::exceptions::is_exception_subclass(
-                        exception_internal(id),
-                        exception_internal(*earlier),
-                    ) {
+                    if kind.is_masked_by(*earlier, self.table) {
                         self.error(
                             clause.span,
                             format!(
                                 "exception {} has already been caught",
-                                exception_internal(id)
-                                    .rsplit('/')
-                                    .next()
-                                    .unwrap_or_default()
+                                kind.simple_name(self.table)
                             ),
                         );
                     }
                 }
             }
-            resolved.push(id);
+            resolved.push(kind);
+        }
+
+        // Abrupt exits (return/break/continue) inside the protected
+        // region must run the finally first; the guard stack tells
+        // them to.
+        if let Some(finally_stmts) = finally_body {
+            self.finally_stack
+                .push((finally_stmts.to_vec(), self.loop_stack.len()));
         }
 
         let before_flags = self.assigned_flags();
@@ -2476,15 +2613,32 @@ impl BodyGen<'_> {
         let end = self.code.offset();
         if start == end {
             // An empty protected range is illegal in the table; with
-            // nothing to throw, the catches are dead anyway.
+            // nothing to throw, the catches are dead anyway. The
+            // finally still runs.
             self.restore_assigned(&before_flags);
+            if let Some(finally_stmts) = finally_body {
+                self.finally_stack.pop();
+                self.emit_block(finally_stmts);
+            }
             let _ = span;
             return;
         }
         let after = self.code.new_label();
+        // Normal completion path: the finally copy runs un-guarded.
+        if let Some(finally_stmts) = finally_body {
+            let guard = self.finally_stack.pop();
+            self.emit_block(finally_stmts);
+            if let Some(guard) = guard {
+                self.finally_stack.push(guard);
+            }
+        }
         self.code.branch(op::GOTO, after, 0);
         let try_flags = self.assigned_flags();
         let mut branch_flags = vec![try_flags];
+        // Catch-body ranges for the finally catch-all (an exception
+        // thrown inside a catch must still run the finally; one thrown
+        // inside a finally copy must not re-run it).
+        let mut catch_ranges: Vec<(u16, u16)> = Vec::new();
 
         for (clause, id) in catches.iter().zip(&resolved) {
             self.restore_assigned(&before_flags);
@@ -2494,13 +2648,13 @@ impl BodyGen<'_> {
             self.code.assume_stack(1);
 
             self.scopes.push(Vec::new());
-            let Some(id) = id else {
+            let Some(kind) = id else {
                 // Unresolvable type: an error was reported; skip body
                 // emission to avoid cascades.
                 self.scopes.pop();
                 continue;
             };
-            let ty = JType::Exception(*id);
+            let ty = kind.jtype();
             let slot = self.next_slot;
             self.next_slot += 1;
             self.emit_store(slot, ty);
@@ -2527,17 +2681,50 @@ impl BodyGen<'_> {
                 self.statement(stmt);
             }
             self.scopes.pop();
+            let catch_body_end = self.code.offset();
+            catch_ranges.push((handler, catch_body_end));
+            if let Some(finally_stmts) = finally_body {
+                let guard = self.finally_stack.pop();
+                self.emit_block(finally_stmts);
+                if let Some(guard) = guard {
+                    self.finally_stack.push(guard);
+                }
+            }
             self.code.branch(op::GOTO, after, 0);
             branch_flags.push(self.assigned_flags());
 
-            let catch_class = intern_class(self.pool, exception_internal(*id));
+            let catch_class = intern_class(self.pool, &kind.table_name(self.table));
             self.code
                 .add_exception_entry(start, end, handler, catch_class);
+        }
+
+        // The finally's catch-all: run the finally, then rethrow.
+        if let Some(finally_stmts) = finally_body {
+            self.finally_stack.pop();
+            let handler = self.code.offset();
+            self.code.assume_stack(1);
+            let scratch = self.next_slot;
+            self.next_slot += 1;
+            self.emit_store(scratch, JType::Exception(0));
+            self.emit_block(finally_stmts);
+            self.emit_load(scratch, JType::Exception(0));
+            self.code.push_op(op::ATHROW, 0);
+            self.code.drop_stack(1);
+            // catch_type 0 = any; covers the try body and each catch
+            // body, but never the finally copies themselves.
+            self.code.add_exception_entry(start, end, handler, 0);
+            for (range_start, range_end) in catch_ranges {
+                if range_start != range_end {
+                    self.code
+                        .add_exception_entry(range_start, range_end, handler, 0);
+                }
+            }
         }
         self.code.bind(after);
 
         // JLS definite assignment: assigned after try-catch iff
-        // assigned after the try block AND after every catch block.
+        // assigned after the try block AND after every catch block
+        // (each path above already includes the finally's effects).
         if let Some(first) = branch_flags.first().cloned() {
             self.restore_assigned(&first);
             for flags in &branch_flags[1..] {
@@ -2546,9 +2733,36 @@ impl BodyGen<'_> {
         }
     }
 
-    /// The exception id of a catch clause's type, with javac-flavored
-    /// errors for non-throwables.
-    fn resolve_catch_type(&mut self, clause: &CatchClause) -> Option<u8> {
+    /// Emit statements in a fresh scope (a finally copy).
+    fn emit_block(&mut self, statements: &[Stmt]) {
+        self.scopes.push(Vec::new());
+        for stmt in statements {
+            self.statement(stmt);
+        }
+        self.scopes.pop();
+    }
+
+    /// Duplicate the bodies of enclosing `finally` blocks before an
+    /// abrupt exit, innermost first. `down_to_loop` limits the walk for
+    /// `break`/`continue` (only guards entered inside the exited loop
+    /// run); `None` (a `return`) runs them all. Guards are disabled
+    /// while emitting so a finally body's own exits cannot recurse.
+    fn emit_pending_finallys(&mut self, down_to_loop: Option<usize>) {
+        if self.finally_stack.is_empty() {
+            return;
+        }
+        let saved = std::mem::take(&mut self.finally_stack);
+        for (statements, loop_len) in saved.iter().rev() {
+            if down_to_loop.is_none_or(|target| *loop_len > target) {
+                self.emit_block(statements);
+            }
+        }
+        self.finally_stack = saved;
+    }
+
+    /// The resolved type of a catch clause, with javac-flavored errors
+    /// for non-throwables.
+    fn resolve_catch_type(&mut self, clause: &CatchClause) -> Option<CatchKind> {
         let TypeRef::Named(name) = &clause.ty else {
             self.error(clause.span, "expected an exception class in 'catch'");
             return None;
@@ -2556,7 +2770,7 @@ impl BodyGen<'_> {
         if name.contains('.') {
             let internal = name.replace('.', "/");
             if jvmjs_classfile::exceptions::is_exception_class(&internal) {
-                return exception_id(&internal);
+                return exception_id(&internal).map(CatchKind::Library);
             }
             self.error(
                 clause.span,
@@ -2564,18 +2778,21 @@ impl BodyGen<'_> {
             );
             return None;
         }
-        if let Some(internal) = jvmjs_classfile::exceptions::internal_name_of(name.as_str()) {
-            return exception_id(internal);
-        }
-        if self.table.has_class(name) {
-            // User classes cannot (yet) extend Throwable.
+        // User exception classes shadow library names, like elsewhere.
+        if let Some(id) = self.table.class_id(name) {
+            if self.table.is_throwable(id) {
+                return Some(CatchKind::User(id));
+            }
             self.error(
                 clause.span,
                 format!("incompatible types: {name} cannot be converted to Throwable"),
             );
-        } else {
-            self.error(clause.span, format!("cannot find symbol: class {name}"));
+            return None;
         }
+        if let Some(internal) = jvmjs_classfile::exceptions::internal_name_of(name.as_str()) {
+            return exception_id(internal).map(CatchKind::Library);
+        }
+        self.error(clause.span, format!("cannot find symbol: class {name}"));
         None
     }
 
@@ -2584,6 +2801,7 @@ impl BodyGen<'_> {
         let ty = self.expr(value);
         match ty {
             JType::Exception(_) | JType::Null | JType::Error => {}
+            JType::Object(id) if self.table.is_throwable(id) => {}
             other => {
                 self.error(
                     span,
@@ -2600,7 +2818,11 @@ impl BodyGen<'_> {
 
     fn return_statement(&mut self, value: Option<&Expr>, span: SourceSpan) {
         match (self.return_type, value) {
-            (None, None) => self.code.push_op(op::RETURN, 0),
+            (None, None) => {
+                // Enclosing finally blocks run before the method exits.
+                self.emit_pending_finallys(None);
+                self.code.push_op(op::RETURN, 0);
+            }
             (None, Some(value)) => {
                 self.expr(value);
                 self.error(
@@ -2616,6 +2838,9 @@ impl BodyGen<'_> {
             (Some(expected), Some(value)) => {
                 let actual = self.expr(value);
                 self.convert_for_assignment(actual, expected, value.span());
+                // Enclosing finally blocks run with the return value
+                // parked on the stack (they balance to empty).
+                self.emit_pending_finallys(None);
                 let opcode = match expected {
                     JType::Double => op::DRETURN,
                     JType::Str | JType::Null => op::ARETURN,
@@ -3222,6 +3447,51 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return;
         }
+        // `super(...)` into a library throwable parent: the no-arg or
+        // String-message constructor.
+        if let Some(internal) =
+            jvmjs_classfile::exceptions::internal_name_of(class_name).or_else(|| {
+                jvmjs_classfile::exceptions::is_exception_class(class_name)
+                    .then(|| {
+                        jvmjs_classfile::exceptions::internal_name_of(
+                            class_name.rsplit('/').next().unwrap_or(class_name),
+                        )
+                    })
+                    .flatten()
+            })
+            && !self.table.has_class(class_name)
+        {
+            match args {
+                [] => {
+                    let init = intern_method_ref(self.pool, internal, "<init>", "()V");
+                    self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+                    self.code.drop_stack(1);
+                }
+                [message] => {
+                    let message_ty = self.expr(message);
+                    if message_ty != JType::Str && message_ty != JType::Error {
+                        self.error(
+                            message.span(),
+                            format!(
+                                "incompatible types: {} cannot be converted to String",
+                                message_ty.describe(self.table)
+                            ),
+                        );
+                    }
+                    let init =
+                        intern_method_ref(self.pool, internal, "<init>", "(Ljava/lang/String;)V");
+                    self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+                    self.code.drop_stack(2);
+                }
+                _ => {
+                    self.error(
+                        span,
+                        "exception constructors take at most one String message",
+                    );
+                }
+            }
+            return;
+        }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             for arg in args {
@@ -3823,6 +4093,18 @@ impl BodyGen<'_> {
         let sig = match table.resolve(&class_name, method, &arg_types) {
             Resolution::Found(sig) => sig.clone(),
             Resolution::UnknownName => {
+                // Throwable-descended classes inherit getMessage /
+                // toString from their library parent.
+                if self.table.is_throwable(class_id)
+                    && (method == "getMessage" || method == "toString")
+                    && args.is_empty()
+                {
+                    let method_ref =
+                        intern_method_ref(self.pool, &class_name, method, "()Ljava/lang/String;");
+                    self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+                    self.code.drop_stack(1);
+                    return Some(Some(JType::Str));
+                }
                 self.error(
                     span,
                     format!(
@@ -4712,7 +4994,19 @@ impl BodyGen<'_> {
                 let table = self.table;
                 match table.resolve(&class, method, &arg_types) {
                     Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
-                    _ => JType::Error,
+                    _ => {
+                        // Inherited Throwable members (mirrors emission).
+                        if (method == "getMessage" || method == "toString")
+                            && args.is_empty()
+                            && table
+                                .class_id(&class)
+                                .is_some_and(|id| table.is_throwable(id))
+                        {
+                            JType::Str
+                        } else {
+                            JType::Error
+                        }
+                    }
                 }
             }
             Expr::Unary {

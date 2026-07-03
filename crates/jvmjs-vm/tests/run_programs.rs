@@ -3004,8 +3004,8 @@ fn try_catch_compile_errors_match_javac() {
             "incompatible types: String cannot be converted to Throwable",
         ),
         (
-            "class M { static void f() { try { int x = 1; } finally { } } }",
-            "finally is not yet supported by jvmjs",
+            "class M { static void f() { try { int x = 1; } } }",
+            "'try' needs at least one 'catch' clause or a 'finally' block",
         ),
     ];
     for (source, expected) in cases {
@@ -3048,6 +3048,219 @@ fn missing_return_accounts_for_try_catch() {
         "Paths",
     );
     assert_eq!(out, "ok 2\nfail\n");
+}
+
+#[test]
+fn finally_runs_on_every_path() {
+    let out = run_stdout(
+        r#"
+        public class Fin {
+            static String log = "";
+
+            static int normal() {
+                try {
+                    log += "t";
+                    return 1;
+                } finally {
+                    log += "F";
+                }
+            }
+
+            static int caught() {
+                try {
+                    return 10 / 0;
+                } catch (ArithmeticException e) {
+                    log += "c";
+                    return 2;
+                } finally {
+                    log += "F";
+                }
+            }
+
+            static int uncaughtThrough() {
+                try {
+                    return 10 / 0;
+                } finally {
+                    log += "F";
+                }
+            }
+
+            public static void main(String[] args) {
+                // Separate statements: `log += normal()` would read log
+                // BEFORE the call and wipe its side effects (Java
+                // compound-assignment semantics).
+                int a = normal();
+                log += a;
+                int b = caught();
+                log += b;
+                try {
+                    int c = uncaughtThrough();
+                    log += c;
+                } catch (ArithmeticException e) {
+                    log += "outer";
+                }
+                // break and continue through finally.
+                for (int i = 0; i < 3; i++) {
+                    try {
+                        if (i == 1) {
+                            continue;
+                        }
+                        if (i == 2) {
+                            break;
+                        }
+                        log += i;
+                    } finally {
+                        log += "f";
+                    }
+                }
+                System.out.println(log);
+            }
+        }
+        "#,
+        "Fin",
+    );
+    assert_eq!(out, "tF1cF2Fouter0fff\n");
+}
+
+#[test]
+fn try_finally_without_catch() {
+    let out = run_stdout(
+        r#"
+        public class NoCatch {
+            public static void main(String[] args) {
+                try {
+                    System.out.println("work");
+                } finally {
+                    System.out.println("cleanup");
+                }
+                System.out.println("done");
+            }
+        }
+        "#,
+        "NoCatch",
+    );
+    assert_eq!(out, "work\ncleanup\ndone\n");
+}
+
+#[test]
+fn user_defined_exceptions() {
+    let out = run_stdout(
+        r#"
+        class TooSmallException extends Exception {
+            private int actual;
+
+            TooSmallException(String message, int actual) {
+                super(message);
+                this.actual = actual;
+            }
+
+            int getActual() { return actual; }
+        }
+
+        class EmptyException extends RuntimeException {
+        }
+
+        public class Users {
+            static void check(int n) throws TooSmallException {
+                if (n < 10) {
+                    throw new TooSmallException("need at least 10, got " + n, n);
+                }
+                System.out.println(n + " ok");
+            }
+
+            public static void main(String[] args) {
+                try {
+                    check(25);
+                    check(3);
+                } catch (TooSmallException e) {
+                    // Inherited getMessage + own field + own method.
+                    System.out.println("caught: " + e.getMessage());
+                    System.out.println("actual was " + e.getActual());
+                    System.out.println(e);
+                }
+
+                // Subtype catch: a user exception under its library parent.
+                try {
+                    throw new TooSmallException("subtype", 1);
+                } catch (Exception e) {
+                    System.out.println("as Exception: " + e.getMessage());
+                }
+
+                // No-message user runtime exception via catch-all parent.
+                try {
+                    throw new EmptyException();
+                } catch (RuntimeException e) {
+                    System.out.println("message: " + e.getMessage());
+                    System.out.println(e);
+                }
+            }
+        }
+        "#,
+        "Users",
+    );
+    assert_eq!(
+        out,
+        "25 ok\ncaught: need at least 10, got 3\nactual was 3\n\
+         TooSmallException: need at least 10, got 3\n\
+         as Exception: subtype\nmessage: null\nEmptyException\n"
+    );
+}
+
+#[test]
+fn user_exception_uncaught_and_hierarchy_errors() {
+    // Uncaught user exception: java-style stderr.
+    let (result, console) = compile_and_run(
+        r#"
+        class BoomException extends RuntimeException {
+            BoomException(String m) { super(m); }
+        }
+
+        public class Boom {
+            public static void main(String[] args) {
+                throw new BoomException("kaboom");
+            }
+        }
+        "#,
+        "Boom",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    let stderr = console.stderr_text();
+    assert!(stderr.contains("BoomException: kaboom"), "{stderr}");
+    assert!(stderr.contains("\tat Boom.main(Boom.java"), "{stderr}");
+
+    // catch of a non-throwable user class: javac wording.
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "T.java".into(),
+        text:
+            "class Pet { } class M { static void f() { try { int x = 1/0; } catch (Pet p) { } } }"
+                .into(),
+    }]);
+    assert!(!compilation.success());
+    assert!(
+        compilation.diagnostics.iter().any(|d| d
+            .message
+            .contains("incompatible types: Pet cannot be converted to Throwable")),
+        "{:?}",
+        compilation.diagnostics
+    );
+
+    // Masking a user exception with its library parent first.
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "T.java".into(),
+        text: "class E extends Exception { } class M { static void f() { try { int x = 1/0; } catch (Exception a) { } catch (E b) { } } }".into(),
+    }]);
+    assert!(!compilation.success());
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("exception E has already been caught")),
+        "{:?}",
+        compilation.diagnostics
+    );
 }
 
 #[test]

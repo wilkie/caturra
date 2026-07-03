@@ -168,10 +168,11 @@ pub enum Stmt {
         args: Vec<Expr>,
         span: SourceSpan,
     },
-    /// `try { ... } catch (Type name) { ... } ...`.
+    /// `try { ... } catch (Type name) { ... } ... finally { ... }`.
     Try {
         body: Vec<Stmt>,
         catches: Vec<CatchClause>,
+        finally_body: Option<Vec<Stmt>>,
         span: SourceSpan,
     },
     /// `throw expr;`.

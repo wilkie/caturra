@@ -418,7 +418,12 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                     self.expr(arg);
                 }
             }
-            Stmt::Try { body, catches, .. } => {
+            Stmt::Try {
+                body,
+                catches,
+                finally_body,
+                ..
+            } => {
                 for stmt in body {
                     self.stmt(stmt);
                 }
@@ -427,6 +432,9 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                     for stmt in &clause.body {
                         self.stmt(stmt);
                     }
+                }
+                for stmt in finally_body.iter().flatten() {
+                    self.stmt(stmt);
                 }
             }
             Stmt::Throw { value, .. } => self.expr(value),

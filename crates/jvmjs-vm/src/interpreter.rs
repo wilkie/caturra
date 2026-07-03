@@ -59,6 +59,10 @@ pub(crate) struct Interpreter<'run> {
     /// Arena keeping compiled watch classes alive for the run (their
     /// frames borrow them at `'run`), set for debug runs.
     watch_arena: Option<&'run typed_arena::Arena<ClassFile>>,
+    /// The most recently `athrow`n object; the unwinder binds this to
+    /// the catch variable so a user exception keeps its identity and
+    /// fields (library throws allocate fresh objects instead).
+    last_thrown: Option<HeapRef>,
 }
 
 /// Where the active frame is, for stack traces and snapshots.
@@ -116,6 +120,7 @@ impl<'run> Interpreter<'run> {
             code_cache: HashMap::new(),
             debug: None,
             watch_arena: None,
+            last_thrown: None,
         }
     }
 
@@ -370,8 +375,10 @@ impl<'run> Interpreter<'run> {
                     if depth > 0 || fields.is_empty() {
                         return format!("{class_name}@{reference:x}");
                     }
-                    // Sorted for stable display (fields live in a map).
-                    let mut names: Vec<&String> = fields.keys().collect();
+                    // Sorted for stable display (fields live in a map);
+                    // reserved names (the throwable message) hidden.
+                    let mut names: Vec<&String> =
+                        fields.keys().filter(|k| !k.starts_with("__")).collect();
                     names.sort();
                     let rendered: Vec<String> = names
                         .into_iter()
@@ -736,17 +743,36 @@ impl<'run> Interpreter<'run> {
                                     "java.lang.NullPointerException: cannot throw null",
                                 ))
                             })?;
-                            let Some(crate::value::HeapObject::Exception {
-                                class_name,
-                                message,
-                            }) = self.heap.get(reference)
-                            else {
-                                return Err(malformed(String::from("athrow on a non-throwable")));
-                            };
-                            return Err(VmError::UncaughtException(match message {
-                                Some(message) => format!("{class_name}: {message}"),
-                                None => class_name.clone(),
-                            }));
+                            self.last_thrown = Some(reference);
+                            match self.heap.get(reference) {
+                                Some(crate::value::HeapObject::Exception {
+                                    class_name,
+                                    message,
+                                }) => {
+                                    return Err(VmError::UncaughtException(match message {
+                                        Some(message) => format!("{class_name}: {message}"),
+                                        None => class_name.clone(),
+                                    }));
+                                }
+                                Some(crate::value::HeapObject::Instance { class_name, fields })
+                                    if self.instance_is_throwable(class_name) =>
+                                {
+                                    let message =
+                                        fields.get("__message").and_then(|value| match value {
+                                            JValue::Ref(Some(text)) => self.heap.string_text(*text),
+                                            _ => None,
+                                        });
+                                    return Err(VmError::UncaughtException(match message {
+                                        Some(message) => format!("{class_name}: {message}"),
+                                        None => class_name.clone(),
+                                    }));
+                                }
+                                _ => {
+                                    return Err(malformed(String::from(
+                                        "athrow on a non-throwable",
+                                    )));
+                                }
+                            }
                         }
 
                         // ----- objects -----
@@ -1087,17 +1113,28 @@ impl<'run> Interpreter<'run> {
             None => (first_line, None),
         };
         let internal = dotted.replace('.', "/");
-        if !jvmjs_classfile::exceptions::is_exception_class(&internal) {
+        let is_library = jvmjs_classfile::exceptions::is_exception_class(&internal);
+        if !is_library && !self.instance_is_throwable(dotted) {
             return Ok(false);
         }
+
+        // A user exception keeps its thrown object (identity, fields);
+        // library throws materialize one at the catch.
+        let thrown_object = if is_library {
+            None
+        } else {
+            self.last_thrown.take()
+        };
 
         // The active frame first, at the faulting instruction.
         let mut search_pc = addr;
         loop {
-            if let Some(handler_pc) = handler_for(frame, search_pc, &internal) {
-                let exception = self.heap.alloc(crate::value::HeapObject::Exception {
-                    class_name: dotted.to_owned(),
-                    message,
+            if let Some(handler_pc) = self.handler_for(frame, search_pc, dotted) {
+                let exception = thrown_object.unwrap_or_else(|| {
+                    self.heap.alloc(crate::value::HeapObject::Exception {
+                        class_name: dotted.to_owned(),
+                        message: message.clone(),
+                    })
                 });
                 frame.stack.clear();
                 frame.stack.push(JValue::Ref(Some(exception)));
@@ -1432,6 +1469,88 @@ impl<'run> Interpreter<'run> {
         }
     }
 
+    /// Find a handler in `frame`'s exception table covering `pc` for
+    /// the thrown class (dotted or user name). Entry order is
+    /// significant (first match wins, like the JVMS).
+    fn handler_for(&self, frame: &Frame<'_>, pc: usize, thrown_dotted: &str) -> Option<usize> {
+        let pool = &frame.class.constant_pool;
+        for entry in &frame.code.attr.exception_table {
+            let start = usize::from(entry.start_pc);
+            let end = usize::from(entry.end_pc);
+            if pc < start || pc >= end {
+                continue;
+            }
+            // catch_type 0 catches everything (finally-style).
+            let matches = entry.catch_type == 0
+                || pool
+                    .get_class_name(entry.catch_type)
+                    .is_some_and(|catch| self.thrown_matches(thrown_dotted, catch));
+            if matches {
+                return Some(usize::from(entry.handler_pc));
+            }
+        }
+        None
+    }
+
+    /// Whether a user class descends from a library throwable (its
+    /// class-file superclass chain reaches the exceptions table).
+    fn instance_is_throwable(&self, class_name: &str) -> bool {
+        let mut current = self.classes.get(class_name);
+        let mut steps = 0usize;
+        while let Some(class) = current {
+            steps += 1;
+            if steps > self.classes.len() + 1 {
+                return false;
+            }
+            let Some(super_name) = class.constant_pool.get_class_name(class.super_class) else {
+                return false;
+            };
+            if super_name.contains('/') {
+                return jvmjs_classfile::exceptions::is_exception_class(super_name);
+            }
+            current = self.classes.get(super_name);
+        }
+        false
+    }
+
+    /// Exception-catch matching across user and library classes:
+    /// whether the thrown class (dotted library or simple user name)
+    /// is the catch type or a subclass of it.
+    fn thrown_matches(&self, thrown_dotted: &str, catch_name: &str) -> bool {
+        let thrown_internal = thrown_dotted.replace('.', "/");
+        // Library-thrown: pure table walk (a library class is never
+        // under a user class).
+        if jvmjs_classfile::exceptions::is_exception_class(&thrown_internal) {
+            return jvmjs_classfile::exceptions::is_exception_subclass(
+                &thrown_internal,
+                catch_name,
+            );
+        }
+        // User-thrown: walk the user chain, crossing into the library
+        // table at the first java/... superclass.
+        let mut current_name = thrown_dotted.to_owned();
+        let mut steps = 0usize;
+        loop {
+            steps += 1;
+            if steps > self.classes.len() + 2 {
+                return false;
+            }
+            if current_name == catch_name {
+                return true;
+            }
+            let Some(class) = self.classes.get(&current_name) else {
+                return jvmjs_classfile::exceptions::is_exception_subclass(
+                    &current_name,
+                    catch_name,
+                );
+            };
+            match class.constant_pool.get_class_name(class.super_class) {
+                Some(super_name) => current_name = super_name.to_owned(),
+                None => return false,
+            }
+        }
+    }
+
     /// Whether `sub` (a user class name) is `sup` or inherits from it,
     /// walking `extends` and `implements` edges.
     fn is_runtime_subtype(&self, sub: &str, sup: &str) -> bool {
@@ -1511,6 +1630,33 @@ impl<'run> Interpreter<'run> {
                 .and_then(|super_name| classes.get(super_name));
         }
         let Some((class, method)) = found else {
+            // Throwable-descended classes inherit getMessage/toString.
+            if self.instance_is_throwable(instance_class)
+                && (method_name == "getMessage" || method_name == "toString")
+                && descriptor == "()Ljava/lang/String;"
+            {
+                let message = match self.heap.get(receiver) {
+                    Some(crate::value::HeapObject::Instance { fields, .. }) => {
+                        fields.get("__message").and_then(|value| match value {
+                            JValue::Ref(Some(text)) => self.heap.string_text(*text),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                };
+                if method_name == "getMessage" {
+                    return Ok(UserDispatch::Value(Some(match message {
+                        Some(text) => JValue::Ref(Some(self.heap.alloc_string(&text))),
+                        None => JValue::NULL,
+                    })));
+                }
+                let text = match message {
+                    Some(message) => format!("{instance_class}: {message}"),
+                    None => instance_class.to_owned(),
+                };
+                let reference = self.heap.alloc_string(&text);
+                return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
+            }
             // Object.toString() default: "ClassName@<hex>".
             if method_name == "toString" && descriptor == "()Ljava/lang/String;" {
                 let text = format!("{instance_class}@{receiver:x}");
@@ -2107,32 +2253,6 @@ impl Frame<'_> {
         self.stack.push(JValue::Double(apply(a, b)));
         Ok(())
     }
-}
-
-/// Find a handler in `frame`'s exception table covering `pc` for the
-/// thrown class (`internal` slash form). Entry order is significant
-/// (first match wins, like the JVMS).
-fn handler_for(frame: &Frame<'_>, pc: usize, internal: &str) -> Option<usize> {
-    let pool = &frame.class.constant_pool;
-    for entry in &frame.code.attr.exception_table {
-        let start = usize::from(entry.start_pc);
-        let end = usize::from(entry.end_pc);
-        if pc < start || pc >= end {
-            continue;
-        }
-        // catch_type 0 catches everything (finally-style).
-        let matches = if entry.catch_type == 0 {
-            true
-        } else {
-            pool.get_class_name(entry.catch_type).is_some_and(|catch| {
-                jvmjs_classfile::exceptions::is_exception_subclass(internal, catch)
-            })
-        };
-        if matches {
-            return Some(usize::from(entry.handler_pc));
-        }
-    }
-    None
 }
 
 /// `[a, b, c]` capped at 20 elements for the locals view.

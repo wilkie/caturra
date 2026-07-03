@@ -179,10 +179,16 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   unwinding, rethrow, `getMessage()`/`toString()`, javac's "exception X
   has already been caught" for masked clauses, JLS definite-assignment
   and completes-normally rules (a method whose try and catch both
-  return has no missing-return error). User-defined exception classes
-  (`extends Exception`) are not yet supported, and `finally` reports a
-  friendly not-yet-supported diagnostic (its abrupt-exit duplication
-  semantics deserve their own stage). Uncaught behavior is unchanged:
+  return has no missing-return error). `finally` works via javac's
+  duplication strategy (2026-07-03): copies on the normal path, each
+  catch, every `return`/`break`/`continue` that exits the try, and a
+  catch-all rethrow handler; loop-depth tagging keeps `break` from
+  running guards outside its loop, and copies are never covered by
+  their own catch-all. User exception classes extend the library
+  throwables (`class TooSmall extends Exception` with `super(message)`
+  chaining, own fields and methods, inherited `getMessage`/`toString`);
+  thrown user objects keep their identity through catch and rethrow.
+  Uncaught behavior is unchanged:
   Java-formatted stderr with a line-numbered stack trace captured at
   the throw point.
 
