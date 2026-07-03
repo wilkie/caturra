@@ -619,6 +619,39 @@ test.describe('playground', () => {
     await expect(page.locator('.cm-lintRange-error')).toHaveCount(1);
   });
 
+  test('try/catch runs in the browser and the debugger pauses in handlers', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        try {',
+        '            int[] data = new int[2];',
+        '            data[7] = 1;',
+        '        } catch (ArrayIndexOutOfBoundsException e) {',
+        '            System.out.println("caught: " + e.getMessage());',
+        '        }',
+        '        System.out.println("recovered");',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    // Breakpoint inside the catch handler.
+    await toggleBreakpoint(page, 7);
+    await page.getByTestId('debug').click();
+    await expect(page.getByTestId('frames')).toContainText('Main.java:7');
+    // The caught exception is a named, inspectable local.
+    await expect(page.getByTestId('frames')).toContainText(
+      'e = java.lang.ArrayIndexOutOfBoundsException: Index 7 out of bounds for length 2',
+    );
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText(
+      'caught: Index 7 out of bounds for length 2',
+    );
+    await expect(page.getByTestId('console')).toContainText('recovered');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await setSource(

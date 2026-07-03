@@ -2826,6 +2826,230 @@ fn paused_view_expands_instance_fields() {
     );
 }
 
+// ----- try / catch / throw -----
+
+#[test]
+fn try_catch_basics() {
+    let out = run_stdout(
+        r#"
+        public class Catcher {
+            public static void main(String[] args) {
+                try {
+                    int[] a = new int[2];
+                    a[5] = 1;
+                    System.out.println("unreached");
+                } catch (ArithmeticException e) {
+                    System.out.println("wrong handler");
+                } catch (ArrayIndexOutOfBoundsException e) {
+                    System.out.println("caught: " + e.getMessage());
+                }
+                try {
+                    int x = 1 / 0;
+                } catch (RuntimeException e) {
+                    // Subtype catch: ArithmeticException < RuntimeException.
+                    System.out.println(e);
+                }
+                System.out.println("after");
+            }
+        }
+        "#,
+        "Catcher",
+    );
+    assert_eq!(
+        out,
+        "caught: Index 5 out of bounds for length 2\n\
+         java.lang.ArithmeticException: / by zero\nafter\n"
+    );
+}
+
+#[test]
+fn exceptions_unwind_across_frames() {
+    let out = run_stdout(
+        r#"
+        public class Unwind {
+            static int depth3() { return 10 / 0; }
+            static int depth2() { return depth3(); }
+            static int depth1() { return depth2(); }
+
+            public static void main(String[] args) {
+                try {
+                    System.out.println(depth1());
+                } catch (ArithmeticException e) {
+                    System.out.println("unwound: " + e.getMessage());
+                }
+                System.out.println("still running");
+            }
+        }
+        "#,
+        "Unwind",
+    );
+    assert_eq!(out, "unwound: / by zero\nstill running\n");
+}
+
+#[test]
+fn throw_and_rethrow() {
+    let out = run_stdout(
+        r#"
+        public class Thrower {
+            static void validate(int age) {
+                if (age < 0) {
+                    throw new IllegalArgumentException("age " + age + " is negative");
+                }
+            }
+
+            public static void main(String[] args) {
+                try {
+                    validate(-3);
+                } catch (IllegalArgumentException e) {
+                    System.out.println("rejected: " + e.getMessage());
+                }
+                try {
+                    try {
+                        throw new RuntimeException("inner");
+                    } catch (RuntimeException e) {
+                        // Rethrow to the outer handler.
+                        throw e;
+                    }
+                } catch (RuntimeException e) {
+                    System.out.println("outer got " + e.getMessage());
+                }
+                try {
+                    throw new IllegalStateException();
+                } catch (IllegalStateException e) {
+                    System.out.println("message: " + e.getMessage());
+                    System.out.println(e);
+                }
+            }
+        }
+        "#,
+        "Thrower",
+    );
+    assert_eq!(
+        out,
+        "rejected: age -3 is negative\nouter got inner\nmessage: null\n\
+         java.lang.IllegalStateException\n"
+    );
+}
+
+#[test]
+fn uncaught_exceptions_still_terminate() {
+    let (result, console) = compile_and_run(
+        r#"
+        public class Escapes {
+            public static void main(String[] args) {
+                try {
+                    int x = 1 / 0;
+                } catch (NullPointerException e) {
+                    System.out.println("wrong type");
+                }
+            }
+        }
+        "#,
+        "Escapes",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    let stderr = console.stderr_text();
+    assert!(
+        stderr.contains("java.lang.ArithmeticException: / by zero"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\tat Escapes.main(Escapes.java:5)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn catch_stack_overflow_error() {
+    let out = run_stdout(
+        r#"
+        public class DeepCatch {
+            static int down(int n) { return down(n + 1); }
+
+            public static void main(String[] args) {
+                try {
+                    System.out.println(down(0));
+                } catch (Error e) {
+                    System.out.println("caught " + e);
+                }
+                System.out.println("recovered");
+            }
+        }
+        "#,
+        "DeepCatch",
+    );
+    assert_eq!(out, "caught java.lang.StackOverflowError\nrecovered\n");
+}
+
+#[test]
+fn try_catch_compile_errors_match_javac() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "class M { static void f() { try { int x = 1/0; } catch (Exception e) { } catch (ArithmeticException e) { } } }",
+            "exception ArithmeticException has already been caught",
+        ),
+        (
+            "class M { static void f() { try { int x = 1/0; } catch (NotReal e) { } } }",
+            "cannot find symbol: class NotReal",
+        ),
+        (
+            "class M { static void f() { throw new M(); } }",
+            "cannot be converted to Throwable",
+        ),
+        (
+            r#"class M { static void f() { throw "text"; } }"#,
+            "incompatible types: String cannot be converted to Throwable",
+        ),
+        (
+            "class M { static void f() { try { int x = 1; } finally { } } }",
+            "finally is not yet supported by jvmjs",
+        ),
+    ];
+    for (source, expected) in cases {
+        let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+            path: "T.java".into(),
+            text: (*source).into(),
+        }]);
+        assert!(!result.success(), "case '{source}' compiled unexpectedly");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(expected)),
+            "case '{source}': expected '{expected}' in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
+fn missing_return_accounts_for_try_catch() {
+    // Both paths return: no missing-return error.
+    let out = run_stdout(
+        r#"
+        public class Paths {
+            static String attempt(int n) {
+                try {
+                    return "ok " + (10 / n);
+                } catch (ArithmeticException e) {
+                    return "fail";
+                }
+            }
+
+            public static void main(String[] args) {
+                System.out.println(attempt(5));
+                System.out.println(attempt(0));
+            }
+        }
+        "#,
+        "Paths",
+    );
+    assert_eq!(out, "ok 2\nfail\n");
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

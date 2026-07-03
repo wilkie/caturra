@@ -170,6 +170,22 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   exceptions are not enforced). The host seeds and inspects files via
   the `JvmSession` VFS API, so JS ⇄ Java file exchange works.
 
+- **Exceptions** (2026-07-03): `try` / multi-`catch` with JVMS
+  exception tables, `throw`, and `new SomeException("message")` over the
+  closed library hierarchy in `jvmjs-classfile::exceptions`
+  (`Throwable` down through `Exception`/`Error`/`RuntimeException` to
+  the concrete classes the runtime throws — `StackOverflowError` is
+  catchable via `Error`, matching Java). Subtype catching, cross-frame
+  unwinding, rethrow, `getMessage()`/`toString()`, javac's "exception X
+  has already been caught" for masked clauses, JLS definite-assignment
+  and completes-normally rules (a method whose try and catch both
+  return has no missing-return error). User-defined exception classes
+  (`extends Exception`) are not yet supported, and `finally` reports a
+  friendly not-yet-supported diagnostic (its abrupt-exit duplication
+  semantics deserve their own stage). Uncaught behavior is unchanged:
+  Java-formatted stderr with a line-numbered stack trace captured at
+  the throw point.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

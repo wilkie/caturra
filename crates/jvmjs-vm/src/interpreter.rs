@@ -176,6 +176,9 @@ impl<'run> Interpreter<'run> {
     /// lines, innermost first) to an uncaught exception's message.
     fn attach_stack_trace(&self, message: String) -> String {
         use std::fmt::Write as _;
+        if message.contains("\n\tat ") {
+            return message;
+        }
         let mut full = message;
         let location = |file: &str, line: Option<u16>| match line {
             Some(line) => format!("{file}:{line}"),
@@ -376,6 +379,13 @@ impl<'run> Interpreter<'run> {
                         .collect();
                     format!("{class_name}@{reference:x}{{{}}}", rendered.join(", "))
                 }
+                Some(crate::value::HeapObject::Exception {
+                    class_name,
+                    message,
+                }) => match message {
+                    Some(message) => format!("{class_name}: {message}"),
+                    None => class_name.clone(),
+                },
                 Some(crate::value::HeapObject::Scanner { .. }) => String::from("Scanner"),
                 Some(crate::value::HeapObject::File(path)) => format!("File({path})"),
                 Some(crate::value::HeapObject::Writer { path }) => {
@@ -483,514 +493,626 @@ impl<'run> Interpreter<'run> {
                 })?;
                 pc = addr + 1;
 
-                match opcode {
-                    op::NOP => {}
-                    op::ACONST_NULL => frame.stack.push(JValue::NULL),
-                    op::ICONST_M1..=op::ICONST_5 => {
-                        let value = i32::from(opcode) - i32::from(op::ICONST_0);
-                        frame.stack.push(JValue::Int(value));
-                    }
-                    op::BIPUSH => {
-                        let byte = read_u8(bytes, &mut pc, &malformed)?;
-                        frame.stack.push(JValue::Int(i32::from(byte.cast_signed())));
-                    }
-                    op::SIPUSH => {
-                        let short = read_u16(bytes, &mut pc, &malformed)?;
-                        frame
-                            .stack
-                            .push(JValue::Int(i32::from(short.cast_signed())));
-                    }
-                    op::LDC => {
-                        let index = u16::from(read_u8(bytes, &mut pc, &malformed)?);
-                        let value = self.load_constant(class, index, &malformed)?;
-                        frame.stack.push(value);
-                    }
-                    op::LDC_W | op::LDC2_W => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        let value = self.load_constant(class, index, &malformed)?;
-                        frame.stack.push(value);
-                    }
+                // One instruction, in a closure so a thrown Java
+                // exception surfaces here (where the frame stack is
+                // intact for handler search) instead of exiting the VM.
+                let flow = (|| -> Result<Flow<'run>, VmError> {
+                    match opcode {
+                        op::NOP => {}
+                        op::ACONST_NULL => frame.stack.push(JValue::NULL),
+                        op::ICONST_M1..=op::ICONST_5 => {
+                            let value = i32::from(opcode) - i32::from(op::ICONST_0);
+                            frame.stack.push(JValue::Int(value));
+                        }
+                        op::BIPUSH => {
+                            let byte = read_u8(bytes, &mut pc, &malformed)?;
+                            frame.stack.push(JValue::Int(i32::from(byte.cast_signed())));
+                        }
+                        op::SIPUSH => {
+                            let short = read_u16(bytes, &mut pc, &malformed)?;
+                            frame
+                                .stack
+                                .push(JValue::Int(i32::from(short.cast_signed())));
+                        }
+                        op::LDC => {
+                            let index = u16::from(read_u8(bytes, &mut pc, &malformed)?);
+                            let value = self.load_constant(class, index, &malformed)?;
+                            frame.stack.push(value);
+                        }
+                        op::LDC_W | op::LDC2_W => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            let value = self.load_constant(class, index, &malformed)?;
+                            frame.stack.push(value);
+                        }
 
-                    // ----- locals -----
-                    op::ILOAD | op::DLOAD | op::ALOAD => {
-                        let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
-                        frame.load(slot, &malformed)?;
-                    }
-                    op::ILOAD_0..=op::ILOAD_3 => {
-                        frame.load(usize::from(opcode - op::ILOAD_0), &malformed)?;
-                    }
-                    op::DLOAD_0..=op::DLOAD_3 => {
-                        frame.load(usize::from(opcode - op::DLOAD_0), &malformed)?;
-                    }
-                    op::ALOAD_0..=op::ALOAD_3 => {
-                        frame.load(usize::from(opcode - op::ALOAD_0), &malformed)?;
-                    }
-                    op::ISTORE | op::DSTORE | op::ASTORE => {
-                        let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
-                        frame.store(slot, &malformed)?;
-                    }
-                    op::ISTORE_0..=op::ISTORE_3 => {
-                        frame.store(usize::from(opcode - op::ISTORE_0), &malformed)?;
-                    }
-                    op::DSTORE_0..=op::DSTORE_3 => {
-                        frame.store(usize::from(opcode - op::DSTORE_0), &malformed)?;
-                    }
-                    op::ASTORE_0..=op::ASTORE_3 => {
-                        frame.store(usize::from(opcode - op::ASTORE_0), &malformed)?;
-                    }
+                        // ----- locals -----
+                        op::ILOAD | op::DLOAD | op::ALOAD => {
+                            let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                            frame.load(slot, &malformed)?;
+                        }
+                        op::ILOAD_0..=op::ILOAD_3 => {
+                            frame.load(usize::from(opcode - op::ILOAD_0), &malformed)?;
+                        }
+                        op::DLOAD_0..=op::DLOAD_3 => {
+                            frame.load(usize::from(opcode - op::DLOAD_0), &malformed)?;
+                        }
+                        op::ALOAD_0..=op::ALOAD_3 => {
+                            frame.load(usize::from(opcode - op::ALOAD_0), &malformed)?;
+                        }
+                        op::ISTORE | op::DSTORE | op::ASTORE => {
+                            let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                            frame.store(slot, &malformed)?;
+                        }
+                        op::ISTORE_0..=op::ISTORE_3 => {
+                            frame.store(usize::from(opcode - op::ISTORE_0), &malformed)?;
+                        }
+                        op::DSTORE_0..=op::DSTORE_3 => {
+                            frame.store(usize::from(opcode - op::DSTORE_0), &malformed)?;
+                        }
+                        op::ASTORE_0..=op::ASTORE_3 => {
+                            frame.store(usize::from(opcode - op::ASTORE_0), &malformed)?;
+                        }
 
-                    // ----- stack manipulation -----
-                    op::POP => {
-                        frame.pop()?;
-                    }
-                    op::POP2 => {
-                        // One category-2 value or two category-1 values.
-                        let top = frame.pop()?;
-                        if !matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                        // ----- stack manipulation -----
+                        op::POP => {
                             frame.pop()?;
                         }
-                    }
-                    op::DUP => {
-                        let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
-                        frame.stack.push(top);
-                    }
-                    op::DUP2 => {
-                        // One category-2 value or the top two category-1s.
-                        let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
-                        if matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                        op::POP2 => {
+                            // One category-2 value or two category-1 values.
+                            let top = frame.pop()?;
+                            if !matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                                frame.pop()?;
+                            }
+                        }
+                        op::DUP => {
+                            let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
                             frame.stack.push(top);
-                        } else {
+                        }
+                        op::DUP2 => {
+                            // One category-2 value or the top two category-1s.
+                            let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
+                            if matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                                frame.stack.push(top);
+                            } else {
+                                let len = frame.stack.len();
+                                if len < 2 {
+                                    return Err(VmError::StackUnderflow);
+                                }
+                                let under = frame.stack[len - 2];
+                                frame.stack.push(under);
+                                frame.stack.push(top);
+                            }
+                        }
+                        op::SWAP => {
                             let len = frame.stack.len();
                             if len < 2 {
                                 return Err(VmError::StackUnderflow);
                             }
-                            let under = frame.stack[len - 2];
-                            frame.stack.push(under);
-                            frame.stack.push(top);
+                            frame.stack.swap(len - 1, len - 2);
                         }
-                    }
-                    op::SWAP => {
-                        let len = frame.stack.len();
-                        if len < 2 {
-                            return Err(VmError::StackUnderflow);
-                        }
-                        frame.stack.swap(len - 1, len - 2);
-                    }
 
-                    // ----- arithmetic (Java wrapping semantics) -----
-                    op::IADD => frame.int_binop(i32::wrapping_add)?,
-                    op::ISUB => frame.int_binop(i32::wrapping_sub)?,
-                    op::IMUL => frame.int_binop(i32::wrapping_mul)?,
-                    op::IDIV => frame.int_division(i32::wrapping_div)?,
-                    op::IREM => frame.int_division(i32::wrapping_rem)?,
-                    op::INEG => {
-                        let value = frame.pop_int()?;
-                        frame.stack.push(JValue::Int(value.wrapping_neg()));
-                    }
-                    op::DADD => frame.double_binop(|a, b| a + b)?,
-                    op::DSUB => frame.double_binop(|a, b| a - b)?,
-                    op::DMUL => frame.double_binop(|a, b| a * b)?,
-                    op::DDIV => frame.double_binop(|a, b| a / b)?,
-                    op::DREM => frame.double_binop(|a, b| a % b)?,
-                    op::DNEG => {
-                        let value = frame.pop_double()?;
-                        frame.stack.push(JValue::Double(-value));
-                    }
+                        // ----- arithmetic (Java wrapping semantics) -----
+                        op::IADD => frame.int_binop(i32::wrapping_add)?,
+                        op::ISUB => frame.int_binop(i32::wrapping_sub)?,
+                        op::IMUL => frame.int_binop(i32::wrapping_mul)?,
+                        op::IDIV => frame.int_division(i32::wrapping_div)?,
+                        op::IREM => frame.int_division(i32::wrapping_rem)?,
+                        op::INEG => {
+                            let value = frame.pop_int()?;
+                            frame.stack.push(JValue::Int(value.wrapping_neg()));
+                        }
+                        op::DADD => frame.double_binop(|a, b| a + b)?,
+                        op::DSUB => frame.double_binop(|a, b| a - b)?,
+                        op::DMUL => frame.double_binop(|a, b| a * b)?,
+                        op::DDIV => frame.double_binop(|a, b| a / b)?,
+                        op::DREM => frame.double_binop(|a, b| a % b)?,
+                        op::DNEG => {
+                            let value = frame.pop_double()?;
+                            frame.stack.push(JValue::Double(-value));
+                        }
 
-                    // ----- conversions -----
-                    op::I2D => {
-                        let value = frame.pop_int()?;
-                        frame.stack.push(JValue::Double(f64::from(value)));
-                    }
-                    op::D2I => {
-                        let value = frame.pop_double()?;
-                        // `as` matches JVM d2i: NaN -> 0, saturating bounds.
-                        frame.stack.push(JValue::Int(value as i32));
-                    }
-                    op::I2C => {
-                        let value = frame.pop_int()?;
-                        // i2c truncates to 16 bits and zero-extends.
-                        let truncated = (value.cast_unsigned() & 0xFFFF).cast_signed();
-                        frame.stack.push(JValue::Int(truncated));
-                    }
+                        // ----- conversions -----
+                        op::I2D => {
+                            let value = frame.pop_int()?;
+                            frame.stack.push(JValue::Double(f64::from(value)));
+                        }
+                        op::D2I => {
+                            let value = frame.pop_double()?;
+                            // `as` matches JVM d2i: NaN -> 0, saturating bounds.
+                            frame.stack.push(JValue::Int(value as i32));
+                        }
+                        op::I2C => {
+                            let value = frame.pop_int()?;
+                            // i2c truncates to 16 bits and zero-extends.
+                            let truncated = (value.cast_unsigned() & 0xFFFF).cast_signed();
+                            frame.stack.push(JValue::Int(truncated));
+                        }
 
-                    // ----- comparisons and branches -----
-                    op::DCMPL | op::DCMPG => {
-                        let b = frame.pop_double()?;
-                        let a = frame.pop_double()?;
-                        let result = if a.is_nan() || b.is_nan() {
-                            if opcode == op::DCMPG { 1 } else { -1 }
-                        } else if a < b {
-                            -1
-                        } else {
-                            i32::from(a > b)
-                        };
-                        frame.stack.push(JValue::Int(result));
-                    }
-                    op::IFEQ..=op::IFLE => {
-                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                        let value = frame.pop_int()?;
-                        let jump = match opcode {
-                            op::IFEQ => value == 0,
-                            op::IFNE => value != 0,
-                            op::IFLT => value < 0,
-                            op::IFGE => value >= 0,
-                            op::IFGT => value > 0,
-                            _ => value <= 0,
-                        };
-                        if jump {
+                        // ----- comparisons and branches -----
+                        op::DCMPL | op::DCMPG => {
+                            let b = frame.pop_double()?;
+                            let a = frame.pop_double()?;
+                            let result = if a.is_nan() || b.is_nan() {
+                                if opcode == op::DCMPG { 1 } else { -1 }
+                            } else if a < b {
+                                -1
+                            } else {
+                                i32::from(a > b)
+                            };
+                            frame.stack.push(JValue::Int(result));
+                        }
+                        op::IFEQ..=op::IFLE => {
+                            let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                            let value = frame.pop_int()?;
+                            let jump = match opcode {
+                                op::IFEQ => value == 0,
+                                op::IFNE => value != 0,
+                                op::IFLT => value < 0,
+                                op::IFGE => value >= 0,
+                                op::IFGT => value > 0,
+                                _ => value <= 0,
+                            };
+                            if jump {
+                                pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                            }
+                        }
+                        op::IF_ICMPEQ..=op::IF_ICMPLE => {
+                            let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                            let b = frame.pop_int()?;
+                            let a = frame.pop_int()?;
+                            let jump = match opcode {
+                                op::IF_ICMPEQ => a == b,
+                                op::IF_ICMPNE => a != b,
+                                op::IF_ICMPLT => a < b,
+                                op::IF_ICMPGE => a >= b,
+                                op::IF_ICMPGT => a > b,
+                                _ => a <= b,
+                            };
+                            if jump {
+                                pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                            }
+                        }
+                        op::IF_ACMPEQ | op::IF_ACMPNE => {
+                            let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                            let b = frame.pop_ref()?;
+                            let a = frame.pop_ref()?;
+                            let jump = (a == b) == (opcode == op::IF_ACMPEQ);
+                            if jump {
+                                pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                            }
+                        }
+                        op::IFNULL | op::IFNONNULL => {
+                            let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
+                            let reference = frame.pop_ref()?;
+                            if reference.is_none() == (opcode == op::IFNULL) {
+                                pc = branch_target(addr, offset, bytes.len(), &malformed)?;
+                            }
+                        }
+                        op::GOTO => {
+                            let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
                             pc = branch_target(addr, offset, bytes.len(), &malformed)?;
                         }
-                    }
-                    op::IF_ICMPEQ..=op::IF_ICMPLE => {
-                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                        let b = frame.pop_int()?;
-                        let a = frame.pop_int()?;
-                        let jump = match opcode {
-                            op::IF_ICMPEQ => a == b,
-                            op::IF_ICMPNE => a != b,
-                            op::IF_ICMPLT => a < b,
-                            op::IF_ICMPGE => a >= b,
-                            op::IF_ICMPGT => a > b,
-                            _ => a <= b,
-                        };
-                        if jump {
-                            pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                        }
-                    }
-                    op::IF_ACMPEQ | op::IF_ACMPNE => {
-                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                        let b = frame.pop_ref()?;
-                        let a = frame.pop_ref()?;
-                        let jump = (a == b) == (opcode == op::IF_ACMPEQ);
-                        if jump {
-                            pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                        }
-                    }
-                    op::IFNULL | op::IFNONNULL => {
-                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                        let reference = frame.pop_ref()?;
-                        if reference.is_none() == (opcode == op::IFNULL) {
-                            pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                        }
-                    }
-                    op::GOTO => {
-                        let offset = read_u16(bytes, &mut pc, &malformed)?.cast_signed();
-                        pc = branch_target(addr, offset, bytes.len(), &malformed)?;
-                    }
-                    op::CHECKCAST | op::INSTANCEOF => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        let target = class
-                            .constant_pool
-                            .get_class_name(index)
-                            .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
-                            .to_owned();
-                        let reference = frame.pop_ref()?;
-                        let matches_type = match reference {
-                            None => false,
-                            Some(reference) => match self.heap.get(reference) {
-                                Some(crate::value::HeapObject::Instance { class_name, .. }) => {
-                                    self.is_runtime_subtype(class_name, &target)
-                                }
-                                _ => false,
-                            },
-                        };
-                        if opcode == op::INSTANCEOF {
-                            frame.stack.push(JValue::Int(i32::from(matches_type)));
-                        } else {
-                            // checkcast: null always passes; a mismatch throws.
-                            if reference.is_some() && !matches_type {
-                                let actual = match reference.and_then(|r| self.heap.get(r)) {
+                        op::CHECKCAST | op::INSTANCEOF => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            let target = class
+                                .constant_pool
+                                .get_class_name(index)
+                                .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
+                                .to_owned();
+                            let reference = frame.pop_ref()?;
+                            let matches_type = match reference {
+                                None => false,
+                                Some(reference) => match self.heap.get(reference) {
                                     Some(crate::value::HeapObject::Instance {
                                         class_name, ..
-                                    }) => class_name.clone(),
-                                    _ => String::from("<object>"),
-                                };
-                                return Err(VmError::UncaughtException(format!(
-                                    "java.lang.ClassCastException: class {actual} cannot be cast \
+                                    }) => self.is_runtime_subtype(class_name, &target),
+                                    _ => false,
+                                },
+                            };
+                            if opcode == op::INSTANCEOF {
+                                frame.stack.push(JValue::Int(i32::from(matches_type)));
+                            } else {
+                                // checkcast: null always passes; a mismatch throws.
+                                if reference.is_some() && !matches_type {
+                                    let actual = match reference.and_then(|r| self.heap.get(r)) {
+                                        Some(crate::value::HeapObject::Instance {
+                                            class_name,
+                                            ..
+                                        }) => class_name.clone(),
+                                        _ => String::from("<object>"),
+                                    };
+                                    return Err(VmError::UncaughtException(format!(
+                                        "java.lang.ClassCastException: class {actual} cannot be cast \
                                  to class {target}"
-                                )));
+                                    )));
+                                }
+                                frame.stack.push(JValue::Ref(reference));
                             }
-                            frame.stack.push(JValue::Ref(reference));
                         }
-                    }
 
-                    // ----- objects -----
-                    op::NEW => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        let target = class
-                            .constant_pool
-                            .get_class_name(index)
-                            .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
-                            .to_owned();
-                        let object = if self.classes.contains_key(&target) {
-                            if let Some(mut chain) = self.begin_initialization(&target)?
+                        op::ATHROW => {
+                            let reference = frame.pop_ref()?.ok_or_else(|| {
+                                VmError::UncaughtException(String::from(
+                                    "java.lang.NullPointerException: cannot throw null",
+                                ))
+                            })?;
+                            let Some(crate::value::HeapObject::Exception {
+                                class_name,
+                                message,
+                            }) = self.heap.get(reference)
+                            else {
+                                return Err(malformed(String::from("athrow on a non-throwable")));
+                            };
+                            return Err(VmError::UncaughtException(match message {
+                                Some(message) => format!("{class_name}: {message}"),
+                                None => class_name.clone(),
+                            }));
+                        }
+
+                        // ----- objects -----
+                        op::NEW => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            let target = class
+                                .constant_pool
+                                .get_class_name(index)
+                                .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
+                                .to_owned();
+                            let object = if self.classes.contains_key(&target) {
+                                if let Some(chain) = self.begin_initialization(&target)?
+                                    && !chain.is_empty()
+                                {
+                                    // Run <clinit> chain first, then re-execute
+                                    // this instruction (JVMS §5.5).
+                                    frame.pc = addr;
+                                    return Ok(Flow::InitChain(chain));
+                                }
+                                self.new_instance(&target)
+                            } else {
+                                intrinsics::instantiate(&target).ok_or_else(|| {
+                                    VmError::UnknownIntrinsic(format!(
+                                        "cannot instantiate {target}"
+                                    ))
+                                })?
+                            };
+                            let reference = self.heap.alloc(object);
+                            frame.stack.push(JValue::Ref(Some(reference)));
+                        }
+                        op::INVOKESPECIAL => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            if let Some(callee) =
+                                self.invoke_special_op(class, &mut frame, index, &malformed)?
+                            {
+                                frame.pc = pc;
+                                return Ok(Flow::Call(callee));
+                            }
+                        }
+                        op::GETSTATIC | op::PUTSTATIC => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            let field_class = class
+                                .constant_pool
+                                .get_member_ref(index)
+                                .map(|(c, _, _)| c.to_owned())
+                                .ok_or_else(|| {
+                                    malformed(format!("bad field ref at pool {index}"))
+                                })?;
+                            if let Some(chain) = self.begin_initialization(&field_class)?
                                 && !chain.is_empty()
                             {
-                                // Run <clinit> chain first, then re-execute
-                                // this instruction (JVMS §5.5).
                                 frame.pc = addr;
-                                let first = chain.remove(0);
-                                self.frames.push(std::mem::replace(&mut frame, first));
-                                for pending in chain.into_iter().rev() {
-                                    self.frames.push(pending);
+                                return Ok(Flow::InitChain(chain));
+                            }
+                            if opcode == op::GETSTATIC {
+                                self.getstatic_op(class, &mut frame, index, &malformed)?;
+                            } else {
+                                self.putstatic_op(class, &mut frame, index, &malformed)?;
+                            }
+                        }
+                        op::GETFIELD => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            self.getfield_op(class, &mut frame, index, &malformed)?;
+                        }
+                        op::PUTFIELD => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            self.putfield_op(class, &mut frame, index, &malformed)?;
+                        }
+                        op::INVOKEVIRTUAL => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            if let Some(callee) =
+                                self.invoke_virtual_op(class, &mut frame, index, &malformed)?
+                            {
+                                frame.pc = pc;
+                                return Ok(Flow::Call(callee));
+                            }
+                        }
+                        op::INVOKESTATIC => {
+                            let index = read_u16(bytes, &mut pc, &malformed)?;
+                            let (target_class, method_name, descriptor) = class
+                                .constant_pool
+                                .get_member_ref(index)
+                                .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
+                                .ok_or_else(|| {
+                                    malformed(format!("bad method ref at pool {index}"))
+                                })?;
+                            // Initialization retry happens before arguments are
+                            // popped so the re-executed instruction sees them.
+                            if let Some(chain) = self.begin_initialization(&target_class)?
+                                && !chain.is_empty()
+                            {
+                                frame.pc = addr;
+                                return Ok(Flow::InitChain(chain));
+                            }
+                            let widths = descriptor_arg_widths(&descriptor)
+                                .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+                            let mut args = Vec::with_capacity(widths.len());
+                            for _ in &widths {
+                                args.push(frame.pop()?);
+                            }
+                            args.reverse();
+                            if let Some(callee) = self.invoke_static(
+                                &target_class,
+                                &method_name,
+                                &descriptor,
+                                &widths,
+                                &args,
+                                &mut frame,
+                            )? {
+                                frame.pc = pc;
+                                return Ok(Flow::Call(callee));
+                            }
+                        }
+                        // ----- arrays -----
+                        op::NEWARRAY => {
+                            let atype = read_u8(bytes, &mut pc, &malformed)?;
+                            let length = check_array_size(frame.pop_int()?)?;
+                            let object = match atype {
+                                op::T_INT | op::T_BOOLEAN | op::T_CHAR => {
+                                    crate::value::HeapObject::IntArray(vec![0; length])
                                 }
-                                continue 'frames;
-                            }
-                            self.new_instance(&target)
-                        } else {
-                            intrinsics::instantiate(&target).ok_or_else(|| {
-                                VmError::UnknownIntrinsic(format!("cannot instantiate {target}"))
-                            })?
-                        };
-                        let reference = self.heap.alloc(object);
-                        frame.stack.push(JValue::Ref(Some(reference)));
-                    }
-                    op::INVOKESPECIAL => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        if let Some(callee) =
-                            self.invoke_special_op(class, &mut frame, index, &malformed)?
-                        {
-                            frame.pc = pc;
-                            self.frames.push(std::mem::replace(&mut frame, callee));
-                            continue 'frames;
+                                op::T_DOUBLE => {
+                                    crate::value::HeapObject::DoubleArray(vec![0.0; length])
+                                }
+                                other => {
+                                    return Err(malformed(format!(
+                                        "unsupported newarray type {other}"
+                                    )));
+                                }
+                            };
+                            let reference = self.heap.alloc(object);
+                            frame.stack.push(JValue::Ref(Some(reference)));
                         }
-                    }
-                    op::GETSTATIC | op::PUTSTATIC => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        let field_class = class
-                            .constant_pool
-                            .get_member_ref(index)
-                            .map(|(c, _, _)| c.to_owned())
-                            .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
-                        if let Some(mut chain) = self.begin_initialization(&field_class)?
-                            && !chain.is_empty()
-                        {
-                            frame.pc = addr;
-                            let first = chain.remove(0);
-                            self.frames.push(std::mem::replace(&mut frame, first));
-                            for pending in chain.into_iter().rev() {
-                                self.frames.push(pending);
-                            }
-                            continue 'frames;
-                        }
-                        if opcode == op::GETSTATIC {
-                            self.getstatic_op(class, &mut frame, index, &malformed)?;
-                        } else {
-                            self.putstatic_op(class, &mut frame, index, &malformed)?;
-                        }
-                    }
-                    op::GETFIELD => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        self.getfield_op(class, &mut frame, index, &malformed)?;
-                    }
-                    op::PUTFIELD => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        self.putfield_op(class, &mut frame, index, &malformed)?;
-                    }
-                    op::INVOKEVIRTUAL => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        if let Some(callee) =
-                            self.invoke_virtual_op(class, &mut frame, index, &malformed)?
-                        {
-                            frame.pc = pc;
-                            self.frames.push(std::mem::replace(&mut frame, callee));
-                            continue 'frames;
-                        }
-                    }
-                    op::INVOKESTATIC => {
-                        let index = read_u16(bytes, &mut pc, &malformed)?;
-                        let (target_class, method_name, descriptor) = class
-                            .constant_pool
-                            .get_member_ref(index)
-                            .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
-                            .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
-                        // Initialization retry happens before arguments are
-                        // popped so the re-executed instruction sees them.
-                        if let Some(mut chain) = self.begin_initialization(&target_class)?
-                            && !chain.is_empty()
-                        {
-                            frame.pc = addr;
-                            let first = chain.remove(0);
-                            self.frames.push(std::mem::replace(&mut frame, first));
-                            for pending in chain.into_iter().rev() {
-                                self.frames.push(pending);
-                            }
-                            continue 'frames;
-                        }
-                        let widths = descriptor_arg_widths(&descriptor)
-                            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
-                        let mut args = Vec::with_capacity(widths.len());
-                        for _ in &widths {
-                            args.push(frame.pop()?);
-                        }
-                        args.reverse();
-                        if let Some(callee) = self.invoke_static(
-                            &target_class,
-                            &method_name,
-                            &descriptor,
-                            &widths,
-                            &args,
-                            &mut frame,
-                        )? {
-                            frame.pc = pc;
-                            self.frames.push(std::mem::replace(&mut frame, callee));
-                            continue 'frames;
-                        }
-                    }
-                    // ----- arrays -----
-                    op::NEWARRAY => {
-                        let atype = read_u8(bytes, &mut pc, &malformed)?;
-                        let length = check_array_size(frame.pop_int()?)?;
-                        let object = match atype {
-                            op::T_INT | op::T_BOOLEAN | op::T_CHAR => {
-                                crate::value::HeapObject::IntArray(vec![0; length])
-                            }
-                            op::T_DOUBLE => {
-                                crate::value::HeapObject::DoubleArray(vec![0.0; length])
-                            }
-                            other => {
-                                return Err(malformed(format!(
-                                    "unsupported newarray type {other}"
-                                )));
-                            }
-                        };
-                        let reference = self.heap.alloc(object);
-                        frame.stack.push(JValue::Ref(Some(reference)));
-                    }
-                    op::ANEWARRAY => {
-                        let _class_index = read_u16(bytes, &mut pc, &malformed)?;
-                        let length = check_array_size(frame.pop_int()?)?;
-                        let reference = self.heap.alloc(crate::value::HeapObject::RefArray(vec![
+                        op::ANEWARRAY => {
+                            let _class_index = read_u16(bytes, &mut pc, &malformed)?;
+                            let length = check_array_size(frame.pop_int()?)?;
+                            let reference =
+                                self.heap.alloc(crate::value::HeapObject::RefArray(vec![
                             JValue::NULL;
                             length
                         ]));
-                        frame.stack.push(JValue::Ref(Some(reference)));
-                    }
-                    op::MULTIANEWARRAY => {
-                        let class_index = read_u16(bytes, &mut pc, &malformed)?;
-                        let dims = usize::from(read_u8(bytes, &mut pc, &malformed)?);
-                        let descriptor = class
-                            .constant_pool
-                            .get_class_name(class_index)
-                            .ok_or_else(|| {
-                                malformed(format!("bad class ref at pool {class_index}"))
-                            })?
-                            .to_owned();
-                        let mut counts = Vec::with_capacity(dims);
-                        for _ in 0..dims {
-                            counts.push(frame.pop_int()?);
+                            frame.stack.push(JValue::Ref(Some(reference)));
                         }
-                        counts.reverse();
-                        let reference = self.alloc_multi_array(&descriptor, &counts, &malformed)?;
-                        frame.stack.push(JValue::Ref(Some(reference)));
-                    }
-                    op::ARRAYLENGTH => {
-                        let reference = frame.pop_ref()?.ok_or_else(null_array)?;
-                        let length = match self.heap.get(reference) {
-                            Some(crate::value::HeapObject::IntArray(v)) => v.len(),
-                            Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
-                            Some(crate::value::HeapObject::RefArray(v)) => v.len(),
-                            _ => return Err(malformed(String::from("arraylength on a non-array"))),
-                        };
-                        frame
-                            .stack
-                            .push(JValue::Int(i32::try_from(length).unwrap_or(i32::MAX)));
-                    }
-                    op::IALOAD | op::BALOAD | op::CALOAD => {
-                        let (reference, index) = frame.pop_array_access()?;
-                        let Some(crate::value::HeapObject::IntArray(values)) =
-                            self.heap.get(reference)
-                        else {
-                            return Err(malformed(String::from(
-                                "int-array load on a non-int-array",
-                            )));
-                        };
-                        let value = *array_get(values, index)?;
-                        frame.stack.push(JValue::Int(value));
-                    }
-                    op::DALOAD => {
-                        let (reference, index) = frame.pop_array_access()?;
-                        let Some(crate::value::HeapObject::DoubleArray(values)) =
-                            self.heap.get(reference)
-                        else {
-                            return Err(malformed(String::from("daload on a non-double-array")));
-                        };
-                        let value = *array_get(values, index)?;
-                        frame.stack.push(JValue::Double(value));
-                    }
-                    op::AALOAD => {
-                        let (reference, index) = frame.pop_array_access()?;
-                        let Some(crate::value::HeapObject::RefArray(values)) =
-                            self.heap.get(reference)
-                        else {
-                            return Err(malformed(String::from("aaload on a non-reference-array")));
-                        };
-                        let value = *array_get(values, index)?;
-                        frame.stack.push(value);
-                    }
-                    op::IASTORE | op::BASTORE | op::CASTORE => {
-                        let value = frame.pop_int()?;
-                        let (reference, index) = frame.pop_array_access()?;
-                        let Some(crate::value::HeapObject::IntArray(values)) =
-                            self.heap.get_mut(reference)
-                        else {
-                            return Err(malformed(String::from(
-                                "int-array store on a non-int-array",
-                            )));
-                        };
-                        let slot = array_get_mut(values, index)?;
-                        // Stores mask to the element width (JVMS castore /
-                        // bastore); boolean arrays hold 0/1.
-                        *slot = match opcode {
-                            op::CASTORE => i32::from(value.cast_unsigned() as u16),
-                            op::BASTORE => value & 1,
-                            _ => value,
-                        };
-                    }
-                    op::DASTORE => {
-                        let value = frame.pop_double()?;
-                        let (reference, index) = frame.pop_array_access()?;
-                        let Some(crate::value::HeapObject::DoubleArray(values)) =
-                            self.heap.get_mut(reference)
-                        else {
-                            return Err(malformed(String::from("dastore on a non-double-array")));
-                        };
-                        *array_get_mut(values, index)? = value;
-                    }
-                    op::AASTORE => {
-                        let value = frame.pop()?;
-                        let (reference, index) = frame.pop_array_access()?;
-                        let Some(crate::value::HeapObject::RefArray(values)) =
-                            self.heap.get_mut(reference)
-                        else {
-                            return Err(malformed(String::from(
-                                "aastore on a non-reference-array",
-                            )));
-                        };
-                        *array_get_mut(values, index)? = value;
-                    }
+                        op::MULTIANEWARRAY => {
+                            let class_index = read_u16(bytes, &mut pc, &malformed)?;
+                            let dims = usize::from(read_u8(bytes, &mut pc, &malformed)?);
+                            let descriptor = class
+                                .constant_pool
+                                .get_class_name(class_index)
+                                .ok_or_else(|| {
+                                    malformed(format!("bad class ref at pool {class_index}"))
+                                })?
+                                .to_owned();
+                            let mut counts = Vec::with_capacity(dims);
+                            for _ in 0..dims {
+                                counts.push(frame.pop_int()?);
+                            }
+                            counts.reverse();
+                            let reference =
+                                self.alloc_multi_array(&descriptor, &counts, &malformed)?;
+                            frame.stack.push(JValue::Ref(Some(reference)));
+                        }
+                        op::ARRAYLENGTH => {
+                            let reference = frame.pop_ref()?.ok_or_else(null_array)?;
+                            let length = match self.heap.get(reference) {
+                                Some(crate::value::HeapObject::IntArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::RefArray(v)) => v.len(),
+                                _ => {
+                                    return Err(malformed(String::from(
+                                        "arraylength on a non-array",
+                                    )));
+                                }
+                            };
+                            frame
+                                .stack
+                                .push(JValue::Int(i32::try_from(length).unwrap_or(i32::MAX)));
+                        }
+                        op::IALOAD | op::BALOAD | op::CALOAD => {
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::IntArray(values)) =
+                                self.heap.get(reference)
+                            else {
+                                return Err(malformed(String::from(
+                                    "int-array load on a non-int-array",
+                                )));
+                            };
+                            let value = *array_get(values, index)?;
+                            frame.stack.push(JValue::Int(value));
+                        }
+                        op::DALOAD => {
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::DoubleArray(values)) =
+                                self.heap.get(reference)
+                            else {
+                                return Err(malformed(String::from(
+                                    "daload on a non-double-array",
+                                )));
+                            };
+                            let value = *array_get(values, index)?;
+                            frame.stack.push(JValue::Double(value));
+                        }
+                        op::AALOAD => {
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::RefArray(values)) =
+                                self.heap.get(reference)
+                            else {
+                                return Err(malformed(String::from(
+                                    "aaload on a non-reference-array",
+                                )));
+                            };
+                            let value = *array_get(values, index)?;
+                            frame.stack.push(value);
+                        }
+                        op::IASTORE | op::BASTORE | op::CASTORE => {
+                            let value = frame.pop_int()?;
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::IntArray(values)) =
+                                self.heap.get_mut(reference)
+                            else {
+                                return Err(malformed(String::from(
+                                    "int-array store on a non-int-array",
+                                )));
+                            };
+                            let slot = array_get_mut(values, index)?;
+                            // Stores mask to the element width (JVMS castore /
+                            // bastore); boolean arrays hold 0/1.
+                            *slot = match opcode {
+                                op::CASTORE => i32::from(value.cast_unsigned() as u16),
+                                op::BASTORE => value & 1,
+                                _ => value,
+                            };
+                        }
+                        op::DASTORE => {
+                            let value = frame.pop_double()?;
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::DoubleArray(values)) =
+                                self.heap.get_mut(reference)
+                            else {
+                                return Err(malformed(String::from(
+                                    "dastore on a non-double-array",
+                                )));
+                            };
+                            *array_get_mut(values, index)? = value;
+                        }
+                        op::AASTORE => {
+                            let value = frame.pop()?;
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::RefArray(values)) =
+                                self.heap.get_mut(reference)
+                            else {
+                                return Err(malformed(String::from(
+                                    "aastore on a non-reference-array",
+                                )));
+                            };
+                            *array_get_mut(values, index)? = value;
+                        }
 
-                    op::RETURN => match self.frames.pop() {
-                        None => return Ok(None),
+                        op::RETURN => return Ok(Flow::Return(None)),
+                        op::IRETURN | op::DRETURN | op::ARETURN => {
+                            let value = frame.pop()?;
+                            return Ok(Flow::Return(Some(value)));
+                        }
+                        other => return Err(VmError::UnsupportedOpcode(other)),
+                    }
+                    Ok(Flow::Next)
+                })();
+
+                match flow {
+                    Ok(Flow::Next) => {}
+                    Ok(Flow::Call(callee)) => {
+                        frame.pc = pc;
+                        self.frames.push(std::mem::replace(&mut frame, callee));
+                        continue 'frames;
+                    }
+                    Ok(Flow::InitChain(mut chain)) => {
+                        // `frame.pc` was rewound by the arm; the chain
+                        // runs ancestor-first as pseudo-callers.
+                        let first = chain.remove(0);
+                        self.frames.push(std::mem::replace(&mut frame, first));
+                        for pending in chain.into_iter().rev() {
+                            self.frames.push(pending);
+                        }
+                        continue 'frames;
+                    }
+                    Ok(Flow::Return(value)) => match self.frames.pop() {
+                        None => return Ok(value),
                         Some(caller) => {
                             frame = caller;
+                            if let Some(value) = value {
+                                frame.stack.push(value);
+                            }
                             continue 'frames;
                         }
                     },
-                    op::IRETURN | op::DRETURN | op::ARETURN => {
-                        let value = frame.pop()?;
-                        match self.frames.pop() {
-                            None => return Ok(Some(value)),
-                            Some(caller) => {
-                                frame = caller;
-                                frame.stack.push(value);
-                                continue 'frames;
+                    Err(error) => {
+                        // Capture the trace at the throw point — the
+                        // handler search below unwinds (consumes)
+                        // frames, so this must come first. Handlers
+                        // only read the first line, so the trace rides
+                        // along harmlessly when caught.
+                        let error = match error {
+                            VmError::UncaughtException(message) => {
+                                VmError::UncaughtException(self.attach_stack_trace(message))
                             }
+                            other => other,
+                        };
+                        if self.unwind_to_handler(&mut frame, addr, &error)? {
+                            continue 'frames;
                         }
+                        return Err(error);
                     }
-                    other => return Err(VmError::UnsupportedOpcode(other)),
                 }
+            }
+        }
+    }
+
+    /// Search the active frame, then each suspended caller, for an
+    /// exception handler covering the faulting pc whose catch type
+    /// matches the thrown class. On a match: unwind to that frame,
+    /// clear its operand stack, push the exception object, and point
+    /// `frame.pc` at the handler. Returns whether a handler was found
+    /// (`false` leaves non-Java errors untouched).
+    fn unwind_to_handler(
+        &mut self,
+        frame: &mut Frame<'run>,
+        addr: usize,
+        error: &VmError,
+    ) -> Result<bool, VmError> {
+        // Only Java exceptions unwind; host errors (budget, stop,
+        // malformed classes) are not catchable.
+        let VmError::UncaughtException(text) = error else {
+            return Ok(false);
+        };
+        let first_line = text.lines().next().unwrap_or_default();
+        let (dotted, message) = match first_line.split_once(": ") {
+            Some((class, message)) => (class, Some(message.to_owned())),
+            None => (first_line, None),
+        };
+        let internal = dotted.replace('.', "/");
+        if !jvmjs_classfile::exceptions::is_exception_class(&internal) {
+            return Ok(false);
+        }
+
+        // The active frame first, at the faulting instruction.
+        let mut search_pc = addr;
+        loop {
+            if let Some(handler_pc) = handler_for(frame, search_pc, &internal) {
+                let exception = self.heap.alloc(crate::value::HeapObject::Exception {
+                    class_name: dotted.to_owned(),
+                    message,
+                });
+                frame.stack.clear();
+                frame.stack.push(JValue::Ref(Some(exception)));
+                frame.pc = handler_pc;
+                return Ok(true);
+            }
+            match self.frames.pop() {
+                Some(caller) => {
+                    // The caller's saved pc points just past its invoke
+                    // instruction; step back inside it so try ranges
+                    // covering the call match.
+                    search_pc = caller.pc.saturating_sub(1);
+                    *frame = caller;
+                }
+                None => return Ok(false),
             }
         }
     }
@@ -1696,6 +1818,20 @@ impl WatchEvaluator for FrameWatchEvaluator<'_, '_> {
     }
 }
 
+/// What one dispatched instruction asks the frame loop to do next.
+enum Flow<'run> {
+    /// Fall through to the next instruction.
+    Next,
+    /// Push this callee frame and continue inside it.
+    Call(Frame<'run>),
+    /// Pop the current frame, delivering a value to the caller (or out
+    /// of `execute` for the last frame).
+    Return(Option<JValue>),
+    /// Static initializers must run first (execution order), then the
+    /// current instruction re-executes (`frame.pc` already rewound).
+    InitChain(Vec<Frame<'run>>),
+}
+
 /// The outcome of dispatching a virtual call on a user object.
 enum UserDispatch<'run> {
     /// Push this frame and continue executing inside it.
@@ -1971,6 +2107,32 @@ impl Frame<'_> {
         self.stack.push(JValue::Double(apply(a, b)));
         Ok(())
     }
+}
+
+/// Find a handler in `frame`'s exception table covering `pc` for the
+/// thrown class (`internal` slash form). Entry order is significant
+/// (first match wins, like the JVMS).
+fn handler_for(frame: &Frame<'_>, pc: usize, internal: &str) -> Option<usize> {
+    let pool = &frame.class.constant_pool;
+    for entry in &frame.code.attr.exception_table {
+        let start = usize::from(entry.start_pc);
+        let end = usize::from(entry.end_pc);
+        if pc < start || pc >= end {
+            continue;
+        }
+        // catch_type 0 catches everything (finally-style).
+        let matches = if entry.catch_type == 0 {
+            true
+        } else {
+            pool.get_class_name(entry.catch_type).is_some_and(|catch| {
+                jvmjs_classfile::exceptions::is_exception_subclass(internal, catch)
+            })
+        };
+        if matches {
+            return Some(usize::from(entry.handler_pc));
+        }
+    }
+    None
 }
 
 /// `[a, b, c]` capped at 20 elements for the locals view.

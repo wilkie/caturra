@@ -50,6 +50,10 @@ const JAVA_LANG: &[&str] = &[
     "NumberFormatException",
     "ClassCastException",
     "StackOverflowError",
+    "Throwable",
+    "Error",
+    "IllegalArgumentException",
+    "IllegalStateException",
 ];
 
 /// Real Java classes students may reach for that jvmjs doesn't
@@ -114,7 +118,16 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
 ];
 
 /// Library type names whose use requires an import.
-const REQUIRES_IMPORT: &[&str] = &["Scanner", "ArrayList", "File", "PrintWriter"];
+const REQUIRES_IMPORT: &[&str] = &[
+    "Scanner",
+    "ArrayList",
+    "File",
+    "PrintWriter",
+    "InputMismatchException",
+    "NoSuchElementException",
+    "IOException",
+    "FileNotFoundException",
+];
 
 /// Resolve a fully qualified library name (`java.util.Scanner`) to the
 /// simple name the compiler models. Fully qualified uses never need an
@@ -316,6 +329,7 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per statement kind
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Block(statements) => {
@@ -404,6 +418,18 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                     self.expr(arg);
                 }
             }
+            Stmt::Try { body, catches, .. } => {
+                for stmt in body {
+                    self.stmt(stmt);
+                }
+                for clause in catches {
+                    self.type_ref(&clause.ty, clause.span);
+                    for stmt in &clause.body {
+                        self.stmt(stmt);
+                    }
+                }
+            }
+            Stmt::Throw { value, .. } => self.expr(value),
             Stmt::Break { .. } | Stmt::Continue { .. } => {}
         }
     }

@@ -874,6 +874,58 @@ public class DiffExtras {
 );
 
 differential_test!(
+    diff_try_catch,
+    "DiffCatch",
+    r#"
+import java.util.Scanner;
+
+public class DiffCatch {
+    static int parse(String text) {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            System.out.println("bad: " + e.getMessage());
+            return -1;
+        }
+    }
+
+    static double divide(int a, int b) {
+        try {
+            return a / b;
+        } catch (ArithmeticException e) {
+            System.out.println(e);
+            throw new IllegalArgumentException("b must be nonzero");
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(parse("42"));
+        System.out.println(parse("x42"));
+        try {
+            int[] grades = new int[3];
+            grades[3] = 100;
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("bounds: " + e.getMessage());
+        }
+        try {
+            System.out.println(divide(10, 2));
+            System.out.println(divide(10, 0));
+        } catch (IllegalArgumentException e) {
+            System.out.println("rejected: " + e.getMessage());
+        }
+        try {
+            String s = null;
+            System.out.println(s.length());
+        } catch (RuntimeException e) {
+            System.out.println("runtime caught");
+        }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

@@ -63,7 +63,15 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),
         }),
-        _ => None,
+        _ => {
+            if jvmjs_classfile::exceptions::is_exception_class(class) {
+                return Some(HeapObject::Exception {
+                    class_name: jvmjs_classfile::exceptions::dotted(class),
+                    message: None,
+                });
+            }
+            None
+        }
     }
 }
 
@@ -112,6 +120,10 @@ pub fn invoke_special(
             match heap.get_mut(receiver) {
                 Some(HeapObject::File(path)) => {
                     *path = text;
+                    Ok(())
+                }
+                Some(HeapObject::Exception { message, .. }) => {
+                    *message = Some(text);
                     Ok(())
                 }
                 Some(HeapObject::Writer { path }) => {
@@ -218,6 +230,27 @@ pub fn invoke_virtual(
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
+        (
+            HeapObject::Exception {
+                class_name,
+                message,
+            },
+            "getMessage" | "toString",
+        ) => {
+            let rendered = if method == "getMessage" {
+                match message {
+                    Some(message) => message.clone(),
+                    None => return Ok(Some(JValue::NULL)),
+                }
+            } else {
+                match message {
+                    Some(message) => format!("{class_name}: {message}"),
+                    None => class_name.clone(),
+                }
+            };
+            let reference = heap.alloc_string(&rendered);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         (HeapObject::Writer { .. }, _) => {
             writer_method(heap, vfs, receiver, method, descriptor, args)
         }

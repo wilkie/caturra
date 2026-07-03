@@ -72,6 +72,13 @@ pub enum HeapObject {
     /// A `java.io.PrintWriter` into the virtual filesystem
     /// (write-through: output is durable without `close()`).
     Writer { path: String },
+    /// A throwable: a library exception class (dotted name) with its
+    /// optional message. Bound by `catch` handlers, created by
+    /// `new SomeException(...)`.
+    Exception {
+        class_name: String,
+        message: Option<String>,
+    },
 }
 
 /// The per-run object heap.

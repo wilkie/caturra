@@ -10,6 +10,7 @@
 
 mod constant_pool;
 pub mod debug;
+pub mod exceptions;
 mod model;
 pub mod opcodes;
 mod reader;

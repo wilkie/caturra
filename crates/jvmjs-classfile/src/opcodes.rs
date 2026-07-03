@@ -120,6 +120,8 @@ pub const INVOKESPECIAL: u8 = 0xB7;
 pub const INVOKESTATIC: u8 = 0xB8;
 pub const NEW: u8 = 0xBB;
 
+pub const ATHROW: u8 = 0xBF;
+
 // Type checks.
 pub const CHECKCAST: u8 = 0xC0;
 pub const INSTANCEOF: u8 = 0xC1;

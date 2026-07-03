@@ -168,6 +168,26 @@ pub enum Stmt {
         args: Vec<Expr>,
         span: SourceSpan,
     },
+    /// `try { ... } catch (Type name) { ... } ...`.
+    Try {
+        body: Vec<Stmt>,
+        catches: Vec<CatchClause>,
+        span: SourceSpan,
+    },
+    /// `throw expr;`.
+    Throw {
+        value: Expr,
+        span: SourceSpan,
+    },
+}
+
+/// One `catch (Type name) { ... }` clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatchClause {
+    pub ty: TypeRef,
+    pub name: String,
+    pub body: Vec<Stmt>,
+    pub span: SourceSpan,
 }
 
 /// One `name = init` (or bare `name`) in a local declaration.

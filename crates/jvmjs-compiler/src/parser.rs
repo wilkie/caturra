@@ -7,8 +7,8 @@
 //! problem, not just the first.
 
 use crate::ast::{
-    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, FieldDecl, ImportDecl, Literal,
-    LocalDeclarator, MethodDecl, Param, Stmt, TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, ImportDecl,
+    Literal, LocalDeclarator, MethodDecl, Param, Stmt, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -35,7 +35,6 @@ fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
     match keyword {
         Keyword::Else => Some("'else' without a matching 'if'"),
         Keyword::Switch => Some("switch statements are not yet supported by jvmjs"),
-        Keyword::Try | Keyword::Throw => Some("exception handling is not yet supported by jvmjs"),
         Keyword::Var => Some("'var' is not supported by jvmjs; write the type explicitly"),
         Keyword::New => Some("object creation with 'new' is not yet supported by jvmjs"),
         Keyword::Int
@@ -747,6 +746,10 @@ impl Parser<'_> {
             Some(TokenKind::Keyword(Keyword::Return)) => {
                 return self.return_statement().map(Some);
             }
+            Some(TokenKind::Keyword(Keyword::Try)) => return self.try_statement().map(Some),
+            Some(TokenKind::Keyword(Keyword::Throw)) => {
+                return self.throw_statement().map(Some);
+            }
             _ => {}
         }
 
@@ -898,6 +901,69 @@ impl Parser<'_> {
             then,
             els,
             span: start,
+        })
+    }
+
+    /// `try { ... } catch (Type name) { ... } ...` — `finally` is
+    /// recognized but not yet supported.
+    fn try_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'try'
+        self.expect_symbol("{", "after 'try'")?;
+        let body = self.block_body();
+
+        let mut catches = Vec::new();
+        while self.at_keyword(Keyword::Catch) {
+            let clause_start = self.here();
+            self.pos += 1;
+            self.expect_symbol("(", "after 'catch'")?;
+            let ty = self.type_ref()?;
+            let (name, _) = self.expect_ident("for the caught exception")?;
+            self.expect_symbol(")", "after the catch parameter")?;
+            self.expect_symbol("{", "after the catch parameter")?;
+            let catch_body = self.block_body();
+            catches.push(CatchClause {
+                ty,
+                name,
+                body: catch_body,
+                span: SourceSpan {
+                    start: clause_start.start,
+                    end: self.here().start,
+                },
+            });
+        }
+
+        if self.at_keyword(Keyword::Finally) {
+            let span = self.here();
+            self.error_at(span, "finally is not yet supported by jvmjs");
+            return Err(Abort);
+        }
+        if catches.is_empty() {
+            self.error_at(start, "'try' needs at least one 'catch' clause");
+            return Err(Abort);
+        }
+        Ok(Stmt::Try {
+            body,
+            catches,
+            span: SourceSpan {
+                start: start.start,
+                end: self.here().start,
+            },
+        })
+    }
+
+    /// `throw expr;`.
+    fn throw_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'throw'
+        let value = self.expression()?;
+        self.expect_symbol(";", "after the throw expression")?;
+        Ok(Stmt::Throw {
+            value,
+            span: SourceSpan {
+                start: start.start,
+                end: self.here().start,
+            },
         })
     }
 

@@ -21,8 +21,8 @@ use jvmjs_classfile::{
 
 use crate::CompiledClass;
 use crate::ast::{
-    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, FieldDecl, Literal, LocalDeclarator,
-    MethodDecl, Stmt, TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, Literal,
+    LocalDeclarator, MethodDecl, Stmt, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
@@ -197,7 +197,7 @@ fn emit_clinit(
     body.code.push_op(op::RETURN, 0);
     let max_locals = body.next_slot;
     let local_var_debug = std::mem::take(&mut body.local_var_debug);
-    let (bytecode, max_stack, line_numbers) = body.code.finish();
+    let (bytecode, max_stack, line_numbers, exception_table) = body.code.finish();
     finish_method_info(
         pool,
         "<clinit>",
@@ -208,6 +208,7 @@ fn emit_clinit(
         bytecode,
         &line_numbers,
         &local_var_debug,
+        exception_table,
     )
 }
 
@@ -225,6 +226,7 @@ fn finish_method_info(
     code: Vec<u8>,
     line_numbers: &[(u16, u16)],
     local_var_debug: &[(String, String, Option<String>, u16, u16)],
+    exception_table: Vec<jvmjs_classfile::ExceptionTableEntry>,
 ) -> MethodInfo {
     let code_len = u16::try_from(code.len()).unwrap_or(u16::MAX);
     let mut code_attributes = Vec::new();
@@ -283,7 +285,7 @@ fn finish_method_info(
         max_stack,
         max_locals,
         code,
-        exception_table: Vec::new(),
+        exception_table,
         attributes: code_attributes,
     };
     let name_index = pool.intern_utf8(name);
@@ -813,7 +815,14 @@ impl MethodTable {
                     "Scanner" => Some(JType::Scanner),
                     "File" => Some(JType::File),
                     "PrintWriter" => Some(JType::Writer),
-                    _ => None,
+                    other => {
+                        let internal = if name.contains('.') {
+                            name.replace('.', "/")
+                        } else {
+                            jvmjs_classfile::exceptions::internal_name_of(other)?.to_owned()
+                        };
+                        exception_id(&internal).map(JType::Exception)
+                    }
                 }
             }
             TypeRef::Generic { base, args } => {
@@ -942,6 +951,27 @@ impl MethodTable {
     }
 }
 
+/// Exception ids: 0 is `java/lang/Throwable`, `i + 1` indexes
+/// [`jvmjs_classfile::exceptions::EXCEPTIONS`].
+fn exception_id(internal: &str) -> Option<u8> {
+    if internal == "java/lang/Throwable" {
+        return Some(0);
+    }
+    jvmjs_classfile::exceptions::EXCEPTIONS
+        .iter()
+        .position(|(class, _)| *class == internal)
+        .and_then(|index| u8::try_from(index + 1).ok())
+}
+
+fn exception_internal(id: u8) -> &'static str {
+    if id == 0 {
+        return "java/lang/Throwable";
+    }
+    jvmjs_classfile::exceptions::EXCEPTIONS
+        .get(usize::from(id - 1))
+        .map_or("java/lang/Throwable", |(class, _)| class)
+}
+
 /// The display name of a list element as its wrapper type.
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
@@ -1003,6 +1033,15 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::Object(sub), JType::Object(sup)) if table.is_subtype(sub, sup)
         )
+        || matches!(
+            (from, to),
+            (JType::Exception(sub), JType::Exception(sup))
+                if jvmjs_classfile::exceptions::is_exception_subclass(
+                    exception_internal(sub),
+                    exception_internal(sup),
+                )
+        )
+        || (from == JType::Null && to.is_reference())
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -1063,6 +1102,9 @@ enum JType {
     Object(ClassId),
     /// `java.util.Scanner` (intrinsic).
     Scanner,
+    /// A library throwable; the id indexes the shared exception table
+    /// (`jvmjs_classfile::exceptions`), 0 = `Throwable` itself.
+    Exception(u8),
     /// `java.io.File` (intrinsic, backed by the virtual filesystem).
     File,
     /// `java.io.PrintWriter` (intrinsic, writes into the virtual
@@ -1095,6 +1137,11 @@ impl JType {
             }
             JType::Object(id) => table.class_name(id).to_owned(),
             JType::Scanner => String::from("Scanner"),
+            JType::Exception(id) => exception_internal(id)
+                .rsplit('/')
+                .next()
+                .unwrap_or("Throwable")
+                .to_owned(),
             JType::File => String::from("File"),
             JType::Writer => String::from("PrintWriter"),
             JType::List(elem) => {
@@ -1120,6 +1167,7 @@ impl JType {
                 | JType::File
                 | JType::Writer
                 | JType::List(_)
+                | JType::Exception(_)
         )
     }
 
@@ -1155,6 +1203,7 @@ impl JType {
             }
             JType::Object(id) => format!("L{};", table.class_name(id)),
             JType::Scanner => String::from("Ljava/util/Scanner;"),
+            JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::List(_) => String::from("Ljava/util/ArrayList;"),
@@ -1218,7 +1267,9 @@ fn statement_span(stmt: &Stmt) -> Option<SourceSpan> {
         | Stmt::Continue { span }
         | Stmt::Return { span, .. }
         | Stmt::SuperCall { span, .. }
-        | Stmt::ThisCall { span, .. } => Some(*span),
+        | Stmt::ThisCall { span, .. }
+        | Stmt::Try { span, .. }
+        | Stmt::Throw { span, .. } => Some(*span),
         Stmt::Expr(expr) => Some(expr.span()),
     }
 }
@@ -1348,7 +1399,7 @@ fn emit_method(
 
     let max_locals = body.next_slot;
     let local_var_debug = std::mem::take(&mut body.local_var_debug);
-    let (bytecode, max_stack, line_numbers) = body.code.finish();
+    let (bytecode, max_stack, line_numbers, exception_table) = body.code.finish();
 
     let descriptor = method_descriptor(path, diagnostics, table, decl);
     let mut flags = 0;
@@ -1376,6 +1427,7 @@ fn emit_method(
         bytecode,
         &line_numbers,
         &local_var_debug,
+        exception_table,
     )
 }
 
@@ -1472,7 +1524,17 @@ fn method_descriptor(
 /// (`while (true)` without `break` does not complete).
 fn stmt_completes_normally(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => false,
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Throw { .. } => {
+            false
+        }
+        // JLS: a try-catch completes normally iff the try block or at
+        // least one catch block can complete normally.
+        Stmt::Try { body, catches, .. } => {
+            block_completes_normally(body)
+                || catches
+                    .iter()
+                    .any(|clause| block_completes_normally(&clause.body))
+        }
         Stmt::Block(statements) => block_completes_normally(statements),
         Stmt::If {
             then,
@@ -1903,6 +1965,21 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
+const EXCEPTION_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "getMessage",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "toString",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+];
+
 const MATH_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
         name: "abs",
@@ -2061,6 +2138,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Str => Some(("java/lang/String", STRING_METHODS)),
         JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
         JType::File => Some(("java/io/File", FILE_METHODS)),
+        JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         _ => None,
@@ -2341,7 +2419,183 @@ impl BodyGen<'_> {
                     "call to super/this must be the first statement in a constructor",
                 );
             }
+            Stmt::Try {
+                body,
+                catches,
+                span,
+            } => self.try_statement(body, catches, *span),
+            Stmt::Throw { value, span } => self.throw_statement(value, *span),
         }
+    }
+
+    /// `try { ... } catch (...) { ... }` — a JVMS exception table entry
+    /// per catch clause, handlers after the protected range:
+    ///
+    /// ```text
+    /// start:   ...body...
+    /// end:     goto after
+    /// handler: astore e; ...catch body...; goto after
+    /// after:
+    /// ```
+    fn try_statement(&mut self, body: &[Stmt], catches: &[CatchClause], span: SourceSpan) {
+        // Resolve catch types first: exception classes only, and no
+        // clause may be masked by an earlier broader one (javac:
+        // "exception X has already been caught").
+        let mut resolved: Vec<Option<u8>> = Vec::with_capacity(catches.len());
+        for (index, clause) in catches.iter().enumerate() {
+            let id = self.resolve_catch_type(clause);
+            if let Some(id) = id {
+                for earlier in resolved.iter().take(index).flatten() {
+                    if jvmjs_classfile::exceptions::is_exception_subclass(
+                        exception_internal(id),
+                        exception_internal(*earlier),
+                    ) {
+                        self.error(
+                            clause.span,
+                            format!(
+                                "exception {} has already been caught",
+                                exception_internal(id)
+                                    .rsplit('/')
+                                    .next()
+                                    .unwrap_or_default()
+                            ),
+                        );
+                    }
+                }
+            }
+            resolved.push(id);
+        }
+
+        let before_flags = self.assigned_flags();
+        let start = self.code.offset();
+        self.scopes.push(Vec::new());
+        for stmt in body {
+            self.statement(stmt);
+        }
+        self.scopes.pop();
+        let end = self.code.offset();
+        if start == end {
+            // An empty protected range is illegal in the table; with
+            // nothing to throw, the catches are dead anyway.
+            self.restore_assigned(&before_flags);
+            let _ = span;
+            return;
+        }
+        let after = self.code.new_label();
+        self.code.branch(op::GOTO, after, 0);
+        let try_flags = self.assigned_flags();
+        let mut branch_flags = vec![try_flags];
+
+        for (clause, id) in catches.iter().zip(&resolved) {
+            self.restore_assigned(&before_flags);
+            let handler = self.code.offset();
+            self.code.mark_line(clause.span.start.line);
+            // The VM pushes the thrown object before jumping here.
+            self.code.assume_stack(1);
+
+            self.scopes.push(Vec::new());
+            let Some(id) = id else {
+                // Unresolvable type: an error was reported; skip body
+                // emission to avoid cascades.
+                self.scopes.pop();
+                continue;
+            };
+            let ty = JType::Exception(*id);
+            let slot = self.next_slot;
+            self.next_slot += 1;
+            self.emit_store(slot, ty);
+            self.record_local_debug(&clause.name, ty, slot);
+            if self.lookup(&clause.name).is_some() {
+                self.error(
+                    clause.span,
+                    format!(
+                        "variable '{}' is already defined in this method",
+                        clause.name
+                    ),
+                );
+            }
+            self.scopes.last_mut().expect("scope pushed").push((
+                clause.name.clone(),
+                LocalVar {
+                    slot,
+                    ty,
+                    is_final: false,
+                    assigned: true,
+                },
+            ));
+            for stmt in &clause.body {
+                self.statement(stmt);
+            }
+            self.scopes.pop();
+            self.code.branch(op::GOTO, after, 0);
+            branch_flags.push(self.assigned_flags());
+
+            let catch_class = intern_class(self.pool, exception_internal(*id));
+            self.code
+                .add_exception_entry(start, end, handler, catch_class);
+        }
+        self.code.bind(after);
+
+        // JLS definite assignment: assigned after try-catch iff
+        // assigned after the try block AND after every catch block.
+        if let Some(first) = branch_flags.first().cloned() {
+            self.restore_assigned(&first);
+            for flags in &branch_flags[1..] {
+                self.intersect_assigned(flags);
+            }
+        }
+    }
+
+    /// The exception id of a catch clause's type, with javac-flavored
+    /// errors for non-throwables.
+    fn resolve_catch_type(&mut self, clause: &CatchClause) -> Option<u8> {
+        let TypeRef::Named(name) = &clause.ty else {
+            self.error(clause.span, "expected an exception class in 'catch'");
+            return None;
+        };
+        if name.contains('.') {
+            let internal = name.replace('.', "/");
+            if jvmjs_classfile::exceptions::is_exception_class(&internal) {
+                return exception_id(&internal);
+            }
+            self.error(
+                clause.span,
+                crate::imports::unknown_qualified_message(name.as_str()),
+            );
+            return None;
+        }
+        if let Some(internal) = jvmjs_classfile::exceptions::internal_name_of(name.as_str()) {
+            return exception_id(internal);
+        }
+        if self.table.has_class(name) {
+            // User classes cannot (yet) extend Throwable.
+            self.error(
+                clause.span,
+                format!("incompatible types: {name} cannot be converted to Throwable"),
+            );
+        } else {
+            self.error(clause.span, format!("cannot find symbol: class {name}"));
+        }
+        None
+    }
+
+    /// `throw expr;` — the expression must be a throwable.
+    fn throw_statement(&mut self, value: &Expr, span: SourceSpan) {
+        let ty = self.expr(value);
+        match ty {
+            JType::Exception(_) | JType::Null | JType::Error => {}
+            other => {
+                self.error(
+                    span,
+                    format!(
+                        "incompatible types: {} cannot be converted to Throwable",
+                        other.describe(self.table)
+                    ),
+                );
+            }
+        }
+        self.code.push_op(op::ATHROW, 0);
+        self.code.drop_stack(1);
     }
 
     fn return_statement(&mut self, value: Option<&Expr>, span: SourceSpan) {
@@ -3070,6 +3324,11 @@ impl BodyGen<'_> {
         if let Some(id) = self.table.class_id(class) {
             return JType::Object(id);
         }
+        if let Some(internal) = jvmjs_classfile::exceptions::internal_name_of(class)
+            && let Some(id) = exception_id(internal)
+        {
+            return JType::Exception(id);
+        }
         match class {
             "Scanner" => JType::Scanner,
             "File" => JType::File,
@@ -3109,7 +3368,13 @@ impl BodyGen<'_> {
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
-                _ => {}
+                other => {
+                    if let Some(internal) = jvmjs_classfile::exceptions::internal_name_of(other)
+                        && let Some(id) = exception_id(internal)
+                    {
+                        return self.new_exception(id, args, span);
+                    }
+                }
             }
         }
         if !type_args.is_empty() {
@@ -3196,6 +3461,45 @@ impl BodyGen<'_> {
         let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
         self.code.drop_stack(1 + args_width);
         JType::Object(class_id)
+    }
+
+    /// `new SomeException()` / `new SomeException("message")`.
+    fn new_exception(&mut self, id: u8, args: &[Expr], span: SourceSpan) -> JType {
+        let internal = exception_internal(id);
+        let class_index = intern_class(self.pool, internal);
+        self.code.push_op_u16(op::NEW, class_index, 1);
+        self.code.push_op(op::DUP, 1);
+        match args {
+            [] => {
+                let init_ref = intern_method_ref(self.pool, internal, "<init>", "()V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(1);
+            }
+            [message] => {
+                let message_ty = self.expr(message);
+                if message_ty != JType::Str && message_ty != JType::Error {
+                    self.error(
+                        message.span(),
+                        format!(
+                            "incompatible types: {} cannot be converted to String",
+                            message_ty.describe(self.table)
+                        ),
+                    );
+                }
+                let init_ref =
+                    intern_method_ref(self.pool, internal, "<init>", "(Ljava/lang/String;)V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+            }
+            _ => {
+                self.error(
+                    span,
+                    "exception constructors take at most one String message",
+                );
+                return JType::Error;
+            }
+        }
+        JType::Exception(id)
     }
 
     /// `new Scanner(System.in)` or `new Scanner(fileExpr)`.
@@ -3371,7 +3675,12 @@ impl BodyGen<'_> {
         let class_id = match receiver_ty {
             JType::Object(id) => id,
             JType::Error => return None,
-            JType::Str | JType::Scanner | JType::File | JType::Writer | JType::List(_) => {
+            JType::Str
+            | JType::Scanner
+            | JType::File
+            | JType::Writer
+            | JType::List(_)
+            | JType::Exception(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
             }
             other => {
@@ -3577,6 +3886,17 @@ impl BodyGen<'_> {
     /// concatenation: objects go through their `toString()` (the VM
     /// supplies `ClassName@hex` when a class doesn't define one).
     fn coerce_to_string_for_output(&mut self, ty: JType) -> JType {
+        if let JType::Exception(id) = ty {
+            let method_ref = intern_method_ref(
+                self.pool,
+                exception_internal(id),
+                "toString",
+                "()Ljava/lang/String;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return JType::Str;
+        }
         if ty == JType::File {
             let method_ref = intern_method_ref(
                 self.pool,
@@ -4205,7 +4525,7 @@ impl BodyGen<'_> {
             JType::Char => Some(String::from("(C)V")),
             // Objects and lists are coerced to String before this is
             // consulted.
-            JType::Str | JType::Object(_) | JType::List(_) => {
+            JType::Str | JType::Object(_) | JType::List(_) | JType::Exception(_) => {
                 Some(String::from("(Ljava/lang/String;)V"))
             }
             // File is coerced to its path string upstream.
@@ -4371,7 +4691,8 @@ impl BodyGen<'_> {
                         | JType::Scanner
                         | JType::File
                         | JType::Writer
-                        | JType::List(_)) => {
+                        | JType::List(_)
+                        | JType::Exception(_)) => {
                             let elem = match receiver_ty {
                                 JType::List(elem) => Some(elem),
                                 _ => None,
@@ -5385,9 +5706,12 @@ impl BodyGen<'_> {
             JType::Double => "(D)Ljava/lang/StringBuilder;",
             JType::Boolean => "(Z)Ljava/lang/StringBuilder;",
             JType::Char => "(C)Ljava/lang/StringBuilder;",
-            JType::Str | JType::Null | JType::Object(_) | JType::List(_) | JType::File => {
-                "(Ljava/lang/String;)Ljava/lang/StringBuilder;"
-            }
+            JType::Str
+            | JType::Null
+            | JType::Object(_)
+            | JType::List(_)
+            | JType::File
+            | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             JType::Scanner | JType::Writer => {
                 self.error(
                     span,
@@ -5539,7 +5863,8 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
-            | JType::List(_) => (op::ALOAD, op::ALOAD_0),
+            | JType::List(_)
+            | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
         self.local_op(base, short_base, slot);
@@ -5555,7 +5880,8 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
-            | JType::List(_) => (op::ASTORE, op::ASTORE_0),
+            | JType::List(_)
+            | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };
         self.local_op(base, short_base, slot);
@@ -5717,6 +6043,8 @@ struct CodeBuilder {
     /// `(bytecode offset, source line)` pairs for the
     /// `LineNumberTable` debug attribute.
     line_numbers: Vec<(u16, u16)>,
+    /// JVMS exception table entries (offsets are final at emission).
+    exception_entries: Vec<jvmjs_classfile::ExceptionTableEntry>,
     bytes: Vec<u8>,
     depth: u16,
     max_stack: u16,
@@ -5731,9 +6059,28 @@ impl CodeBuilder {
             depth: 0,
             max_stack: 0,
             line_numbers: Vec::new(),
+            exception_entries: Vec::new(),
             labels: Vec::new(),
             patches: Vec::new(),
         }
+    }
+
+    /// The VM materializes state at an exception handler (one thrown
+    /// object on an otherwise empty stack); account for it.
+    fn assume_stack(&mut self, depth: u16) {
+        self.depth = self.depth.max(depth);
+        self.max_stack = self.max_stack.max(self.depth);
+    }
+
+    /// Register a `try` range with its handler and catch type.
+    fn add_exception_entry(&mut self, start_pc: u16, end_pc: u16, handler_pc: u16, catch: CpIndex) {
+        self.exception_entries
+            .push(jvmjs_classfile::ExceptionTableEntry {
+                start_pc,
+                end_pc,
+                handler_pc,
+                catch_type: catch,
+            });
     }
 
     /// Current bytecode offset (for debug live ranges).
@@ -5817,7 +6164,15 @@ impl CodeBuilder {
     }
 
     /// Resolve all label patches and return the final bytecode.
-    fn finish(mut self) -> (Vec<u8>, u16, Vec<(u16, u16)>) {
+    #[allow(clippy::type_complexity)] // one assembly hand-off
+    fn finish(
+        mut self,
+    ) -> (
+        Vec<u8>,
+        u16,
+        Vec<(u16, u16)>,
+        Vec<jvmjs_classfile::ExceptionTableEntry>,
+    ) {
         for (patch_at, opcode_at, label) in &self.patches {
             let target = self.labels[label.0].expect("branch to unbound label");
             let offset = i32::try_from(target).expect("code too large")
@@ -5825,7 +6180,12 @@ impl CodeBuilder {
             let offset = i16::try_from(offset).expect("branch offset exceeds 16 bits");
             self.bytes[*patch_at..*patch_at + 2].copy_from_slice(&offset.to_be_bytes());
         }
-        (self.bytes, self.max_stack, self.line_numbers)
+        (
+            self.bytes,
+            self.max_stack,
+            self.line_numbers,
+            self.exception_entries,
+        )
     }
 }
 
