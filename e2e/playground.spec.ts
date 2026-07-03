@@ -189,6 +189,50 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('meow moo');
   });
 
+  test('Scanner reads the stdin box through SharedArrayBuffer', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'import java.util.Scanner;',
+          '',
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        Scanner in = new Scanner(System.in);',
+          '        String name = in.nextLine();',
+          '        int age = in.nextInt();',
+          '        System.out.println("Hello " + name + ", age " + (age + 1) + " next year!");',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('stdin').fill('Ada\n36');
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('Hello Ada, age 37 next year!');
+  });
+
+  test('runs ArrayList programs in the browser', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'import java.util.ArrayList;',
+          '',
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        ArrayList<Integer> squares = new ArrayList<>();',
+          '        for (int i = 1; i <= 4; i++) squares.add(i * i);',
+          '        System.out.println(squares);',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('[1, 4, 9, 16]');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page
@@ -197,13 +241,15 @@ test.describe('playground', () => {
         [
           'public class Main {',
           '    public static void main(String[] args) {',
-          '        Scanner in = new Scanner(System.in);',
-          '        System.out.println(in.nextLine());',
+          '        long big = 5000000000L;',
+          '        System.out.println(big);',
           '    }',
           '}',
         ].join('\n'),
       );
     await page.getByTestId('run').click();
-    await expect(page.getByTestId('console')).toContainText('unknown type');
+    await expect(page.getByTestId('console')).toContainText(
+      'only int, double, boolean, and char primitives are supported',
+    );
   });
 });

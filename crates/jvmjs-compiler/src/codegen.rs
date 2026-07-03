@@ -722,7 +722,23 @@ impl MethodTable {
     /// array elements) to ids.
     fn resolve_type(&self, ty: &TypeRef) -> Option<JType> {
         match ty {
-            TypeRef::Named(name) if name != "String" => self.class_id(name).map(JType::Object),
+            TypeRef::Named(name) if name != "String" => {
+                // User classes shadow the intrinsic names.
+                if let Some(id) = self.class_id(name) {
+                    return Some(JType::Object(id));
+                }
+                if name == "Scanner" {
+                    return Some(JType::Scanner);
+                }
+                None
+            }
+            TypeRef::Generic { base, args } => {
+                if base == "ArrayList" && args.len() == 1 && !self.has_class(base) {
+                    elem_from_type_arg(&args[0], self).map(JType::List)
+                } else {
+                    None
+                }
+            }
             TypeRef::Array(_) => {
                 // Peel dimensions, then resolve the base.
                 let mut dims: u8 = 0;
@@ -841,6 +857,34 @@ impl MethodTable {
     }
 }
 
+/// The display name of a list element as its wrapper type.
+fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
+    match elem {
+        ElemType::Int => String::from("Integer"),
+        ElemType::Double => String::from("Double"),
+        ElemType::Boolean => String::from("Boolean"),
+        ElemType::Char => String::from("Character"),
+        ElemType::Str => String::from("String"),
+        ElemType::Object(id) => table.class_name(id).to_owned(),
+    }
+}
+
+/// The [`ElemType`] a generic type argument denotes, per CSA usage
+/// (wrapper classes, String, or a user class).
+fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
+    match arg {
+        TypeRef::Named(name) => match name.as_str() {
+            "Integer" => Some(ElemType::Int),
+            "Double" => Some(ElemType::Double),
+            "Boolean" => Some(ElemType::Boolean),
+            "Character" => Some(ElemType::Char),
+            "String" => Some(ElemType::Str),
+            other => table.class_id(other).map(ElemType::Object),
+        },
+        _ => None,
+    }
+}
+
 /// The [`ElemType`] for a base (non-array) type, if it can be an array
 /// element.
 fn elem_type_of(ty: JType) -> Option<ElemType> {
@@ -930,6 +974,11 @@ enum JType {
     },
     /// An instance of a user-defined class.
     Object(ClassId),
+    /// `java.util.Scanner` (intrinsic).
+    Scanner,
+    /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
+    /// erased at runtime).
+    List(ElemType),
     /// A type jvmjs doesn't handle yet.
     Unsupported,
     /// A diagnostic was already reported for this subtree.
@@ -953,6 +1002,10 @@ impl JType {
                 out
             }
             JType::Object(id) => table.class_name(id).to_owned(),
+            JType::Scanner => String::from("Scanner"),
+            JType::List(elem) => {
+                format!("ArrayList<{}>", wrapper_name(elem, table))
+            }
             JType::Unsupported => String::from("an unsupported type"),
             JType::Error => String::from("an unknown type"),
         }
@@ -965,7 +1018,12 @@ impl JType {
     fn is_reference(self) -> bool {
         matches!(
             self,
-            JType::Str | JType::Null | JType::Array { .. } | JType::Object(_)
+            JType::Str
+                | JType::Null
+                | JType::Array { .. }
+                | JType::Object(_)
+                | JType::Scanner
+                | JType::List(_)
         )
     }
 
@@ -1000,6 +1058,8 @@ impl JType {
                 out
             }
             JType::Object(id) => format!("L{};", table.class_name(id)),
+            JType::Scanner => String::from("Ljava/util/Scanner;"),
+            JType::List(_) => String::from("Ljava/util/ArrayList;"),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
             JType::Unsupported | JType::Error => String::from("Ljava/lang/Object;"),
@@ -1216,9 +1276,23 @@ fn method_descriptor(
                 out.push('[');
                 push_type(path, diagnostics, table, out, inner, span);
             }
+            TypeRef::Generic { base, .. } => {
+                if base == "ArrayList" {
+                    out.push_str("Ljava/util/ArrayList;");
+                } else {
+                    diagnostics.push(Diagnostic::error(
+                        path,
+                        format!("unknown generic type '{base}'"),
+                        span,
+                    ));
+                    out.push_str("Ljava/lang/Object;");
+                }
+            }
             TypeRef::Named(name) => {
                 if name == "String" {
                     out.push_str("Ljava/lang/String;");
+                } else if name == "Scanner" && !table.has_class(name) {
+                    out.push_str("Ljava/util/Scanner;");
                 } else if table.has_class(name) {
                     out.push('L');
                     out.push_str(name);
@@ -1312,6 +1386,378 @@ fn has_direct_break(stmt: &Stmt) -> bool {
             has_direct_break(then) || els.as_deref().is_some_and(has_direct_break)
         }
         _ => false,
+    }
+}
+
+/// A parameter of an intrinsic method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BParam {
+    Int,
+    Double,
+    Str,
+    /// The list's element type (autoboxed at the boundary).
+    Elem,
+}
+
+/// The return of an intrinsic method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BRet {
+    Void,
+    Int,
+    Double,
+    Boolean,
+    Char,
+    Str,
+    /// The list's element type.
+    Elem,
+}
+
+/// One intrinsic method signature the compiler knows about.
+struct BuiltinMethod {
+    name: &'static str,
+    params: &'static [BParam],
+    ret: BRet,
+    descriptor: &'static str,
+}
+
+const STRING_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "length",
+        params: &[],
+        ret: BRet::Int,
+        descriptor: "()I",
+    },
+    BuiltinMethod {
+        name: "isEmpty",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "charAt",
+        params: &[BParam::Int],
+        ret: BRet::Char,
+        descriptor: "(I)C",
+    },
+    BuiltinMethod {
+        name: "substring",
+        params: &[BParam::Int],
+        ret: BRet::Str,
+        descriptor: "(I)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "substring",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Str,
+        descriptor: "(II)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "indexOf",
+        params: &[BParam::Str],
+        ret: BRet::Int,
+        descriptor: "(Ljava/lang/String;)I",
+    },
+    BuiltinMethod {
+        name: "equals",
+        params: &[BParam::Str],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/Object;)Z",
+    },
+    BuiltinMethod {
+        name: "equalsIgnoreCase",
+        params: &[BParam::Str],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/String;)Z",
+    },
+    BuiltinMethod {
+        name: "compareTo",
+        params: &[BParam::Str],
+        ret: BRet::Int,
+        descriptor: "(Ljava/lang/String;)I",
+    },
+    BuiltinMethod {
+        name: "contains",
+        params: &[BParam::Str],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/CharSequence;)Z",
+    },
+    BuiltinMethod {
+        name: "startsWith",
+        params: &[BParam::Str],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/String;)Z",
+    },
+    BuiltinMethod {
+        name: "endsWith",
+        params: &[BParam::Str],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/String;)Z",
+    },
+    BuiltinMethod {
+        name: "toUpperCase",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "toLowerCase",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "trim",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+];
+
+const SCANNER_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "nextInt",
+        params: &[],
+        ret: BRet::Int,
+        descriptor: "()I",
+    },
+    BuiltinMethod {
+        name: "nextDouble",
+        params: &[],
+        ret: BRet::Double,
+        descriptor: "()D",
+    },
+    BuiltinMethod {
+        name: "next",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "nextLine",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "hasNext",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "hasNextInt",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "hasNextDouble",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "hasNextLine",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+];
+
+const LIST_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "size",
+        params: &[],
+        ret: BRet::Int,
+        descriptor: "()I",
+    },
+    BuiltinMethod {
+        name: "isEmpty",
+        params: &[],
+        ret: BRet::Boolean,
+        descriptor: "()Z",
+    },
+    BuiltinMethod {
+        name: "add",
+        params: &[BParam::Elem],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/Object;)Z",
+    },
+    BuiltinMethod {
+        name: "add",
+        params: &[BParam::Int, BParam::Elem],
+        ret: BRet::Void,
+        descriptor: "(ILjava/lang/Object;)V",
+    },
+    BuiltinMethod {
+        name: "get",
+        params: &[BParam::Int],
+        ret: BRet::Elem,
+        descriptor: "(I)Ljava/lang/Object;",
+    },
+    BuiltinMethod {
+        name: "set",
+        params: &[BParam::Int, BParam::Elem],
+        ret: BRet::Elem,
+        descriptor: "(ILjava/lang/Object;)Ljava/lang/Object;",
+    },
+    BuiltinMethod {
+        name: "remove",
+        params: &[BParam::Int],
+        ret: BRet::Elem,
+        descriptor: "(I)Ljava/lang/Object;",
+    },
+];
+
+const MATH_METHODS: &[BuiltinMethod] = &[
+    BuiltinMethod {
+        name: "abs",
+        params: &[BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(I)I",
+    },
+    BuiltinMethod {
+        name: "abs",
+        params: &[BParam::Double],
+        ret: BRet::Double,
+        descriptor: "(D)D",
+    },
+    BuiltinMethod {
+        name: "pow",
+        params: &[BParam::Double, BParam::Double],
+        ret: BRet::Double,
+        descriptor: "(DD)D",
+    },
+    BuiltinMethod {
+        name: "sqrt",
+        params: &[BParam::Double],
+        ret: BRet::Double,
+        descriptor: "(D)D",
+    },
+    BuiltinMethod {
+        name: "random",
+        params: &[],
+        ret: BRet::Double,
+        descriptor: "()D",
+    },
+    BuiltinMethod {
+        name: "max",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(II)I",
+    },
+    BuiltinMethod {
+        name: "max",
+        params: &[BParam::Double, BParam::Double],
+        ret: BRet::Double,
+        descriptor: "(DD)D",
+    },
+    BuiltinMethod {
+        name: "min",
+        params: &[BParam::Int, BParam::Int],
+        ret: BRet::Int,
+        descriptor: "(II)I",
+    },
+    BuiltinMethod {
+        name: "min",
+        params: &[BParam::Double, BParam::Double],
+        ret: BRet::Double,
+        descriptor: "(DD)D",
+    },
+];
+
+const INTEGER_METHODS: &[BuiltinMethod] = &[BuiltinMethod {
+    name: "parseInt",
+    params: &[BParam::Str],
+    ret: BRet::Int,
+    descriptor: "(Ljava/lang/String;)I",
+}];
+
+const DOUBLE_METHODS: &[BuiltinMethod] = &[BuiltinMethod {
+    name: "parseDouble",
+    params: &[BParam::Str],
+    ret: BRet::Double,
+    descriptor: "(Ljava/lang/String;)D",
+}];
+
+/// The intrinsic method table and JVM class for a receiver type.
+fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
+    match ty {
+        JType::Str => Some(("java/lang/String", STRING_METHODS)),
+        JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
+        JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
+        _ => None,
+    }
+}
+
+/// The intrinsic static-method table for a class name.
+fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
+    match class {
+        "Math" => Some(("java/lang/Math", MATH_METHODS)),
+        "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
+        "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
+        _ => None,
+    }
+}
+
+/// Intrinsic static constants (`Integer.MAX_VALUE`, ...).
+fn builtin_static_constant(class: &str, field: &str) -> Option<i32> {
+    match (class, field) {
+        ("Integer", "MAX_VALUE") => Some(i32::MAX),
+        ("Integer", "MIN_VALUE") => Some(i32::MIN),
+        _ => None,
+    }
+}
+
+fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
+    match param {
+        BParam::Int => JType::Int,
+        BParam::Double => JType::Double,
+        BParam::Str => JType::Str,
+        BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
+    }
+}
+
+/// Overload selection for intrinsic methods: applicable-by-widening
+/// with exact match preferred (mirrors user-method resolution).
+fn pick_builtin<'m>(
+    methods: &'m [BuiltinMethod],
+    name: &str,
+    args: &[JType],
+    elem: Option<ElemType>,
+    table: &MethodTable,
+) -> Option<&'m BuiltinMethod> {
+    let applicable: Vec<&BuiltinMethod> = methods
+        .iter()
+        .filter(|m| {
+            m.name == name
+                && m.params.len() == args.len()
+                && m.params
+                    .iter()
+                    .zip(args)
+                    .all(|(p, a)| widens(*a, bparam_type(*p, elem), table))
+        })
+        .collect();
+    if let Some(exact) = applicable.iter().find(|m| {
+        m.params
+            .iter()
+            .zip(args)
+            .all(|(p, a)| bparam_type(*p, elem) == *a)
+    }) {
+        return Some(exact);
+    }
+    applicable.first().copied()
+}
+
+fn bret_type(ret: BRet, elem: Option<ElemType>) -> Option<JType> {
+    match ret {
+        BRet::Void => None,
+        BRet::Int => Some(JType::Int),
+        BRet::Double => Some(JType::Double),
+        BRet::Boolean => Some(JType::Boolean),
+        BRet::Char => Some(JType::Char),
+        BRet::Str => Some(JType::Str),
+        BRet::Elem => Some(elem.map_or(JType::Error, ElemType::base_type)),
     }
 }
 
@@ -2177,8 +2623,40 @@ impl BodyGen<'_> {
         field.ty
     }
 
-    /// `new ClassName(args)`.
-    fn new_object(&mut self, class_name: &str, args: &[Expr], span: SourceSpan) -> JType {
+    /// The static type of a `new` expression (pure).
+    fn type_of_new_object(&mut self, class: &str, type_args: &[TypeRef]) -> JType {
+        if let Some(id) = self.table.class_id(class) {
+            return JType::Object(id);
+        }
+        match class {
+            "Scanner" => JType::Scanner,
+            "ArrayList" => match type_args {
+                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Error, JType::List),
+                _ => JType::Error,
+            },
+            _ => JType::Error,
+        }
+    }
+
+    /// `new ClassName(args)` (or an intrinsic: Scanner, `ArrayList`).
+    fn new_object(
+        &mut self,
+        class_name: &str,
+        type_args: &[TypeRef],
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> JType {
+        if self.table.class_id(class_name).is_none() {
+            match class_name {
+                "Scanner" => return self.new_scanner(args, span),
+                "ArrayList" => return self.new_array_list(type_args, args, span),
+                _ => {}
+            }
+        }
+        if !type_args.is_empty() {
+            self.error(span, format!("{class_name} is not a generic type"));
+            return JType::Error;
+        }
         let Some(class_id) = self.table.class_id(class_name) else {
             let classlib = [
                 "String",
@@ -2269,6 +2747,90 @@ impl BodyGen<'_> {
         JType::Object(class_id)
     }
 
+    /// `new Scanner(System.in)`.
+    fn new_scanner(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let reads_stdin = matches!(
+            args,
+            [Expr::Name { path, .. }]
+                if path.len() == 2 && path[0] == "System" && path[1] == "in"
+        );
+        if !reads_stdin {
+            self.error(
+                span,
+                "only 'new Scanner(System.in)' is supported by jvmjs \
+                 (file scanning arrives with java.io.File)",
+            );
+            return JType::Error;
+        }
+        let scanner_class = intern_class(self.pool, "java/util/Scanner");
+        self.code.push_op_u16(op::NEW, scanner_class, 1);
+        self.code.push_op(op::DUP, 1);
+        let stdin_field =
+            intern_field_ref(self.pool, "java/lang/System", "in", "Ljava/io/InputStream;");
+        self.code.push_op_u16(op::GETSTATIC, stdin_field, 1);
+        let init_ref = intern_method_ref(
+            self.pool,
+            "java/util/Scanner",
+            "<init>",
+            "(Ljava/io/InputStream;)V",
+        );
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code.drop_stack(2);
+        JType::Scanner
+    }
+
+    /// `new ArrayList<E>()` (diamond allowed when the declaration names
+    /// the element type — students write both).
+    fn new_array_list(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        if !args.is_empty() {
+            self.error(
+                span,
+                "ArrayList constructor arguments are not supported by jvmjs \
+                 (use new ArrayList<...>())",
+            );
+            return JType::Error;
+        }
+        let elem = match type_args {
+            [] => {
+                // Diamond `new ArrayList<>()`: the element type comes
+                // from the assignment context; the emission is
+                // identical, so leave it generic here. Diamond in a
+                // context we can't see types Error only if used
+                // standalone; declarations convert with the declared
+                // type's element (widening accepts identity).
+                None
+            }
+            [arg] => {
+                let Some(elem) = elem_from_type_arg(arg, self.table) else {
+                    self.error(
+                        span,
+                        "ArrayList element type must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some(elem)
+            }
+            _ => {
+                self.error(span, "ArrayList takes one type argument");
+                return JType::Error;
+            }
+        };
+        let list_class = intern_class(self.pool, "java/util/ArrayList");
+        self.code.push_op_u16(op::NEW, list_class, 1);
+        self.code.push_op(op::DUP, 1);
+        let init_ref = intern_method_ref(self.pool, "java/util/ArrayList", "<init>", "()V");
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code.drop_stack(1);
+        match elem {
+            Some(elem) => JType::List(elem),
+            // Diamond: callers in declaration position convert with
+            // the declared type; `Null` behaves as assignable-to-any
+            // reference, which matches the diamond's intent.
+            None => JType::Null,
+        }
+    }
+
     /// Resolve and emit an instance method call with the receiver
     /// expression. `None` means a diagnostic was reported.
     #[allow(clippy::option_option)] // error / void / value are distinct outcomes
@@ -2283,13 +2845,8 @@ impl BodyGen<'_> {
         let class_id = match receiver_ty {
             JType::Object(id) => id,
             JType::Error => return None,
-            JType::Str => {
-                self.error(
-                    span,
-                    "String methods are not yet supported by jvmjs \
-                     (they arrive with the class library)",
-                );
-                return None;
+            JType::Str | JType::Scanner | JType::List(_) => {
+                return self.builtin_instance_call(receiver_ty, method, args, span);
             }
             other => {
                 self.error(
@@ -2300,6 +2857,112 @@ impl BodyGen<'_> {
             }
         };
         self.emit_virtual_call_on_stacked_receiver(class_id, method, args, span)
+    }
+
+    /// Resolve and emit an intrinsic instance call (String / Scanner /
+    /// `ArrayList`); the receiver value is already on the stack.
+    #[allow(clippy::option_option)]
+    fn builtin_instance_call(
+        &mut self,
+        receiver_ty: JType,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let (class, methods) =
+            builtin_instance_table(receiver_ty).expect("caller checked receiver kind");
+        let elem = match receiver_ty {
+            JType::List(elem) => Some(elem),
+            _ => None,
+        };
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            for arg in args {
+                self.expr(arg);
+            }
+            return None;
+        }
+
+        let Some(chosen) = pick_builtin(methods, method, &arg_types, elem, self.table) else {
+            if methods.iter().any(|m| m.name == method) {
+                self.error(
+                    span,
+                    format!(
+                        "no suitable method found for {method}({}) in class {}",
+                        describe_types(&arg_types, self.table),
+                        receiver_ty.describe(self.table)
+                    ),
+                );
+            } else {
+                self.error(
+                    span,
+                    format!(
+                        "cannot find symbol: method {method}({}) in class {}",
+                        describe_types(&arg_types, self.table),
+                        receiver_ty.describe(self.table)
+                    ),
+                );
+            }
+            return None;
+        };
+
+        let mut args_width: u16 = 0;
+        for (arg, param) in args.iter().zip(chosen.params) {
+            let param_ty = bparam_type(*param, elem);
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, param_ty);
+            args_width += param_ty.width();
+        }
+        let method_ref = intern_method_ref(self.pool, class, chosen.name, chosen.descriptor);
+        let ret = bret_type(chosen.ret, elem);
+        let ret_width = ret.map_or(0, JType::width);
+        self.code
+            .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
+        self.code.drop_stack(1 + args_width);
+        Some(ret)
+    }
+
+    /// Emit an intrinsic static call (`Math.abs(...)`, ...).
+    #[allow(clippy::option_option)]
+    fn builtin_static_call(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let (jvm_class, methods) = builtin_static_table(class).expect("caller checked");
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            for arg in args {
+                self.expr(arg);
+            }
+            return None;
+        }
+        let Some(chosen) = pick_builtin(methods, method, &arg_types, None, self.table) else {
+            self.error(
+                span,
+                format!(
+                    "cannot find symbol: method {method}({}) in class {class}",
+                    describe_types(&arg_types, self.table)
+                ),
+            );
+            return None;
+        };
+        let mut args_width: u16 = 0;
+        for (arg, param) in args.iter().zip(chosen.params) {
+            let param_ty = bparam_type(*param, None);
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, param_ty);
+            args_width += param_ty.width();
+        }
+        let method_ref = intern_method_ref(self.pool, jvm_class, chosen.name, chosen.descriptor);
+        let ret = bret_type(chosen.ret, None);
+        let ret_width = ret.map_or(0, JType::width);
+        self.code
+            .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
+        self.code.drop_stack(args_width);
+        Some(ret)
     }
 
     /// The receiver object is already on the stack; resolve the
@@ -2388,6 +3051,17 @@ impl BodyGen<'_> {
     /// concatenation: objects go through their `toString()` (the VM
     /// supplies `ClassName@hex` when a class doesn't define one).
     fn coerce_to_string_for_output(&mut self, ty: JType) -> JType {
+        if matches!(ty, JType::List(_)) {
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/util/ArrayList",
+                "toString",
+                "()Ljava/lang/String;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return JType::Str;
+        }
         if let JType::Object(class_id) = ty {
             // String.valueOf semantics: null prints as "null" instead
             // of throwing, so guard the toString call.
@@ -2550,12 +3224,16 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) {
         let iterable_ty = self.expr(iterable);
+        if let JType::List(elem) = iterable_ty {
+            self.for_each_list(ty, name, elem, body, span);
+            return;
+        }
         let Some(element) = iterable_ty.element_type() else {
             if iterable_ty != JType::Error {
                 self.error(
                     iterable.span(),
                     format!(
-                        "for-each needs an array, but {} found (ArrayList arrives later)",
+                        "for-each needs an array or ArrayList, but {} found",
                         iterable_ty.describe(self.table)
                     ),
                 );
@@ -2634,6 +3312,97 @@ impl BodyGen<'_> {
         self.scopes.pop();
     }
 
+    /// `for (T x : list)` desugared to an indexed loop over
+    /// `size()`/`get(int)` (the list reference is already on the stack).
+    fn for_each_list(
+        &mut self,
+        ty: &TypeRef,
+        name: &str,
+        elem: ElemType,
+        body: &Stmt,
+        span: SourceSpan,
+    ) {
+        let element = elem.base_type();
+        let Some(var_ty) = self.table.resolve_type(ty) else {
+            self.error(span, "unknown type for the for-each variable");
+            self.code.discard();
+            return;
+        };
+
+        let list_slot = self.next_slot;
+        self.next_slot += 1;
+        let index_slot = self.next_slot;
+        self.next_slot += 1;
+        self.emit_store(list_slot, JType::List(elem));
+        self.code.push_op(op::ICONST_0, 1);
+        self.emit_store(index_slot, JType::Int);
+
+        self.scopes.push(Vec::new());
+        if self.lookup(name).is_some() {
+            self.error(
+                span,
+                format!("variable '{name}' is already defined in this method"),
+            );
+        }
+        let var_slot = self.next_slot;
+        self.next_slot += var_ty.width();
+        self.scopes.last_mut().expect("scope pushed").push((
+            name.to_owned(),
+            LocalVar {
+                slot: var_slot,
+                ty: var_ty,
+                is_final: false,
+                assigned: true,
+            },
+        ));
+
+        let size_ref = intern_method_ref(self.pool, "java/util/ArrayList", "size", "()I");
+        let get_ref = intern_method_ref(
+            self.pool,
+            "java/util/ArrayList",
+            "get",
+            "(I)Ljava/lang/Object;",
+        );
+
+        let cond_label = self.code.new_label();
+        let continue_label = self.code.new_label();
+        let end = self.code.new_label();
+
+        self.code.bind(cond_label);
+        self.emit_load(index_slot, JType::Int);
+        self.emit_load(list_slot, JType::List(elem));
+        self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
+        self.code.drop_stack(1);
+        self.code.branch(op::IF_ICMPGE, end, 2);
+
+        self.emit_load(list_slot, JType::List(elem));
+        self.emit_load(index_slot, JType::Int);
+        self.code
+            .push_op_u16(op::INVOKEVIRTUAL, get_ref, element.width());
+        self.code.drop_stack(2);
+        self.convert_for_assignment(element, var_ty, span);
+        self.emit_store(var_slot, var_ty);
+
+        let before = self.assigned_flags();
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label,
+        });
+        self.statement(body);
+        self.loop_stack.pop();
+        self.restore_assigned(&before);
+
+        self.code.bind(continue_label);
+        self.emit_load(index_slot, JType::Int);
+        self.code.push_op(op::ICONST_1, 1);
+        self.code.push_op(op::IADD, 0);
+        self.code.drop_stack(1);
+        self.emit_store(index_slot, JType::Int);
+        self.code.branch(op::GOTO, cond_label, 0);
+        self.code.bind(end);
+        self.scopes.pop();
+    }
+
     fn expression_statement(&mut self, expr: &Expr) {
         let Expr::Call {
             receiver,
@@ -2684,7 +3453,8 @@ impl BodyGen<'_> {
                 [single] => {
                     if self.lookup(single).is_some() {
                         Some(CallTarget::Instance(expr))
-                    } else if self.table.has_class(single) {
+                    } else if self.table.has_class(single) || builtin_static_table(single).is_some()
+                    {
                         Some(CallTarget::Static(single.to_owned()))
                     } else if self.table.field(self.current_class, single).is_some() {
                         // A field of the current class used as receiver.
@@ -2746,6 +3516,9 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        if !self.table.has_class(class) && builtin_static_table(class).is_some() {
+            return self.builtin_static_call(class, method, args, span);
+        }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             // Emit the arguments so their own diagnostics surface.
@@ -2877,8 +3650,15 @@ impl BodyGen<'_> {
             JType::Double => Some(String::from("(D)V")),
             JType::Boolean => Some(String::from("(Z)V")),
             JType::Char => Some(String::from("(C)V")),
-            // Objects are coerced to String before this is consulted.
-            JType::Str | JType::Object(_) => Some(String::from("(Ljava/lang/String;)V")),
+            // Objects and lists are coerced to String before this is
+            // consulted.
+            JType::Str | JType::Object(_) | JType::List(_) => {
+                Some(String::from("(Ljava/lang/String;)V"))
+            }
+            JType::Scanner => {
+                self.error(span, "printing a Scanner is not supported");
+                None
+            }
             JType::Null => {
                 self.error(
                     span,
@@ -2933,6 +3713,13 @@ impl BodyGen<'_> {
                     && self
                         .lookup(&path[0])
                         .is_some_and(|v| matches!(v.ty, JType::Array { .. })) =>
+            {
+                JType::Int
+            }
+            Expr::Name { path, .. }
+                if path.len() == 2
+                    && !self.table.has_class(&path[0])
+                    && builtin_static_constant(&path[0], &path[1]).is_some() =>
             {
                 JType::Int
             }
@@ -2992,8 +3779,33 @@ impl BodyGen<'_> {
                     {
                         path[0].clone()
                     }
+                    Some(Expr::Name { path, .. })
+                        if path.len() == 1
+                            && self.lookup(&path[0]).is_none()
+                            && builtin_static_table(&path[0]).is_some() =>
+                    {
+                        // Intrinsic static (Math.abs, ...).
+                        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                        let (_, methods) = builtin_static_table(&path[0]).expect("checked above");
+                        return pick_builtin(methods, method, &arg_types, None, self.table)
+                            .and_then(|m| bret_type(m.ret, None))
+                            .unwrap_or(JType::Error);
+                    }
                     Some(other) => match self.type_of(other) {
                         JType::Object(id) => self.table.class_name(id).to_owned(),
+                        receiver_ty @ (JType::Str | JType::Scanner | JType::List(_)) => {
+                            let elem = match receiver_ty {
+                                JType::List(elem) => Some(elem),
+                                _ => None,
+                            };
+                            let arg_types: Vec<JType> =
+                                args.iter().map(|a| self.type_of(a)).collect();
+                            let (_, methods) = builtin_instance_table(receiver_ty)
+                                .expect("matched builtin receivers");
+                            return pick_builtin(methods, method, &arg_types, elem, self.table)
+                                .and_then(|m| bret_type(m.ret, elem))
+                                .unwrap_or(JType::Error);
+                        }
                         _ => return JType::Error,
                     },
                 };
@@ -3039,10 +3851,9 @@ impl BodyGen<'_> {
                     JType::Object(self.current_class_id)
                 }
             }
-            Expr::NewObject { class, .. } => self
-                .table
-                .class_id(class)
-                .map_or(JType::Error, JType::Object),
+            Expr::NewObject {
+                class, type_args, ..
+            } => self.type_of_new_object(class, type_args),
             Expr::SuperMethodCall { method, args, .. } => {
                 let current = self.table.class_name(self.current_class_id).to_owned();
                 let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass)
@@ -3134,7 +3945,12 @@ impl BodyGen<'_> {
                 self.code.push_op(op::ALOAD_0, 1);
                 JType::Object(self.current_class_id)
             }
-            Expr::NewObject { class, args, span } => self.new_object(class, args, *span),
+            Expr::NewObject {
+                class,
+                type_args,
+                args,
+                span,
+            } => self.new_object(class, type_args, args, *span),
             Expr::InstanceOf { value, ty, span } => self.instance_of(value, ty, *span),
             Expr::SuperMethodCall { method, args, span } => {
                 match self.super_method_call(method, args, *span) {
@@ -3497,6 +4313,15 @@ impl BodyGen<'_> {
             self.emit_load(slot, ty);
             self.code.push_op(op::ARRAYLENGTH, 1);
             self.code.drop_stack(1);
+            return JType::Int;
+        }
+        // Intrinsic constants: Integer.MAX_VALUE / MIN_VALUE.
+        if path.len() == 2
+            && !self.table.has_class(&path[0])
+            && self.lookup(&path[0]).is_none()
+            && let Some(value) = builtin_static_constant(&path[0], &path[1])
+        {
+            self.push_int(value);
             return JType::Int;
         }
         // `x.field` on a local object, or `Class.staticField`.
@@ -3968,8 +4793,12 @@ impl BodyGen<'_> {
             JType::Double => "(D)Ljava/lang/StringBuilder;",
             JType::Boolean => "(Z)Ljava/lang/StringBuilder;",
             JType::Char => "(C)Ljava/lang/StringBuilder;",
-            JType::Str | JType::Null | JType::Object(_) => {
+            JType::Str | JType::Null | JType::Object(_) | JType::List(_) => {
                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;"
+            }
+            JType::Scanner => {
+                self.error(span, "concatenating a Scanner is not supported");
+                return;
             }
             JType::Array { .. } => {
                 self.error(
@@ -4106,7 +4935,9 @@ impl BodyGen<'_> {
     fn emit_load(&mut self, slot: u16, ty: JType) {
         let (base, short_base) = match ty {
             JType::Double => (op::DLOAD, op::DLOAD_0),
-            JType::Str | JType::Null | JType::Array { .. } => (op::ALOAD, op::ALOAD_0),
+            JType::Str | JType::Null | JType::Array { .. } | JType::Scanner | JType::List(_) => {
+                (op::ALOAD, op::ALOAD_0)
+            }
             _ => (op::ILOAD, op::ILOAD_0),
         };
         self.local_op(base, short_base, slot);
@@ -4116,7 +4947,9 @@ impl BodyGen<'_> {
     fn emit_store(&mut self, slot: u16, ty: JType) {
         let (base, short_base) = match ty {
             JType::Double => (op::DSTORE, op::DSTORE_0),
-            JType::Str | JType::Null | JType::Array { .. } => (op::ASTORE, op::ASTORE_0),
+            JType::Str | JType::Null | JType::Array { .. } | JType::Scanner | JType::List(_) => {
+                (op::ASTORE, op::ASTORE_0)
+            }
             _ => (op::ISTORE, op::ISTORE_0),
         };
         self.local_op(base, short_base, slot);

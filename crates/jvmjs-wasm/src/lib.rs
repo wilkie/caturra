@@ -180,7 +180,15 @@ impl JvmSession {
             stderr,
             stdin: stdin.as_ref(),
         };
-        let mut vm = Vm::new(VmOptions::default(), &mut self.vfs, &mut console);
+        // Real entropy for Math.random(); tests off-browser use the
+        // deterministic default seed instead.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let seed = (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64;
+        let options = VmOptions {
+            random_seed: Some(seed),
+            ..VmOptions::default()
+        };
+        let mut vm = Vm::new(options, &mut self.vfs, &mut console);
         for compiled in &self.classes {
             vm.load_class(compiled.class_file.clone())
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;

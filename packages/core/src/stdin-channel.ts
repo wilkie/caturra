@@ -40,9 +40,15 @@ export function supplyLine(buffer: SharedArrayBuffer, line: string | null): void
   if (line === null) {
     Atomics.store(state, STATE_INDEX, STATE_EOF);
   } else {
-    const data = new Uint8Array(buffer, HEADER_BYTES);
-    const { written } = new TextEncoder().encodeInto(line, data);
-    Atomics.store(state, LENGTH_INDEX, written);
+    // TextEncoder refuses SharedArrayBuffer-backed views, so encode
+    // into regular memory and copy across (truncating to capacity).
+    const capacity = buffer.byteLength - HEADER_BYTES;
+    let encoded = new TextEncoder().encode(line);
+    if (encoded.length > capacity) {
+      encoded = encoded.subarray(0, capacity);
+    }
+    new Uint8Array(buffer, HEADER_BYTES, encoded.length).set(encoded);
+    Atomics.store(state, LENGTH_INDEX, encoded.length);
     Atomics.store(state, STATE_INDEX, STATE_READY);
   }
   Atomics.notify(state, STATE_INDEX);

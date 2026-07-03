@@ -1659,6 +1659,284 @@ fn stage6_compile_errors_match_javac_wording() {
     }
 }
 
+// ----- stage 7: the class library -----
+
+#[test]
+fn string_methods_match_java() {
+    let out = run_stdout(
+        r#"
+        public class Strings {
+            public static void main(String[] args) {
+                String s = "Hello, World";
+                System.out.println(s.length());
+                System.out.println(s.charAt(4));
+                System.out.println(s.substring(7));
+                System.out.println(s.substring(0, 5));
+                System.out.println(s.indexOf("World"));
+                System.out.println(s.indexOf("xyz"));
+                System.out.println(s.equals("Hello, World"));
+                System.out.println(s.equals("hello, world"));
+                System.out.println(s.equalsIgnoreCase("HELLO, WORLD"));
+                System.out.println("Ab".compareTo("b"));
+                System.out.println("apple".compareTo("apple"));
+                System.out.println(s.toUpperCase());
+                System.out.println(s.toLowerCase());
+                System.out.println("  pad  ".trim());
+                System.out.println(s.contains("lo, W"));
+                System.out.println(s.startsWith("Hell") + " " + s.endsWith("!"));
+                System.out.println("".isEmpty());
+            }
+        }
+        "#,
+        "Strings",
+    );
+    assert_eq!(
+        out,
+        "12\no\nWorld\nHello\n7\n-1\ntrue\nfalse\ntrue\n-33\n0\nHELLO, WORLD\nhello, world\npad\ntrue\ntrue false\ntrue\n"
+    );
+}
+
+#[test]
+fn math_and_wrappers() {
+    let out = run_stdout(
+        r#"
+        public class Maths {
+            public static void main(String[] args) {
+                System.out.println(Math.abs(-7));
+                System.out.println(Math.abs(-2.5));
+                System.out.println(Math.pow(2.0, 10.0));
+                System.out.println(Math.sqrt(144.0));
+                System.out.println(Math.max(3, 9) + " " + Math.min(3, 9));
+                System.out.println(Math.max(1.5, 2.5));
+                double r = Math.random();
+                System.out.println(r >= 0.0 && r < 1.0);
+                System.out.println(Integer.MAX_VALUE);
+                System.out.println(Integer.MIN_VALUE);
+                System.out.println(Integer.parseInt("-42") + 1);
+                System.out.println(Double.parseDouble("2.5") * 2);
+            }
+        }
+        "#,
+        "Maths",
+    );
+    assert_eq!(
+        out,
+        "7\n2.5\n1024.0\n12.0\n9 3\n2.5\ntrue\n2147483647\n-2147483648\n-41\n5.0\n"
+    );
+}
+
+#[test]
+fn scanner_reads_tokens_and_lines() {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "In.java".into(),
+        text: r#"
+        import java.util.Scanner;
+        public class In {
+            public static void main(String[] args) {
+                Scanner in = new Scanner(System.in);
+                int n = in.nextInt();
+                double d = in.nextDouble();
+                String word = in.next();
+                in.nextLine();
+                String line = in.nextLine();
+                System.out.println(n * 2);
+                System.out.println(d + 0.5);
+                System.out.println(word.toUpperCase());
+                System.out.println("[" + line + "]");
+                System.out.println(in.hasNextInt());
+            }
+        }
+        "#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::with_input(["21 3.5 hey trailing", "a whole line"]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("In", &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "42\n4.0\nHEY\n[a whole line]\nfalse\n"
+    );
+}
+
+#[test]
+fn array_list_basics_and_for_each() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        public class Lists {
+            public static void main(String[] args) {
+                ArrayList<Integer> nums = new ArrayList<Integer>();
+                nums.add(10);
+                nums.add(20);
+                nums.add(1, 15);
+                System.out.println(nums.size());
+                System.out.println(nums.get(1));
+                nums.set(0, 5);
+                System.out.println(nums);
+                int removed = nums.remove(2);
+                System.out.println(removed + " -> " + nums);
+                int total = 0;
+                for (int n : nums) total += n;
+                System.out.println(total);
+
+                ArrayList<String> names = new ArrayList<>();
+                names.add("Ada");
+                names.add("Grace");
+                System.out.println(names);
+                for (String name : names) System.out.println(name.toUpperCase());
+
+                ArrayList<Double> temps = new ArrayList<Double>();
+                temps.add(98.6);
+                System.out.println(temps.get(0) + 1.0);
+                System.out.println(temps.isEmpty());
+            }
+        }
+        "#,
+        "Lists",
+    );
+    assert_eq!(
+        out,
+        "3\n15\n[5, 15, 20]\n20 -> [5, 15]\n20\n[Ada, Grace]\nADA\nGRACE\n99.6\nfalse\n"
+    );
+}
+
+#[test]
+fn array_list_of_objects() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        class Song {
+            private String title;
+            Song(String title) { this.title = title; }
+            String getTitle() { return title; }
+        }
+
+        public class Playlist {
+            public static void main(String[] args) {
+                ArrayList<Song> queue = new ArrayList<Song>();
+                queue.add(new Song("Daisy"));
+                queue.add(new Song("Bicycle"));
+                for (Song s : queue) {
+                    System.out.println(s.getTitle());
+                }
+                Song first = queue.get(0);
+                System.out.println(first.getTitle().length());
+            }
+        }
+        "#,
+        "Playlist",
+    );
+    assert_eq!(out, "Daisy\nBicycle\n5\n");
+}
+
+#[test]
+fn classlib_exceptions_match_java_wording() {
+    let cases: &[(&str, &str)] = &[
+        (
+            r#"String s = "abc"; System.out.println(s.charAt(5));"#,
+            "java.lang.StringIndexOutOfBoundsException: String index out of range: 5",
+        ),
+        (
+            r#"String s = "abc"; System.out.println(s.substring(1, 9));"#,
+            "java.lang.StringIndexOutOfBoundsException: begin 1, end 9, length 3",
+        ),
+        (
+            r#"System.out.println(Integer.parseInt("x1"));"#,
+            "java.lang.NumberFormatException: For input string: \"x1\"",
+        ),
+    ];
+    for (body, expected) in cases {
+        let (result, console) = compile_and_run(
+            &format!("public class T {{ public static void main(String[] args) {{ {body} }} }}"),
+            "T",
+        );
+        assert!(
+            matches!(result, Err(VmError::UncaughtException(_))),
+            "case '{body}': {result:?}"
+        );
+        assert!(
+            console.stderr_text().contains(expected),
+            "case '{body}': expected '{expected}' in {}",
+            console.stderr_text()
+        );
+    }
+
+    // ArrayList index errors.
+    let (result, console) = compile_and_run(
+        r"
+        import java.util.ArrayList;
+        public class L {
+            public static void main(String[] args) {
+                ArrayList<Integer> list = new ArrayList<Integer>();
+                list.add(7);
+                System.out.println(list.get(3));
+            }
+        }
+        ",
+        "L",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.lang.IndexOutOfBoundsException: Index 3 out of bounds for length 1"),
+        "{}",
+        console.stderr_text()
+    );
+}
+
+#[test]
+fn math_random_is_deterministic_per_seed() {
+    let source = r"
+        public class R {
+            public static void main(String[] args) {
+                System.out.println(Math.random());
+                System.out.println((int) (Math.random() * 6) + 1);
+            }
+        }
+    ";
+    let run = |seed: Option<u64>| {
+        let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+            path: "R.java".into(),
+            text: source.into(),
+        }]);
+        assert!(compilation.success());
+        let mut vfs = VirtualFileSystem::new();
+        let mut console = BufferedConsole::new();
+        let mut vm = Vm::new(
+            VmOptions {
+                random_seed: seed,
+                ..VmOptions::default()
+            },
+            &mut vfs,
+            &mut console,
+        );
+        for class in compilation.classes {
+            vm.load_class(class.class_file).unwrap();
+        }
+        vm.run_main("R", &[]).unwrap();
+        console.stdout_text()
+    };
+    // Same seed → same output; different seed → different draw.
+    assert_eq!(run(Some(7)), run(Some(7)));
+    assert_ne!(run(Some(7)), run(Some(8)));
+    // All draws in range.
+    for line in run(Some(99)).lines() {
+        let value: f64 = line.parse().unwrap();
+        assert!((0.0..7.0).contains(&value), "{value}");
+    }
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

@@ -48,6 +48,10 @@ pub struct VmOptions {
     /// deep-recursion support means moving to an explicit frame stack
     /// (see `specs/RUNTIME.md`).
     pub max_call_depth: u32,
+    /// Seed for `Math.random()` (Java's LCG). `None` uses a fixed
+    /// default — deterministic, which tests rely on; hosts that want
+    /// real randomness pass entropy here (the WASM boundary does).
+    pub random_seed: Option<u64>,
 }
 
 impl Default for VmOptions {
@@ -55,6 +59,7 @@ impl Default for VmOptions {
         Self {
             max_instructions: 500_000_000,
             max_call_depth: 256,
+            random_seed: None,
         }
     }
 }
@@ -148,6 +153,7 @@ impl<'host> Vm<'host> {
             self.console,
             self.options.max_instructions,
             self.options.max_call_depth,
+            self.options.random_seed,
         );
         let arg_refs: Vec<JValue> = args
             .iter()

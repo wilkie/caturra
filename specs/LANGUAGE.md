@@ -18,7 +18,7 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Accepted today (v0 slice + stages 1–6)
+## Accepted today (v0 slice + stages 1–7)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
@@ -111,6 +111,32 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   Field hiding is rejected by design; `protected` currently behaves like
   public (no packages).
 
+- **The class library** (stage 7, intrinsics per SCOPE.md):
+  - `String` methods over UTF-16: `length`, `charAt`, `substring` (both),
+    `indexOf`, `equals`/`equalsIgnoreCase`, `compareTo`, `contains`,
+    `startsWith`/`endsWith`, `toUpperCase`/`toLowerCase`, `trim`,
+    `isEmpty`, with Java 11 exception wording
+    (`StringIndexOutOfBoundsException: String index out of range: 5`).
+    `equals` accepts only strings/null (a documented narrowing of
+    `equals(Object)`).
+  - `Math.abs/pow/sqrt/max/min/random` — `random()` uses Java's LCG,
+    seeded deterministically by default (tests) and from host entropy in
+    the browser (`VmOptions::random_seed`).
+  - `Integer.MAX_VALUE/MIN_VALUE/parseInt`, `Double.parseDouble`, with
+    `NumberFormatException: For input string: "x"`.
+  - `Scanner` over `System.in` (`nextInt/nextDouble/next/nextLine/`
+    `hasNext*`), tokenizing like Java, fed by the host console — in the
+    browser this is the SharedArrayBuffer blocking-stdin path.
+  - `ArrayList<E>` with the CSA generics surface: wrapper/String/class
+    element types, the diamond, `size/add(E)/add(int,E)/get/set/remove/`
+    `isEmpty`, autoboxing (a no-op in this VM — boxed-equality caching
+    semantics are not modeled), `println(list)` printing `[a, b]`,
+    for-each, and `IndexOutOfBoundsException` in Java 11's wording.
+    Nested generics (`ArrayList<ArrayList<...>>`) are rejected kindly.
+  - `import` statements are accepted and ignored (classlib names are
+    always in scope); `package` remains unsupported.
+  - User classes shadow intrinsic names (a class called `Scanner` wins).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
@@ -148,6 +174,11 @@ friendly message for now.
 6. ~~Inheritance: `extends`, `super`, overriding, polymorphic dispatch;
    `interface` / `abstract`.~~ **Done (2026-07-02)** — plus `this(...)`
    chaining and `instanceof`, differential-verified against OpenJDK 11.
-7. Generics as far as `ArrayList<E>` requires (erasure, autoboxing).
+7. ~~Generics as far as `ArrayList<E>` requires (erasure, autoboxing).~~
+   **Done (2026-07-02)** together with the intrinsic class library
+   (String/Math/Integer/Double/Scanner/ArrayList), differential-verified
+   against OpenJDK 11 including Scanner over piped stdin. Remaining for
+   full SCOPE.md coverage: `java.io.File` + readers/writers over the
+   virtual filesystem (stage 8).
 
 The staging order optimizes for what CSA course units need earliest.

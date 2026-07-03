@@ -24,6 +24,7 @@ pub(crate) struct Interpreter<'run> {
     pub heap: Heap,
     pub intrinsic_statics: IntrinsicStatics,
     string_pool: HashMap<String, HeapRef>,
+    rng: intrinsics::JavaRng,
     /// Static field values per user class, created on first use.
     statics: HashMap<String, HashMap<String, JValue>>,
     /// Classes whose initialization has started (JVMS §5.5: recursive
@@ -40,6 +41,7 @@ impl<'run> Interpreter<'run> {
         console: &'run mut dyn ConsoleIo,
         max_instructions: u64,
         max_call_depth: u32,
+        random_seed: Option<u64>,
     ) -> Self {
         Self {
             classes,
@@ -47,6 +49,7 @@ impl<'run> Interpreter<'run> {
             heap: Heap::new(),
             intrinsic_statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
+            rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
             init_started: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
@@ -1014,11 +1017,14 @@ impl<'run> Interpreter<'run> {
         // `execute` can take `&mut self`.
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         let Some(class) = classes.get(class_name) else {
-            // TODO(classlib): fall back to intrinsic static methods
-            // (Math.abs, Integer.parseInt, ...) when they land.
-            return Err(VmError::UnknownIntrinsic(format!(
-                "{class_name}.{method_name}{descriptor}"
-            )));
+            // Intrinsic statics: Math.*, Integer.parseInt, ...
+            return intrinsics::invoke_static(
+                &mut self.heap,
+                &mut self.rng,
+                class_name,
+                method_name,
+                args,
+            );
         };
         self.ensure_initialized(class_name)?;
         let method = find_static_method(class, method_name, descriptor).ok_or_else(|| {

@@ -24,6 +24,11 @@ fn jdk_available() -> bool {
 
 /// Run `source` through javac+java, returning stdout.
 fn run_with_jdk(class_name: &str, source: &str) -> String {
+    run_with_jdk_stdin(class_name, source, "")
+}
+
+/// Run through the JDK with piped standard input.
+fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("differential-{class_name}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
@@ -43,11 +48,21 @@ fn run_with_jdk(class_name: &str, source: &str) -> String {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let run = Command::new("java")
+    let mut child = Command::new("java")
         .arg(class_name)
         .current_dir(&dir)
-        .output()
-        .expect("java runs");
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("java starts");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write stdin");
+    let run = child.wait_with_output().expect("java runs");
     assert!(
         run.status.success(),
         "java failed for {class_name}: {}",
@@ -58,6 +73,11 @@ fn run_with_jdk(class_name: &str, source: &str) -> String {
 
 /// Run `source` through the jvmjs engine, returning stdout.
 fn run_with_jvmjs(class_name: &str, source: &str) -> String {
+    run_with_jvmjs_stdin(class_name, source, "")
+}
+
+/// Run through jvmjs with scripted standard input.
+fn run_with_jvmjs_stdin(class_name: &str, source: &str, stdin: &str) -> String {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
         path: format!("{class_name}.java"),
         text: source.to_owned(),
@@ -69,7 +89,7 @@ fn run_with_jvmjs(class_name: &str, source: &str) -> String {
     );
 
     let mut vfs = VirtualFileSystem::new();
-    let mut console = BufferedConsole::new();
+    let mut console = BufferedConsole::with_input(stdin.lines().map(str::to_owned));
     let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
     for class in compilation.classes {
         vm.load_class(class.class_file).expect("class loads");
@@ -89,6 +109,15 @@ fn assert_same_output(class_name: &str, source: &str) {
     assert_eq!(
         actual, expected,
         "output diverges from the reference JDK for {class_name}"
+    );
+}
+
+fn assert_same_output_with_stdin(class_name: &str, source: &str, stdin: &str) {
+    let expected = run_with_jdk_stdin(class_name, source, stdin);
+    let actual = run_with_jvmjs_stdin(class_name, source, stdin);
+    assert_eq!(
+        actual, expected,
+        "output diverges from the reference JDK for {class_name} (with stdin)"
     );
 }
 
@@ -524,6 +553,127 @@ public class DiffIface {
 }
 "#
 );
+
+differential_test!(
+    diff_string_methods,
+    "DiffStrings",
+    r#"
+public class DiffStrings {
+    public static void main(String[] args) {
+        String s = "Concatenate ALL the strings";
+        System.out.println(s.length());
+        System.out.println(s.charAt(0));
+        System.out.println(s.substring(12));
+        System.out.println(s.substring(0, 11));
+        System.out.println(s.indexOf("ALL"));
+        System.out.println(s.indexOf("all"));
+        System.out.println(s.toUpperCase());
+        System.out.println(s.toLowerCase());
+        System.out.println("a".compareTo("b"));
+        System.out.println("b".compareTo("a"));
+        System.out.println("same".compareTo("same"));
+        System.out.println("ab".compareTo("abc"));
+        System.out.println(s.equals("nope"));
+        System.out.println(s.contains("ALL"));
+        System.out.println("  trimmed 	".trim());
+        String built = "";
+        for (int i = 0; i < 3; i++) {
+            built += s.charAt(i);
+        }
+        System.out.println(built);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_math_and_wrappers,
+    "DiffMath",
+    r#"
+public class DiffMath {
+    public static void main(String[] args) {
+        System.out.println(Math.abs(-9));
+        System.out.println(Math.abs(-9.75));
+        System.out.println(Math.pow(3.0, 4.0));
+        System.out.println(Math.sqrt(2.0));
+        System.out.println(Math.max(-1, 1) + " " + Math.min(-1, 1));
+        System.out.println(Math.max(0.5, 0.25));
+        System.out.println(Integer.MAX_VALUE);
+        System.out.println(Integer.MIN_VALUE);
+        System.out.println(Integer.parseInt("123") + Integer.parseInt("-23"));
+        System.out.println(Double.parseDouble("1.5e2"));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_array_list,
+    "DiffList",
+    r#"
+import java.util.ArrayList;
+
+public class DiffList {
+    public static void main(String[] args) {
+        ArrayList<Integer> nums = new ArrayList<Integer>();
+        for (int i = 1; i <= 5; i++) {
+            nums.add(i * i);
+        }
+        nums.add(2, 99);
+        System.out.println(nums);
+        System.out.println(nums.size());
+        System.out.println(nums.get(2));
+        System.out.println(nums.set(0, -1));
+        System.out.println(nums.remove(3));
+        System.out.println(nums);
+        int total = 0;
+        for (int n : nums) total += n;
+        System.out.println(total);
+
+        ArrayList<String> words = new ArrayList<>();
+        words.add("delta");
+        words.add(0, "alpha");
+        System.out.println(words);
+        String all = "";
+        for (String w : words) all += w.substring(0, 1);
+        System.out.println(all);
+    }
+}
+"#
+);
+
+#[test]
+fn diff_scanner_stdin() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    assert_same_output_with_stdin(
+        "DiffScan",
+        r#"
+import java.util.Scanner;
+
+public class DiffScan {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        int count = in.nextInt();
+        double scale = in.nextDouble();
+        double total = 0;
+        for (int i = 0; i < count; i++) {
+            total += in.nextInt() * scale;
+        }
+        in.nextLine();
+        String label = in.nextLine();
+        System.out.println(label.trim() + ": " + total);
+        System.out.println(in.hasNextInt());
+        String tail = in.next();
+        System.out.println(tail.toUpperCase());
+    }
+}
+"#,
+        "3 0.5\n10 20 30\n  weighted sum  \nfinal-token\n",
+    );
+}
 
 differential_test!(
     diff_compound_assignment_narrowing,

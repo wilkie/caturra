@@ -75,6 +75,11 @@ pub enum TypeRef {
     Char,
     /// A class type by simple name, e.g. `String`.
     Named(String),
+    /// A generic type, e.g. `ArrayList<Integer>`.
+    Generic {
+        base: String,
+        args: Vec<TypeRef>,
+    },
     Array(Box<TypeRef>),
 }
 
@@ -272,9 +277,11 @@ pub enum Expr {
     This {
         span: SourceSpan,
     },
-    /// `new ClassName(args)`.
+    /// `new ClassName(args)` / `new ArrayList<Integer>()`.
     NewObject {
         class: String,
+        /// Generic type arguments (empty for the diamond `<>` or none).
+        type_args: Vec<TypeRef>,
         args: Vec<Expr>,
         span: SourceSpan,
     },

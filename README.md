@@ -33,13 +33,15 @@ filesystem, which the host page can seed and inspect (`writeFile`, `readTextFile
 
 ## Status
 
-**Stages 1–6 of the language are live** (see `specs/LANGUAGE.md`): programs
+**Stages 1–7 are live — the CSA language surface is complete** (see `specs/LANGUAGE.md`): programs
 with local variables, operators, casts, string concatenation, full control
 flow, **user-defined static methods**, **arrays** (1D/2D, initializers,
-for-each), **classes with objects** (fields, constructors, `new`, `this`, statics,
-`private`), and now **inheritance** — `extends`, `super`, overriding with
-polymorphic dispatch, `interface`/`abstract`, `instanceof`, and casts —
-compile with our compiler and run on our VM in the browser. Semantics are
+for-each), **classes with objects**, **inheritance** (`extends`, `super`, overriding,
+`interface`/`abstract`, `instanceof`, casts), and now the **class
+library** — `String` methods, `Math`, `Integer`/`Double`,
+`ArrayList<E>` with autoboxing and for-each, and `Scanner` reading real
+console input (in the browser: the SharedArrayBuffer blocking-stdin
+path) — compile with our compiler and run on our VM. Semantics are
 Java-exact and **verified against OpenJDK 11**: a differential test suite
 runs identical programs through `javac`+`java` and jvmjs and requires
 byte-identical stdout. Compiler errors use javac's wording, and runtime
@@ -58,9 +60,8 @@ out of bounds for length 3`). Implemented and tested:
   stdin over SharedArrayBuffer + Atomics ready for when `Scanner` lands
 - virtual filesystem + console IO plumbing across the whole stack
 
-Next: the class library — `String` methods, `Math`, `Integer`/`Double`,
-`Scanner`, `ArrayList`, `java.io.File` — per the intrinsics + classlib plan
-in `specs/SCOPE.md`. That completes the CSA surface.
+Remaining for full SCOPE.md coverage: `java.io.File` and basic
+readers/writers over the virtual filesystem (stage 8).
 
 Dev note: with a JDK installed (`javac`/`java` on PATH), `cargo test`
 includes the differential suite; without one those tests skip.

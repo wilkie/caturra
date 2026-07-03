@@ -15,6 +15,7 @@ use crate::vm::VmError;
 pub struct IntrinsicStatics {
     stdout: Option<HeapRef>,
     stderr: Option<HeapRef>,
+    stdin: Option<HeapRef>,
 }
 
 impl IntrinsicStatics {
@@ -34,6 +35,12 @@ impl IntrinsicStatics {
                     .get_or_insert_with(|| heap.alloc(HeapObject::PrintStream(StdStream::Err)));
                 Some(JValue::Ref(Some(reference)))
             }
+            ("java/lang/System", "in") => {
+                let reference = *self
+                    .stdin
+                    .get_or_insert_with(|| heap.alloc(HeapObject::InputStream));
+                Some(JValue::Ref(Some(reference)))
+            }
             _ => None,
         }
     }
@@ -45,6 +52,12 @@ impl IntrinsicStatics {
 pub fn instantiate(class: &str) -> Option<HeapObject> {
     match class {
         "java/lang/StringBuilder" => Some(HeapObject::StringBuilder(Vec::new())),
+        "java/util/Scanner" => Some(HeapObject::Scanner {
+            buffer: String::new(),
+            pos: 0,
+            eof: false,
+        }),
+        "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         _ => None,
     }
 }
@@ -63,9 +76,11 @@ pub fn invoke_special(
         return Ok(());
     }
     match (heap.get(receiver), method, descriptor) {
-        // StringBuilder is fully initialized at `new`; its no-arg
-        // constructor has nothing left to do.
-        (Some(HeapObject::StringBuilder(_)), "<init>", "()V") => Ok(()),
+        // These are fully initialized at `new`; their constructors
+        // have nothing left to do (the Scanner ignores the stream
+        // object — stdin is the only source).
+        (Some(HeapObject::StringBuilder(_) | HeapObject::ArrayList(_)), "<init>", "()V")
+        | (Some(HeapObject::Scanner { .. }), "<init>", "(Ljava/io/InputStream;)V") => Ok(()),
         _ => Err(VmError::UnknownIntrinsic(format!(
             "{class}.{method}{descriptor}"
         ))),
@@ -116,9 +131,566 @@ pub fn invoke_virtual(
             let text = heap.alloc(HeapObject::JavaString(units));
             Ok(Some(JValue::Ref(Some(text))))
         }
+        (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
+        (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
+        (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
         _ => Err(VmError::UnknownIntrinsic(format!(
             "{class}.{method}{descriptor}"
         ))),
+    }
+}
+
+fn throw(message: impl Into<String>) -> VmError {
+    VmError::UncaughtException(message.into())
+}
+
+/// `java.lang.String` instance methods over UTF-16 code units.
+#[allow(clippy::too_many_lines)]
+fn string_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let Some(HeapObject::JavaString(units)) = heap.get(receiver) else {
+        unreachable!("receiver kind checked by caller");
+    };
+    let units = units.clone();
+    let len = i32::try_from(units.len()).unwrap_or(i32::MAX);
+
+    // Resolve a string argument's code units (null → NPE like Java).
+    let arg_units = |value: &JValue| -> Result<Vec<u16>, VmError> {
+        match value {
+            JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                Some(HeapObject::JavaString(other)) => Ok(other.clone()),
+                _ => Err(throw("java.lang.ClassCastException: not a String")),
+            },
+            JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+            _ => Err(throw("java.lang.VerifyError: expected a String argument")),
+        }
+    };
+
+    match (method, args) {
+        ("length", []) => Ok(Some(JValue::Int(len))),
+        ("isEmpty", []) => Ok(Some(JValue::Int(i32::from(units.is_empty())))),
+        ("charAt", [JValue::Int(index)]) => {
+            let unit = usize::try_from(*index)
+                .ok()
+                .and_then(|i| units.get(i))
+                .ok_or_else(|| {
+                    throw(format!(
+                        "java.lang.StringIndexOutOfBoundsException: String index out of \
+                         range: {index}"
+                    ))
+                })?;
+            Ok(Some(JValue::Int(i32::from(*unit))))
+        }
+        ("substring", [JValue::Int(begin)]) => substring(heap, &units, *begin, len),
+        ("substring", [JValue::Int(begin), JValue::Int(end)]) => {
+            substring_range(heap, &units, *begin, *end)
+        }
+        ("indexOf", [needle]) => {
+            let needle = arg_units(needle)?;
+            Ok(Some(JValue::Int(index_of(&units, &needle))))
+        }
+        ("contains", [needle]) => {
+            let needle = arg_units(needle)?;
+            Ok(Some(JValue::Int(i32::from(index_of(&units, &needle) >= 0))))
+        }
+        ("startsWith", [prefix]) => {
+            let prefix = arg_units(prefix)?;
+            Ok(Some(JValue::Int(i32::from(units.starts_with(&prefix)))))
+        }
+        ("endsWith", [suffix]) => {
+            let suffix = arg_units(suffix)?;
+            Ok(Some(JValue::Int(i32::from(units.ends_with(&suffix)))))
+        }
+        ("equals", [other]) => {
+            // equals(Object): a null or non-string argument is false in
+            // Java; ours can only receive strings or null.
+            let result = match other {
+                JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                    Some(HeapObject::JavaString(other_units)) => *other_units == units,
+                    _ => false,
+                },
+                _ => false,
+            };
+            Ok(Some(JValue::Int(i32::from(result))))
+        }
+        ("equalsIgnoreCase", [other]) => {
+            let other = arg_units(other)?;
+            let a = String::from_utf16_lossy(&units).to_lowercase();
+            let b = String::from_utf16_lossy(&other).to_lowercase();
+            Ok(Some(JValue::Int(i32::from(a == b))))
+        }
+        ("compareTo", [other]) => {
+            let other = arg_units(other)?;
+            Ok(Some(JValue::Int(compare_utf16(&units, &other))))
+        }
+        ("toUpperCase", []) => {
+            let text = String::from_utf16_lossy(&units).to_uppercase();
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("toLowerCase", []) => {
+            let text = String::from_utf16_lossy(&units).to_lowercase();
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("trim", []) => {
+            let text = String::from_utf16_lossy(&units);
+            let reference = heap.alloc_string(text.trim_matches(|c| c <= ' '));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("String.{method}"))),
+    }
+}
+
+fn substring(
+    heap: &mut Heap,
+    units: &[u16],
+    begin: i32,
+    len: i32,
+) -> Result<Option<JValue>, VmError> {
+    let begin_usize = usize::try_from(begin).ok().filter(|b| *b <= units.len());
+    let Some(begin_usize) = begin_usize else {
+        return Err(throw(format!(
+            "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {len}, length {len}"
+        )));
+    };
+    let reference = heap.alloc(HeapObject::JavaString(units[begin_usize..].to_vec()));
+    Ok(Some(JValue::Ref(Some(reference))))
+}
+
+fn substring_range(
+    heap: &mut Heap,
+    units: &[u16],
+    begin: i32,
+    end: i32,
+) -> Result<Option<JValue>, VmError> {
+    let length = units.len();
+    let valid = usize::try_from(begin)
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .filter(|(b, e)| b <= e && *e <= length);
+    let Some((begin_usize, end_usize)) = valid else {
+        return Err(throw(format!(
+            "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {end}, \
+             length {length}"
+        )));
+    };
+    let reference = heap.alloc(HeapObject::JavaString(
+        units[begin_usize..end_usize].to_vec(),
+    ));
+    Ok(Some(JValue::Ref(Some(reference))))
+}
+
+/// `String.indexOf(String)` over UTF-16 units (-1 when absent).
+fn index_of(haystack: &[u16], needle: &[u16]) -> i32 {
+    if needle.is_empty() {
+        return 0;
+    }
+    if needle.len() > haystack.len() {
+        return -1;
+    }
+    for start in 0..=(haystack.len() - needle.len()) {
+        if &haystack[start..start + needle.len()] == needle {
+            return i32::try_from(start).unwrap_or(i32::MAX);
+        }
+    }
+    -1
+}
+
+/// `String.compareTo` semantics: difference of first differing code
+/// unit, else length difference.
+fn compare_utf16(a: &[u16], b: &[u16]) -> i32 {
+    for (x, y) in a.iter().zip(b.iter()) {
+        if x != y {
+            return i32::from(*x) - i32::from(*y);
+        }
+    }
+    i32::try_from(a.len()).unwrap_or(i32::MAX) - i32::try_from(b.len()).unwrap_or(i32::MAX)
+}
+
+/// `java.util.Scanner` methods, pulling lines from the console on
+/// demand. Tokens are whitespace-delimited (Java's default).
+fn scanner_method(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+    method: &str,
+) -> Result<Option<JValue>, VmError> {
+    match method {
+        "nextLine" => {
+            let line = scanner_next_line(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException: No line found"))?;
+            let reference = heap.alloc_string(&line);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        "hasNextLine" => {
+            let has = scanner_peek_line(heap, console, receiver)?;
+            Ok(Some(JValue::Int(i32::from(has))))
+        }
+        "next" => {
+            let token = scanner_next_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let reference = heap.alloc_string(&token);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        "hasNext" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            Ok(Some(JValue::Int(i32::from(token.is_some()))))
+        }
+        "nextInt" => {
+            let token = scanner_next_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let value: i32 = token
+                .parse()
+                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            Ok(Some(JValue::Int(value)))
+        }
+        "hasNextInt" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token.is_some_and(|t| t.parse::<i32>().is_ok());
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
+        "nextDouble" => {
+            let token = scanner_next_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let value: f64 = token
+                .parse()
+                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            Ok(Some(JValue::Double(value)))
+        }
+        "hasNextDouble" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token.is_some_and(|t| t.parse::<f64>().is_ok());
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("Scanner.{method}"))),
+    }
+}
+
+/// Pull one more line of input into the scanner's buffer. Returns
+/// whether a line was added.
+fn scanner_fill(heap: &mut Heap, console: &mut dyn ConsoleIo, receiver: HeapRef) {
+    let line = console.read_line();
+    let Some(HeapObject::Scanner { buffer, eof, .. }) = heap.get_mut(receiver) else {
+        unreachable!("receiver kind checked by caller");
+    };
+    if let Some(line) = line {
+        buffer.push_str(&line);
+        buffer.push('\n');
+    } else {
+        *eof = true;
+    }
+}
+
+fn scanner_state(heap: &Heap, receiver: HeapRef) -> (String, usize, bool) {
+    match heap.get(receiver) {
+        Some(HeapObject::Scanner { buffer, pos, eof }) => (buffer.clone(), *pos, *eof),
+        _ => unreachable!("receiver kind checked by caller"),
+    }
+}
+
+fn scanner_set_pos(heap: &mut Heap, receiver: HeapRef, new_pos: usize) {
+    if let Some(HeapObject::Scanner { pos, .. }) = heap.get_mut(receiver) {
+        *pos = new_pos;
+    }
+}
+
+/// Read up to the next newline (consuming it); `None` at EOF.
+fn scanner_next_line(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+) -> Result<Option<String>, VmError> {
+    loop {
+        let (buffer, pos, eof) = scanner_state(heap, receiver);
+        if let Some(offset) = buffer[pos..].find('\n') {
+            let line = buffer[pos..pos + offset].to_owned();
+            scanner_set_pos(heap, receiver, pos + offset + 1);
+            return Ok(Some(line));
+        }
+        if eof {
+            // Trailing text without a newline still counts as a line.
+            if pos < buffer.len() {
+                let line = buffer[pos..].to_owned();
+                scanner_set_pos(heap, receiver, buffer.len());
+                return Ok(Some(line));
+            }
+            return Ok(None);
+        }
+        scanner_fill(heap, console, receiver);
+    }
+}
+
+fn scanner_peek_line(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+) -> Result<bool, VmError> {
+    loop {
+        let (buffer, pos, eof) = scanner_state(heap, receiver);
+        if buffer[pos..].contains('\n') || (eof && pos < buffer.len()) {
+            return Ok(true);
+        }
+        if eof {
+            return Ok(false);
+        }
+        scanner_fill(heap, console, receiver);
+    }
+}
+
+/// Advance past whitespace and read one token; `None` at EOF.
+fn scanner_next_token(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+) -> Result<Option<String>, VmError> {
+    let token = scanner_peek_token(heap, console, receiver)?;
+    if let Some(token) = &token {
+        let (buffer, pos, _) = scanner_state(heap, receiver);
+        let skip = buffer[pos..]
+            .find(token.as_str())
+            .expect("peeked token is present");
+        scanner_set_pos(heap, receiver, pos + skip + token.len());
+    }
+    Ok(token)
+}
+
+fn scanner_peek_token(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+) -> Result<Option<String>, VmError> {
+    loop {
+        let (buffer, pos, eof) = scanner_state(heap, receiver);
+        let rest = &buffer[pos..];
+        let trimmed = rest.trim_start();
+        if !trimmed.is_empty() {
+            // A complete token needs trailing whitespace or EOF.
+            let token: String = trimmed.chars().take_while(|c| !c.is_whitespace()).collect();
+            if trimmed.len() > token.len() || eof {
+                return Ok(Some(token));
+            }
+        }
+        if eof {
+            return Ok(None);
+        }
+        scanner_fill(heap, console, receiver);
+    }
+}
+
+/// `java.util.ArrayList` methods (values stored unboxed).
+fn list_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let list_len = match heap.get(receiver) {
+        Some(HeapObject::ArrayList(values)) => values.len(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    let check = |index: i32, limit: usize| -> Result<usize, VmError> {
+        usize::try_from(index)
+            .ok()
+            .filter(|i| *i < limit)
+            .ok_or_else(|| {
+                throw(format!(
+                    "java.lang.IndexOutOfBoundsException: Index {index} out of bounds for \
+                     length {list_len}"
+                ))
+            })
+    };
+    match (method, descriptor, args) {
+        ("size", _, []) => Ok(Some(JValue::Int(
+            i32::try_from(list_len).unwrap_or(i32::MAX),
+        ))),
+        ("isEmpty", _, []) => Ok(Some(JValue::Int(i32::from(list_len == 0)))),
+        ("add", "(Ljava/lang/Object;)Z", [value]) => {
+            let value = *value;
+            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+                values.push(value);
+            }
+            Ok(Some(JValue::Int(1)))
+        }
+        ("add", "(ILjava/lang/Object;)V", [JValue::Int(index), value]) => {
+            // Insertion allows index == size.
+            let at = usize::try_from(*index)
+                .ok()
+                .filter(|i| *i <= list_len)
+                .ok_or_else(|| {
+                    throw(format!(
+                        "java.lang.IndexOutOfBoundsException: Index {index} out of bounds \
+                         for length {list_len}"
+                    ))
+                })?;
+            let value = *value;
+            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+                values.insert(at, value);
+            }
+            Ok(None)
+        }
+        ("get", _, [JValue::Int(index)]) => {
+            let at = check(*index, list_len)?;
+            match heap.get(receiver) {
+                Some(HeapObject::ArrayList(values)) => Ok(Some(values[at])),
+                _ => unreachable!(),
+            }
+        }
+        ("set", _, [JValue::Int(index), value]) => {
+            let at = check(*index, list_len)?;
+            let value = *value;
+            let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) else {
+                unreachable!()
+            };
+            let previous = values[at];
+            values[at] = value;
+            Ok(Some(previous))
+        }
+        ("remove", _, [JValue::Int(index)]) => {
+            let at = check(*index, list_len)?;
+            let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) else {
+                unreachable!()
+            };
+            Ok(Some(values.remove(at)))
+        }
+        ("toString", _, []) => {
+            let values = match heap.get(receiver) {
+                Some(HeapObject::ArrayList(values)) => values.clone(),
+                _ => unreachable!(),
+            };
+            let mut parts = Vec::with_capacity(values.len());
+            for value in values {
+                parts.push(display_jvalue(heap, value));
+            }
+            let text = format!("[{}]", parts.join(", "));
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "ArrayList.{method}{descriptor}"
+        ))),
+    }
+}
+
+/// Best-effort display of a stored value for `ArrayList.toString`
+/// (ints print as ints; the VM cannot distinguish boxed Character /
+/// Boolean, a documented deviation).
+fn display_jvalue(heap: &Heap, value: JValue) -> String {
+    match value {
+        JValue::Int(v) => v.to_string(),
+        JValue::Long(v) => v.to_string(),
+        JValue::Float(v) => v.to_string(),
+        JValue::Double(v) => java_double_to_string(v),
+        JValue::Ref(None) => String::from("null"),
+        JValue::Ref(Some(reference)) => match heap.get(reference) {
+            Some(HeapObject::JavaString(units)) => String::from_utf16_lossy(units),
+            Some(HeapObject::Instance { class_name, .. }) => {
+                // User toString would need re-entering the interpreter;
+                // fall back to the default form here.
+                format!("{class_name}@{reference:x}")
+            }
+            _ => String::from("<object>"),
+        },
+    }
+}
+
+/// Java's `java.util.Random` LCG, used for `Math.random()`.
+#[derive(Debug)]
+pub struct JavaRng {
+    seed: u64,
+}
+
+impl JavaRng {
+    const MULTIPLIER: u64 = 0x5_DEEC_E66D;
+    const MASK: u64 = (1 << 48) - 1;
+
+    #[must_use]
+    pub fn new(seed: Option<u64>) -> Self {
+        let seed = seed.unwrap_or(0x5EED_1234_5678);
+        Self {
+            seed: (seed ^ Self::MULTIPLIER) & Self::MASK,
+        }
+    }
+
+    fn next(&mut self, bits: u32) -> u64 {
+        self.seed = self.seed.wrapping_mul(Self::MULTIPLIER).wrapping_add(0xB) & Self::MASK;
+        self.seed >> (48 - bits)
+    }
+
+    /// `Random.nextDouble()`: uniform in `[0, 1)`.
+    #[allow(clippy::cast_precision_loss)] // both values are < 2^53
+    pub fn next_double(&mut self) -> f64 {
+        let high = self.next(26) << 27;
+        let low = self.next(27);
+        ((high + low) as f64) / ((1u64 << 53) as f64)
+    }
+}
+
+/// Intrinsic static methods (`Math.*`, `Integer.parseInt`,
+/// `Double.parseDouble`).
+pub fn invoke_static(
+    heap: &mut Heap,
+    rng: &mut JavaRng,
+    class: &str,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let string_arg = |value: &JValue| -> Result<String, VmError> {
+        match value {
+            JValue::Ref(Some(reference)) => heap
+                .string_text(*reference)
+                .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
+            JValue::Ref(None) => Err(throw(
+                "java.lang.NumberFormatException: Cannot parse null string",
+            )),
+            _ => Err(throw("java.lang.VerifyError: expected a String argument")),
+        }
+    };
+
+    match (class, method, args) {
+        ("java/lang/Math", "abs", [JValue::Int(v)]) => Ok(Some(JValue::Int(v.wrapping_abs()))),
+        ("java/lang/Math", "abs", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.abs()))),
+        ("java/lang/Math", "sqrt", [JValue::Double(v)]) => Ok(Some(JValue::Double(v.sqrt()))),
+        ("java/lang/Math", "pow", [JValue::Double(a), JValue::Double(b)]) => {
+            Ok(Some(JValue::Double(a.powf(*b))))
+        }
+        ("java/lang/Math", "max", [JValue::Int(a), JValue::Int(b)]) => {
+            Ok(Some(JValue::Int((*a).max(*b))))
+        }
+        ("java/lang/Math", "max", [JValue::Double(a), JValue::Double(b)]) => {
+            Ok(Some(JValue::Double(a.max(*b))))
+        }
+        ("java/lang/Math", "min", [JValue::Int(a), JValue::Int(b)]) => {
+            Ok(Some(JValue::Int((*a).min(*b))))
+        }
+        ("java/lang/Math", "min", [JValue::Double(a), JValue::Double(b)]) => {
+            Ok(Some(JValue::Double(a.min(*b))))
+        }
+        ("java/lang/Math", "random", []) => Ok(Some(JValue::Double(rng.next_double()))),
+        ("java/lang/Integer", "parseInt", [value]) => {
+            let text = string_arg(value)?;
+            let parsed: i32 = text.parse().map_err(|_| {
+                throw(format!(
+                    "java.lang.NumberFormatException: For input string: \"{text}\""
+                ))
+            })?;
+            Ok(Some(JValue::Int(parsed)))
+        }
+        ("java/lang/Double", "parseDouble", [value]) => {
+            let text = string_arg(value)?;
+            let parsed: f64 = text.trim().parse().map_err(|_| {
+                throw(format!(
+                    "java.lang.NumberFormatException: For input string: \"{text}\""
+                ))
+            })?;
+            Ok(Some(JValue::Double(parsed)))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
     }
 }
 

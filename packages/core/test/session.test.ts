@@ -347,6 +347,46 @@ public class Stage6 {
     expect(stdout.join('')).toBe('Ada earns 10000.0\nfalse\nAlan earns 4000.0\ntrue\n');
   });
 
+  it('runs a stage-7 program: classlib with Scanner input', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Stage7.java',
+        text: `
+import java.util.ArrayList;
+import java.util.Scanner;
+
+public class Stage7 {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        ArrayList<String> shouts = new ArrayList<>();
+        int n = in.nextInt();
+        for (int i = 0; i < n; i++) {
+            shouts.add(in.next().toUpperCase() + "!");
+        }
+        System.out.println(shouts);
+        System.out.println(Math.max(Integer.parseInt("40"), shouts.size()));
+        String first = shouts.get(0);
+        System.out.println(first.substring(0, first.length() - 1));
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const inputs = ['3 hey ho', "let's-go"];
+    let next = 0;
+    const result = session.run('Stage7', {
+      onStdout: (text) => stdout.push(text),
+      readStdin: () => (next < inputs.length ? (inputs[next++] ?? null) : null),
+    });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe("[HEY!, HO!, LET'S-GO!]\n40\nHEY\n");
+  });
+
   it('routes System.err to the stderr callback', async () => {
     const session = await createJvmSession();
     const compiled = session.compile([

@@ -43,7 +43,11 @@ fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
         | Keyword::Boolean
         | Keyword::Char
         | Keyword::Final
-        | Keyword::This => None,
+        | Keyword::This
+        | Keyword::Long
+        | Keyword::Float
+        | Keyword::Byte
+        | Keyword::Short => None,
         _ => Some("this statement is not yet supported by jvmjs"),
     }
 }
@@ -261,18 +265,17 @@ impl Parser<'_> {
         let mut classes = Vec::new();
         while let Some(kind) = self.peek() {
             match kind {
-                TokenKind::Keyword(Keyword::Package | Keyword::Import) => {
+                TokenKind::Keyword(Keyword::Import) => {
+                    // Imports are accepted and ignored: the class
+                    // library names are always in scope.
+                    self.recover_to_statement_boundary();
+                }
+                TokenKind::Keyword(Keyword::Package) => {
                     let span = self.here();
-                    let what = if self.at_keyword(Keyword::Package) {
-                        "package declarations are"
-                    } else {
-                        "import is"
-                    };
                     self.error_at(
                         span,
-                        format!(
-                            "{what} not yet supported by jvmjs; classes share one namespace for now"
-                        ),
+                        "package declarations are not supported by jvmjs; classes share one \
+                         namespace",
                     );
                     self.recover_to_statement_boundary();
                 }
@@ -578,7 +581,29 @@ impl Parser<'_> {
             }
             Some(TokenKind::Identifier(_)) => {
                 let (name, _) = self.expect_ident("for the type")?;
-                TypeRef::Named(name)
+                if self.at_symbol("<") {
+                    self.pos += 1;
+                    let mut args = Vec::new();
+                    if !self.at_symbol(">") {
+                        loop {
+                            args.push(self.type_ref()?);
+                            if !self.eat_symbol(",") {
+                                break;
+                            }
+                        }
+                    }
+                    if self.at_symbol(">>") {
+                        self.error_here(
+                            "nested generic types (like ArrayList<ArrayList<...>>) are not \
+                             supported by jvmjs",
+                        );
+                        return Err(Abort);
+                    }
+                    self.expect_symbol(">", "to close the type arguments")?;
+                    TypeRef::Generic { base: name, args }
+                } else {
+                    TypeRef::Named(name)
+                }
             }
             _ => {
                 self.error_here("expected a type");
@@ -937,13 +962,27 @@ impl Parser<'_> {
         matches!(
             self.peek(),
             Some(TokenKind::Keyword(
-                Keyword::Int | Keyword::Double | Keyword::Boolean | Keyword::Char | Keyword::Final
+                Keyword::Int
+                    | Keyword::Double
+                    | Keyword::Boolean
+                    | Keyword::Char
+                    | Keyword::Final
+                    | Keyword::Long
+                    | Keyword::Float
+                    | Keyword::Byte
+                    | Keyword::Short
             ))
         ) || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
             && matches!(self.peek_at(1), Some(TokenKind::Identifier(_))))
             || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
                 && matches!(self.peek_at(1), Some(TokenKind::Symbol("[")))
                 && matches!(self.peek_at(2), Some(TokenKind::Symbol("]"))))
+            // `ArrayList<Integer> list = ...` — a generic declaration.
+            // (`a < b;` alone is not a valid statement, so this is safe.)
+            || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
+                && matches!(self.peek_at(1), Some(TokenKind::Symbol("<")))
+                && matches!(self.peek_at(2), Some(TokenKind::Identifier(_)))
+                && matches!(self.peek_at(3), Some(TokenKind::Symbol(">"))))
     }
 
     /// The assignment operator at the cursor, if any: `Some(None)` for
@@ -1279,6 +1318,7 @@ impl Parser<'_> {
     /// `new int[3]`, `new int[2][3]`, `new int[]{...}` — array
     /// creation. Constructor calls (`new Scanner(...)`) get a friendly
     /// not-yet message.
+    #[allow(clippy::too_many_lines)] // one coherent grammar production
     fn new_expression(&mut self) -> Parsed<Expr> {
         let start = self.here();
         self.pos += 1; // 'new'
@@ -1310,6 +1350,22 @@ impl Parser<'_> {
             }
         };
 
+        // Optional generic arguments: `new ArrayList<Integer>()` or the
+        // diamond `new ArrayList<>()`.
+        let mut type_args = Vec::new();
+        if matches!(base, TypeRef::Named(_)) && self.at_symbol("<") {
+            self.pos += 1;
+            if !self.at_symbol(">") {
+                loop {
+                    type_args.push(self.type_ref()?);
+                    if !self.eat_symbol(",") {
+                        break;
+                    }
+                }
+            }
+            self.expect_symbol(">", "to close the type arguments")?;
+        }
+
         if self.at_symbol("(") {
             // `new ClassName(args)` — object creation.
             let TypeRef::Named(class) = base else {
@@ -1321,7 +1377,16 @@ impl Parser<'_> {
                 start: start.start,
                 end: self.here().start,
             };
-            return Ok(Expr::NewObject { class, args, span });
+            return Ok(Expr::NewObject {
+                class,
+                type_args,
+                args,
+                span,
+            });
+        }
+        if !type_args.is_empty() {
+            self.error_at(start, "expected '(' after the generic type");
+            return Err(Abort);
         }
 
         let mut dims: Vec<Option<Expr>> = Vec::new();
@@ -2000,10 +2065,12 @@ mod tests {
     }
 
     #[test]
-    fn import_and_package_are_skipped_with_messages() {
-        let errors = parse_errors("package com.example;\nimport java.util.Scanner;\nclass A { }");
-        assert_eq!(errors.len(), 2);
+    fn imports_are_ignored_and_packages_rejected() {
+        let unit = parse_ok("import java.util.Scanner;\nimport java.util.ArrayList;\nclass A { }");
+        assert_eq!(unit.classes.len(), 1);
+
+        let errors = parse_errors("package com.example;\nclass A { }");
+        assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("package"));
-        assert!(errors[1].message.contains("import"));
     }
 }

@@ -54,6 +54,19 @@ pub enum HeapObject {
         class_name: String,
         fields: std::collections::HashMap<String, JValue>,
     },
+    /// A `java.util.Scanner` over standard input: buffered text pulled
+    /// from the console line by line.
+    Scanner {
+        buffer: String,
+        /// Cursor into `buffer` (UTF-8 byte index).
+        pos: usize,
+        eof: bool,
+    },
+    /// A `java.util.ArrayList` (element types erased; values are
+    /// stored directly — boxing is a no-op in this VM).
+    ArrayList(Vec<JValue>),
+    /// The marker object behind `System.in`.
+    InputStream,
 }
 
 /// The per-run object heap.
