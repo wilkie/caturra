@@ -796,6 +796,29 @@ public class Probe {
 }
 
 differential_test!(
+    diff_wildcard_imports,
+    "DiffWild",
+    r#"
+import java.util.*;
+import java.io.*;
+
+public class DiffWild {
+    public static void main(String[] args) throws IOException {
+        ArrayList<Integer> nums = new ArrayList<>();
+        for (int i = 0; i < 4; i++) nums.add(i * 3);
+        PrintWriter out = new PrintWriter("wild.txt");
+        for (int n : nums) out.println(n);
+        out.close();
+        Scanner in = new Scanner(new File("wild.txt"));
+        int total = 0;
+        while (in.hasNextInt()) total += in.nextInt();
+        System.out.println(total);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

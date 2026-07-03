@@ -133,8 +133,16 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
     Nested generics (`ArrayList<ArrayList<...>>`) are rejected kindly.
-  - `import` statements are accepted and ignored (classlib names are
-    always in scope); `package` remains unsupported.
+  - `import` statements are real (2026-07-03): declarations are
+    validated (unknown class in a known package / unknown package get
+    javac's wording; real-but-unmodeled Java classes and packages get
+    an honest "not supported by jvmjs" instead), and using `Scanner`,
+    `ArrayList`, `File`, or `PrintWriter` without the matching import
+    (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
+    symbol: class Scanner". `java.lang` is implicit; exception-class
+    imports (`IOException`, ...) are accepted for `throws` clauses;
+    user-defined classes shadow library names. `package` remains
+    unsupported.
   - User classes shadow intrinsic names (a class called `Scanner` wins).
 
 - **File IO over the virtual filesystem** (stage 8): `new File(path)`

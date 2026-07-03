@@ -7,8 +7,8 @@
 //! problem, not just the first.
 
 use crate::ast::{
-    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, FieldDecl, Literal, LocalDeclarator,
-    MethodDecl, Param, Stmt, TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, ClassDecl, CompilationUnit, Expr, FieldDecl, ImportDecl, Literal,
+    LocalDeclarator, MethodDecl, Param, Stmt, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -262,13 +262,16 @@ impl Parser<'_> {
     // ----- grammar -----
 
     fn compilation_unit(&mut self) -> CompilationUnit {
+        let mut imports = Vec::new();
         let mut classes = Vec::new();
         while let Some(kind) = self.peek() {
             match kind {
                 TokenKind::Keyword(Keyword::Import) => {
-                    // Imports are accepted and ignored: the class
-                    // library names are always in scope.
-                    self.recover_to_statement_boundary();
+                    if let Ok(import) = self.import_decl() {
+                        imports.push(import);
+                    } else {
+                        self.recover_to_statement_boundary();
+                    }
                 }
                 TokenKind::Keyword(Keyword::Package) => {
                     let span = self.here();
@@ -291,7 +294,43 @@ impl Parser<'_> {
                 }
             }
         }
-        CompilationUnit { classes }
+        CompilationUnit { imports, classes }
+    }
+
+    /// `import a.b.C;` or `import a.b.*;`.
+    fn import_decl(&mut self) -> Parsed<ImportDecl> {
+        let start = self.here();
+        if !self.eat_keyword(Keyword::Import) {
+            return Err(Abort);
+        }
+        let mut path = Vec::new();
+        let mut wildcard = false;
+        loop {
+            if self.at_symbol("*") {
+                self.pos += 1;
+                wildcard = true;
+                break;
+            }
+            let (segment, _) = self.expect_ident("in the import path")?;
+            path.push(segment);
+            if !self.eat_symbol(".") {
+                break;
+            }
+        }
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        self.expect_symbol(";", "after the import")?;
+        if path.is_empty() {
+            self.error_at(span, "expected a class name after 'import'");
+            return Err(Abort);
+        }
+        Ok(ImportDecl {
+            path,
+            wildcard,
+            span,
+        })
     }
 
     /// Modifier keywords before a class or member. Returns

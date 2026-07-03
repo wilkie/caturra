@@ -9,6 +9,7 @@
 pub mod ast;
 pub mod codegen;
 pub mod diagnostics;
+mod imports;
 pub mod lexer;
 pub mod parser;
 
@@ -84,6 +85,16 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             }
         }
         units.push((source.path.clone(), unit));
+    }
+
+    // Import validation and enforcement (after all units parse, since
+    // user classes anywhere in the compilation shadow library names).
+    let user_classes: std::collections::HashSet<String> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter().map(|c| c.name.clone()))
+        .collect();
+    for (path, unit) in &units {
+        imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
     let (classes, mut codegen_errors) = codegen::generate(&units);

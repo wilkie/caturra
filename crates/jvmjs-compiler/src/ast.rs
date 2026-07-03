@@ -8,7 +8,18 @@ use crate::diagnostics::SourceSpan;
 /// One parsed source file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompilationUnit {
+    pub imports: Vec<ImportDecl>,
     pub classes: Vec<ClassDecl>,
+}
+
+/// An `import a.b.C;` or `import a.b.*;` declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDecl {
+    /// Dotted segments, e.g. `["java", "util", "Scanner"]` (the last
+    /// segment is `*` for wildcard imports... represented separately).
+    pub path: Vec<String>,
+    pub wildcard: bool,
+    pub span: SourceSpan,
 }
 
 /// A class or interface declaration.

@@ -1639,6 +1639,30 @@ fn stage6_compile_errors_match_javac_wording() {
             r#"class M { static void f() { System.out.prinn("hello"); } }"#,
             "cannot find symbol: method prinn(String) in class PrintStream",
         ),
+        (
+            "class M { static void f() { Scanner in = new Scanner(System.in); } }",
+            "cannot find symbol: class Scanner",
+        ),
+        (
+            "import java.util.Scanner; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); } }",
+            "cannot find symbol: class ArrayList",
+        ),
+        (
+            "import java.util.NotReal; class M { }",
+            "cannot find symbol: class NotReal in package java.util",
+        ),
+        (
+            "import foo.bar.Baz; class M { }",
+            "package foo.bar does not exist",
+        ),
+        (
+            "import java.util.HashMap; class M { }",
+            "java.util.HashMap is not supported by jvmjs (the class library covers the AP CS A subset)",
+        ),
+        (
+            "import java.awt.*; class M { }",
+            "package java.awt is not supported by jvmjs",
+        ),
     ];
     for (source, expected) in cases {
         let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
@@ -2445,6 +2469,53 @@ fn interrupt_pauses_a_running_loop() {
     let result = vm.run_main_debug("Spin", &[], &[], &mut host);
     assert!(matches!(result, Err(VmError::Stopped)), "{result:?}");
     assert!(host.asked && host.paused);
+}
+
+#[test]
+fn imports_enable_library_classes() {
+    // Wildcards work, java.lang imports are legal-and-redundant, and
+    // exception imports (used only in throws clauses) are accepted.
+    let out = run_stdout(
+        r#"
+        import java.lang.String;
+        import java.util.*;
+        import java.io.*;
+
+        public class Wild {
+            public static void main(String[] args) throws IOException {
+                ArrayList<String> list = new ArrayList<>();
+                list.add("wildcard");
+                PrintWriter out = new PrintWriter("w.txt");
+                out.println(list.get(0));
+                out.close();
+                Scanner in = new Scanner(new File("w.txt"));
+                System.out.println(in.nextLine());
+            }
+        }
+        "#,
+        "Wild",
+    );
+    assert_eq!(out, "wildcard\n");
+}
+
+#[test]
+fn user_class_named_like_library_needs_no_import() {
+    let out = run_stdout(
+        r#"
+        class Scanner {
+            String kind() { return "homemade"; }
+        }
+
+        public class Shadow {
+            public static void main(String[] args) {
+                Scanner s = new Scanner();
+                System.out.println(s.kind());
+            }
+        }
+        "#,
+        "Shadow",
+    );
+    assert_eq!(out, "homemade\n");
 }
 
 #[test]
