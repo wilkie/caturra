@@ -50,6 +50,17 @@ verification pass in v1; the interpreter validates structurally as it executes
 `VmError`s, not panics). `StackMapTable` attributes are neither emitted nor
 read. Revisit if we ever want real JVMs to load our class files.
 
+## Method calls and the call stack
+
+User-method calls (`invokestatic` today) recurse on the host (Rust/WASM)
+stack, one interpreter invocation per Java frame, guarded by
+`VmOptions::max_call_depth` (default 256) which raises Java's
+`StackOverflowError`. The limit is set conservatively so the host stack can
+never actually overflow. If deeper recursion becomes a real need (e.g.
+element-per-frame recursion over large arrays), the interpreter should move
+to an explicit heap-allocated frame stack — noted here as the intended
+design change rather than raising the limit.
+
 ## Runaway protection
 
 `VmOptions::max_instructions` bounds interpreted instructions per run

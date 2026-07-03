@@ -103,6 +103,10 @@ pub enum Stmt {
     Continue {
         span: SourceSpan,
     },
+    Return {
+        value: Option<Expr>,
+        span: SourceSpan,
+    },
 }
 
 /// One `name = init` (or bare `name`) in a local declaration.

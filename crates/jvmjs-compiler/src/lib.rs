@@ -55,12 +55,14 @@ impl Compilation {
     }
 }
 
-/// Compile a set of Java source files.
+/// Compile a set of Java source files. All files are parsed first so
+/// classes can call each other's static methods regardless of file
+/// order.
 #[must_use]
 pub fn compile(sources: &[SourceFile]) -> Compilation {
     let mut compilation = Compilation::default();
-    let mut classes = Vec::new();
     let mut seen: HashMap<String, String> = HashMap::new();
+    let mut units = Vec::new();
 
     for source in sources {
         let (tokens, mut lex_errors) = lexer::lex(&source.path, &source.text);
@@ -81,11 +83,11 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
                 seen.insert(class.name.clone(), source.path.clone());
             }
         }
-
-        let (mut compiled, mut codegen_errors) = codegen::generate(&source.path, &unit);
-        compilation.diagnostics.append(&mut codegen_errors);
-        classes.append(&mut compiled);
+        units.push((source.path.clone(), unit));
     }
+
+    let (classes, mut codegen_errors) = codegen::generate(&units);
+    compilation.diagnostics.append(&mut codegen_errors);
 
     if compilation.success() {
         compilation.classes = classes;

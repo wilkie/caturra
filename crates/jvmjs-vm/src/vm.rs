@@ -42,12 +42,19 @@ pub struct VmOptions {
     /// Upper bound on interpreted instructions per `run` call, so a
     /// student's `while (true) {}` can't hang the browser tab.
     pub max_instructions: u64,
+    /// Maximum method-call depth; exceeding it raises Java's
+    /// `StackOverflowError`. The interpreter currently recurses on the
+    /// host stack, so this must stay well inside the WASM stack budget;
+    /// deep-recursion support means moving to an explicit frame stack
+    /// (see `specs/RUNTIME.md`).
+    pub max_call_depth: u32,
 }
 
 impl Default for VmOptions {
     fn default() -> Self {
         Self {
             max_instructions: 500_000_000,
+            max_call_depth: 256,
         }
     }
 }
@@ -136,7 +143,12 @@ impl<'host> Vm<'host> {
 
         let _ = self.vfs.is_empty(); // wired to File intrinsics with the classlib
 
-        let mut interpreter = Interpreter::new(self.console, self.options.max_instructions);
+        let mut interpreter = Interpreter::new(
+            &self.classes,
+            self.console,
+            self.options.max_instructions,
+            self.options.max_call_depth,
+        );
         let arg_refs: Vec<JValue> = args
             .iter()
             .map(|a| JValue::Ref(Some(interpreter.intern_string(a))))
@@ -145,7 +157,7 @@ impl<'host> Vm<'host> {
         let locals = vec![JValue::Ref(Some(args_array))];
 
         match interpreter.execute(class, main, locals) {
-            Ok(()) => Ok(ExitStatus::Completed),
+            Ok(_) => Ok(ExitStatus::Completed),
             Err(VmError::UncaughtException(message)) => {
                 // Match the shape of the real `java` launcher's output.
                 self.console

@@ -176,11 +176,19 @@ impl ConstantPool {
     }
 
     /// Find an existing identical entry or insert a new one, returning
-    /// its index. (Equality on `Double`/`Float` is bitwise-value based;
-    /// `NaN` constants are never deduplicated, which is harmless.)
+    /// its index. `Double`/`Float` compare by bit pattern, not IEEE
+    /// equality — `-0.0` and `0.0` are distinct constants, and `NaN`
+    /// deduplicates against itself.
     pub fn intern(&mut self, constant: Constant) -> CpIndex {
+        fn identical(a: &Constant, b: &Constant) -> bool {
+            match (a, b) {
+                (Constant::Double(x), Constant::Double(y)) => x.to_bits() == y.to_bits(),
+                (Constant::Float(x), Constant::Float(y)) => x.to_bits() == y.to_bits(),
+                _ => a == b,
+            }
+        }
         for (i, entry) in self.entries.iter().enumerate() {
-            if *entry == constant {
+            if identical(entry, &constant) {
                 return u16::try_from(i + 1).expect("constant pool overflow");
             }
         }

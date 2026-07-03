@@ -16,28 +16,35 @@ use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, JValue};
 use crate::vm::VmError;
 
-/// State for one `run`: the heap, interned strings, intrinsic
-/// singletons, and the instruction budget.
-///
-/// (User-method calls — `invokestatic` and friends — will add a
-/// reference to the loaded-classes map here; the current opcode surface
-/// only calls intrinsics.)
+/// State for one `run`: the loaded classes, heap, interned strings,
+/// intrinsic singletons, and the instruction/call-depth budgets.
 pub(crate) struct Interpreter<'run> {
+    pub classes: &'run HashMap<String, ClassFile>,
     pub console: &'run mut dyn ConsoleIo,
     pub heap: Heap,
     pub statics: IntrinsicStatics,
     string_pool: HashMap<String, HeapRef>,
     remaining_instructions: u64,
+    call_depth: u32,
+    max_call_depth: u32,
 }
 
 impl<'run> Interpreter<'run> {
-    pub fn new(console: &'run mut dyn ConsoleIo, max_instructions: u64) -> Self {
+    pub fn new(
+        classes: &'run HashMap<String, ClassFile>,
+        console: &'run mut dyn ConsoleIo,
+        max_instructions: u64,
+        max_call_depth: u32,
+    ) -> Self {
         Self {
+            classes,
             console,
             heap: Heap::new(),
             statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
             remaining_instructions: max_instructions,
+            call_depth: 0,
+            max_call_depth,
         }
     }
 
@@ -52,18 +59,36 @@ impl<'run> Interpreter<'run> {
         reference
     }
 
-    /// Execute one method to completion (no user-method calls yet, so
-    /// there is exactly one frame).
-    ///
-    /// The dispatch loop is one long match by design; splitting it per
-    /// opcode family would only scatter the instruction set.
-    #[allow(clippy::too_many_lines)]
+    /// Execute one method to completion, returning its result value
+    /// (`None` for void). Recursion mirrors Java's call stack, guarded
+    /// by `max_call_depth` → `StackOverflowError`.
     pub fn execute(
         &mut self,
         class: &ClassFile,
         method: &MethodInfo,
+        locals: Vec<JValue>,
+    ) -> Result<Option<JValue>, VmError> {
+        self.call_depth += 1;
+        if self.call_depth > self.max_call_depth {
+            self.call_depth -= 1;
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.StackOverflowError",
+            )));
+        }
+        let result = self.execute_frame(class, method, locals);
+        self.call_depth -= 1;
+        result
+    }
+
+    /// The dispatch loop is one long match by design; splitting it per
+    /// opcode family would only scatter the instruction set.
+    #[allow(clippy::too_many_lines)]
+    fn execute_frame(
+        &mut self,
+        class: &ClassFile,
+        method: &MethodInfo,
         mut locals: Vec<JValue>,
-    ) -> Result<(), VmError> {
+    ) -> Result<Option<JValue>, VmError> {
         let class_name = class.class_name().unwrap_or("<unknown>").to_owned();
         let malformed = |reason: String| VmError::MalformedClass {
             name: class_name.clone(),
@@ -161,6 +186,13 @@ impl<'run> Interpreter<'run> {
                 // ----- stack manipulation -----
                 op::POP => {
                     frame.pop()?;
+                }
+                op::POP2 => {
+                    // One category-2 value or two category-1 values.
+                    let top = frame.pop()?;
+                    if !matches!(top, JValue::Double(_) | JValue::Long(_)) {
+                        frame.pop()?;
+                    }
                 }
                 op::DUP => {
                     let top = *frame.stack.last().ok_or(VmError::StackUnderflow)?;
@@ -325,10 +357,77 @@ impl<'run> Interpreter<'run> {
                     let index = read_u16(bytes, &mut pc, &malformed)?;
                     self.invoke_virtual_op(class, &mut frame, index, &malformed)?;
                 }
-                op::RETURN => return Ok(()),
+                op::INVOKESTATIC => {
+                    let index = read_u16(bytes, &mut pc, &malformed)?;
+                    let (target_class, method_name, descriptor) = class
+                        .constant_pool
+                        .get_member_ref(index)
+                        .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
+                        .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
+                    let widths = descriptor_arg_widths(&descriptor)
+                        .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+                    let mut args = Vec::with_capacity(widths.len());
+                    for _ in &widths {
+                        args.push(frame.pop()?);
+                    }
+                    args.reverse();
+                    let result = self.invoke_static(
+                        &target_class,
+                        &method_name,
+                        &descriptor,
+                        &widths,
+                        &args,
+                    )?;
+                    if let Some(value) = result {
+                        frame.stack.push(value);
+                    }
+                }
+                op::RETURN => return Ok(None),
+                op::IRETURN | op::DRETURN | op::ARETURN => {
+                    let value = frame.pop()?;
+                    return Ok(Some(value));
+                }
                 other => return Err(VmError::UnsupportedOpcode(other)),
             }
         }
+    }
+
+    /// `invokestatic`: dispatch to a user-defined static method,
+    /// building its frame's locals from the popped arguments (doubles
+    /// occupy two slots, JVMS §2.6.1).
+    fn invoke_static(
+        &mut self,
+        class_name: &str,
+        method_name: &str,
+        descriptor: &str,
+        widths: &[u16],
+        args: &[JValue],
+    ) -> Result<Option<JValue>, VmError> {
+        // Decouple the class borrow from `self` so the recursive
+        // `execute` can take `&mut self`.
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let Some(class) = classes.get(class_name) else {
+            // TODO(classlib): fall back to intrinsic static methods
+            // (Math.abs, Integer.parseInt, ...) when they land.
+            return Err(VmError::UnknownIntrinsic(format!(
+                "{class_name}.{method_name}{descriptor}"
+            )));
+        };
+        let method = find_static_method(class, method_name, descriptor).ok_or_else(|| {
+            VmError::MalformedClass {
+                name: class_name.to_owned(),
+                reason: format!("no static method {method_name}{descriptor}"),
+            }
+        })?;
+
+        let mut locals = Vec::with_capacity(args.len());
+        for (value, width) in args.iter().zip(widths) {
+            locals.push(*value);
+            if *width == 2 {
+                locals.push(JValue::Int(0)); // padding for the wide slot
+            }
+        }
+        self.execute(class, method, locals)
     }
 
     /// `invokevirtual`: resolve the method ref, pop arguments and
@@ -538,26 +637,38 @@ fn read_u16(
     Ok(u16::from_be_bytes([high, low]))
 }
 
-/// Number of arguments in a method descriptor (each argument is one
-/// operand-stack entry in this VM regardless of JVMS slot width).
-fn descriptor_arg_count(descriptor: &str) -> Option<usize> {
+/// Find a class's static method by name and exact descriptor.
+fn find_static_method<'c>(
+    class: &'c ClassFile,
+    name: &str,
+    descriptor: &str,
+) -> Option<&'c MethodInfo> {
+    class.methods.iter().find(|m| {
+        m.access_flags
+            .contains(jvmjs_classfile::MethodAccessFlags::STATIC)
+            && class.constant_pool.get_utf8(m.name_index) == Some(name)
+            && class.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+    })
+}
+
+/// Local-variable slot widths of each argument in a method descriptor
+/// (JVMS §2.6.1: double/long take two slots).
+fn descriptor_arg_widths(descriptor: &str) -> Option<Vec<u16>> {
     let inner = descriptor.strip_prefix('(')?;
     let (args, _return_type) = inner.split_once(')')?;
-    let mut count = 0usize;
+    let mut widths = Vec::new();
     let mut chars = args.chars();
     while let Some(c) = chars.next() {
         match c {
-            'B' | 'C' | 'D' | 'F' | 'I' | 'J' | 'S' | 'Z' => count += 1,
+            'B' | 'C' | 'F' | 'I' | 'S' | 'Z' => widths.push(1),
+            'D' | 'J' => widths.push(2),
             'L' => {
                 chars.by_ref().find(|&c| c == ';')?;
-                count += 1;
+                widths.push(1);
             }
             '[' => {
-                // Array dimensions don't add arguments; the element
-                // type that follows will be counted... unless it's
-                // another '[', which the loop handles naturally. But a
-                // '[' before a primitive would double-count, so consume
-                // the element type here.
+                // Arrays are references (width 1) regardless of the
+                // element type; consume the element descriptor.
                 let mut element = chars.next()?;
                 while element == '[' {
                     element = chars.next()?;
@@ -565,12 +676,18 @@ fn descriptor_arg_count(descriptor: &str) -> Option<usize> {
                 if element == 'L' {
                     chars.by_ref().find(|&c| c == ';')?;
                 }
-                count += 1;
+                widths.push(1);
             }
             _ => return None,
         }
     }
-    Some(count)
+    Some(widths)
+}
+
+/// Number of arguments in a method descriptor (each argument is one
+/// operand-stack entry in this VM regardless of JVMS slot width).
+fn descriptor_arg_count(descriptor: &str) -> Option<usize> {
+    descriptor_arg_widths(descriptor).map(|w| w.len())
 }
 
 #[cfg(test)]

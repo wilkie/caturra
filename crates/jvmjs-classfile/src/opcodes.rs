@@ -44,6 +44,8 @@ pub const ASTORE_3: u8 = 0x4E;
 
 // Stack manipulation.
 pub const POP: u8 = 0x57;
+/// Pops one category-2 value (double/long) or two category-1 values.
+pub const POP2: u8 = 0x58;
 pub const DUP: u8 = 0x59;
 pub const SWAP: u8 = 0x5F;
 
@@ -87,8 +89,14 @@ pub const IF_ACMPEQ: u8 = 0xA5;
 pub const IF_ACMPNE: u8 = 0xA6;
 pub const GOTO: u8 = 0xA7;
 
+// Returns.
+pub const IRETURN: u8 = 0xAC;
+pub const DRETURN: u8 = 0xAF;
+pub const ARETURN: u8 = 0xB0;
 pub const RETURN: u8 = 0xB1;
+
 pub const GETSTATIC: u8 = 0xB2;
 pub const INVOKEVIRTUAL: u8 = 0xB6;
 pub const INVOKESPECIAL: u8 = 0xB7;
+pub const INVOKESTATIC: u8 = 0xB8;
 pub const NEW: u8 = 0xBB;

@@ -649,6 +649,7 @@ fn infinite_loop_hits_the_instruction_budget() {
     let mut vm = Vm::new(
         VmOptions {
             max_instructions: 10_000,
+            ..VmOptions::default()
         },
         &mut vfs,
         &mut console,
@@ -661,6 +662,260 @@ fn infinite_loop_hits_the_instruction_budget() {
         matches!(result, Err(VmError::InstructionBudgetExceeded)),
         "{result:?}"
     );
+}
+
+// ----- stage 3: user-defined static methods -----
+
+#[test]
+fn calls_helpers_with_params_and_returns() {
+    let out = run_stdout(
+        r#"
+        public class Temps {
+            public static double toFahrenheit(double celsius) {
+                return celsius * 9 / 5 + 32;
+            }
+
+            public static String describe(double f) {
+                if (f >= 80) return "hot";
+                if (f >= 60) return "mild";
+                return "cold";
+            }
+
+            static void report(double celsius) {
+                double f = toFahrenheit(celsius);
+                System.out.println(celsius + "C = " + f + "F (" + describe(f) + ")");
+            }
+
+            public static void main(String[] args) {
+                report(30.0);
+                report(15);
+                report(-5.0);
+            }
+        }
+        "#,
+        "Temps",
+    );
+    assert_eq!(
+        out,
+        "30.0C = 86.0F (hot)\n15.0C = 59.0F (cold)\n-5.0C = 23.0F (cold)\n"
+    );
+}
+
+#[test]
+fn recursion_and_mutual_recursion() {
+    let out = run_stdout(
+        r"
+        public class Rec {
+            static int factorial(int n) {
+                if (n <= 1) return 1;
+                return n * factorial(n - 1);
+            }
+
+            static int fib(int n) {
+                if (n < 2) return n;
+                return fib(n - 1) + fib(n - 2);
+            }
+
+            static boolean isEven(int n) {
+                if (n == 0) return true;
+                return isOdd(n - 1);
+            }
+
+            static boolean isOdd(int n) {
+                if (n == 0) return false;
+                return isEven(n - 1);
+            }
+
+            public static void main(String[] args) {
+                System.out.println(factorial(10));
+                System.out.println(fib(15));
+                System.out.println(isEven(20));
+                System.out.println(isOdd(20));
+            }
+        }
+        ",
+        "Rec",
+    );
+    assert_eq!(out, "3628800\n610\ntrue\nfalse\n");
+}
+
+#[test]
+fn cross_class_static_calls_and_overloads() {
+    let out = run_stdout(
+        r#"
+        class MathUtil {
+            static int max(int a, int b) {
+                if (a > b) return a;
+                return b;
+            }
+
+            static double max(double a, double b) {
+                if (a > b) return a;
+                return b;
+            }
+
+            static String label(int v) { return "int:" + v; }
+            static String label(double v) { return "double:" + v; }
+        }
+
+        public class Uses {
+            public static void main(String[] args) {
+                System.out.println(MathUtil.max(3, 9));
+                System.out.println(MathUtil.max(2.5, 1.5));
+                System.out.println(MathUtil.label(7));
+                System.out.println(MathUtil.label(7.0));
+                System.out.println(MathUtil.max(1, 2.5));
+                char c = 'a';
+                System.out.println(MathUtil.label(c));
+            }
+        }
+        "#,
+        "Uses",
+    );
+    // Exact overload wins for ints; widening picks the double overload
+    // for max(1, 2.5); char widens to int so label('a') prints 97.
+    assert_eq!(out, "9\n2.5\nint:7\ndouble:7.0\n2.5\nint:97\n");
+}
+
+#[test]
+fn void_call_statements_and_value_discard() {
+    let out = run_stdout(
+        r#"
+        public class Effects {
+            static int counter() {
+                System.out.println("counted");
+                return 42;
+            }
+
+            static double wide() { return 1.5; }
+
+            public static void main(String[] args) {
+                // Results discarded (pop / pop2), side effects kept.
+                counter();
+                wide();
+                System.out.println("done");
+            }
+        }
+        "#,
+        "Effects",
+    );
+    assert_eq!(out, "counted\ndone\n");
+}
+
+#[test]
+fn runaway_recursion_overflows_like_java() {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Deep.java".into(),
+        text: r"
+        public class Deep {
+            static int down(int n) {
+                return down(n + 1);
+            }
+
+            public static void main(String[] args) {
+                System.out.println(down(0));
+            }
+        }
+        "
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    // A small explicit limit keeps the test independent of the host
+    // (debug-build) stack size; the default limit works the same way.
+    let mut vm = Vm::new(
+        VmOptions {
+            max_call_depth: 64,
+            ..VmOptions::default()
+        },
+        &mut vfs,
+        &mut console,
+    );
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("Deep", &[]);
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    assert!(
+        console
+            .stderr_text()
+            .contains("java.lang.StackOverflowError"),
+        "{}",
+        console.stderr_text()
+    );
+}
+
+#[test]
+fn stage3_compile_errors_match_javac_wording() {
+    let cases: &[(&str, &str)] = &[
+        ("static int f() { int x = 1; }", "missing return statement"),
+        ("static void f() { return 5; }", "unexpected return value"),
+        ("static int f() { return; }", "missing return value"),
+        (
+            "static void f() { h(1); }",
+            "cannot find symbol: method h(int)",
+        ),
+        (
+            "static void f(int a, double b) { } static void f(double a, int b) { } \
+             static void g() { f(1, 2); }",
+            "reference to f is ambiguous",
+        ),
+        (
+            "void inst() { } static void f() { inst(); }",
+            "non-static method inst() cannot be referenced from a static context",
+        ),
+        (
+            "static int f() { return 1; } static int f() { return 2; }",
+            "method f() is already defined",
+        ),
+        (
+            "static void g() { } static void f() { int x = g(); }",
+            "returns void",
+        ),
+    ];
+    for (body, expected) in cases {
+        let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+            path: "T.java".into(),
+            text: format!("class T {{ {body} }}"),
+        }]);
+        assert!(!result.success(), "case '{body}' compiled unexpectedly");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(expected)),
+            "case '{body}': expected '{expected}' in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
+fn while_true_with_return_needs_no_trailing_return() {
+    let out = run_stdout(
+        r"
+        public class Search {
+            static int firstSquareAbove(int limit) {
+                int n = 1;
+                while (true) {
+                    if (n * n > limit) return n * n;
+                    n++;
+                }
+            }
+
+            public static void main(String[] args) {
+                System.out.println(firstSquareAbove(50));
+            }
+        }
+        ",
+        "Search",
+    );
+    assert_eq!(out, "64\n");
 }
 
 #[test]
@@ -692,6 +947,7 @@ fn instruction_budget_stops_runaway_bytecode() {
     let mut vm = Vm::new(
         VmOptions {
             max_instructions: 2,
+            ..VmOptions::default()
         },
         &mut vfs,
         &mut console,

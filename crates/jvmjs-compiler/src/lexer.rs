@@ -307,7 +307,24 @@ impl Lexer<'_> {
                 digits.push(self.bump().expect("peeked"));
             }
         }
-        // TODO: exponents (1e9), hex/binary/octal literals, and the
+        // Exponents: `1e10`, `2.5E-3`. Only when followed by digits (or
+        // a signed digit), so `1exit` stays `1` + identifier.
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let exponent_digits_follow = self.peek_at(1).is_some_and(|c| c.is_ascii_digit())
+                || (matches!(self.peek_at(1), Some('+' | '-'))
+                    && self.peek_at(2).is_some_and(|c| c.is_ascii_digit()));
+            if exponent_digits_follow {
+                is_double = true;
+                digits.push(self.bump().expect("peeked"));
+                if matches!(self.peek(), Some('+' | '-')) {
+                    digits.push(self.bump().expect("peeked"));
+                }
+                while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
+                    digits.push(self.bump().expect("peeked"));
+                }
+            }
+        }
+        // TODO: hex/binary/octal literals, and the
         // L/f/d suffixes.
         let digits = digits.replace('_', "");
         if is_double {
@@ -451,6 +468,26 @@ mod tests {
                 TokenKind::BooleanLiteral(true),
                 TokenKind::BooleanLiteral(false),
                 TokenKind::NullLiteral,
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_exponent_literals() {
+        assert_eq!(
+            kinds("1e3 2.5E-2 1e+2"),
+            vec![
+                TokenKind::DoubleLiteral(1000.0),
+                TokenKind::DoubleLiteral(0.025),
+                TokenKind::DoubleLiteral(100.0),
+            ]
+        );
+        // 'e' not followed by digits stays an identifier boundary.
+        assert_eq!(
+            kinds("1e"),
+            vec![
+                TokenKind::IntLiteral(1),
+                TokenKind::Identifier(String::from("e")),
             ]
         );
     }

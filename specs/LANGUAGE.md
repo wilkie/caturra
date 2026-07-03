@@ -18,7 +18,7 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Accepted today (v0 slice + stages 1–2)
+## Accepted today (v0 slice + stages 1–3)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
@@ -53,8 +53,19 @@ slice.
     saturation and i2c truncation;
   - string concatenation with `+`/`+=` (compiled to `StringBuilder` chains),
     formatting `int`/`double`/`char`/`boolean`/`null` exactly as Java does.
-- Callable surface: `System.out` / `System.err` `print` / `println` with zero
-  arguments or one argument of any supported expression type.
+- User-defined **static methods**: parameters, `return` (with javac-style
+  missing-return and unexpected-return checks via a reachability-lite
+  analysis, so `while (true) { ... return ...; }` needs no trailing return),
+  recursion and mutual recursion (guarded by `StackOverflowError`, see
+  RUNTIME.md), bare same-class calls and `ClassName.method(...)` across
+  classes/files, results usable in any expression or discarded as a
+  statement. Overload resolution follows JLS §15.12.2 without boxing:
+  applicable-by-widening, exact match preferred, unique most-specific
+  method, javac-worded ambiguity/cannot-find-symbol/non-static errors.
+- Callable surface: the above, plus `System.out` / `System.err`
+  `print` / `println` with zero arguments or one argument of any supported
+  expression type.
+- Literals: exponent notation (`1e10`, `2.5E-3`) lexes as double.
 
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
@@ -80,7 +91,11 @@ friendly message for now.
 2. ~~Control flow: `if`/`else`, `while`, `for`, `break`/`continue`.~~
    **Done (2026-07-02)** — plus `do`/`while`. Labeled break/continue and
    `switch` remain out for now; for-each arrives with arrays (stage 4).
-3. Static methods with parameters and returns (user-defined), recursion.
+3. ~~Static methods with parameters and returns (user-defined), recursion.~~
+   **Done (2026-07-02)** — verified against OpenJDK 11 by the differential
+   suite (`crates/jvmjs-vm/tests/differential.rs`), which runs identical
+   programs through `javac`+`java` and jvmjs and requires byte-identical
+   stdout.
 4. Arrays (1D, then 2D), `for-each`.
 5. Objects: fields, constructors, `new`, instance methods, `this`.
 6. Inheritance: `extends`, `super`, overriding, polymorphic dispatch;

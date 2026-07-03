@@ -26,33 +26,205 @@ use crate::ast::{
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
-/// Generate class files for every class in the unit. Diagnostics and
-/// classes are both returned; callers treat any error diagnostic as
-/// failing the compilation.
+/// Generate class files for every class across all parsed units.
+/// Method calls resolve against every class in the compilation, so the
+/// signature table is built first. Diagnostics and classes are both
+/// returned; callers treat any error diagnostic as failing the
+/// compilation.
 #[must_use]
-pub fn generate(path: &str, unit: &CompilationUnit) -> (Vec<CompiledClass>, Vec<Diagnostic>) {
+pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let classes = unit
-        .classes
-        .iter()
-        .map(|class| CompiledClass {
-            binary_name: class.name.clone(),
-            class_file: emit_class(path, &mut diagnostics, class),
-        })
-        .collect();
+    let table = MethodTable::build(units, &mut diagnostics);
+
+    let mut classes = Vec::new();
+    for (path, unit) in units {
+        for class in &unit.classes {
+            classes.push(CompiledClass {
+                binary_name: class.name.clone(),
+                class_file: emit_class(path, &mut diagnostics, &table, class),
+            });
+        }
+    }
     (classes, diagnostics)
 }
 
-fn emit_class(path: &str, diagnostics: &mut Vec<Diagnostic>, decl: &ClassDecl) -> ClassFile {
+fn emit_class(
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+    table: &MethodTable,
+    decl: &ClassDecl,
+) -> ClassFile {
     let mut class = ClassFile::new_java11();
     class.this_class = intern_class(&mut class.constant_pool, &decl.name);
     class.super_class = intern_class(&mut class.constant_pool, "java/lang/Object");
 
     for method in &decl.methods {
-        let compiled = emit_method(path, diagnostics, &mut class.constant_pool, method);
+        let compiled = emit_method(
+            path,
+            diagnostics,
+            table,
+            &decl.name,
+            &mut class.constant_pool,
+            method,
+        );
         class.methods.push(compiled);
     }
     class
+}
+
+/// One method signature, as seen by call resolution.
+#[derive(Debug, Clone)]
+struct MethodSig {
+    name: String,
+    params: Vec<JType>,
+    /// `None` is `void`.
+    ret: Option<JType>,
+    is_static: bool,
+}
+
+impl MethodSig {
+    fn describe(&self) -> String {
+        let params: Vec<&str> = self.params.iter().map(|p| p.describe()).collect();
+        format!("{}({})", self.name, params.join(","))
+    }
+
+    fn descriptor(&self) -> String {
+        let mut out = String::from("(");
+        for param in &self.params {
+            out.push_str(param.descriptor());
+        }
+        out.push(')');
+        match self.ret {
+            None => out.push('V'),
+            Some(ty) => out.push_str(ty.descriptor()),
+        }
+        out
+    }
+}
+
+/// All method signatures in the compilation, keyed by class name.
+struct MethodTable {
+    classes: std::collections::HashMap<String, Vec<MethodSig>>,
+}
+
+/// Outcome of static overload resolution (JLS §15.12.2, without boxing
+/// or varargs).
+enum Resolution<'t> {
+    Found(&'t MethodSig),
+    /// No method of that name exists in the class.
+    UnknownName,
+    /// Methods of that name exist, but none accept these arguments.
+    NoneApplicable,
+    /// Several maximally specific methods match.
+    Ambiguous(Vec<String>),
+}
+
+impl MethodTable {
+    fn build(units: &[(String, CompilationUnit)], diagnostics: &mut Vec<Diagnostic>) -> Self {
+        let mut classes: std::collections::HashMap<String, Vec<MethodSig>> =
+            std::collections::HashMap::new();
+        for (path, unit) in units {
+            for class in &unit.classes {
+                let methods = classes.entry(class.name.clone()).or_default();
+                for method in &class.methods {
+                    let sig = MethodSig {
+                        name: method.name.clone(),
+                        params: method
+                            .params
+                            .iter()
+                            .map(|p| type_from_ref(&p.ty).unwrap_or(JType::Unsupported))
+                            .collect(),
+                        ret: match &method.return_type {
+                            TypeRef::Void => None,
+                            other => Some(type_from_ref(other).unwrap_or(JType::Unsupported)),
+                        },
+                        is_static: method.is_static,
+                    };
+                    if methods
+                        .iter()
+                        .any(|m| m.name == sig.name && m.params == sig.params)
+                    {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            format!(
+                                "method {} is already defined in class {}",
+                                sig.describe(),
+                                class.name
+                            ),
+                            method.span,
+                        ));
+                    } else {
+                        methods.push(sig);
+                    }
+                }
+            }
+        }
+        Self { classes }
+    }
+
+    fn has_class(&self, name: &str) -> bool {
+        self.classes.contains_key(name)
+    }
+
+    /// Resolve `class.name(args)`: applicable-by-widening, exact match
+    /// first, then the unique most-specific method.
+    fn resolve(&self, class: &str, name: &str, args: &[JType]) -> Resolution<'_> {
+        let Some(methods) = self.classes.get(class) else {
+            return Resolution::UnknownName;
+        };
+        let named: Vec<&MethodSig> = methods.iter().filter(|m| m.name == name).collect();
+        if named.is_empty() {
+            return Resolution::UnknownName;
+        }
+        let applicable: Vec<&MethodSig> = named
+            .iter()
+            .copied()
+            .filter(|m| {
+                m.params.len() == args.len()
+                    && m.params.iter().zip(args).all(|(p, a)| widens(*a, *p))
+            })
+            .collect();
+        match applicable.len() {
+            0 => Resolution::NoneApplicable,
+            1 => Resolution::Found(applicable[0]),
+            _ => {
+                if let Some(exact) = applicable
+                    .iter()
+                    .find(|m| m.params.iter().zip(args).all(|(p, a)| p == a))
+                {
+                    return Resolution::Found(exact);
+                }
+                let most_specific: Vec<&MethodSig> = applicable
+                    .iter()
+                    .copied()
+                    .filter(|m| {
+                        applicable.iter().all(|other| {
+                            m.params
+                                .iter()
+                                .zip(&other.params)
+                                .all(|(a, b)| widens(*a, *b))
+                        })
+                    })
+                    .collect();
+                if most_specific.len() == 1 {
+                    Resolution::Found(most_specific[0])
+                } else {
+                    Resolution::Ambiguous(applicable.iter().map(|m| m.describe()).collect())
+                }
+            }
+        }
+    }
+}
+
+/// Method-invocation / assignment widening (JLS §5.3 without boxing).
+fn widens(from: JType, to: JType) -> bool {
+    from == to
+        || matches!(
+            (from, to),
+            (JType::Char, JType::Int)
+                | (JType::Int | JType::Char, JType::Double)
+                | (JType::Null, JType::Str)
+        )
 }
 
 /// The static type of an expression on the operand stack.
@@ -94,6 +266,20 @@ impl JType {
     fn width(self) -> u16 {
         if self == JType::Double { 2 } else { 1 }
     }
+
+    /// The JVM field descriptor for this type.
+    fn descriptor(self) -> &'static str {
+        match self {
+            JType::Int => "I",
+            JType::Double => "D",
+            JType::Boolean => "Z",
+            JType::Char => "C",
+            JType::Str | JType::Null => "Ljava/lang/String;",
+            // Only reachable for methods that already produced a
+            // diagnostic; the descriptor keeps the class file coherent.
+            JType::Unsupported | JType::Error => "Ljava/lang/Object;",
+        }
+    }
 }
 
 /// Binary numeric promotion (JLS §5.6.2), within the CSA type set.
@@ -126,25 +312,27 @@ struct LocalVar {
 fn emit_method(
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
+    table: &MethodTable,
+    current_class: &str,
     pool: &mut ConstantPool,
     decl: &MethodDecl,
 ) -> MethodInfo {
+    let return_type = match &decl.return_type {
+        TypeRef::Void => None,
+        other => Some(type_from_ref(other).unwrap_or(JType::Unsupported)),
+    };
     let mut body = BodyGen {
         path,
         diagnostics,
         pool,
+        table,
+        current_class,
+        return_type,
         code: CodeBuilder::new(),
         scopes: vec![Vec::new()],
         next_slot: u16::from(!decl.is_static),
         loop_stack: Vec::new(),
     };
-
-    if decl.return_type != TypeRef::Void {
-        body.error(
-            decl.span,
-            "methods that return a value are not yet supported by jvmjs",
-        );
-    }
 
     for param in &decl.params {
         let ty = type_from_ref(&param.ty).unwrap_or(JType::Unsupported);
@@ -163,6 +351,13 @@ fn emit_method(
 
     for stmt in &decl.body {
         body.statement(stmt);
+    }
+    // javac-style missing-return check: a non-void method whose body
+    // can complete normally is an error (JLS §8.4.7).
+    if !matches!(body.return_type, None | Some(JType::Error))
+        && block_completes_normally(&decl.body)
+    {
+        body.error(decl.span, "missing return statement");
     }
     body.code.push_op(op::RETURN, 0);
 
@@ -249,6 +444,75 @@ fn method_descriptor(path: &str, diagnostics: &mut Vec<Diagnostic>, decl: &Metho
     descriptor
 }
 
+/// Reachability-lite (JLS §14.21): whether a statement can complete
+/// normally, used for the missing-return check. Conservative on
+/// non-constant loop conditions, exact on the patterns students write
+/// (`while (true)` without `break` does not complete).
+fn stmt_completes_normally(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => false,
+        Stmt::Block(statements) => block_completes_normally(statements),
+        Stmt::If {
+            then,
+            els: Some(els),
+            ..
+        } => stmt_completes_normally(then) || stmt_completes_normally(els),
+        // (An `if` without `else` falls through to `true` below: the
+        // condition may be false.)
+        // A constant-true loop only completes via `break`.
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
+            !is_true_literal(cond) || has_direct_break(body)
+        }
+        Stmt::For { cond, body, .. } => match cond {
+            Some(cond) if !is_true_literal(cond) => true,
+            // `for (;;)` or `for (; true;)`.
+            _ => has_direct_break(body),
+        },
+        _ => true,
+    }
+}
+
+fn block_completes_normally(statements: &[Stmt]) -> bool {
+    statements.iter().all(stmt_completes_normally)
+}
+
+fn is_true_literal(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Literal {
+            value: Literal::Bool(true),
+            ..
+        }
+    )
+}
+
+/// Whether a loop body contains a `break` binding to THAT loop (nested
+/// loops keep their own breaks).
+fn has_direct_break(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Break { .. } => true,
+        Stmt::Block(statements) => statements.iter().any(has_direct_break),
+        Stmt::If { then, els, .. } => {
+            has_direct_break(then) || els.as_deref().is_some_and(has_direct_break)
+        }
+        _ => false,
+    }
+}
+
+/// What a method call's receiver refers to.
+enum CallTarget {
+    /// `System.out` / `System.err`.
+    Stream(&'static str),
+    /// Static methods of the named class (bare calls target the
+    /// current class).
+    Static(String),
+}
+
+fn describe_types(types: &[JType]) -> String {
+    let names: Vec<&str> = types.iter().map(|t| t.describe()).collect();
+    names.join(",")
+}
+
 /// Break/continue targets for the innermost enclosing loop.
 #[derive(Clone, Copy)]
 struct LoopLabels {
@@ -261,6 +525,10 @@ struct BodyGen<'a> {
     path: &'a str,
     diagnostics: &'a mut Vec<Diagnostic>,
     pool: &'a mut ConstantPool,
+    table: &'a MethodTable,
+    current_class: &'a str,
+    /// Declared return type; `None` is `void`.
+    return_type: Option<JType>,
     code: CodeBuilder,
     /// Lexical scopes (innermost last); Java forbids shadowing locals,
     /// so declaration checks search all of them.
@@ -339,6 +607,36 @@ impl BodyGen<'_> {
                 }
                 None => self.error(*span, "'continue' can only be used inside a loop"),
             },
+            Stmt::Return { value, span } => self.return_statement(value.as_ref(), *span),
+        }
+    }
+
+    fn return_statement(&mut self, value: Option<&Expr>, span: SourceSpan) {
+        match (self.return_type, value) {
+            (None, None) => self.code.push_op(op::RETURN, 0),
+            (None, Some(value)) => {
+                self.expr(value);
+                self.error(
+                    value.span(),
+                    "incompatible types: unexpected return value (this method is void)",
+                );
+            }
+            (Some(expected), None) => {
+                if expected != JType::Error {
+                    self.error(span, "incompatible types: missing return value");
+                }
+            }
+            (Some(expected), Some(value)) => {
+                let actual = self.expr(value);
+                self.convert_for_assignment(actual, expected, value.span());
+                let opcode = match expected {
+                    JType::Double => op::DRETURN,
+                    JType::Str | JType::Null => op::ARETURN,
+                    _ => op::IRETURN,
+                };
+                self.code.push_op(opcode, 0);
+                self.code.drop_stack(expected.width());
+            }
         }
     }
 
@@ -645,26 +943,160 @@ impl BodyGen<'_> {
             return;
         };
 
-        let stream_field = receiver.as_deref().and_then(|r| match r {
-            Expr::Name { path, .. } => {
-                match path.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-                    ["System", "out"] => Some("out"),
-                    ["System", "err"] => Some("err"),
-                    _ => None,
+        match self.call_target(receiver.as_deref(), *span) {
+            None => {}
+            Some(CallTarget::Stream(stream)) => self.print_call(stream, method, args, *span),
+            Some(CallTarget::Static(class)) => {
+                // The result of a call statement (if any) is discarded.
+                if let Some(Some(ty)) = self.static_call(&class, method, args, *span) {
+                    let opcode = if ty.width() == 2 { op::POP2 } else { op::POP };
+                    self.code.push_op(opcode, 0);
+                    self.code.drop_stack(ty.width());
                 }
             }
-            _ => None,
-        });
-        let Some(stream_field) = stream_field else {
-            self.error(
-                *span,
-                "only calls on System.out and System.err are supported by jvmjs so far",
-            );
-            return;
+        }
+    }
+
+    /// Classify what a call's receiver refers to, reporting an error
+    /// for unsupported shapes.
+    fn call_target(&mut self, receiver: Option<&Expr>, _span: SourceSpan) -> Option<CallTarget> {
+        match receiver {
+            None => Some(CallTarget::Static(self.current_class.to_owned())),
+            Some(Expr::Name {
+                path,
+                span: receiver_span,
+            }) => match path.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+                ["System", "out"] => Some(CallTarget::Stream("out")),
+                ["System", "err"] => Some(CallTarget::Stream("err")),
+                [single] => {
+                    if self.lookup(single).is_some() {
+                        self.error(
+                            *receiver_span,
+                            "method calls on values are not yet supported by jvmjs \
+                             (objects arrive in a later stage)",
+                        );
+                        None
+                    } else if self.table.has_class(single) {
+                        Some(CallTarget::Static(single.to_owned()))
+                    } else {
+                        self.error(*receiver_span, format!("cannot find symbol: '{single}'"));
+                        None
+                    }
+                }
+                _ => {
+                    self.error(
+                        *receiver_span,
+                        "only System.out/System.err and ClassName.method(...) calls are \
+                         supported by jvmjs so far",
+                    );
+                    None
+                }
+            },
+            Some(other) => {
+                self.error(
+                    other.span(),
+                    "method calls on values are not yet supported by jvmjs \
+                     (objects arrive in a later stage)",
+                );
+                None
+            }
+        }
+    }
+
+    /// Resolve and emit a static method call. `None` means a
+    /// diagnostic was reported; `Some(ret)` is the method's return
+    /// type (`None` for void), with the value left on the stack.
+    #[allow(clippy::option_option)] // error / void / value are three distinct outcomes
+    fn static_call(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            // Emit the arguments so their own diagnostics surface.
+            for arg in args {
+                self.expr(arg);
+            }
+            return None;
+        }
+
+        let table = self.table;
+        let sig = match table.resolve(class, method, &arg_types) {
+            Resolution::Found(sig) => sig.clone(),
+            Resolution::UnknownName => {
+                self.error(
+                    span,
+                    format!(
+                        "cannot find symbol: method {method}({}) in class {class}",
+                        describe_types(&arg_types)
+                    ),
+                );
+                return None;
+            }
+            Resolution::NoneApplicable => {
+                self.error(
+                    span,
+                    format!(
+                        "no suitable method found for {method}({}) in class {class}",
+                        describe_types(&arg_types)
+                    ),
+                );
+                return None;
+            }
+            Resolution::Ambiguous(candidates) => {
+                self.error(
+                    span,
+                    format!(
+                        "reference to {method} is ambiguous: both method {} match",
+                        candidates.join(" and method ")
+                    ),
+                );
+                return None;
+            }
         };
+
+        if !sig.is_static {
+            self.error(
+                span,
+                format!(
+                    "non-static method {method}() cannot be referenced from a static context \
+                     (instance methods arrive with objects)"
+                ),
+            );
+            return None;
+        }
+        if sig.params.contains(&JType::Unsupported) || sig.ret == Some(JType::Unsupported) {
+            self.error(
+                span,
+                format!(
+                    "method {} uses types not yet supported by jvmjs",
+                    sig.describe()
+                ),
+            );
+            return None;
+        }
+
+        for (arg, param) in args.iter().zip(&sig.params) {
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, *param);
+        }
+        let method_ref = intern_method_ref(self.pool, class, method, &sig.descriptor());
+        let ret_width = sig.ret.map_or(0, JType::width);
+        self.code
+            .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
+        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
+        self.code.drop_stack(args_width);
+        Some(sig.ret)
+    }
+
+    /// `System.out.println(...)` and friends.
+    fn print_call(&mut self, stream: &'static str, method: &str, args: &[Expr], span: SourceSpan) {
         if method != "println" && method != "print" {
             self.error(
-                *span,
+                span,
                 format!("PrintStream.{method} is not supported by jvmjs (try print or println)"),
             );
             return;
@@ -673,15 +1105,15 @@ impl BodyGen<'_> {
         let field = intern_field_ref(
             self.pool,
             "java/lang/System",
-            stream_field,
+            stream,
             "Ljava/io/PrintStream;",
         );
         self.code.push_op_u16(op::GETSTATIC, field, 1);
 
-        let arg_descriptor = match &args[..] {
+        let arg_descriptor = match args {
             [] => {
                 if method == "print" {
-                    self.error(*span, "print() requires an argument (println() does not)");
+                    self.error(span, "print() requires an argument (println() does not)");
                     return;
                 }
                 String::from("()V")
@@ -694,7 +1126,7 @@ impl BodyGen<'_> {
                 }
             }
             _ => {
-                self.error(*span, "print/println take at most one argument");
+                self.error(span, "print/println take at most one argument");
                 return;
             }
         };
@@ -745,7 +1177,32 @@ impl BodyGen<'_> {
             Expr::Name { path, .. } if path.len() == 1 => {
                 self.lookup(&path[0]).map_or(JType::Error, |v| v.ty)
             }
-            Expr::Name { .. } | Expr::Call { .. } => JType::Error,
+            Expr::Name { .. } => JType::Error,
+            Expr::Call {
+                receiver,
+                method,
+                args,
+                ..
+            } => {
+                // Mirror emission-path resolution, silently.
+                let class = match receiver.as_deref() {
+                    None => self.current_class.to_owned(),
+                    Some(Expr::Name { path, .. })
+                        if path.len() == 1
+                            && self.lookup(&path[0]).is_none()
+                            && self.table.has_class(&path[0]) =>
+                    {
+                        path[0].clone()
+                    }
+                    _ => return JType::Error,
+                };
+                let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                let table = self.table;
+                match table.resolve(&class, method, &arg_types) {
+                    Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
+                    _ => JType::Error,
+                }
+            }
             Expr::Unary {
                 op: UnaryOp::Not, ..
             } => JType::Boolean,
@@ -782,13 +1239,31 @@ impl BodyGen<'_> {
         match expr {
             Expr::Literal { value, span } => self.literal(value, *span),
             Expr::Name { path, span } => self.name(path, *span),
-            Expr::Call { span, .. } => {
-                self.error(
-                    *span,
-                    "method calls that return a value are not yet supported by jvmjs",
-                );
-                JType::Error
-            }
+            Expr::Call {
+                receiver,
+                method,
+                args,
+                span,
+            } => match self.call_target(receiver.as_deref(), *span) {
+                None => JType::Error,
+                Some(CallTarget::Stream(_)) => {
+                    self.error(*span, "print/println do not return a value");
+                    JType::Error
+                }
+                Some(CallTarget::Static(class)) => {
+                    match self.static_call(&class, method, args, *span) {
+                        None => JType::Error,
+                        Some(Some(ty)) => ty,
+                        Some(None) => {
+                            self.error(
+                                *span,
+                                format!("'{method}' returns void, so it cannot be used as a value"),
+                            );
+                            JType::Error
+                        }
+                    }
+                }
+            },
             Expr::Unary { op, operand, span } => self.unary(*op, operand, *span),
             Expr::Cast { ty, operand, span } => self.cast(ty, operand, *span),
             Expr::Binary { op, lhs, rhs, span } => self.binary(*op, lhs, rhs, *span),
@@ -1596,7 +2071,7 @@ mod tests {
         assert!(lex_errors.is_empty(), "{lex_errors:?}");
         let (unit, parse_errors) = parse("Test.java", tokens);
         assert!(parse_errors.is_empty(), "{parse_errors:?}");
-        let (classes, errors) = generate("Test.java", &unit);
+        let (classes, errors) = generate(&[(String::from("Test.java"), unit)]);
         assert!(errors.is_empty(), "{errors:?}");
         classes
     }
@@ -1605,7 +2080,7 @@ mod tests {
         let (tokens, _) = lex("Test.java", source);
         let (unit, parse_errors) = parse("Test.java", tokens);
         assert!(parse_errors.is_empty(), "{parse_errors:?}");
-        let (_, errors) = generate("Test.java", &unit);
+        let (_, errors) = generate(&[(String::from("Test.java"), unit)]);
         errors
     }
 

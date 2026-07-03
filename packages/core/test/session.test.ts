@@ -178,6 +178,39 @@ public class Stage2 {
     expect(stdout.join('')).toBe('.x.x.x.x.x.x.x!\ncollatz(27) steps: 112\n');
   });
 
+  it('runs a stage-3 program: methods, recursion, overloads', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Stage3.java',
+        text: `
+public class Stage3 {
+    static int gcd(int a, int b) {
+        if (b == 0) return a;
+        return gcd(b, a % b);
+    }
+
+    static String pretty(int v) { return "int " + v; }
+    static String pretty(double v) { return "double " + v; }
+
+    public static void main(String[] args) {
+        System.out.println(gcd(1071, 462));
+        System.out.println(pretty(21));
+        System.out.println(pretty(21.0));
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Stage3', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('21\nint 21\ndouble 21.0\n');
+  });
+
   it('routes System.err to the stderr callback', async () => {
     const session = await createJvmSession();
     const compiled = session.compile([

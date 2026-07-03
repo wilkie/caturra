@@ -94,6 +94,28 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('1245');
   });
 
+  test('runs recursive methods in the browser', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'public class Main {',
+          '    static int fib(int n) {',
+          '        if (n < 2) return n;',
+          '        return fib(n - 1) + fib(n - 2);',
+          '    }',
+          '',
+          '    public static void main(String[] args) {',
+          '        System.out.println("fib(12) = " + fib(12));',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('fib(12) = 144');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page

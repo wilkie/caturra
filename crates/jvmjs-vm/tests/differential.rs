@@ -1,0 +1,300 @@
+//! Differential tests: run the same program through the installed JDK
+//! (`javac` + `java`) and through the jvmjs engine, and require
+//! identical stdout. This pins our semantics to the reference
+//! implementation rather than to our own expectations.
+//!
+//! Skips (with a note) when no JDK is installed, so CI without Java
+//! still passes; locally, `apt install openjdk-11-jdk` enables it.
+
+use std::io::Write;
+use std::process::Command;
+
+use jvmjs_vm::{BufferedConsole, VirtualFileSystem, Vm, VmOptions};
+
+fn jdk_available() -> bool {
+    Command::new("javac")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+        && Command::new("java")
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
+}
+
+/// Run `source` through javac+java, returning stdout.
+fn run_with_jdk(class_name: &str, source: &str) -> String {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("differential-{class_name}"));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let java_file = dir.join(format!("{class_name}.java"));
+    let mut file = std::fs::File::create(&java_file).expect("create source file");
+    file.write_all(source.as_bytes()).expect("write source");
+    drop(file);
+
+    let compile = Command::new("javac")
+        .arg(java_file.file_name().expect("file name"))
+        .current_dir(&dir)
+        .output()
+        .expect("javac runs");
+    assert!(
+        compile.status.success(),
+        "javac rejected {class_name}: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new("java")
+        .arg(class_name)
+        .current_dir(&dir)
+        .output()
+        .expect("java runs");
+    assert!(
+        run.status.success(),
+        "java failed for {class_name}: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    String::from_utf8_lossy(&run.stdout).into_owned()
+}
+
+/// Run `source` through the jvmjs engine, returning stdout.
+fn run_with_jvmjs(class_name: &str, source: &str) -> String {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: format!("{class_name}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "jvmjs rejected {class_name}: {:?}",
+        compilation.diagnostics
+    );
+
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("class loads");
+    }
+    let result = vm.run_main(class_name, &[]);
+    assert!(
+        result.is_ok(),
+        "jvmjs run failed for {class_name}: {result:?}; stderr: {}",
+        console.stderr_text()
+    );
+    console.stdout_text()
+}
+
+fn assert_same_output(class_name: &str, source: &str) {
+    let expected = run_with_jdk(class_name, source);
+    let actual = run_with_jvmjs(class_name, source);
+    assert_eq!(
+        actual, expected,
+        "output diverges from the reference JDK for {class_name}"
+    );
+}
+
+macro_rules! differential_test {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            assert_same_output($class, $source);
+        }
+    };
+}
+
+differential_test!(
+    diff_arithmetic_and_formatting,
+    "DiffArith",
+    r"
+public class DiffArith {
+    public static void main(String[] args) {
+        System.out.println(7 / 2);
+        System.out.println(7 % 2);
+        System.out.println(-7 / 2);
+        System.out.println(-7 % 2);
+        System.out.println(7 / 2.0);
+        System.out.println(2147483647 + 1);
+        System.out.println(-2147483648);
+        System.out.println(2.0);
+        System.out.println(0.1 + 0.2);
+        System.out.println(10000000.0);
+        System.out.println(1.0 / 0.0);
+        System.out.println(-1.0 / 0.0);
+        System.out.println(0.0 / 0.0);
+        System.out.println(1.5 % 0.5);
+        System.out.println(-0.0);
+    }
+}
+"
+);
+
+differential_test!(
+    diff_comparisons_and_logic,
+    "DiffLogic",
+    r"
+public class DiffLogic {
+    public static void main(String[] args) {
+        double nan = 0.0 / 0.0;
+        System.out.println(nan == nan);
+        System.out.println(nan != nan);
+        System.out.println(nan < 1.0);
+        System.out.println(nan >= 1.0);
+        int zero = 0;
+        System.out.println(zero != 0 && 1 / zero > 0);
+        System.out.println(zero == 0 || 1 / zero > 0);
+        System.out.println(!(1 < 2));
+        System.out.println('a' < 'b');
+    }
+}
+"
+);
+
+differential_test!(
+    diff_string_concat,
+    "DiffConcat",
+    r#"
+public class DiffConcat {
+    public static void main(String[] args) {
+        int x = 42;
+        System.out.println("x = " + x);
+        System.out.println(1 + 2 + "a");
+        System.out.println("a" + 1 + 2);
+        System.out.println("d: " + 2.0 + ", c: " + 'q' + ", b: " + true);
+        String s = null;
+        System.out.println("null? " + s);
+        String t = "ab";
+        t += 'c';
+        t += 5;
+        t += 1.5;
+        System.out.println(t);
+        System.out.println("" + 'a' + 'b');
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_casts_and_char_arithmetic,
+    "DiffCasts",
+    r"
+public class DiffCasts {
+    public static void main(String[] args) {
+        System.out.println((int) 9.99);
+        System.out.println((int) -9.99);
+        System.out.println((char) 66);
+        System.out.println((double) 5);
+        System.out.println('a' + 1);
+        System.out.println((char) ('a' + 1));
+        char c = 'z';
+        c++;
+        System.out.println(c);
+        int big = 70000;
+        System.out.println((int) (char) big);
+        double d = 1e10;
+        System.out.println((int) d);
+    }
+}
+"
+);
+
+differential_test!(
+    diff_control_flow,
+    "DiffFlow",
+    r#"
+public class DiffFlow {
+    public static void main(String[] args) {
+        for (int i = 1; i <= 15; i++) {
+            if (i % 15 == 0) System.out.println("FizzBuzz");
+            else if (i % 3 == 0) System.out.println("Fizz");
+            else if (i % 5 == 0) System.out.println("Buzz");
+            else System.out.println(i);
+        }
+        int n = 3;
+        do { System.out.println(n); n--; } while (n > 0);
+        for (int i = 0; i < 10; i++) {
+            if (i % 2 == 0) continue;
+            if (i > 6) break;
+            System.out.println(i);
+        }
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_methods_and_recursion,
+    "DiffMethods",
+    r#"
+public class DiffMethods {
+    static int factorial(int n) {
+        if (n <= 1) return 1;
+        return n * factorial(n - 1);
+    }
+
+    static double average(int a, int b) {
+        return (a + b) / 2.0;
+    }
+
+    static String shout(String s) { return s + "!"; }
+
+    static void tick() { System.out.println("tick"); }
+
+    public static void main(String[] args) {
+        System.out.println(factorial(12));
+        System.out.println(average(3, 4));
+        System.out.println(shout(shout("hey")));
+        tick();
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_overload_resolution,
+    "DiffOverload",
+    r#"
+public class DiffOverload {
+    static String f(int v) { return "int:" + v; }
+    static String f(double v) { return "double:" + v; }
+
+    public static void main(String[] args) {
+        System.out.println(f(1));
+        System.out.println(f(1.0));
+        System.out.println(f('a'));
+        char c = 'b';
+        System.out.println(f(c));
+        System.out.println(f(1 + 1));
+        System.out.println(f(1 / 2));
+        System.out.println(f(1 / 2.0));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_compound_assignment_narrowing,
+    "DiffCompound",
+    r"
+public class DiffCompound {
+    public static void main(String[] args) {
+        int x = 7;
+        x += 0.9;
+        System.out.println(x);
+        x *= 2.5;
+        System.out.println(x);
+        char c = 'a';
+        c += 2;
+        System.out.println(c);
+        double d = 10;
+        d /= 4;
+        System.out.println(d);
+        int wrap = 2000000000;
+        wrap += wrap;
+        System.out.println(wrap);
+    }
+}
+"
+);

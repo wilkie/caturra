@@ -34,7 +34,6 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
 fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
     match keyword {
         Keyword::Else => Some("'else' without a matching 'if'"),
-        Keyword::Return => Some("return statements are not yet supported by jvmjs"),
         Keyword::Switch => Some("switch statements are not yet supported by jvmjs"),
         Keyword::Try | Keyword::Throw => Some("exception handling is not yet supported by jvmjs"),
         Keyword::Var => Some("'var' is not supported by jvmjs; write the type explicitly"),
@@ -464,6 +463,9 @@ impl Parser<'_> {
             Some(TokenKind::Keyword(Keyword::Break | Keyword::Continue)) => {
                 return self.break_or_continue().map(Some);
             }
+            Some(TokenKind::Keyword(Keyword::Return)) => {
+                return self.return_statement().map(Some);
+            }
             _ => {}
         }
 
@@ -688,6 +690,18 @@ impl Parser<'_> {
             body,
             span: start,
         })
+    }
+
+    fn return_statement(&mut self) -> Parsed<Stmt> {
+        let span = self.here();
+        self.pos += 1; // 'return'
+        let value = if self.at_symbol(";") {
+            None
+        } else {
+            Some(self.expression()?)
+        };
+        self.expect_symbol(";", "to end the return statement")?;
+        Ok(Stmt::Return { value, span })
     }
 
     fn break_or_continue(&mut self) -> Parsed<Stmt> {
