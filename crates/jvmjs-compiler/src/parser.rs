@@ -297,6 +297,28 @@ impl Parser<'_> {
         CompilationUnit { imports, classes }
     }
 
+    /// Whether the cursor sits on `Ident (. Ident)+` followed by an
+    /// identifier or `<...>` — a fully qualified declaration.
+    fn at_qualified_declaration(&self) -> bool {
+        if !matches!(self.peek(), Some(TokenKind::Identifier(_))) {
+            return false;
+        }
+        let mut i = 1;
+        let mut segments = 1;
+        while matches!(self.peek_at(i), Some(TokenKind::Symbol(".")))
+            && matches!(self.peek_at(i + 1), Some(TokenKind::Identifier(_)))
+        {
+            i += 2;
+            segments += 1;
+        }
+        if segments < 2 {
+            return false;
+        }
+        matches!(self.peek_at(i), Some(TokenKind::Identifier(_)))
+            || (matches!(self.peek_at(i), Some(TokenKind::Symbol("<")))
+                && matches!(self.peek_at(i + 1), Some(TokenKind::Identifier(_))))
+    }
+
     /// `import a.b.C;` or `import a.b.*;`.
     fn import_decl(&mut self) -> Parsed<ImportDecl> {
         let start = self.here();
@@ -580,6 +602,13 @@ impl Parser<'_> {
         if self.eat_keyword(Keyword::Throws) {
             loop {
                 self.expect_ident("after 'throws'")?;
+                // Qualified exception names: `throws java.io.IOException`.
+                while self.at_symbol(".")
+                    && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
+                {
+                    self.pos += 1;
+                    self.expect_ident("in the qualified exception")?;
+                }
                 if !self.eat_symbol(",") {
                     break;
                 }
@@ -630,7 +659,16 @@ impl Parser<'_> {
                 return Err(Abort);
             }
             Some(TokenKind::Identifier(_)) => {
-                let (name, _) = self.expect_ident("for the type")?;
+                let (mut name, _) = self.expect_ident("for the type")?;
+                // Fully qualified names: `java.util.Scanner`.
+                while self.at_symbol(".")
+                    && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
+                {
+                    self.pos += 1;
+                    let (segment, _) = self.expect_ident("in the qualified type")?;
+                    name.push('.');
+                    name.push_str(&segment);
+                }
                 if self.at_symbol("<") {
                     self.pos += 1;
                     let mut args = Vec::new();
@@ -1033,6 +1071,10 @@ impl Parser<'_> {
                 && matches!(self.peek_at(1), Some(TokenKind::Symbol("<")))
                 && matches!(self.peek_at(2), Some(TokenKind::Identifier(_)))
                 && matches!(self.peek_at(3), Some(TokenKind::Symbol(">"))))
+            // Fully qualified declarations: `java.util.Scanner sc = ...`
+            // (scan `Ident (. Ident)+`, then an identifier or generic
+            // arguments means a declaration, not an expression).
+            || self.at_qualified_declaration()
     }
 
     /// The assignment operator at the cursor, if any: `Some(None)` for
@@ -1391,7 +1433,16 @@ impl Parser<'_> {
                 TypeRef::Char
             }
             Some(TokenKind::Identifier(_)) => {
-                let (name, _) = self.expect_ident("after 'new'")?;
+                let (mut name, _) = self.expect_ident("after 'new'")?;
+                // `new java.util.Scanner(...)` — fully qualified.
+                while self.at_symbol(".")
+                    && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
+                {
+                    self.pos += 1;
+                    let (segment, _) = self.expect_ident("in the qualified type")?;
+                    name.push('.');
+                    name.push_str(&segment);
+                }
                 TypeRef::Named(name)
             }
             _ => {

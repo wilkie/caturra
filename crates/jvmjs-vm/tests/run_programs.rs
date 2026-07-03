@@ -1663,6 +1663,18 @@ fn stage6_compile_errors_match_javac_wording() {
             "import java.awt.*; class M { }",
             "package java.awt is not supported by jvmjs",
         ),
+        (
+            "class M { static void f() { java.util.NotReal x = null; } }",
+            "cannot find symbol: class NotReal in package java.util",
+        ),
+        (
+            "class M { static void f() { foo.bar.Baz x = null; } }",
+            "package foo.bar does not exist",
+        ),
+        (
+            "class M { static void f() { java.util.HashMap x = null; } }",
+            "java.util.HashMap is not supported by jvmjs",
+        ),
     ];
     for (source, expected) in cases {
         let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
@@ -2516,6 +2528,80 @@ fn user_class_named_like_library_needs_no_import() {
         "Shadow",
     );
     assert_eq!(out, "homemade\n");
+}
+
+#[test]
+fn fully_qualified_names_need_no_import() {
+    let out = run_stdout(
+        r#"
+        public class Qualified {
+            public static void main(String[] args) throws java.io.IOException {
+                java.util.ArrayList<java.lang.Integer> nums =
+                    new java.util.ArrayList<Integer>();
+                nums.add(java.lang.Integer.parseInt("20"));
+                nums.add(java.lang.Math.max(1, 2));
+                java.io.PrintWriter out = new java.io.PrintWriter("q.txt");
+                for (int n : nums) out.println(n);
+                out.close();
+                java.util.Scanner in = new java.util.Scanner(new java.io.File("q.txt"));
+                int total = 0;
+                while (in.hasNextInt()) total += in.nextInt();
+                java.lang.System.out.println(total + java.lang.Integer.MAX_VALUE % 10);
+                java.lang.String label = "ok";
+                System.out.println(label.toUpperCase());
+            }
+        }
+        "#,
+        "Qualified",
+    );
+    assert_eq!(out, "29\nOK\n");
+}
+
+#[test]
+fn qualified_scanner_reads_stdin() {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "QIn.java".into(),
+        text: r"
+        public class QIn {
+            public static void main(String[] args) {
+                java.util.Scanner in = new java.util.Scanner(java.lang.System.in);
+                System.out.println(in.nextInt() * 2);
+            }
+        }
+        "
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::with_input(["21"]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    vm.run_main("QIn", &[]).unwrap();
+    assert_eq!(console.stdout_text(), "42\n");
+}
+
+#[test]
+fn local_variable_shadows_the_java_package() {
+    // Java's obscuring rules: a variable named `java` wins over the
+    // package, so `java.x` is a field access, not a qualified name.
+    let out = run_stdout(
+        r"
+        class Holder {
+            int x = 7;
+        }
+
+        public class Obscured {
+            public static void main(String[] args) {
+                Holder java = new Holder();
+                System.out.println(java.x);
+            }
+        }
+        ",
+        "Obscured",
+    );
+    assert_eq!(out, "7\n");
 }
 
 #[test]

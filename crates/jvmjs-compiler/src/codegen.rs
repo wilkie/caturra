@@ -771,12 +771,20 @@ impl MethodTable {
     /// array elements) to ids.
     fn resolve_type(&self, ty: &TypeRef) -> Option<JType> {
         match ty {
-            TypeRef::Named(name) if name != "String" => {
-                // User classes shadow the intrinsic names.
-                if let Some(id) = self.class_id(name) {
+            TypeRef::Named(name) => {
+                // `java.util.Scanner` and friends resolve without an
+                // import; qualified names never match user classes.
+                let simple = crate::imports::canonical_library_class(name).unwrap_or(name.as_str());
+                if simple == "String" {
+                    return Some(JType::Str);
+                }
+                // User classes shadow the intrinsic simple names.
+                if !name.contains('.')
+                    && let Some(id) = self.class_id(simple)
+                {
                     return Some(JType::Object(id));
                 }
-                match name.as_str() {
+                match simple {
                     "Scanner" => Some(JType::Scanner),
                     "File" => Some(JType::File),
                     "PrintWriter" => Some(JType::Writer),
@@ -784,7 +792,8 @@ impl MethodTable {
                 }
             }
             TypeRef::Generic { base, args } => {
-                if base == "ArrayList" && args.len() == 1 && !self.has_class(base) {
+                let simple = crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
                 } else {
                     None
@@ -924,14 +933,16 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
 /// (wrapper classes, String, or a user class).
 fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
     match arg {
-        TypeRef::Named(name) => match name.as_str() {
-            "Integer" => Some(ElemType::Int),
-            "Double" => Some(ElemType::Double),
-            "Boolean" => Some(ElemType::Boolean),
-            "Character" => Some(ElemType::Char),
-            "String" => Some(ElemType::Str),
-            other => table.class_id(other).map(ElemType::Object),
-        },
+        TypeRef::Named(name) => {
+            match crate::imports::canonical_library_class(name).unwrap_or(name.as_str()) {
+                "Integer" => Some(ElemType::Int),
+                "Double" => Some(ElemType::Double),
+                "Boolean" => Some(ElemType::Boolean),
+                "Character" => Some(ElemType::Char),
+                "String" => Some(ElemType::Str),
+                other => table.class_id(other).map(ElemType::Object),
+            }
+        }
         _ => None,
     }
 }
@@ -1380,22 +1391,26 @@ fn method_descriptor(
                 }
             }
             TypeRef::Named(name) => {
-                if name == "String" {
+                let simple = crate::imports::canonical_library_class(name).unwrap_or(name.as_str());
+                if simple == "String" {
                     out.push_str("Ljava/lang/String;");
-                } else if name == "Scanner" && !table.has_class(name) {
+                } else if simple == "Scanner" && !table.has_class(simple) {
                     out.push_str("Ljava/util/Scanner;");
-                } else if table.has_class(name) {
+                } else if simple == "File" && !table.has_class(simple) {
+                    out.push_str("Ljava/io/File;");
+                } else if simple == "PrintWriter" && !table.has_class(simple) {
+                    out.push_str("Ljava/io/PrintWriter;");
+                } else if !name.contains('.') && table.has_class(simple) {
                     out.push('L');
-                    out.push_str(name);
+                    out.push_str(simple);
                     out.push(';');
                 } else {
-                    // TODO(classlib): resolve simple names against the
-                    // class library once it exists.
-                    diagnostics.push(Diagnostic::error(
-                        path,
-                        format!("unknown type '{name}'"),
-                        span,
-                    ));
+                    let message = if name.contains('.') {
+                        crate::imports::unknown_qualified_message(name)
+                    } else {
+                        format!("unknown type '{name}'")
+                    };
+                    diagnostics.push(Diagnostic::error(path, message, span));
                     out.push_str("Ljava/lang/Object;");
                 }
             }
@@ -2073,6 +2088,22 @@ impl BodyGen<'_> {
             .push((name.to_owned(), descriptor, slot, start));
     }
 
+    /// `["java","lang","Math","abs"]` → `["Math","abs"]`: collapse a
+    /// fully qualified library prefix in a dotted name, unless a local
+    /// variable named `java` shadows the package (Java's obscuring
+    /// rules: variables win).
+    fn strip_package_prefix(&mut self, path: &[String]) -> Option<Vec<String>> {
+        if path.len() < 3 || path[0] != "java" || self.lookup("java").is_some() {
+            return None;
+        }
+        let dotted = format!("java.{}.{}", path[1], path[2]);
+        let simple = crate::imports::canonical_library_class(&dotted)?;
+        let mut short = Vec::with_capacity(path.len() - 2);
+        short.push(simple.to_owned());
+        short.extend_from_slice(&path[3..]);
+        Some(short)
+    }
+
     fn lookup(&mut self, name: &str) -> Option<&mut LocalVar> {
         self.scopes
             .iter_mut()
@@ -2350,6 +2381,9 @@ impl BodyGen<'_> {
     ) {
         let Some(var_ty) = self.table.resolve_type(ty) else {
             let what = match ty {
+                TypeRef::Named(name) if name.contains('.') => {
+                    crate::imports::unknown_qualified_message(name)
+                }
                 TypeRef::Named(name) => format!("unknown type '{name}'"),
                 TypeRef::Array(_) => String::from("arrays are not yet supported by jvmjs"),
                 _ => String::from("this type cannot be used for a variable"),
@@ -2878,6 +2912,8 @@ impl BodyGen<'_> {
 
     /// The static type of a `new` expression (pure).
     fn type_of_new_object(&mut self, class: &str, type_args: &[TypeRef]) -> JType {
+        let simple = crate::imports::canonical_library_class(class).unwrap_or(class);
+        let class = if class.contains('.') { simple } else { class };
         if let Some(id) = self.table.class_id(class) {
             return JType::Object(id);
         }
@@ -2894,6 +2930,7 @@ impl BodyGen<'_> {
     }
 
     /// `new ClassName(args)` (or an intrinsic: Scanner, `ArrayList`).
+    #[allow(clippy::too_many_lines)] // qualified-name + intrinsic dispatch
     fn new_object(
         &mut self,
         class_name: &str,
@@ -2901,6 +2938,18 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> JType {
+        // `new java.util.Scanner(...)`: resolve the qualified name (and
+        // reject unknown ones with javac's wording).
+        let class_name = if class_name.contains('.') {
+            if let Some(simple) = crate::imports::canonical_library_class(class_name) {
+                simple
+            } else {
+                self.error(span, crate::imports::unknown_qualified_message(class_name));
+                return JType::Error;
+            }
+        } else {
+            class_name
+        };
         if self.table.class_id(class_name).is_none() {
             match class_name {
                 "Scanner" => return self.new_scanner(args, span),
@@ -3001,7 +3050,10 @@ impl BodyGen<'_> {
         let reads_stdin = matches!(
             args,
             [Expr::Name { path, .. }]
-                if path.len() == 2 && path[0] == "System" && path[1] == "in"
+                if matches!(
+                    path.iter().map(String::as_str).collect::<Vec<_>>()[..],
+                    ["System", "in"] | ["java", "lang", "System", "in"]
+                )
         );
         let scanner_class = intern_class(self.pool, "java/util/Scanner");
         self.code.push_op_u16(op::NEW, scanner_class, 1);
@@ -3781,7 +3833,14 @@ impl BodyGen<'_> {
                     path,
                     span: receiver_span,
                 },
-            ) => match path.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+            ) => match self
+                .strip_package_prefix(path)
+                .as_deref()
+                .unwrap_or(path)
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()[..]
+            {
                 ["System", "out"] => Some(CallTarget::Stream("out")),
                 ["System", "err"] => Some(CallTarget::Stream("err")),
                 [single] => {
@@ -4044,6 +4103,13 @@ impl BodyGen<'_> {
                 Literal::Bool(_) => JType::Boolean,
                 Literal::Null => JType::Null,
             },
+            Expr::Name { path, span } if self.strip_package_prefix(path).is_some() => {
+                let short = self.strip_package_prefix(path).expect("checked in guard");
+                self.type_of(&Expr::Name {
+                    path: short,
+                    span: *span,
+                })
+            }
             Expr::Name { path, .. } if path.len() == 1 => {
                 if let Some(var) = self.lookup(&path[0]) {
                     return var.ty;
@@ -4126,10 +4192,16 @@ impl BodyGen<'_> {
                         path[0].clone()
                     }
                     Some(Expr::Name { path, .. })
-                        if path.len() == 1
-                            && self.lookup(&path[0]).is_none()
-                            && builtin_static_table(&path[0]).is_some() =>
+                        if {
+                            let short = self.strip_package_prefix(path);
+                            let effective = short.as_deref().unwrap_or(path);
+                            effective.len() == 1
+                                && self.lookup(&effective[0]).is_none()
+                                && builtin_static_table(&effective[0]).is_some()
+                        } =>
                     {
+                        let short = self.strip_package_prefix(path);
+                        let path = short.as_deref().unwrap_or(path);
                         // Intrinsic static (Math.abs, ...).
                         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                         let (_, methods) = builtin_static_table(&path[0]).expect("checked above");
@@ -4651,7 +4723,12 @@ impl BodyGen<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one resolution ladder, clearest linear
     fn name(&mut self, path: &[String], span: SourceSpan) -> JType {
+        // Fully qualified statics: java.lang.Integer.MAX_VALUE, ...
+        if let Some(short) = self.strip_package_prefix(path) {
+            return self.name(&short, span);
+        }
         // `a.length` parses as a dotted name; resolve it as array
         // length when `a` is an array-typed local.
         if path.len() == 2

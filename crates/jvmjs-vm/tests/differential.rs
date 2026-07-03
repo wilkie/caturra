@@ -819,6 +819,29 @@ public class DiffWild {
 );
 
 differential_test!(
+    diff_fully_qualified_names,
+    "DiffFq",
+    r#"
+public class DiffFq {
+    public static void main(String[] args) throws java.io.IOException {
+        java.util.ArrayList<java.lang.Integer> nums = new java.util.ArrayList<Integer>();
+        nums.add(java.lang.Math.max(3, 8));
+        nums.add(java.lang.Integer.parseInt("34"));
+        java.io.PrintWriter out = new java.io.PrintWriter("fq.txt");
+        for (int n : nums) out.println(n * 1.5);
+        out.close();
+        java.util.Scanner in = new java.util.Scanner(new java.io.File("fq.txt"));
+        double total = 0;
+        while (in.hasNextDouble()) total += in.nextDouble();
+        java.lang.System.out.println(total);
+        java.lang.String s = "qualified";
+        System.out.println(s.substring(0, 4).toUpperCase());
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

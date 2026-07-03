@@ -116,6 +116,51 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
 /// Library type names whose use requires an import.
 const REQUIRES_IMPORT: &[&str] = &["Scanner", "ArrayList", "File", "PrintWriter"];
 
+/// Resolve a fully qualified library name (`java.util.Scanner`) to the
+/// simple name the compiler models. Fully qualified uses never need an
+/// import — that is their purpose in Java.
+pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
+    let (package, class) = dotted.rsplit_once('.')?;
+    let known: &[&str] = match package {
+        "java.util" => &["Scanner", "ArrayList"],
+        "java.io" => &["File", "PrintWriter"],
+        "java.lang" => &[
+            "String",
+            "Math",
+            "Integer",
+            "Double",
+            "Boolean",
+            "Character",
+            "System",
+        ],
+        _ => return None,
+    };
+    known.iter().find(|name| **name == class).copied()
+}
+
+/// javac-style message for a fully qualified name the library doesn't
+/// model (honest "not supported" for real Java classes and packages).
+pub(crate) fn unknown_qualified_message(dotted: &str) -> String {
+    let Some((package, class)) = dotted.rsplit_once('.') else {
+        return format!("unknown type '{dotted}'");
+    };
+    if package_classes(package).is_some() {
+        if KNOWN_UNSUPPORTED
+            .iter()
+            .any(|(pkg, names)| *pkg == package && names.contains(&class))
+            || package_classes(package).is_some_and(|names| names.contains(&class))
+        {
+            // Real (or modeled-but-not-usable-here) Java class.
+            return not_supported(dotted);
+        }
+        return format!("cannot find symbol: class {class} in package {package}");
+    }
+    if KNOWN_UNSUPPORTED_PACKAGES.contains(&package) {
+        return not_supported(&format!("package {package}"));
+    }
+    format!("package {package} does not exist")
+}
+
 fn package_classes(package: &str) -> Option<&'static [&'static str]> {
     match package {
         "java.util" => Some(JAVA_UTIL),
@@ -243,6 +288,10 @@ fn check_class(
 
 impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
     fn name(&mut self, name: &str, span: SourceSpan) {
+        if name.contains('.') {
+            // Fully qualified: no import needed; codegen validates it.
+            return;
+        }
         if REQUIRES_IMPORT.contains(&name)
             && !self.user_classes.contains(name)
             && !self.enabled.contains(name)

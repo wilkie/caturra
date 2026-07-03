@@ -141,8 +141,14 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
     imports (`IOException`, ...) are accepted for `throws` clauses;
-    user-defined classes shadow library names. `package` remains
-    unsupported.
+    user-defined classes shadow library names. Fully qualified names
+    work without imports (2026-07-03): `java.util.Scanner` in type
+    positions (declarations, `new`, generics, `throws`) and
+    `java.lang.Math.abs(...)` / `java.lang.System.out.println(...)` /
+    `java.lang.Integer.MAX_VALUE` in expressions, with Java's obscuring
+    rule (a variable named `java` wins over the package). Unknown
+    qualified names get the same javac/honest wording as imports.
+    `package` declarations remain unsupported.
   - User classes shadow intrinsic names (a class called `Scanner` wins).
 
 - **File IO over the virtual filesystem** (stage 8): `new File(path)`
