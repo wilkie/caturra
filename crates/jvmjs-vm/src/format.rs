@@ -18,6 +18,7 @@ use crate::vm::VmError;
 #[derive(Debug, Clone, Copy)]
 pub enum FormatArg {
     Int(i32),
+    Long(i64),
     Double(f64),
     Char(u16),
     Boolean(bool),
@@ -30,6 +31,7 @@ impl FormatArg {
     fn java_class(self) -> &'static str {
         match self {
             FormatArg::Int(_) => "java.lang.Integer",
+            FormatArg::Long(_) => "java.lang.Long",
             FormatArg::Double(_) => "java.lang.Double",
             FormatArg::Char(_) => "java.lang.Character",
             FormatArg::Boolean(_) => "java.lang.Boolean",
@@ -247,6 +249,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Str(Some(reference)) => heap.string_text(reference).unwrap_or_default(),
                 FormatArg::Str(None) => String::from("null"),
                 FormatArg::Int(v) => v.to_string(),
+                FormatArg::Long(v) => v.to_string(),
                 FormatArg::Double(v) => crate::intrinsics::java_double_to_string(v),
                 FormatArg::Char(u) => char::from_u32(u32::from(u))
                     .unwrap_or('\u{FFFD}')
@@ -288,6 +291,9 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                     _ => reference.cast_signed(),
                 },
                 FormatArg::Int(v) => v,
+                FormatArg::Long(v) => (((v.cast_unsigned() ^ (v.cast_unsigned() >> 32))
+                    & 0xFFFF_FFFF) as u32)
+                    .cast_signed(),
                 FormatArg::Double(v) => crate::intrinsics::java_double_hash_public(v),
                 FormatArg::Char(u) => i32::from(u),
                 FormatArg::Boolean(b) => {
@@ -323,7 +329,8 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
         }
         'd' => {
             let value = match arg {
-                FormatArg::Int(v) => v,
+                FormatArg::Int(v) => i64::from(v),
+                FormatArg::Long(v) => v,
                 other => return Err(conversion_mismatch(conversion, other)),
             };
             let negative = value < 0;
@@ -347,7 +354,8 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
         }
         'o' | 'x' => {
             let value = match arg {
-                FormatArg::Int(v) => v.cast_unsigned(),
+                FormatArg::Int(v) => u64::from(v.cast_unsigned()),
+                FormatArg::Long(v) => v.cast_unsigned(),
                 other => return Err(conversion_mismatch(conversion, other)),
             };
             let mut text = match conversion.to_ascii_lowercase() {
@@ -664,7 +672,7 @@ pub fn args_from_descriptor(
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
         match c {
-            'I' | 'D' | 'C' | 'Z' => tags.push(c),
+            'I' | 'D' | 'C' | 'Z' | 'J' => tags.push(c),
             'L' => {
                 for inner_char in chars.by_ref() {
                     if inner_char == ';' {
@@ -683,6 +691,7 @@ pub fn args_from_descriptor(
             ('C', JValue::Int(v)) => FormatArg::Char(u16::try_from(*v).unwrap_or(0)),
             ('Z', JValue::Int(v)) => FormatArg::Boolean(*v != 0),
             ('D', JValue::Double(v)) => FormatArg::Double(*v),
+            ('J', JValue::Long(v)) => FormatArg::Long(*v),
             ('L', JValue::Ref(reference)) => FormatArg::Str(*reference),
             _ => {
                 return Err(VmError::UncaughtException(String::from(

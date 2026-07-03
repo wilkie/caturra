@@ -507,6 +507,8 @@ impl<'run> Interpreter<'run> {
                     match opcode {
                         op::NOP => {}
                         op::ACONST_NULL => frame.stack.push(JValue::NULL),
+                        op::LCONST_0 => frame.stack.push(JValue::Long(0)),
+                        op::LCONST_1 => frame.stack.push(JValue::Long(1)),
                         op::ICONST_M1..=op::ICONST_5 => {
                             let value = i32::from(opcode) - i32::from(op::ICONST_0);
                             frame.stack.push(JValue::Int(value));
@@ -533,7 +535,7 @@ impl<'run> Interpreter<'run> {
                         }
 
                         // ----- locals -----
-                        op::ILOAD | op::DLOAD | op::ALOAD => {
+                        op::ILOAD | op::DLOAD | op::ALOAD | op::LLOAD => {
                             let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
                             frame.load(slot, &malformed)?;
                         }
@@ -546,7 +548,10 @@ impl<'run> Interpreter<'run> {
                         op::ALOAD_0..=op::ALOAD_3 => {
                             frame.load(usize::from(opcode - op::ALOAD_0), &malformed)?;
                         }
-                        op::ISTORE | op::DSTORE | op::ASTORE => {
+                        op::LLOAD_0..=op::LLOAD_3 => {
+                            frame.load(usize::from(opcode - op::LLOAD_0), &malformed)?;
+                        }
+                        op::ISTORE | op::DSTORE | op::ASTORE | op::LSTORE => {
                             let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
                             frame.store(slot, &malformed)?;
                         }
@@ -558,6 +563,9 @@ impl<'run> Interpreter<'run> {
                         }
                         op::ASTORE_0..=op::ASTORE_3 => {
                             frame.store(usize::from(opcode - op::ASTORE_0), &malformed)?;
+                        }
+                        op::LSTORE_0..=op::LSTORE_3 => {
+                            frame.store(usize::from(opcode - op::LSTORE_0), &malformed)?;
                         }
 
                         // ----- stack manipulation -----
@@ -683,6 +691,46 @@ impl<'run> Interpreter<'run> {
                         op::IUSHR => frame.int_binop(|a, b| {
                             (a.cast_unsigned().wrapping_shr(b.cast_unsigned() & 0x1F)).cast_signed()
                         })?,
+                        op::LADD => frame.long_binop(i64::wrapping_add)?,
+                        op::LSUB => frame.long_binop(i64::wrapping_sub)?,
+                        op::LMUL => frame.long_binop(i64::wrapping_mul)?,
+                        op::LDIV => frame.long_division(i64::wrapping_div)?,
+                        op::LREM => frame.long_division(i64::wrapping_rem)?,
+                        op::LNEG => {
+                            let value = frame.pop_long()?;
+                            frame.stack.push(JValue::Long(value.wrapping_neg()));
+                        }
+                        op::LAND => frame.long_binop(|a, b| a & b)?,
+                        op::LOR => frame.long_binop(|a, b| a | b)?,
+                        op::LXOR => frame.long_binop(|a, b| a ^ b)?,
+                        // Long shift counts come from an int and mask
+                        // to six bits (JVMS).
+                        op::LSHL => {
+                            let count = frame.pop_int()?.cast_unsigned() & 0x3F;
+                            let value = frame.pop_long()?;
+                            frame.stack.push(JValue::Long(value.wrapping_shl(count)));
+                        }
+                        op::LSHR => {
+                            let count = frame.pop_int()?.cast_unsigned() & 0x3F;
+                            let value = frame.pop_long()?;
+                            frame.stack.push(JValue::Long(value.wrapping_shr(count)));
+                        }
+                        op::LUSHR => {
+                            let count = frame.pop_int()?.cast_unsigned() & 0x3F;
+                            let value = frame.pop_long()?;
+                            frame.stack.push(JValue::Long(
+                                value.cast_unsigned().wrapping_shr(count).cast_signed(),
+                            ));
+                        }
+                        op::LCMP => {
+                            let b = frame.pop_long()?;
+                            let a = frame.pop_long()?;
+                            frame.stack.push(JValue::Int(match a.cmp(&b) {
+                                std::cmp::Ordering::Less => -1,
+                                std::cmp::Ordering::Equal => 0,
+                                std::cmp::Ordering::Greater => 1,
+                            }));
+                        }
                         op::IAND => frame.int_binop(|a, b| a & b)?,
                         op::IOR => frame.int_binop(|a, b| a | b)?,
                         op::IXOR => frame.int_binop(|a, b| a ^ b)?,
@@ -705,6 +753,26 @@ impl<'run> Interpreter<'run> {
                             let value = frame.pop_double()?;
                             // `as` matches JVM d2i: NaN -> 0, saturating bounds.
                             frame.stack.push(JValue::Int(value as i32));
+                        }
+                        op::I2L => {
+                            let value = frame.pop_int()?;
+                            frame.stack.push(JValue::Long(i64::from(value)));
+                        }
+                        op::L2I => {
+                            let value = frame.pop_long()?;
+                            #[allow(clippy::cast_possible_truncation)]
+                            frame.stack.push(JValue::Int(value as i32));
+                        }
+                        op::L2D => {
+                            let value = frame.pop_long()?;
+                            #[allow(clippy::cast_precision_loss)]
+                            frame.stack.push(JValue::Double(value as f64));
+                        }
+                        op::D2L => {
+                            let value = frame.pop_double()?;
+                            // `as` matches JVM d2l: NaN -> 0, saturating.
+                            #[allow(clippy::cast_possible_truncation)]
+                            frame.stack.push(JValue::Long(value as i64));
                         }
                         op::I2C => {
                             let value = frame.pop_int()?;
@@ -975,6 +1043,7 @@ impl<'run> Interpreter<'run> {
                                 op::T_DOUBLE => {
                                     crate::value::HeapObject::DoubleArray(vec![0.0; length])
                                 }
+                                op::T_LONG => crate::value::HeapObject::LongArray(vec![0; length]),
                                 other => {
                                     return Err(malformed(format!(
                                         "unsupported newarray type {other}"
@@ -1019,6 +1088,7 @@ impl<'run> Interpreter<'run> {
                                 Some(crate::value::HeapObject::IntArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::RefArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::LongArray(v)) => v.len(),
                                 _ => {
                                     return Err(malformed(String::from(
                                         "arraylength on a non-array",
@@ -1040,6 +1110,16 @@ impl<'run> Interpreter<'run> {
                             };
                             let value = *array_get(values, index)?;
                             frame.stack.push(JValue::Int(value));
+                        }
+                        op::LALOAD => {
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::LongArray(values)) =
+                                self.heap.get(reference)
+                            else {
+                                return Err(malformed(String::from("laload on a non-long-array")));
+                            };
+                            let value = *array_get(values, index)?;
+                            frame.stack.push(JValue::Long(value));
                         }
                         op::DALOAD => {
                             let (reference, index) = frame.pop_array_access()?;
@@ -1084,6 +1164,16 @@ impl<'run> Interpreter<'run> {
                                 _ => value,
                             };
                         }
+                        op::LASTORE => {
+                            let value = frame.pop_long()?;
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::LongArray(values)) =
+                                self.heap.get_mut(reference)
+                            else {
+                                return Err(malformed(String::from("lastore on a non-long-array")));
+                            };
+                            *array_get_mut(values, index)? = value;
+                        }
                         op::DASTORE => {
                             let value = frame.pop_double()?;
                             let (reference, index) = frame.pop_array_access()?;
@@ -1110,7 +1200,7 @@ impl<'run> Interpreter<'run> {
                         }
 
                         op::RETURN => return Ok(Flow::Return(None)),
-                        op::IRETURN | op::DRETURN | op::ARETURN => {
+                        op::IRETURN | op::DRETURN | op::ARETURN | op::LRETURN => {
                             let value = frame.pop()?;
                             return Ok(Flow::Return(Some(value)));
                         }
@@ -1816,6 +1906,7 @@ impl<'run> Interpreter<'run> {
             let result = intrinsics::invoke_static(
                 &mut self.heap,
                 &mut self.rng,
+                self.console,
                 class_name,
                 method_name,
                 descriptor,
@@ -2100,6 +2191,7 @@ struct MethodCode {
 fn source_type_of(descriptor: &str) -> String {
     match descriptor {
         "I" => return String::from("int"),
+        "J" => return String::from("long"),
         "D" => return String::from("double"),
         "Z" => return String::from("boolean"),
         "C" => return String::from("char"),
@@ -2254,6 +2346,34 @@ impl Frame<'_> {
                 "java.lang.VerifyError: expected an int on the stack, found {other:?}"
             ))),
         }
+    }
+
+    fn pop_long(&mut self) -> Result<i64, VmError> {
+        match self.pop()? {
+            JValue::Long(value) => Ok(value),
+            other => Err(VmError::UncaughtException(format!(
+                "java.lang.VerifyError: expected a long on the stack, found {other:?}"
+            ))),
+        }
+    }
+
+    fn long_binop(&mut self, apply: impl Fn(i64, i64) -> i64) -> Result<(), VmError> {
+        let b = self.pop_long()?;
+        let a = self.pop_long()?;
+        self.stack.push(JValue::Long(apply(a, b)));
+        Ok(())
+    }
+
+    fn long_division(&mut self, apply: impl Fn(i64, i64) -> i64) -> Result<(), VmError> {
+        let b = self.pop_long()?;
+        let a = self.pop_long()?;
+        if b == 0 {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.ArithmeticException: / by zero",
+            )));
+        }
+        self.stack.push(JValue::Long(apply(a, b)));
+        Ok(())
     }
 
     fn pop_double(&mut self) -> Result<f64, VmError> {

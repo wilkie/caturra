@@ -659,15 +659,15 @@ test.describe('playground', () => {
       [
         'public class Main {',
         '    public static void main(String[] args) {',
-        '        long big = 5000000000L;',
-        '        System.out.println(big);',
+        '        float ratio = 0.5f;',
+        '        System.out.println(ratio);',
         '    }',
         '}',
       ].join('\n'),
     );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
-      'only int, double, boolean, and char primitives are supported',
+      'the float type is not yet supported by jvmjs',
     );
   });
 });

@@ -247,6 +247,21 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   (`0x1F`), binary (`0b1010`), octal (`0755`), and underscore
   (`1_000_000`) integer literals and `\uXXXX` escapes.
 
+- **The `long` type** (2026-07-03): literals with `L` (decimal and
+  hex/binary up to 64 bits) and `d`/`D` double suffixes, JLS numeric
+  promotion (int op long → long, long op double → double), implicit
+  int→long and long→double widening with javac's lossy-conversion
+  errors the other way, explicit casts in every direction, the full
+  arithmetic/bitwise/shift set (six-bit shift-count masking, `LCMP`
+  comparisons, wrapping overflow), `long[]` arrays, `++`/`--`,
+  compound-assignment narrowing (`int += long`), switch-selector
+  rejection in javac's wording, `%d`/`%x` formatting, concat and
+  println, the `Long` wrapper class, `Math`/`Double` long members
+  (`toIntExact`, `multiplyHigh`, `doubleToLongBits` family — formerly
+  honest-error stubs, now real), `Scanner.nextLong`, and
+  `System.currentTimeMillis`/`nanoTime` via a host clock
+  (`ConsoleIo::now_millis`; JS `Date.now()` in the browser).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

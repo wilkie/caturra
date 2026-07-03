@@ -13,6 +13,7 @@ pub enum TokenKind {
     Identifier(String),
     Keyword(Keyword),
     IntLiteral(i64),
+    LongLiteral(i64),
     DoubleLiteral(f64),
     StringLiteral(String),
     CharLiteral(char),
@@ -292,6 +293,7 @@ impl Lexer<'_> {
         self.push(kind, start);
     }
 
+    #[allow(clippy::too_many_lines)] // one literal grammar
     fn number(&mut self, start: SourcePosition) {
         // Hex, binary, and octal integer literals (with underscores).
         // Java's rules: `0x1F`, `0b1010`, and a leading zero followed
@@ -315,7 +317,26 @@ impl Lexer<'_> {
                 {
                     digits.push(self.bump().expect("peeked"));
                 }
-                let cleaned = digits.replace('_', "");
+                let mut cleaned = digits.replace('_', "");
+                let is_long = cleaned.ends_with('L') || cleaned.ends_with('l');
+                if is_long {
+                    cleaned.pop();
+                }
+                if is_long {
+                    // Long literals may fill all 64 bits.
+                    match u64::from_str_radix(&cleaned, radix) {
+                        Ok(value) => {
+                            self.push(TokenKind::LongLiteral(value.cast_signed()), start);
+                        }
+                        Err(_) => {
+                            self.error(
+                                format!("integer literal '0{digits}' is malformed or out of range"),
+                                start,
+                            );
+                        }
+                    }
+                    return;
+                }
                 // Hex/binary literals may fill all 32 bits (0xFFFFFFFF
                 // is -1); parse unsigned then reinterpret.
                 match u32::from_str_radix(&cleaned, radix) {
@@ -363,8 +384,35 @@ impl Lexer<'_> {
                 }
             }
         }
+        // Type suffixes: L (long), d/D (double), f/F (float — not yet
+        // a supported type).
+        let mut force_long = false;
+        match self.peek() {
+            Some('L' | 'l') if !is_double => {
+                self.bump();
+                force_long = true;
+            }
+            Some('d' | 'D') => {
+                self.bump();
+                is_double = true;
+            }
+            Some('f' | 'F') => {
+                self.bump();
+                self.error(
+                    "the float type is not yet supported by jvmjs (use double)",
+                    start,
+                );
+                return;
+            }
+            _ => {}
+        }
         let digits = digits.replace('_', "");
-        if is_double {
+        if force_long {
+            match digits.parse::<i64>() {
+                Ok(value) => self.push(TokenKind::LongLiteral(value), start),
+                Err(_) => self.error(format!("integer literal '{digits}' is out of range"), start),
+            }
+        } else if is_double {
             match digits.parse::<f64>() {
                 Ok(value) => self.push(TokenKind::DoubleLiteral(value), start),
                 Err(_) => self.error(format!("invalid floating-point literal '{digits}'"), start),

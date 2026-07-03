@@ -647,12 +647,14 @@ impl Parser<'_> {
                 self.pos += 1;
                 TypeRef::Char
             }
-            Some(TokenKind::Keyword(
-                Keyword::Long | Keyword::Float | Keyword::Byte | Keyword::Short,
-            )) => {
+            Some(TokenKind::Keyword(Keyword::Long)) => {
+                self.pos += 1;
+                TypeRef::Long
+            }
+            Some(TokenKind::Keyword(Keyword::Float | Keyword::Byte | Keyword::Short)) => {
                 self.error_here(
-                    "only int, double, boolean, and char primitives are supported by jvmjs \
-                     (matching the CSA subset)",
+                    "the float, byte, and short primitives are not yet supported by jvmjs \
+                     (int, long, double, boolean, and char are)",
                 );
                 return Err(Abort);
             }
@@ -1524,7 +1526,11 @@ impl Parser<'_> {
             && matches!(
                 self.peek_at(1),
                 Some(TokenKind::Keyword(
-                    Keyword::Int | Keyword::Double | Keyword::Boolean | Keyword::Char
+                    Keyword::Int
+                        | Keyword::Double
+                        | Keyword::Boolean
+                        | Keyword::Char
+                        | Keyword::Long
                 ))
             )
             && matches!(self.peek_at(2), Some(TokenKind::Symbol(")")))
@@ -1692,6 +1698,10 @@ impl Parser<'_> {
                 self.pos += 1;
                 TypeRef::Char
             }
+            Some(TokenKind::Keyword(Keyword::Long)) => {
+                self.pos += 1;
+                TypeRef::Long
+            }
             Some(TokenKind::Identifier(_)) => {
                 let (mut name, _) = self.expect_ident("after 'new'")?;
                 // `new java.util.Scanner(...)` — fully qualified.
@@ -1851,6 +1861,11 @@ impl Parser<'_> {
         match self.peek() {
             Some(TokenKind::IntLiteral(v)) => {
                 let value = Literal::Int(*v);
+                self.pos += 1;
+                Ok(Expr::Literal { value, span })
+            }
+            Some(TokenKind::LongLiteral(v)) => {
+                let value = Literal::Long(*v);
                 self.pos += 1;
                 Ok(Expr::Literal { value, span })
             }

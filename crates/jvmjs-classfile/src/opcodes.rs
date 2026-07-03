@@ -83,6 +83,36 @@ pub const DREM: u8 = 0x73;
 pub const INEG: u8 = 0x74;
 pub const DNEG: u8 = 0x77;
 
+// Long constants, loads, stores.
+pub const LCONST_0: u8 = 0x09;
+pub const LCONST_1: u8 = 0x0A;
+pub const LLOAD: u8 = 0x16;
+pub const LLOAD_0: u8 = 0x1E;
+pub const LLOAD_3: u8 = 0x21;
+pub const LSTORE: u8 = 0x37;
+pub const LSTORE_0: u8 = 0x3F;
+pub const LSTORE_3: u8 = 0x42;
+pub const LALOAD: u8 = 0x2F;
+pub const LASTORE: u8 = 0x50;
+pub const SALOAD: u8 = 0x35;
+pub const SASTORE: u8 = 0x56;
+
+// Long arithmetic.
+pub const LADD: u8 = 0x61;
+pub const LSUB: u8 = 0x65;
+pub const LMUL: u8 = 0x69;
+pub const LDIV: u8 = 0x6D;
+pub const LREM: u8 = 0x71;
+pub const LNEG: u8 = 0x75;
+pub const LSHL: u8 = 0x79;
+pub const LSHR: u8 = 0x7B;
+pub const LUSHR: u8 = 0x7D;
+pub const LAND: u8 = 0x7F;
+pub const LOR: u8 = 0x81;
+pub const LXOR: u8 = 0x83;
+pub const LCMP: u8 = 0x94;
+pub const LRETURN: u8 = 0xAD;
+
 // Bitwise and shifts (int).
 pub const ISHL: u8 = 0x78;
 pub const ISHR: u8 = 0x7A;
@@ -92,8 +122,12 @@ pub const IOR: u8 = 0x80;
 pub const IXOR: u8 = 0x82;
 
 // Numeric conversions.
+pub const I2L: u8 = 0x85;
 pub const I2D: u8 = 0x87;
+pub const L2I: u8 = 0x88;
+pub const L2D: u8 = 0x8A;
 pub const D2I: u8 = 0x8E;
+pub const D2L: u8 = 0x8F;
 pub const I2C: u8 = 0x92;
 
 // Comparisons.
@@ -153,3 +187,4 @@ pub const T_BOOLEAN: u8 = 4;
 pub const T_CHAR: u8 = 5;
 pub const T_DOUBLE: u8 = 7;
 pub const T_INT: u8 = 10;
+pub const T_LONG: u8 = 11;

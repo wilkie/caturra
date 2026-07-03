@@ -3032,12 +3032,8 @@ fn try_catch_compile_errors_match_javac() {
             "ArrayList.iterator exists in Java, but iterators are not supported by jvmjs (use for-each or an index loop)",
         ),
         (
-            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextLong(); } }",
-            "Scanner.nextLong exists in Java, but the long type is not supported by jvmjs",
-        ),
-        (
-            "class M { static void f() { double d = Double.doubleToLongBits(1.0); } }",
-            "Double.doubleToLongBits exists in Java, but the long type is not supported by jvmjs",
+            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextFloat(); } }",
+            "Scanner.nextFloat exists in Java, but the float type is not supported by jvmjs",
         ),
     ];
     for (source, expected) in cases {
@@ -3356,6 +3352,27 @@ fn scanner_boolean_and_close() {
     }
     vm.run_main("B", &[]).unwrap();
     assert_eq!(console.stdout_text(), "true\ntrue false\nfalse\n");
+}
+
+#[test]
+fn current_time_millis_is_wired() {
+    let out = run_stdout(
+        r#"
+        public class Clock {
+            public static void main(String[] args) {
+                long start = System.currentTimeMillis();
+                long total = 0;
+                for (int i = 0; i < 1000; i++) {
+                    total += i;
+                }
+                long elapsed = System.currentTimeMillis() - start;
+                System.out.println(total + " " + (elapsed >= 0));
+            }
+        }
+        "#,
+        "Clock",
+    );
+    assert_eq!(out, "499500 true\n");
 }
 
 #[test]

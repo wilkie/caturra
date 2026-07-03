@@ -84,6 +84,7 @@ pub enum TypeRef {
     Double,
     Boolean,
     Char,
+    Long,
     /// A class type by simple name, e.g. `String`.
     Named(String),
     /// A generic type, e.g. `ArrayList<Integer>`.
@@ -406,6 +407,7 @@ impl Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
     Int(i64),
+    Long(i64),
     Double(f64),
     Str(String),
     Char(char),

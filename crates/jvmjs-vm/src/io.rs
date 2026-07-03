@@ -7,6 +7,12 @@
 
 /// Host hooks for the running program's standard streams.
 pub trait ConsoleIo {
+    /// Milliseconds since the Unix epoch (`System.currentTimeMillis`).
+    /// Hosts without a clock (tests) use a fixed origin.
+    fn now_millis(&mut self) -> i64 {
+        0
+    }
+
     /// Write bytes to standard out.
     fn stdout(&mut self, bytes: &[u8]);
 

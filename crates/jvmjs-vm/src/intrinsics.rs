@@ -945,6 +945,19 @@ fn scanner_method(
             let has = scanner_peek_line(heap, console, receiver)?;
             Ok(Some(JValue::Int(i32::from(has))))
         }
+        "nextLong" => {
+            let token = scanner_next_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let value: i64 = token
+                .parse()
+                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            Ok(Some(JValue::Long(value)))
+        }
+        "hasNextLong" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token.is_some_and(|t| t.parse::<i64>().is_ok());
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
         "nextBoolean" => {
             let token = scanner_next_token(heap, console, receiver)?
                 .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
@@ -1510,6 +1523,7 @@ impl JavaRng {
 pub fn invoke_static(
     heap: &mut Heap,
     rng: &mut JavaRng,
+    console: &mut dyn ConsoleIo,
     class: &str,
     method: &str,
     descriptor: &str,
@@ -1521,6 +1535,14 @@ pub fn invoke_static(
         "java/lang/Double" => double_static(heap, method, args),
         "java/lang/Character" => character_static(heap, method, args),
         "java/lang/Boolean" => boolean_static(heap, method, args),
+        "java/lang/Long" => long_static(heap, method, args),
+        "java/lang/System" => match method {
+            "currentTimeMillis" => Ok(Some(JValue::Long(console.now_millis()))),
+            "nanoTime" => Ok(Some(JValue::Long(
+                console.now_millis().wrapping_mul(1_000_000),
+            ))),
+            _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
+        },
         "java/lang/String" => string_static(heap, method, descriptor, args),
         _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
     }
@@ -1578,6 +1600,17 @@ fn math_static(
     let i = |v: i32| Ok(Some(JValue::Int(v)));
     match (method, args) {
         ("abs", [JValue::Int(v)]) => i(v.wrapping_abs()),
+        ("abs", [JValue::Long(v)]) => Ok(Some(JValue::Long(v.wrapping_abs()))),
+        ("max", [JValue::Long(a), JValue::Long(b)]) => Ok(Some(JValue::Long((*a).max(*b)))),
+        ("min", [JValue::Long(a), JValue::Long(b)]) => Ok(Some(JValue::Long((*a).min(*b)))),
+        ("toIntExact", [JValue::Long(v)]) => {
+            i32::try_from(*v).map_or_else(|_| Err(overflow()), |v| Ok(Some(JValue::Int(v))))
+        }
+        ("multiplyHigh", [JValue::Long(a), JValue::Long(b)]) => {
+            let product = i128::from(*a) * i128::from(*b);
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(Some(JValue::Long((product >> 64) as i64)))
+        }
         ("abs", [JValue::Double(v)]) => d(v.abs()),
         ("absExact", [JValue::Int(v)]) => v.checked_abs().map_or_else(|| Err(overflow()), i),
         ("sqrt", [JValue::Double(v)]) => d(v.sqrt()),
@@ -1935,6 +1968,20 @@ fn double_static(
         ("min", [JValue::Double(a), JValue::Double(b)]) => d(java_double_min(*a, *b)),
         ("sum", [JValue::Double(a), JValue::Double(b)]) => d(a + b),
         ("hashCode", [JValue::Double(v)]) => Ok(Some(JValue::Int(java_double_hash(*v)))),
+        ("doubleToLongBits", [JValue::Double(v)]) => {
+            let bits = if v.is_nan() {
+                0x7FF8_0000_0000_0000_u64
+            } else {
+                v.to_bits()
+            };
+            Ok(Some(JValue::Long(bits.cast_signed())))
+        }
+        ("doubleToRawLongBits", [JValue::Double(v)]) => {
+            Ok(Some(JValue::Long(v.to_bits().cast_signed())))
+        }
+        ("longBitsToDouble", [JValue::Long(v)]) => {
+            Ok(Some(JValue::Double(f64::from_bits(v.cast_unsigned()))))
+        }
         _ => Err(VmError::UnknownIntrinsic(format!("Double.{method}"))),
     }
 }
@@ -2093,6 +2140,49 @@ fn boolean_static(
     }
 }
 
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)] // one arm per documented method
+fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<JValue>, VmError> {
+    let l = |v: i64| Ok(Some(JValue::Long(v)));
+    let i = |v: i32| Ok(Some(JValue::Int(v)));
+    let s = |heap: &mut Heap, text: String| {
+        let reference = heap.alloc_string(&text);
+        Ok(Some(JValue::Ref(Some(reference))))
+    };
+    match (method, args) {
+        ("parseLong" | "valueOf", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            text.parse().map_or_else(|_| Err(number_format(&text)), l)
+        }
+        ("valueOf", [JValue::Long(v)]) => l(*v),
+        ("toString", [JValue::Long(v)]) => s(heap, v.to_string()),
+        ("toBinaryString", [JValue::Long(v)]) => s(heap, format!("{:b}", v.cast_unsigned())),
+        ("toOctalString", [JValue::Long(v)]) => s(heap, format!("{:o}", v.cast_unsigned())),
+        ("toHexString", [JValue::Long(v)]) => s(heap, format!("{:x}", v.cast_unsigned())),
+        ("compare", [JValue::Long(a), JValue::Long(b)]) => i(match a.cmp(b) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }),
+        ("max", [JValue::Long(a), JValue::Long(b)]) => l((*a).max(*b)),
+        ("min", [JValue::Long(a), JValue::Long(b)]) => l((*a).min(*b)),
+        ("sum", [JValue::Long(a), JValue::Long(b)]) => l(a.wrapping_add(*b)),
+        ("signum", [JValue::Long(v)]) => i(i32::try_from(v.signum()).unwrap_or(0)),
+        ("hashCode", [JValue::Long(v)]) => i((((v.cast_unsigned() ^ (v.cast_unsigned() >> 32))
+            & 0xFFFF_FFFF) as u32)
+            .cast_signed()),
+        ("bitCount", [JValue::Long(v)]) => i(i32::try_from(v.count_ones()).unwrap_or(0)),
+        ("numberOfLeadingZeros", [JValue::Long(v)]) => {
+            i(i32::try_from(v.leading_zeros()).unwrap_or(64))
+        }
+        ("numberOfTrailingZeros", [JValue::Long(v)]) => {
+            i(i32::try_from(v.trailing_zeros()).unwrap_or(64))
+        }
+        ("reverse", [JValue::Long(v)]) => l(v.reverse_bits()),
+        ("reverseBytes", [JValue::Long(v)]) => l(v.swap_bytes()),
+        _ => Err(VmError::UnknownIntrinsic(format!("Long.{method}"))),
+    }
+}
+
 fn string_static(
     heap: &mut Heap,
     method: &str,
@@ -2126,6 +2216,7 @@ fn string_static(
                     String::from(if *v != 0 { "true" } else { "false" })
                 }
                 (_, JValue::Int(v)) => v.to_string(),
+                (_, JValue::Long(v)) => v.to_string(),
                 (_, JValue::Double(v)) => java_double_to_string(*v),
                 (_, JValue::Ref(Some(reference))) => match heap.get(*reference) {
                     Some(HeapObject::IntArray(values)) => values
@@ -2150,6 +2241,7 @@ fn string_static(
 fn append_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result<String, VmError> {
     let text = match (descriptor, args) {
         ("(I)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => v.to_string(),
+        ("(J)Ljava/lang/StringBuilder;", [JValue::Long(v)]) => v.to_string(),
         ("(Z)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => {
             if *v != 0 { "true" } else { "false" }.to_owned()
         }
@@ -2182,6 +2274,7 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
     let text = match (descriptor, args) {
         ("()V", []) => String::new(),
         ("(I)V", [JValue::Int(v)]) => v.to_string(),
+        ("(J)V", [JValue::Long(v)]) => v.to_string(),
         ("(Z)V", [JValue::Int(v)]) => if *v != 0 { "true" } else { "false" }.to_owned(),
         ("(C)V", [JValue::Int(v)]) => {
             let unit = u32::try_from(*v).unwrap_or(u32::from(u16::MAX));

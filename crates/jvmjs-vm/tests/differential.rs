@@ -1447,6 +1447,79 @@ public class DiffSwitch {
 );
 
 differential_test!(
+    diff_long_type,
+    "DiffLong",
+    r#"
+public class DiffLong {
+    static long factorial(int n) {
+        long result = 1L;
+        for (int i = 2; i <= n; i++) {
+            result *= i;
+        }
+        return result;
+    }
+
+    public static void main(String[] args) {
+        // Literals, arithmetic, overflow wrapping.
+        long big = 9_000_000_000L;
+        long hexed = 0xFFFF_FFFF_FFFFL;
+        System.out.println(big + " " + hexed + " " + 1L + " " + 0L);
+        System.out.println(big * 3 + " " + big / 7 + " " + big % 7 + " " + -big);
+        System.out.println(Long.MAX_VALUE + " " + Long.MIN_VALUE);
+        System.out.println(Long.MAX_VALUE + 1);
+        System.out.println(factorial(20));
+
+        // Mixed promotion int/long/double, casts both ways.
+        int small = 41;
+        long widened = small + 1L;
+        double d = widened / 2 + 0.5;
+        System.out.println(widened + " " + d + " " + (int) big + " " + (long) 2.75 + " " + (char) 66L);
+
+        // Comparisons and LCMP paths.
+        System.out.println((big > hexed) + " " + (big == 9000000000L) + " " + (0L >= -1L));
+
+        // Bitwise / shifts (six-bit count masking).
+        System.out.println((big & 0xFFL) + " " + (big | 1) + " " + (big ^ big) + " " + ~0L);
+        System.out.println((1L << 40) + " " + (-16L >> 2) + " " + (-16L >>> 60) + " " + (1L << 65));
+
+        // long[] arrays, increments, compound narrowing.
+        long[] values = { 1L, 1L << 34, 3L };
+        values[0]++;
+        values[1] += 5;
+        long total = 0;
+        for (long value : values) {
+            total += value;
+        }
+        System.out.println(values[0] + " " + values[1] + " " + total + " " + values.length);
+        int shrunk = 5;
+        shrunk += 10L;
+        System.out.println(shrunk);
+        long counter = 1;
+        System.out.println(counter++ + " " + counter + " " + --counter);
+
+        // Long statics and Math long overloads.
+        System.out.println(Long.parseLong("-9000000000") + " " + Long.toString(255L));
+        System.out.println(Long.toBinaryString(10L) + " " + Long.toHexString(-1L));
+        System.out.println(Long.compare(2L, 9L) + " " + Long.max(2L, 9L) + " " + Long.sum(2L, 9L));
+        System.out.println(Long.hashCode(9000000000L) + " " + Long.bitCount(255L));
+        System.out.println(Long.numberOfLeadingZeros(1L) + " " + Long.reverseBytes(1L));
+        System.out.println(Math.abs(-9000000000L) + " " + Math.max(1L, 2L) + " " + Math.toIntExact(42L));
+        System.out.println(Math.multiplyHigh(Long.MAX_VALUE, 2L));
+        System.out.println(Double.doubleToLongBits(2.0) + " " + Double.longBitsToDouble(4611686018427387904L));
+
+        // Formatting with %d and long.
+        System.out.println(String.format("%d|%,d|%x", 9000000000L, 9000000000L, 255L));
+        System.out.println(String.valueOf(9000000000L) + " " + ("" + 123L));
+
+        // Ternary joining long with int.
+        long chosen = small > 0 ? 1 : big;
+        System.out.println(chosen);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

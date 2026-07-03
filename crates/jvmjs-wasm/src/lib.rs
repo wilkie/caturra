@@ -330,6 +330,12 @@ struct JsConsole<'a> {
 }
 
 impl ConsoleIo for JsConsole<'_> {
+    fn now_millis(&mut self) -> i64 {
+        #[allow(clippy::cast_possible_truncation)]
+        let millis = js_sys::Date::now() as i64;
+        millis
+    }
+
     fn stdout(&mut self, bytes: &[u8]) {
         let text = JsValue::from_str(&String::from_utf8_lossy(bytes));
         let _ = self.stdout.call1(&JsValue::NULL, &text);
