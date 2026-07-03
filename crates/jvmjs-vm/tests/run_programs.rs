@@ -431,6 +431,238 @@ fn string_reference_equality_of_literals() {
     assert_eq!(out, "true\nfalse\n");
 }
 
+// ----- stage 2: control flow -----
+
+#[test]
+fn if_else_chains_and_dangling_else() {
+    let out = run_stdout(
+        r#"
+        public class Grades {
+            public static void main(String[] args) {
+                int score = 85;
+                if (score >= 90) System.out.println("A");
+                else if (score >= 80) System.out.println("B");
+                else if (score >= 70) System.out.println("C");
+                else System.out.println("F");
+
+                // Dangling else binds to the inner if.
+                int x = 5;
+                if (x > 0)
+                    if (x > 10) System.out.println("big");
+                    else System.out.println("small");
+            }
+        }
+        "#,
+        "Grades",
+    );
+    assert_eq!(out, "B\nsmall\n");
+}
+
+#[test]
+fn while_and_do_while_semantics() {
+    let out = run_stdout(
+        r"
+        public class Loops {
+            public static void main(String[] args) {
+                int n = 3;
+                while (n > 0) {
+                    System.out.println(n);
+                    n--;
+                }
+                // The while body never runs; the do-while body runs once.
+                while (false == true) System.out.println(-1);
+                do System.out.println(99); while (false);
+            }
+        }
+        ",
+        "Loops",
+    );
+    assert_eq!(out, "3\n2\n1\n99\n");
+}
+
+#[test]
+fn for_loops_sum_and_nest() {
+    let out = run_stdout(
+        r#"
+        public class Sums {
+            public static void main(String[] args) {
+                int total = 0;
+                for (int i = 1; i <= 10; i++) {
+                    total += i;
+                }
+                System.out.println(total);
+
+                String grid = "";
+                for (int r = 0; r < 3; r++) {
+                    for (int c = 0; c < 3; c++) {
+                        grid += r * 3 + c;
+                    }
+                    grid += "|";
+                }
+                System.out.println(grid);
+
+                // Two loops can reuse the same index name (loop scoping),
+                // and multi-init/multi-update headers work.
+                for (int i = 0, j = 3; i < j; i++, j--) {
+                    System.out.println(i + "," + j);
+                }
+            }
+        }
+        "#,
+        "Sums",
+    );
+    assert_eq!(out, "55\n012|345|678|\n0,3\n1,2\n");
+}
+
+#[test]
+fn break_and_continue() {
+    let out = run_stdout(
+        r"
+        public class Jumps {
+            public static void main(String[] args) {
+                for (int i = 0; i < 10; i++) {
+                    if (i % 2 == 0) continue;
+                    if (i > 6) break;
+                    System.out.println(i);
+                }
+                // break/continue bind to the INNER loop.
+                int found = 0;
+                for (int i = 0; i < 3; i++) {
+                    for (int j = 0; j < 3; j++) {
+                        if (j > i) break;
+                        found++;
+                    }
+                }
+                System.out.println(found);
+                int n = 0;
+                while (true) {
+                    n++;
+                    if (n == 5) break;
+                }
+                System.out.println(n);
+            }
+        }
+        ",
+        "Jumps",
+    );
+    assert_eq!(out, "1\n3\n5\n6\n5\n");
+}
+
+#[test]
+fn fizzbuzz_works() {
+    let out = run_stdout(
+        r#"
+        public class FizzBuzz {
+            public static void main(String[] args) {
+                for (int i = 1; i <= 15; i++) {
+                    if (i % 15 == 0) System.out.println("FizzBuzz");
+                    else if (i % 3 == 0) System.out.println("Fizz");
+                    else if (i % 5 == 0) System.out.println("Buzz");
+                    else System.out.println(i);
+                }
+            }
+        }
+        "#,
+        "FizzBuzz",
+    );
+    assert_eq!(
+        out,
+        "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n"
+    );
+}
+
+#[test]
+fn definite_assignment_across_branches() {
+    // Both branches assign: OK.
+    let ok = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "T.java".into(),
+        text: r"
+            class T {
+                static void f() {
+                    int x;
+                    if (1 < 2) { x = 1; } else { x = 2; }
+                    System.out.println(x);
+                }
+            }
+        "
+        .into(),
+    }]);
+    assert!(ok.success(), "{:?}", ok.diagnostics);
+
+    // Only one branch assigns: javac-style error.
+    let bad = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "T.java".into(),
+        text: r"
+            class T {
+                static void f() {
+                    int x;
+                    if (1 < 2) { x = 1; }
+                    System.out.println(x);
+                }
+            }
+        "
+        .into(),
+    }]);
+    assert!(!bad.success());
+    assert!(
+        bad.diagnostics[0]
+            .message
+            .contains("might not have been initialized"),
+        "{:?}",
+        bad.diagnostics
+    );
+
+    // Assignment only inside a loop body doesn't count either.
+    let loopy = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "T.java".into(),
+        text: r"
+            class T {
+                static void f() {
+                    int x;
+                    while (1 < 2) { x = 1; }
+                    System.out.println(x);
+                }
+            }
+        "
+        .into(),
+    }]);
+    assert!(!loopy.success());
+}
+
+#[test]
+fn infinite_loop_hits_the_instruction_budget() {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Spin.java".into(),
+        text: r"
+            public class Spin {
+                public static void main(String[] args) {
+                    while (true) { }
+                }
+            }
+        "
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(
+        VmOptions {
+            max_instructions: 10_000,
+        },
+        &mut vfs,
+        &mut console,
+    );
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("Spin", &[]);
+    assert!(
+        matches!(result, Err(VmError::InstructionBudgetExceeded)),
+        "{result:?}"
+    );
+}
+
 #[test]
 fn missing_main_is_reported() {
     let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {

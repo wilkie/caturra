@@ -33,12 +33,14 @@ filesystem, which the host page can seed and inspect (`writeFile`, `readTextFile
 
 ## Status
 
-**Stage 1 of the language is live** (see `specs/LANGUAGE.md`): programs with
-local variables, arithmetic/comparison/logical operators, casts, and string
-concatenation compile with our compiler and run on our VM in the browser —
-with Java-exact semantics (int wrapping, `ArithmeticException` on `/ 0`,
-NaN comparisons, `Double.toString` formatting, literal interning, short-circuit
-evaluation). Implemented and tested:
+**Stages 1–2 of the language are live** (see `specs/LANGUAGE.md`): programs
+with local variables, operators, casts, string concatenation, and full control
+flow (`if`/`else`, `while`, `do`/`while`, `for`, `break`/`continue`) compile
+with our compiler and run on our VM in the browser — FizzBuzz works. Semantics
+are Java-exact: int wrapping, `ArithmeticException` on `/ 0`, NaN comparisons,
+`Double.toString` formatting, literal interning, short-circuit evaluation,
+dangling-else binding, and javac-style branch-aware definite-assignment
+errors. Implemented and tested:
 
 - class file model, constant pool, `Code` attribute, binary read/write round-trip
 - compiler: lexer (complete token surface) → recursive-descent parser →
@@ -52,8 +54,9 @@ evaluation). Implemented and tested:
   stdin over SharedArrayBuffer + Atomics ready for when `Scanner` lands
 - virtual filesystem + console IO plumbing across the whole stack
 
-Next per `specs/LANGUAGE.md` staging: control flow (`if`/`while`/`for`), then
-user-defined methods. The class library strategy is in `specs/SCOPE.md`.
+Next per `specs/LANGUAGE.md` staging: user-defined static methods with
+parameters and returns, then arrays. The class library strategy is in
+`specs/SCOPE.md`.
 
 Deployment note: pages embedding jvmjs need `Cross-Origin-Opener-Policy:
 same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers for

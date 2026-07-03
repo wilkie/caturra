@@ -72,6 +72,28 @@ test.describe('playground', () => {
     );
   });
 
+  test('runs loops with control flow in the browser', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('source')
+      .fill(
+        [
+          'public class Main {',
+          '    public static void main(String[] args) {',
+          '        String out = "";',
+          '        for (int i = 1; i <= 5; i++) {',
+          '            if (i == 3) continue;',
+          '            out += i;',
+          '        }',
+          '        System.out.println(out);',
+          '    }',
+          '}',
+        ].join('\n'),
+      );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('1245');
+  });
+
   test('gives friendly messages for future Java features', async ({ page }) => {
     await page.goto('/');
     await page
@@ -80,16 +102,15 @@ test.describe('playground', () => {
         [
           'public class Main {',
           '    public static void main(String[] args) {',
-          '        for (int i = 0; i < 3; i++) {',
-          '            System.out.println(i);',
-          '        }',
+          '        int[] nums = new int[3];',
+          '        System.out.println(nums.length);',
           '    }',
           '}',
         ].join('\n'),
       );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
-      'for loops are not yet supported by jvmjs',
+      'arrays are not yet supported by jvmjs',
     );
   });
 });

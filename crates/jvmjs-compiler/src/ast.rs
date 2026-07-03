@@ -71,6 +71,38 @@ pub enum Stmt {
         value: Expr,
         span: SourceSpan,
     },
+    If {
+        cond: Expr,
+        then: Box<Stmt>,
+        /// `else` branch; `else if` chains nest here naturally.
+        els: Option<Box<Stmt>>,
+        span: SourceSpan,
+    },
+    While {
+        cond: Expr,
+        body: Box<Stmt>,
+        span: SourceSpan,
+    },
+    DoWhile {
+        body: Box<Stmt>,
+        cond: Expr,
+        span: SourceSpan,
+    },
+    For {
+        /// Declaration or simple statement; scoped to the loop.
+        init: Option<Box<Stmt>>,
+        cond: Option<Expr>,
+        /// Comma-separated statement expressions.
+        update: Vec<Stmt>,
+        body: Box<Stmt>,
+        span: SourceSpan,
+    },
+    Break {
+        span: SourceSpan,
+    },
+    Continue {
+        span: SourceSpan,
+    },
 }
 
 /// One `name = init` (or bare `name`) in a local declaration.

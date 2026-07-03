@@ -89,10 +89,10 @@ describe('javac (compile)', () => {
   it('gives friendly diagnostics for not-yet-supported Java', async () => {
     const session = await createJvmSession();
     const result = session.compile([
-      { path: 'Main.java', text: 'class Main { static void f() { while (true) { } } }' },
+      { path: 'Main.java', text: 'class Main { static void f() { int[] nums = new int[3]; } }' },
     ]);
     expect(result.success).toBe(false);
-    expect(result.diagnostics[0]?.message).toMatch(/while loops are not yet supported/);
+    expect(result.diagnostics[0]?.message).toMatch(/arrays are not yet supported/);
   });
 });
 
@@ -138,6 +138,44 @@ public class Stage1 {
     const result = session.run('Stage1', { onStdout: (text) => stdout.push(text) });
     expect(result.status).toBe('completed');
     expect(stdout.join('')).toBe('temp: 77.0 F\ntrue\nA\n');
+  });
+
+  it('runs a stage-2 program: loops, branches, break/continue', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Stage2.java',
+        text: `
+public class Stage2 {
+    public static void main(String[] args) {
+        String beats = "";
+        for (int i = 1; i <= 20; i++) {
+            if (i % 3 == 0 && i % 5 == 0) { beats += "!"; continue; }
+            if (i > 15) break;
+            if (i % 2 == 0) beats += "x";
+            else beats += ".";
+        }
+        System.out.println(beats);
+        int n = 1, steps = 0;
+        while (n != 1 || steps == 0) {
+            if (steps == 0) n = 27;
+            else if (n % 2 == 0) n /= 2;
+            else n = 3 * n + 1;
+            steps++;
+        }
+        System.out.println("collatz(27) steps: " + steps);
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.diagnostics).toEqual([]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: string[] = [];
+    const result = session.run('Stage2', { onStdout: (text) => stdout.push(text) });
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('.x.x.x.x.x.x.x!\ncollatz(27) steps: 112\n');
   });
 
   it('routes System.err to the stderr callback', async () => {

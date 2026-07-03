@@ -136,6 +136,7 @@ fn emit_method(
         code: CodeBuilder::new(),
         scopes: vec![Vec::new()],
         next_slot: u16::from(!decl.is_static),
+        loop_stack: Vec::new(),
     };
 
     if decl.return_type != TypeRef::Void {
@@ -248,6 +249,13 @@ fn method_descriptor(path: &str, diagnostics: &mut Vec<Diagnostic>, decl: &Metho
     descriptor
 }
 
+/// Break/continue targets for the innermost enclosing loop.
+#[derive(Clone, Copy)]
+struct LoopLabels {
+    break_label: Label,
+    continue_label: Label,
+}
+
 /// Per-method-body emission state.
 struct BodyGen<'a> {
     path: &'a str,
@@ -258,6 +266,8 @@ struct BodyGen<'a> {
     /// so declaration checks search all of them.
     scopes: Vec<Vec<(String, LocalVar)>>,
     next_slot: u16,
+    /// Innermost-last enclosing loops, for `break`/`continue`.
+    loop_stack: Vec<LoopLabels>,
 }
 
 impl BodyGen<'_> {
@@ -303,6 +313,182 @@ impl BodyGen<'_> {
                 self.assign(name, *op, value, *span);
             }
             Stmt::Expr(expr) => self.expression_statement(expr),
+            Stmt::If {
+                cond, then, els, ..
+            } => self.if_statement(cond, then, els.as_deref()),
+            Stmt::While { cond, body, .. } => self.while_statement(cond, body),
+            Stmt::DoWhile { body, cond, .. } => self.do_while_statement(body, cond),
+            Stmt::For {
+                init,
+                cond,
+                update,
+                body,
+                ..
+            } => self.for_statement(init.as_deref(), cond.as_ref(), update, body),
+            Stmt::Break { span } => match self.loop_stack.last() {
+                Some(labels) => {
+                    let target = labels.break_label;
+                    self.code.branch(op::GOTO, target, 0);
+                }
+                None => self.error(*span, "'break' can only be used inside a loop"),
+            },
+            Stmt::Continue { span } => match self.loop_stack.last() {
+                Some(labels) => {
+                    let target = labels.continue_label;
+                    self.code.branch(op::GOTO, target, 0);
+                }
+                None => self.error(*span, "'continue' can only be used inside a loop"),
+            },
+        }
+    }
+
+    /// Emit a condition expression, requiring `boolean` as Java does.
+    fn condition(&mut self, cond: &Expr, what: &str) {
+        let ty = self.expr(cond);
+        if ty != JType::Boolean && ty != JType::Error {
+            self.error(
+                cond.span(),
+                format!(
+                    "the {what} condition must be a boolean, got {}",
+                    ty.describe()
+                ),
+            );
+        }
+    }
+
+    fn if_statement(&mut self, cond: &Expr, then: &Stmt, els: Option<&Stmt>) {
+        self.condition(cond, "if");
+        let before = self.assigned_flags();
+        if let Some(els) = els {
+            let else_label = self.code.new_label();
+            let end = self.code.new_label();
+            self.code.branch(op::IFEQ, else_label, 1);
+            self.statement(then);
+            let after_then = self.assigned_flags();
+            self.restore_assigned(&before);
+            self.code.branch(op::GOTO, end, 0);
+            self.code.bind(else_label);
+            self.statement(els);
+            // Definitely assigned only if both branches assign
+            // (JLS §16 intersection rule).
+            self.intersect_assigned(&after_then);
+            self.code.bind(end);
+        } else {
+            let end = self.code.new_label();
+            self.code.branch(op::IFEQ, end, 1);
+            self.statement(then);
+            // A lone if may not run: its assignments don't count.
+            self.restore_assigned(&before);
+            self.code.bind(end);
+        }
+    }
+
+    fn while_statement(&mut self, cond: &Expr, body: &Stmt) {
+        let start = self.code.new_label();
+        let end = self.code.new_label();
+        self.code.bind(start);
+        self.condition(cond, "while");
+        self.code.branch(op::IFEQ, end, 1);
+        let before = self.assigned_flags();
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label: start,
+        });
+        self.statement(body);
+        self.loop_stack.pop();
+        self.restore_assigned(&before);
+        self.code.branch(op::GOTO, start, 0);
+        self.code.bind(end);
+    }
+
+    fn do_while_statement(&mut self, body: &Stmt, cond: &Expr) {
+        let start = self.code.new_label();
+        let continue_label = self.code.new_label();
+        let end = self.code.new_label();
+        self.code.bind(start);
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label,
+        });
+        // A do-while body always runs once, so its assignments stick.
+        self.statement(body);
+        self.loop_stack.pop();
+        self.code.bind(continue_label);
+        self.condition(cond, "do-while");
+        self.code.branch(op::IFNE, start, 1);
+        self.code.bind(end);
+    }
+
+    fn for_statement(
+        &mut self,
+        init: Option<&Stmt>,
+        cond: Option<&Expr>,
+        update: &[Stmt],
+        body: &Stmt,
+    ) {
+        // The init declaration is scoped to the loop.
+        self.scopes.push(Vec::new());
+        if let Some(init) = init {
+            self.statement(init);
+        }
+        let cond_label = self.code.new_label();
+        let update_label = self.code.new_label();
+        let end = self.code.new_label();
+        self.code.bind(cond_label);
+        if let Some(cond) = cond {
+            self.condition(cond, "for");
+            self.code.branch(op::IFEQ, end, 1);
+        }
+        let before = self.assigned_flags();
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label: update_label,
+        });
+        self.statement(body);
+        self.loop_stack.pop();
+        self.code.bind(update_label);
+        for stmt in update {
+            self.statement(stmt);
+        }
+        self.restore_assigned(&before);
+        self.code.branch(op::GOTO, cond_label, 0);
+        self.code.bind(end);
+        self.scopes.pop();
+    }
+
+    // ----- branch-aware definite assignment -----
+    //
+    // The tracker is deliberately simple: per-variable `assigned` flags
+    // snapshotted around branches. Both if-branches assigning counts;
+    // loop bodies (which may run zero times) don't. This matches javac
+    // on everything students write, minus constant-condition special
+    // cases (`while (true)`), where we stay conservative.
+
+    fn assigned_flags(&self) -> Vec<Vec<bool>> {
+        self.scopes
+            .iter()
+            .map(|scope| scope.iter().map(|(_, var)| var.assigned).collect())
+            .collect()
+    }
+
+    /// Reset flags to a snapshot (branch bodies whose execution isn't
+    /// guaranteed). Scopes pushed since the snapshot are untouched —
+    /// they can only be the current statement's own, already popped.
+    fn restore_assigned(&mut self, snapshot: &[Vec<bool>]) {
+        for (scope, flags) in self.scopes.iter_mut().zip(snapshot) {
+            for ((_, var), flag) in scope.iter_mut().zip(flags) {
+                var.assigned = *flag;
+            }
+        }
+    }
+
+    /// Keep a variable assigned only if the other branch (whose flags
+    /// are `other`) assigned it too.
+    fn intersect_assigned(&mut self, other: &[Vec<bool>]) {
+        for (scope, flags) in self.scopes.iter_mut().zip(other) {
+            for ((_, var), flag) in scope.iter_mut().zip(flags) {
+                var.assigned = var.assigned && *flag;
+            }
         }
     }
 
@@ -377,6 +563,11 @@ impl BodyGen<'_> {
             None => {
                 if is_final && assigned {
                     self.error(span, format!("cannot assign to final variable '{name}'"));
+                } else if is_final && !self.loop_stack.is_empty() {
+                    self.error(
+                        span,
+                        format!("final variable '{name}' might be assigned in a loop"),
+                    );
                 }
                 let value_ty = self.expr(value);
                 self.convert_for_assignment(value_ty, var_ty, value.span());

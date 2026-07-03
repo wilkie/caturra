@@ -18,7 +18,7 @@ The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
 slice.
 
-## Accepted today (v0 slice + stage 1)
+## Accepted today (v0 slice + stages 1–2)
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
@@ -27,9 +27,17 @@ slice.
   primitive / array return type, parameter list, block body.
 - Statements: blocks, expression statements (method calls only, as in Java),
   local variable declarations (`int a = 1, b;`, `final double d = 2.5;`,
-  `String s = "hi";`) with linear definite-assignment checking, assignment
-  (`=`, `+=`, `-=`, `*=`, `/=`, `%=`), and statement-position `++`/`--`
-  (prefix or postfix), which lower to `+= 1` / `-= 1`.
+  `String s = "hi";`), assignment (`=`, `+=`, `-=`, `*=`, `/=`, `%=`), and
+  statement-position `++`/`--` (prefix or postfix), which lower to
+  `+= 1` / `-= 1`.
+- Control flow: `if`/`else` (dangling `else` binds inner, like Java),
+  `while`, `do`/`while`, `for` (including multi-declarator init,
+  comma-separated updates, and `for (;;)`), and unlabeled
+  `break`/`continue` binding to the innermost loop. Conditions must be
+  `boolean`, and `if (x = 1)` gets a "did you mean '=='?" hint.
+  Definite assignment is branch-aware: both `if`/`else` arms assigning
+  counts, a lone branch or loop body doesn't, a `do` body does
+  (JLS §16-style, conservative on constant conditions).
 - Expressions, with Java precedence:
   - literals (`int`, `double`, `String`, `char`, `boolean`, `null`), with
     `-2147483648` folding so `Integer.MIN_VALUE` is writable;
@@ -69,7 +77,9 @@ friendly message for now.
 
 1. ~~Local variables, assignment, arithmetic/comparison/logical operators,
    string concatenation.~~ **Done (2026-07-02).**
-2. Control flow: `if`/`else`, `while`, `for`, `break`/`continue`.
+2. ~~Control flow: `if`/`else`, `while`, `for`, `break`/`continue`.~~
+   **Done (2026-07-02)** — plus `do`/`while`. Labeled break/continue and
+   `switch` remain out for now; for-each arrives with arrays (stage 4).
 3. Static methods with parameters and returns (user-defined), recursion.
 4. Arrays (1D, then 2D), `for-each`.
 5. Objects: fields, constructors, `new`, instance methods, `this`.

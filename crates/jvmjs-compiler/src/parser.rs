@@ -33,13 +33,10 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
 /// support yet; `None` when the keyword can begin a real statement.
 fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
     match keyword {
-        Keyword::If | Keyword::Else => Some("if statements are not yet supported by jvmjs"),
-        Keyword::While | Keyword::Do => Some("while loops are not yet supported by jvmjs"),
-        Keyword::For => Some("for loops are not yet supported by jvmjs"),
+        Keyword::Else => Some("'else' without a matching 'if'"),
         Keyword::Return => Some("return statements are not yet supported by jvmjs"),
         Keyword::Switch => Some("switch statements are not yet supported by jvmjs"),
         Keyword::Try | Keyword::Throw => Some("exception handling is not yet supported by jvmjs"),
-        Keyword::Break | Keyword::Continue => Some("break/continue are not yet supported by jvmjs"),
         Keyword::Var => Some("'var' is not supported by jvmjs; write the type explicitly"),
         Keyword::New => Some("object creation with 'new' is not yet supported by jvmjs"),
         Keyword::Int | Keyword::Double | Keyword::Boolean | Keyword::Char | Keyword::Final => None,
@@ -455,6 +452,21 @@ impl Parser<'_> {
             return Ok(Some(Stmt::Block(self.block_body())));
         }
 
+        match self.peek() {
+            Some(TokenKind::Keyword(Keyword::If)) => return self.if_statement().map(Some),
+            Some(TokenKind::Keyword(Keyword::While)) => {
+                return self.while_statement().map(Some);
+            }
+            Some(TokenKind::Keyword(Keyword::Do)) => {
+                return self.do_while_statement().map(Some);
+            }
+            Some(TokenKind::Keyword(Keyword::For)) => return self.for_statement().map(Some),
+            Some(TokenKind::Keyword(Keyword::Break | Keyword::Continue)) => {
+                return self.break_or_continue().map(Some);
+            }
+            _ => {}
+        }
+
         if let Some(TokenKind::Keyword(keyword)) = self.peek()
             && let Some(message) = unsupported_statement_keyword(*keyword)
         {
@@ -466,19 +478,26 @@ impl Parser<'_> {
             return self.local_declaration().map(Some);
         }
 
-        // `x++;` / `++x;` and assignments.
+        let stmt = self.simple_statement()?;
+        self.expect_symbol(";", "to end the statement")?;
+        Ok(Some(stmt))
+    }
+
+    /// An assignment, `++`/`--`, or call statement, WITHOUT the
+    /// trailing `;` (shared by statements and `for` headers).
+    fn simple_statement(&mut self) -> Parsed<Stmt> {
+        // Prefix `++x` / `--x`.
         if self.at_symbol("++") || self.at_symbol("--") {
             let start = self.here();
             let increment = self.at_symbol("++");
             self.pos += 1;
             let (name, name_span) = self.expect_ident("after the increment operator")?;
-            self.expect_symbol(";", "to end the statement")?;
-            return Ok(Some(increment_statement(
+            return Ok(increment_statement(
                 name,
                 increment,
                 start.start,
                 name_span.end,
-            )));
+            ));
         }
 
         let expr = self.expression()?;
@@ -503,13 +522,12 @@ impl Parser<'_> {
             self.pos += 1;
             let value = self.expression()?;
             let end = value.span().end;
-            self.expect_symbol(";", "to end the statement")?;
-            return Ok(Some(Stmt::Assign {
+            return Ok(Stmt::Assign {
                 name,
                 op,
                 value,
                 span: SourceSpan { start, end },
-            }));
+            });
         }
 
         if self.at_symbol("++") || self.at_symbol("--") {
@@ -523,17 +541,213 @@ impl Parser<'_> {
                 self.error_at(*span, "++/-- can only be applied to a simple variable");
                 return Err(Abort);
             }
-            let stmt = increment_statement(path[0].clone(), increment, span.start, span.end);
-            self.expect_symbol(";", "to end the statement")?;
-            return Ok(Some(stmt));
+            return Ok(increment_statement(
+                path[0].clone(),
+                increment,
+                span.start,
+                span.end,
+            ));
         }
 
         if !matches!(expr, Expr::Call { .. }) {
             self.error_at(expr.span(), "this expression is not a statement in Java");
             return Err(Abort);
         }
+        Ok(Stmt::Expr(expr))
+    }
+
+    // ----- control flow -----
+
+    /// The body of an `if`/loop: one statement. Bare declarations are
+    /// illegal there in Java; empty statements become empty blocks.
+    fn embedded_statement(&mut self, context: &str) -> Parsed<Stmt> {
+        let start = self.here();
+        match self.statement()? {
+            None => Ok(Stmt::Block(Vec::new())),
+            Some(Stmt::LocalDecl { .. }) => {
+                self.error_at(
+                    start,
+                    format!("a variable declaration as the body of {context} needs braces {{ }}"),
+                );
+                Err(Abort)
+            }
+            Some(stmt) => Ok(stmt),
+        }
+    }
+
+    /// `( condition )` with a hint for the classic `=` vs `==` typo.
+    fn paren_condition(&mut self, context: &str) -> Parsed<Expr> {
+        self.expect_symbol("(", &format!("after '{context}'"))?;
+        let cond = self.expression()?;
+        if self.at_symbol("=") {
+            self.error_here("assignment is not a condition — did you mean '=='?");
+            return Err(Abort);
+        }
+        self.expect_symbol(")", "to close the condition")?;
+        Ok(cond)
+    }
+
+    fn if_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'if'
+        let cond = self.paren_condition("if")?;
+        let then = Box::new(self.embedded_statement("an if")?);
+        let els = if self.eat_keyword(Keyword::Else) {
+            Some(Box::new(self.embedded_statement("an else")?))
+        } else {
+            None
+        };
+        Ok(Stmt::If {
+            cond,
+            then,
+            els,
+            span: start,
+        })
+    }
+
+    fn while_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'while'
+        let cond = self.paren_condition("while")?;
+        let body = Box::new(self.embedded_statement("a while loop")?);
+        Ok(Stmt::While {
+            cond,
+            body,
+            span: start,
+        })
+    }
+
+    fn do_while_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'do'
+        let body = Box::new(self.embedded_statement("a do-while loop")?);
+        if !self.eat_keyword(Keyword::While) {
+            self.error_here("expected 'while' after the do-while body");
+            return Err(Abort);
+        }
+        let cond = self.paren_condition("while")?;
+        self.expect_symbol(";", "to end the do-while statement")?;
+        Ok(Stmt::DoWhile {
+            body,
+            cond,
+            span: start,
+        })
+    }
+
+    fn for_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'for'
+        self.expect_symbol("(", "after 'for'")?;
+
+        // `for (Type name : ...)` — for-each needs arrays/ArrayList.
+        if self.header_contains_top_level_colon() {
+            self.error_at(
+                start,
+                "for-each loops are not yet supported by jvmjs (they arrive with arrays)",
+            );
+            self.skip_balanced_parens();
+            // Parse and discard the body so recovery is clean.
+            let _ = self.statement();
+            return Err(Abort);
+        }
+
+        let init = if self.eat_symbol(";") {
+            None
+        } else if self.at_declaration_start() {
+            // Consumes the `;` itself.
+            Some(Box::new(self.local_declaration()?))
+        } else {
+            let stmt = self.simple_statement()?;
+            self.expect_symbol(";", "after the for-loop initializer")?;
+            Some(Box::new(stmt))
+        };
+
+        let cond = if self.at_symbol(";") {
+            None
+        } else {
+            Some(self.expression()?)
+        };
+        self.expect_symbol(";", "after the for-loop condition")?;
+
+        let mut update = Vec::new();
+        if !self.at_symbol(")") {
+            loop {
+                update.push(self.simple_statement()?);
+                if !self.eat_symbol(",") {
+                    break;
+                }
+            }
+        }
+        self.expect_symbol(")", "to close the for-loop header")?;
+
+        let body = Box::new(self.embedded_statement("a for loop")?);
+        Ok(Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+            span: start,
+        })
+    }
+
+    fn break_or_continue(&mut self) -> Parsed<Stmt> {
+        let span = self.here();
+        let is_break = self.at_keyword(Keyword::Break);
+        self.pos += 1;
+        if matches!(self.peek(), Some(TokenKind::Identifier(_))) {
+            self.error_here("labeled break/continue is not supported by jvmjs");
+            return Err(Abort);
+        }
         self.expect_symbol(";", "to end the statement")?;
-        Ok(Some(Stmt::Expr(expr)))
+        Ok(if is_break {
+            Stmt::Break { span }
+        } else {
+            Stmt::Continue { span }
+        })
+    }
+
+    /// Whether the parenthesized header at the cursor contains a `:` at
+    /// paren depth zero before any `;` (i.e. a for-each header). The
+    /// cursor sits just past the opening `(`.
+    fn header_contains_top_level_colon(&self) -> bool {
+        let mut depth = 0usize;
+        let mut offset = 0usize;
+        while let Some(kind) = self.peek_at(offset) {
+            match kind {
+                TokenKind::Symbol("(") => depth += 1,
+                TokenKind::Symbol(")") => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                TokenKind::Symbol(";") if depth == 0 => return false,
+                TokenKind::Symbol(":") if depth == 0 => return true,
+                _ => {}
+            }
+            offset += 1;
+        }
+        false
+    }
+
+    /// Skip forward past the closing `)` matching an already-consumed
+    /// `(`.
+    fn skip_balanced_parens(&mut self) {
+        let mut depth = 1usize;
+        while let Some(kind) = self.peek() {
+            match kind {
+                TokenKind::Symbol("(") => depth += 1,
+                TokenKind::Symbol(")") => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.pos += 1;
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
     }
 
     /// Whether the cursor starts a local declaration:
@@ -991,15 +1205,125 @@ mod tests {
             r#"
             class Main {
                 static void run() {
-                    if (true) { }
+                    switch (1) { }
                     System.out.println("still parsed");
                 }
             }
             "#,
         );
         let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        assert!(messages[0].contains("if statements are not yet supported"));
-        assert_eq!(errors.len(), 1, "{messages:?}");
+        assert!(messages[0].contains("switch statements are not yet supported"));
+    }
+
+    #[test]
+    fn parses_if_else_with_dangling_else() {
+        let unit = parse_ok(
+            r#"
+            class Main {
+                static void run() {
+                    int x = 1;
+                    if (x > 0)
+                        if (x > 10) System.out.println("big");
+                        else System.out.println("small");
+                }
+            }
+            "#,
+        );
+        // The else must bind to the INNER if.
+        let Stmt::If {
+            then, els: None, ..
+        } = &unit.classes[0].methods[0].body[1]
+        else {
+            panic!("outer if must have no else");
+        };
+        let Stmt::If { els: Some(_), .. } = &**then else {
+            panic!("inner if must own the else");
+        };
+    }
+
+    #[test]
+    fn parses_loops_and_jumps() {
+        let unit = parse_ok(
+            r"
+            class Main {
+                static void run() {
+                    int total = 0;
+                    for (int i = 0, j = 10; i < j; i++, j--) {
+                        total += i;
+                        if (total > 5) break;
+                    }
+                    while (total > 0) total--;
+                    do { total++; } while (total < 3);
+                    for (;;) break;
+                }
+            }
+            ",
+        );
+        let body = &unit.classes[0].methods[0].body;
+        let Stmt::For {
+            init: Some(_),
+            cond: Some(_),
+            update,
+            ..
+        } = &body[1]
+        else {
+            panic!("expected full for loop, got {:?}", body[1]);
+        };
+        assert_eq!(update.len(), 2);
+        assert!(matches!(&body[2], Stmt::While { .. }));
+        assert!(matches!(&body[3], Stmt::DoWhile { .. }));
+        let Stmt::For {
+            init: None,
+            cond: None,
+            update,
+            ..
+        } = &body[4]
+        else {
+            panic!("expected for(;;), got {:?}", body[4]);
+        };
+        assert!(update.is_empty());
+    }
+
+    #[test]
+    fn assignment_in_condition_gets_a_hint() {
+        let errors = parse_errors(r"class M { static void f() { int x = 1; if (x = 2) { } } }");
+        assert!(
+            errors[0].message.contains("did you mean '=='"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn for_each_gets_a_friendly_message_and_recovers() {
+        let errors = parse_errors(
+            r#"
+            class M {
+                static void f() {
+                    for (String s : names) { System.out.println(s); }
+                    System.out.println("after");
+                }
+            }
+            "#,
+        );
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("for-each"));
+    }
+
+    #[test]
+    fn declaration_as_branch_body_needs_braces() {
+        let errors = parse_errors(r"class M { static void f() { if (true) int x = 1; } }");
+        assert!(
+            errors[0].message.contains("needs braces"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn labeled_break_is_rejected_kindly() {
+        let errors = parse_errors(r"class M { static void f() { while (true) { break outer; } } }");
+        assert!(errors[0].message.contains("labeled break"));
     }
 
     #[test]
