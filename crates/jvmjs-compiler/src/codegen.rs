@@ -2095,7 +2095,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "chars", "streams are not supported by jvmjs"),
     ("String", "codePoints", "streams are not supported by jvmjs"),
     ("String", "lines", "streams are not supported by jvmjs"),
-    ("String", "format", "varargs are not supported by jvmjs"),
     ("String", "join", "varargs are not supported by jvmjs"),
     ("Math", "toIntExact", "the long type is not supported by jvmjs"),
     ("Math", "multiplyHigh", "the long type is not supported by jvmjs"),
@@ -4465,6 +4464,15 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        if receiver_ty == JType::Writer && method == "printf" {
+            let (tags, width) = self.emit_format_varargs(args, span)?;
+            let descriptor = format!("(Ljava/lang/String;{tags})V");
+            let method_ref =
+                intern_method_ref(self.pool, "java/io/PrintWriter", "printf", &descriptor);
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
+            self.code.drop_stack(1 + width);
+            return Some(None);
+        }
         let (class, methods) =
             builtin_instance_table(receiver_ty).expect("caller checked receiver kind");
         let elem = match receiver_ty {
@@ -4538,6 +4546,70 @@ impl BodyGen<'_> {
         Some(ret)
     }
 
+    /// Emit the format string + variadic arguments of a
+    /// `format`/`printf` call, returning the argument portion of the
+    /// synthesized descriptor (which carries each argument's type tag
+    /// to the VM) and the pushed stack width.
+    fn emit_format_varargs(&mut self, args: &[Expr], span: SourceSpan) -> Option<(String, u16)> {
+        let [template, rest @ ..] = args else {
+            self.error(span, "format needs a format string");
+            return None;
+        };
+        let template_ty = self.expr(template);
+        if template_ty != JType::Str && template_ty != JType::Error {
+            self.error(
+                template.span(),
+                format!(
+                    "incompatible types: {} cannot be converted to String",
+                    template_ty.describe(self.table)
+                ),
+            );
+        }
+        let mut tags = String::new();
+        let mut width: u16 = 1;
+        for arg in rest {
+            let ty = self.expr(arg);
+            // Objects format via toString, like Java's %s.
+            let ty = match ty {
+                JType::Object(_) | JType::List(_) | JType::File | JType::Exception(_) => {
+                    self.coerce_to_string_for_output(ty)
+                }
+                other => other,
+            };
+            match ty {
+                JType::Int => {
+                    tags.push('I');
+                    width += 1;
+                }
+                JType::Double => {
+                    tags.push('D');
+                    width += 2;
+                }
+                JType::Char => {
+                    tags.push('C');
+                    width += 1;
+                }
+                JType::Boolean => {
+                    tags.push('Z');
+                    width += 1;
+                }
+                JType::Str | JType::Null => {
+                    tags.push_str("Ljava/lang/String;");
+                    width += 1;
+                }
+                JType::Error => return None,
+                other => {
+                    self.error(
+                        arg.span(),
+                        format!("cannot format {}", other.describe(self.table)),
+                    );
+                    return None;
+                }
+            }
+        }
+        Some((tags, width))
+    }
+
     /// Emit an intrinsic static call (`Math.abs(...)`, ...).
     #[allow(clippy::option_option)]
     fn builtin_static_call(
@@ -4547,6 +4619,17 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        // `String.format` is variadic — the one call shape the fixed
+        // signature tables cannot express.
+        if class == "String" && method == "format" {
+            let (tags, width) = self.emit_format_varargs(args, span)?;
+            let descriptor = format!("(Ljava/lang/String;{tags})Ljava/lang/String;");
+            let method_ref =
+                intern_method_ref(self.pool, "java/lang/String", "format", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(width);
+            return Some(Some(JType::Str));
+        }
         let (jvm_class, methods) = builtin_static_table(class).expect("caller checked");
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
@@ -5265,6 +5348,25 @@ impl BodyGen<'_> {
 
     /// `System.out.println(...)` and friends.
     fn print_call(&mut self, stream: &'static str, method: &str, args: &[Expr], span: SourceSpan) {
+        if method == "printf" {
+            let field = intern_field_ref(
+                self.pool,
+                "java/lang/System",
+                stream,
+                "Ljava/io/PrintStream;",
+            );
+            self.code.push_op_u16(op::GETSTATIC, field, 1);
+            let Some((tags, width)) = self.emit_format_varargs(args, span) else {
+                self.code.discard();
+                return;
+            };
+            let descriptor = format!("(Ljava/lang/String;{tags})V");
+            let method_ref =
+                intern_method_ref(self.pool, "java/io/PrintStream", "printf", &descriptor);
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
+            self.code.drop_stack(1 + width);
+            return;
+        }
         if method != "println" && method != "print" {
             // javac: "cannot find symbol — symbol: method prinn(String),
             // location: variable out of type PrintStream", flattened to

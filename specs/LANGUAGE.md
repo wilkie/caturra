@@ -119,8 +119,19 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     (`chars`/`codePoints`/`lines`), and `getBytes` — those report an
     honest "String.matches exists in Java, but regular expressions are
     not supported by jvmjs" rather than a misleading cannot-find-symbol.
-    Statics: `valueOf` (all overloads incl. `char[]`), `copyValueOf`;
-    `format`/`join` report the varargs limitation. `split` treats its
+    Statics: `valueOf` (all overloads incl. `char[]`), `copyValueOf`,
+    and `String.format` (2026-07-03) — plus `System.out.printf` and
+    `PrintWriter.printf` — via a compiler special-case that synthesizes
+    the call descriptor from the actual argument types (the one shape
+    the fixed signature tables can't express). The Formatter subset:
+    conversions `b B s S c C d o x X e E f g G n % h H`, flags
+    `- + 0 , ( #` and space, argument indexes (`%2$s`), width, and
+    precision, with Java's exception types and messages
+    (`IllegalFormatConversionException: d != java.lang.String`, ...).
+    Float conversions round HALF_UP over the shortest-round-trip
+    decimal digits, matching Java's `BigDecimal.valueOf` path exactly
+    (`%.2f` of `2.675` is `2.68`). `join` still reports the varargs
+    limitation. `split` treats its
     delimiter literally, not as a regex (a documented deviation visible
     only for metacharacter delimiters like `"."`), with Java's full
     limit semantics; `intern` preserves reference identity; `hashCode`

@@ -55,6 +55,22 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/util/InputMismatchException",
         "java/util/NoSuchElementException",
     ),
+    (
+        "java/util/IllegalFormatException",
+        "java/lang/IllegalArgumentException",
+    ),
+    (
+        "java/util/UnknownFormatConversionException",
+        "java/util/IllegalFormatException",
+    ),
+    (
+        "java/util/MissingFormatArgumentException",
+        "java/util/IllegalFormatException",
+    ),
+    (
+        "java/util/IllegalFormatConversionException",
+        "java/util/IllegalFormatException",
+    ),
     ("java/io/IOException", "java/lang/Exception"),
     ("java/io/FileNotFoundException", "java/io/IOException"),
 ];

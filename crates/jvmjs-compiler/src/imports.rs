@@ -20,6 +20,10 @@ const JAVA_UTIL: &[&str] = &[
     "ArrayList",
     "InputMismatchException",
     "NoSuchElementException",
+    "IllegalFormatException",
+    "UnknownFormatConversionException",
+    "MissingFormatArgumentException",
+    "IllegalFormatConversionException",
 ];
 const JAVA_IO: &[&str] = &[
     "File",

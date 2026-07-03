@@ -8,6 +8,7 @@
 //! backed by the in-memory [`vfs::VirtualFileSystem`].
 
 pub mod debug;
+pub(crate) mod format;
 mod interpreter;
 pub mod intrinsics;
 pub mod io;

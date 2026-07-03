@@ -214,6 +214,27 @@ pub fn invoke_virtual(
     })?;
 
     match (receiver_object, method) {
+        (HeapObject::PrintStream(stream), "printf") => {
+            let stream = *stream;
+            let template = match args.first() {
+                Some(JValue::Ref(Some(reference))) => {
+                    heap.string_text(*reference).unwrap_or_default()
+                }
+                Some(JValue::Ref(None)) => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException: format is null",
+                    )));
+                }
+                _ => String::new(),
+            };
+            let format_args = crate::format::args_from_descriptor(descriptor, &args[1..])?;
+            let text = crate::format::java_format(heap, &template, &format_args)?;
+            match stream {
+                StdStream::Out => console.stdout(text.as_bytes()),
+                StdStream::Err => console.stderr(text.as_bytes()),
+            }
+            Ok(None)
+        }
         (HeapObject::PrintStream(stream), "print" | "println") => {
             let stream = *stream;
             let mut text = print_argument_text(heap, descriptor, args)?;
@@ -1420,6 +1441,22 @@ fn writer_method(
         _ => unreachable!("receiver kind checked by caller"),
     };
     match method {
+        "printf" => {
+            let template = match args.first() {
+                Some(JValue::Ref(Some(reference))) => {
+                    heap.string_text(*reference).unwrap_or_default()
+                }
+                Some(JValue::Ref(None)) => {
+                    return Err(throw("java.lang.NullPointerException: format is null"));
+                }
+                _ => String::new(),
+            };
+            let format_args = crate::format::args_from_descriptor(descriptor, &args[1..])?;
+            let text = crate::format::java_format(heap, &template, &format_args)?;
+            vfs.append_file(&path, text.as_bytes())
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(None)
+        }
         "print" | "println" => {
             let mut text = print_argument_text(heap, descriptor, args)?;
             if method == "println" {
@@ -1798,14 +1835,17 @@ fn integer_static(
 }
 
 /// Java's `Double.hashCode`: fold the canonical bit pattern.
-#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+pub(crate) fn java_double_hash_public(v: f64) -> i32 {
+    java_double_hash(v)
+}
+
 fn java_double_hash(v: f64) -> i32 {
     let bits = if v.is_nan() {
         0x7FF8_0000_0000_0000_u64
     } else {
         v.to_bits()
     };
-    ((bits ^ (bits >> 32)) & 0xFFFF_FFFF) as u32 as i32
+    (((bits ^ (bits >> 32)) & 0xFFFF_FFFF) as u32).cast_signed()
 }
 
 /// Java's `Double.toHexString`.
@@ -2059,6 +2099,19 @@ fn string_static(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
+    if method == "format" {
+        let template = match args.first() {
+            Some(JValue::Ref(Some(reference))) => heap.string_text(*reference).unwrap_or_default(),
+            Some(JValue::Ref(None)) => {
+                return Err(throw("java.lang.NullPointerException: format is null"));
+            }
+            _ => String::new(),
+        };
+        let format_args = crate::format::args_from_descriptor(descriptor, &args[1..])?;
+        let text = crate::format::java_format(heap, &template, &format_args)?;
+        let reference = heap.alloc_string(&text);
+        return Ok(Some(JValue::Ref(Some(reference))));
+    }
     match (method, args) {
         ("valueOf" | "copyValueOf", [value]) => {
             // The descriptor disambiguates int/char/boolean, which all

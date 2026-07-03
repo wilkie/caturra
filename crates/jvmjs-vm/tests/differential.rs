@@ -1240,6 +1240,74 @@ public class DiffListFull {
 );
 
 differential_test!(
+    diff_string_format,
+    "DiffFormat",
+    r#"
+import java.util.*;
+
+public class DiffFormat {
+    public static void main(String[] args) {
+        // Conversions.
+        System.out.println(String.format("%d|%s|%f|%c|%b", 42, "hi", 2.5, 'x', true));
+        System.out.println(String.format("%S|%B|%C", "shout", false, 'q'));
+        System.out.println(String.format("%x|%X|%o", 255, 255, 8));
+        System.out.println(String.format("%e|%E", 12345.6789, 0.000123));
+        System.out.println(String.format("%g|%G", 12345.6789, 0.0000123));
+        System.out.println(String.format("100%% done|%n").length());
+
+        // Flags, width, precision.
+        System.out.println(String.format("[%5d][%-5d][%05d]", 42, 42, 42));
+        System.out.println(String.format("[%+d][% d][%+d]", 42, 42, -42));
+        System.out.println(String.format("[%,d][%,d]", 1234567, -9876543));
+        System.out.println(String.format("[%(d][%(d]", -42, 42));
+        System.out.println(String.format("[%#x][%#o]", 255, 8));
+        System.out.println(String.format("[%10.3f][%-10.2f][%010.1f]", 3.14159, 2.5, -7.25));
+        System.out.println(String.format("[%.0f][%.4f]", 2.5, 1.0 / 3.0));
+        System.out.println(String.format("[%8.3s][%-6.2s]", "truncate", "me"));
+        System.out.println(String.format("[%,.2f]", 1234567.891));
+
+        // HALF_UP rounding ties (would be wrong with half-even).
+        System.out.println(String.format("%.2f %.2f %.1f %.0f", 2.675, 0.125, 0.25, 2.5));
+        System.out.println(String.format("%.2e %.1e", 1.115e3, 2.5e-3));
+
+        // Argument indexes and reuse.
+        System.out.println(String.format("%2$s-%1$s-%2$s", "a", "b"));
+
+        // Special values and null.
+        String nothing = null;
+        System.out.println(String.format("%s|%b|%h", nothing, nothing, nothing));
+        System.out.println(String.format("%f|%e|%g", 0.0, 0.0, 0.0));
+        System.out.println(String.format("%f", 1.0 / 0.0) + " " + String.format("%f", 0.0 / 0.0));
+
+        // %h hash rendering.
+        System.out.println(String.format("%h|%H", "hello", "hello"));
+
+        // printf on streams.
+        System.out.printf("printf: %d %s %.3f%n", 7, "seven", 7.0 / 3.0);
+        System.out.printf("no args%n");
+
+        // Errors are the real Java exception types.
+        try {
+            String.format("%d", "not a number");
+        } catch (IllegalFormatConversionException e) {
+            System.out.println("conversion: " + e.getMessage());
+        }
+        try {
+            String.format("%d %d", 1);
+        } catch (MissingFormatArgumentException e) {
+            System.out.println("missing: " + e.getMessage());
+        }
+        try {
+            String.format("%q", 1);
+        } catch (UnknownFormatConversionException e) {
+            System.out.println("unknown: " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"
