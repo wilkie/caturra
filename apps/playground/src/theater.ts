@@ -1,0 +1,249 @@
+/**
+ * Theater visualizer: replays the `org.code.theater` draw-command log jvmjs
+ * emits onto a 400×400 canvas — the browser-side equivalent of the real
+ * javabuilder, which rasterizes the same commands to a GIF server-side with
+ * `GraphicsHelper`/`GifWriter`.
+ *
+ * The bundled Scene records one command per line to `theater.log`; this module
+ * parses and draws them, holding a frame at each `pause` for animation.
+ */
+
+const CANVAS = 400;
+
+/** Milliseconds a single `pause` frame holds, scaled to keep runs short. */
+function stepMillis(pauseCount: number): number {
+  return Math.min(400, Math.max(30, Math.floor(12_000 / Math.max(pauseCount, 1))));
+}
+
+export class TheaterViz {
+  #ctx: CanvasRenderingContext2D;
+  #run = 0;
+
+  // Persisted drawing state (matches the real Scene's defaults).
+  #fill: string | null = 'rgb(0,0,0)';
+  #stroke: string | null = 'rgb(0,0,0)';
+  #strokeWidth = 1;
+  #textColor = 'rgb(0,0,0)';
+  #textHeight = 20;
+  #fontFamily = 'sans-serif';
+  #fontStyle = '';
+
+  constructor(private readonly canvas: HTMLCanvasElement) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('2d canvas context unavailable');
+    }
+    this.#ctx = ctx;
+    canvas.width = CANVAS;
+    canvas.height = CANVAS;
+    this.reset();
+  }
+
+  /** Clear the canvas and reset drawing state to the Scene defaults. */
+  reset(): void {
+    this.#run += 1;
+    this.#fill = 'rgb(0,0,0)';
+    this.#stroke = 'rgb(0,0,0)';
+    this.#strokeWidth = 1;
+    this.#textColor = 'rgb(0,0,0)';
+    this.#textHeight = 20;
+    this.#fontFamily = 'sans-serif';
+    this.#fontStyle = '';
+    this.#ctx.fillStyle = '#ffffff';
+    this.#ctx.fillRect(0, 0, CANVAS, CANVAS);
+  }
+
+  /** Replay a command log, animating pauses. Cancels any prior run. */
+  async play(log: string): Promise<void> {
+    this.reset();
+    const run = this.#run;
+    const commands = log.split('\n').filter((line) => line.length > 0);
+    const pauseCount = commands.filter((c) => c.startsWith('pause ')).length;
+    const hold = stepMillis(pauseCount);
+    for (const command of commands) {
+      if (this.#run !== run) {
+        return; // superseded by a newer run
+      }
+      if (command.startsWith('pause ')) {
+        await new Promise((resolve) => setTimeout(resolve, hold));
+      } else {
+        this.apply(command);
+      }
+    }
+  }
+
+  /** Apply every command instantly (a static final frame, for tests). */
+  render(log: string): void {
+    this.reset();
+    for (const command of log.split('\n')) {
+      if (command.length > 0 && !command.startsWith('pause ')) {
+        this.apply(command);
+      }
+    }
+  }
+
+  private color(tokens: string[]): string | null {
+    if (tokens[0] === 'none') {
+      return null;
+    }
+    return `rgb(${tokens[0] ?? '0'},${tokens[1] ?? '0'},${tokens[2] ?? '0'})`;
+  }
+
+  private apply(command: string): void {
+    const ctx = this.#ctx;
+    // `text "..." x y rot` needs the quoted body kept intact.
+    const textMatch = /^text "(.*)" (-?\d+) (-?\d+) (-?[\d.]+)$/.exec(command);
+    if (textMatch) {
+      this.drawText(
+        textMatch[1] ?? '',
+        Number(textMatch[2]),
+        Number(textMatch[3]),
+        Number(textMatch[4]),
+      );
+      return;
+    }
+    const [op, ...rest] = command.split(' ');
+    const n = (i: number): number => Number(rest[i] ?? 0);
+    switch (op) {
+      case 'clear':
+        ctx.fillStyle = this.color(rest) ?? '#ffffff';
+        ctx.fillRect(0, 0, CANVAS, CANVAS);
+        break;
+      case 'fillColor':
+        this.#fill = this.color(rest);
+        break;
+      case 'strokeColor':
+        this.#stroke = this.color(rest);
+        break;
+      case 'textColor':
+        this.#textColor = this.color(rest) ?? 'rgb(0,0,0)';
+        break;
+      case 'strokeWidth':
+        this.#strokeWidth = n(0);
+        break;
+      case 'textHeight':
+        this.#textHeight = n(0);
+        break;
+      case 'textStyle':
+        this.#fontFamily = rest[0] === 'MONO' ? 'monospace' : 'sans-serif';
+        this.#fontStyle = rest[1] === 'BOLD' ? 'bold' : rest[1] === 'ITALIC' ? 'italic' : '';
+        break;
+      case 'rectangle':
+        this.fillThenStroke(() => {
+          ctx.rect(n(0), n(1), n(2), n(3));
+        });
+        break;
+      case 'ellipse': {
+        const [x, y, w, h] = [n(0), n(1), n(2), n(3)];
+        this.fillThenStroke(() => {
+          ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+        });
+        break;
+      }
+      case 'line':
+        if (this.#stroke) {
+          ctx.strokeStyle = this.#stroke;
+          ctx.lineWidth = this.#strokeWidth;
+          ctx.beginPath();
+          ctx.moveTo(n(0), n(1));
+          ctx.lineTo(n(2), n(3));
+          ctx.stroke();
+        }
+        break;
+      case 'polygon': {
+        const [x, y, sides, radius] = [n(0), n(1), n(2), n(3)];
+        this.fillThenStroke(() => {
+          const theta = (2 * Math.PI) / sides;
+          for (let i = 0; i < sides; i++) {
+            const px = Math.cos(theta * i) * radius + x;
+            const py = Math.sin(theta * i) * radius + y;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+        });
+        break;
+      }
+      case 'shape':
+        this.drawShape(rest);
+        break;
+      case 'image':
+        this.drawImagePlaceholder(rest);
+        break;
+      default:
+        break; // note / sound: no visual
+    }
+  }
+
+  private fillThenStroke(path: () => void): void {
+    const ctx = this.#ctx;
+    ctx.beginPath();
+    path();
+    if (this.#fill) {
+      ctx.fillStyle = this.#fill;
+      ctx.fill();
+    }
+    if (this.#stroke) {
+      ctx.strokeStyle = this.#stroke;
+      ctx.lineWidth = this.#strokeWidth;
+      ctx.stroke();
+    }
+  }
+
+  private drawText(text: string, x: number, y: number, rotation: number): void {
+    const ctx = this.#ctx;
+    ctx.save();
+    if (rotation !== 0) {
+      ctx.translate(x, y);
+      ctx.rotate((rotation * Math.PI) / 180);
+      ctx.translate(-x, -y);
+    }
+    ctx.font = `${this.#fontStyle} ${String(this.#textHeight)}px ${this.#fontFamily}`.trim();
+    ctx.fillStyle = this.#textColor;
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+
+  private drawShape(rest: string[]): void {
+    const close = rest[rest.length - 1] === 'true';
+    const points = rest.slice(0, -1).map(Number);
+    const ctx = this.#ctx;
+    if (close) {
+      this.fillThenStroke(() => {
+        for (let i = 0; i + 1 < points.length; i += 2) {
+          const px = points[i] ?? 0;
+          const py = points[i + 1] ?? 0;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      });
+    } else if (this.#stroke) {
+      ctx.strokeStyle = this.#stroke;
+      ctx.lineWidth = this.#strokeWidth;
+      ctx.beginPath();
+      for (let i = 0; i + 1 < points.length; i += 2) {
+        const px = points[i] ?? 0;
+        const py = points[i + 1] ?? 0;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+
+  /** Phase-1 images are blank; draw a labelled placeholder box. */
+  private drawImagePlaceholder(rest: string[]): void {
+    const dims = /^\d+x\d+$/.test(rest[0] ?? '');
+    const nums = (dims ? rest.slice(1) : rest.slice(1)).map(Number);
+    const [x, y, size] = [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 40];
+    const ctx = this.#ctx;
+    ctx.fillStyle = '#dcdce4';
+    ctx.strokeStyle = '#9a9aa8';
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, size, size);
+    ctx.strokeRect(x, y, size, size);
+  }
+}

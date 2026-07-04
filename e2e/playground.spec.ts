@@ -135,6 +135,30 @@ test.describe('playground', () => {
     expect(state.painters[0].dir).toBe('south');
   });
 
+  test('renders a theater scene on the stage', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('theater-level').selectOption({ label: 'Shapes' });
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+    await page.getByTestId('run').click();
+    // Wait until the aqua background is drawn, then sample the yellow circle.
+    const handle = await page.waitForFunction(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="theater-canvas"]');
+      const ctx = canvas?.getContext('2d');
+      if (!ctx) {
+        return null;
+      }
+      const bg = ctx.getImageData(5, 5, 1, 1).data;
+      if (!(bg[0] === 0 && bg[1] === 255 && bg[2] === 255)) {
+        return null;
+      }
+      const circle = ctx.getImageData(200, 90, 1, 1).data;
+      return { bg: [bg[0], bg[1], bg[2]], circle: [circle[0], circle[1], circle[2]] };
+    });
+    const value = (await handle.jsonValue()) as { bg: number[]; circle: number[] };
+    expect(value.bg).toEqual([0, 255, 255]); // aqua clear()
+    expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
+  });
+
   test('reports source errors with locations', async ({ page }) => {
     await page.goto('/');
     await setSource(page, 'class Main { String s = "oops; }');

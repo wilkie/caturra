@@ -62,7 +62,13 @@ loop: on a neighborhood run it seeds `grid.txt`, runs, reads back
 canvas (`apps/playground/src/neighborhood.ts`) — a self-contained renderer that
 consumes the same protocol as the real `Neighborhood.ts`. Theater differs — the
 real system renders it to a GIF server-side (`GifWriter`), so its Phase 2 is a
-browser Canvas port, not a message stream.
+browser Canvas port, not a message stream: `apps/playground/src/theater.ts`
+replays the `theater.log` draw commands onto a 400×400 canvas, matching
+`GraphicsHelper`'s coordinate/order semantics (top-left rects/ellipses,
+center-based polygons, baseline text, fill-then-stroke) and holding a frame at
+each `pause`. Pixel-exact parity with the server GIF is out of reach (AWT vs
+Canvas font metrics / image decoding), but shapes, colours, text, and animation
+render faithfully; Phase-1 blank images draw as placeholder boxes.
 
 The same pattern covers **`org.code.theater` + `org.code.media`**
 (`compiler/src/stdlib/theater.java`, injected on either import). `Scene` records

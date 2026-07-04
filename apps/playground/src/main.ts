@@ -19,6 +19,7 @@ import {
   type SourceSquiggle,
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
+import { TheaterViz } from './theater.js';
 
 interface NeighborhoodLevel {
   name: string;
@@ -164,6 +165,80 @@ public class Main {
   },
 ];
 
+interface TheaterLevel {
+  name: string;
+  starter: string;
+}
+
+// Theater examples: each starter draws with org.code.theater onto the
+// 400x400 stage (shapes/text are fully rendered; images are placeholders).
+const THEATER_LEVELS: TheaterLevel[] = [
+  {
+    name: 'Shapes',
+    starter: `import org.code.theater.*;
+import org.code.media.*;
+
+public class Main {
+  public static void main(String[] args) {
+    Scene scene = new Scene();
+    scene.clear("aqua");
+
+    scene.setFillColor(new Color(120, 190, 255));
+    scene.setStrokeColor(new Color(20, 40, 80));
+    scene.setStrokeWidth(3.0);
+    scene.drawRectangle(40, 60, 320, 180);
+
+    scene.setFillColor(Color.YELLOW);
+    scene.drawEllipse(150, 40, 100, 100);
+
+    scene.setStrokeColor(Color.RED);
+    scene.setStrokeWidth(4.0);
+    scene.drawLine(0, 380, 400, 300);
+
+    scene.setFillColor(Color.GREEN);
+    scene.setStrokeColor(new Color(0, 60, 0));
+    scene.drawRegularPolygon(300, 320, 6, 50);
+
+    scene.setTextColor("black");
+    scene.setTextHeight(32);
+    scene.setTextStyle(Font.SANS, FontStyle.BOLD);
+    scene.drawText("Hello Theater", 55, 300);
+
+    Theater.playScenes(scene);
+  }
+}
+`,
+  },
+  {
+    name: 'Animation',
+    starter: `import org.code.theater.*;
+import org.code.media.*;
+
+public class Main {
+  public static void main(String[] args) {
+    Scene scene = new Scene();
+    String[] colors = {"red", "orange", "yellow", "green", "blue", "purple"};
+
+    // Each pause() is one frame: an expanding ring of rainbow color.
+    for (int i = 0; i < 18; i++) {
+      scene.clear("white");
+      scene.setFillColor(new Color(colors[i % colors.length]));
+      int r = 20 + i * 10;
+      scene.drawEllipse(200 - r, 200 - r, 2 * r, 2 * r);
+
+      scene.setTextColor("black");
+      scene.setTextHeight(22);
+      scene.setTextStyle(Font.MONO, FontStyle.NORMAL);
+      scene.drawText("frame " + i, 150, 30);
+      scene.pause(0.15);
+    }
+    Theater.playScenes(scene);
+  }
+}
+`,
+  },
+];
+
 const DEFAULT_PROGRAM = `public class Main {
     public static void main(String[] args) {
         System.out.println("Hello, World!");
@@ -200,6 +275,9 @@ const addFileEl = mustGet('#add-file', HTMLButtonElement);
 const vizEl = mustGet('#viz', HTMLDivElement);
 const neighborhoodLevelEl = mustGet('#neighborhood-level', HTMLSelectElement);
 const neighborhoodViz = new NeighborhoodViz(mustGet('#neighborhood-canvas', HTMLCanvasElement));
+const theaterVizEl = mustGet('#theater-viz', HTMLDivElement);
+const theaterLevelEl = mustGet('#theater-level', HTMLSelectElement);
+const theaterViz = new TheaterViz(mustGet('#theater-canvas', HTMLCanvasElement));
 
 /** Grid seeded on the next neighborhood run (a picked level's maze). */
 let currentNeighborhoodGrid = NEIGHBORHOOD_LEVELS[0]?.grid ?? '';
@@ -311,8 +389,28 @@ neighborhoodLevelEl.addEventListener('change', () => {
   }
   currentNeighborhoodGrid = level.grid;
   setSource(editor, level.starter);
+  theaterVizEl.hidden = true;
   vizEl.hidden = false;
   neighborhoodViz.load(level.grid, '');
+});
+
+// Theater picker: choosing an example loads its program and shows a
+// blank stage, ready for Run to draw on it.
+for (const [index, level] of THEATER_LEVELS.entries()) {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = level.name;
+  theaterLevelEl.appendChild(option);
+}
+theaterLevelEl.addEventListener('change', () => {
+  const level = THEATER_LEVELS[Number(theaterLevelEl.value)];
+  if (!level) {
+    return;
+  }
+  setSource(editor, level.starter);
+  vizEl.hidden = true;
+  theaterVizEl.hidden = false;
+  theaterViz.reset();
 });
 
 /** All files as compiler inputs (the active tab reads the live view). */
@@ -589,6 +687,13 @@ function isNeighborhoodProgram(): boolean {
   return collectSources().some((source) => source.text.includes('org.code.neighborhood'));
 }
 
+/** Whether the program uses the theater library (drives the stage). */
+function isTheaterProgram(): boolean {
+  return collectSources().some(
+    (source) => source.text.includes('org.code.theater') || source.text.includes('org.code.media'),
+  );
+}
+
 /** After a neighborhood run, read the emitted stream and animate it. */
 async function renderNeighborhood(): Promise<void> {
   const session = await sessionReady;
@@ -608,6 +713,23 @@ async function renderNeighborhood(): Promise<void> {
   neighborhoodViz.play(messages);
 }
 
+/** After a theater run, read the draw-command log and replay it. */
+async function renderTheater(): Promise<void> {
+  const session = await sessionReady;
+  let log = '';
+  try {
+    log = await session.readTextFile('theater.log');
+  } catch {
+    // No scene was played — nothing to draw.
+  }
+  if (log.trim() === '') {
+    theaterVizEl.hidden = true;
+    return;
+  }
+  theaterVizEl.hidden = false;
+  void theaterViz.play(log);
+}
+
 async function runProgram(): Promise<void> {
   runEl.disabled = true;
   consoleEl.textContent = '';
@@ -615,12 +737,18 @@ async function runProgram(): Promise<void> {
   try {
     const session = await sessionReady;
     const neighborhood = isNeighborhoodProgram();
+    const theater = !neighborhood && isTheaterProgram();
     if (neighborhood) {
       // Seed the grid and clear any prior run's animation stream.
       await session.writeFile('grid.txt', currentNeighborhoodGrid);
       await session.remove('neighborhood.jsonl').catch(() => undefined);
+      theaterVizEl.hidden = true;
+    } else if (theater) {
+      await session.remove('theater.log').catch(() => undefined);
+      vizEl.hidden = true;
     } else {
       vizEl.hidden = true;
+      theaterVizEl.hidden = true;
     }
     append(`$ javac ${allFileNames().join(' ')}\n`);
     const compiled = await session.compile(collectSources());
@@ -642,8 +770,12 @@ async function runProgram(): Promise<void> {
       } else if (result.status === 'exited') {
         append(`(exit code ${String(result.exitCode)})\n`);
       }
-      if (neighborhood && result.status !== 'error') {
-        await renderNeighborhood();
+      if (result.status !== 'error') {
+        if (neighborhood) {
+          await renderNeighborhood();
+        } else if (theater) {
+          await renderTheater();
+        }
       }
     }
   } catch (error) {

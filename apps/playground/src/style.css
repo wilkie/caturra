@@ -240,3 +240,17 @@ label {
   max-width: 100%;
   image-rendering: pixelated;
 }
+
+#theater-viz {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+#theater-canvas {
+  border: 1px solid #c9c9bd;
+  background: #ffffff;
+  align-self: start;
+  max-width: 100%;
+}
