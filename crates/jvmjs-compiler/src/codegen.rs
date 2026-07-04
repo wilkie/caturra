@@ -21,8 +21,8 @@ use jvmjs_classfile::{
 
 use crate::CompiledClass;
 use crate::ast::{
-    AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, Literal,
-    LocalDeclarator, MethodDecl, Stmt, SwitchArm, TypeRef, UnaryOp,
+    AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, InitBlock,
+    Literal, LocalDeclarator, MethodDecl, Stmt, SwitchArm, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
@@ -160,8 +160,11 @@ fn emit_class(
         class.methods.push(compiled);
     }
 
-    // Static field initializers run in a synthesized <clinit>.
-    if decl.fields.iter().any(|f| f.is_static && f.init.is_some()) {
+    // Static field initializers and `static {}` blocks run in a
+    // synthesized <clinit>, interleaved in source order.
+    let has_static_init = decl.fields.iter().any(|f| f.is_static && f.init.is_some())
+        || decl.init_blocks.iter().any(|b| b.is_static);
+    if has_static_init {
         let compiled = emit_clinit(path, diagnostics, table, decl, &mut class.constant_pool);
         class.methods.push(compiled);
     }
@@ -195,14 +198,7 @@ fn emit_clinit(
         finally_stack: Vec::new(),
         local_var_debug: Vec::new(),
     };
-    for field in &decl.fields {
-        if !field.is_static {
-            continue;
-        }
-        if let Some(init) = &field.init {
-            body.emit_field_initializer(field, init);
-        }
-    }
+    body.emit_ordered_initializers(decl, true);
     body.code.push_op(op::RETURN, 0);
     let max_locals = body.next_slot;
     let local_var_debug = std::mem::take(&mut body.local_var_debug);
@@ -4544,12 +4540,43 @@ impl BodyGen<'_> {
 
     /// The instance-field initializers, in declaration order.
     fn emit_instance_field_initializers(&mut self, class_decl: &ClassDecl) {
+        self.emit_ordered_initializers(class_decl, false);
+    }
+
+    /// Emit the field initializers and initializer blocks of the given
+    /// staticness, interleaved in source order (JLS §12.4.2 / §12.5).
+    fn emit_ordered_initializers(&mut self, class_decl: &ClassDecl, is_static: bool) {
+        enum Action<'a> {
+            Field(&'a FieldDecl),
+            Block(&'a InitBlock),
+        }
+        let mut actions: Vec<(usize, Action)> = Vec::new();
         for field in &class_decl.fields {
-            if field.is_static {
-                continue;
+            if field.is_static == is_static && field.init.is_some() {
+                actions.push((field.order, Action::Field(field)));
             }
-            if let Some(init) = &field.init {
-                self.emit_field_initializer(field, init);
+        }
+        for block in &class_decl.init_blocks {
+            if block.is_static == is_static {
+                actions.push((block.order, Action::Block(block)));
+            }
+        }
+        actions.sort_by_key(|(order, _)| *order);
+        for (_, action) in actions {
+            match action {
+                Action::Field(field) => {
+                    if let Some(init) = &field.init {
+                        self.emit_field_initializer(field, init);
+                    }
+                }
+                Action::Block(block) => {
+                    // Each block is its own local scope.
+                    self.scopes.push(Vec::new());
+                    for stmt in &block.body {
+                        self.statement(stmt);
+                    }
+                    self.scopes.pop();
+                }
             }
         }
     }

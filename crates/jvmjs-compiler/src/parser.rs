@@ -8,7 +8,7 @@
 
 use crate::ast::{
     AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, ImportDecl,
-    Literal, LocalDeclarator, MethodDecl, Param, Stmt, SwitchArm, TypeRef, UnaryOp,
+    InitBlock, Literal, LocalDeclarator, MethodDecl, Param, Stmt, SwitchArm, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -122,6 +122,7 @@ struct ClassModifiers {
 enum Member {
     Fields(Vec<FieldDecl>),
     Method(MethodDecl),
+    Init(InitBlock),
 }
 
 /// Internal marker: a construct failed to parse and a diagnostic was
@@ -437,6 +438,10 @@ impl Parser<'_> {
         self.expect_symbol("{", "to open the class body")?;
         let mut methods = Vec::new();
         let mut fields = Vec::new();
+        let mut init_blocks = Vec::new();
+        // Monotonic source-order counter shared by fields and blocks so
+        // initialization runs in textual order.
+        let mut order = 0usize;
         while !self.at_symbol("}") {
             if self.peek().is_none() {
                 self.error_at(
@@ -448,7 +453,18 @@ impl Parser<'_> {
             if let Ok(member) = self.member(&name) {
                 match member {
                     Member::Method(method) => methods.push(method),
-                    Member::Fields(mut declared) => fields.append(&mut declared),
+                    Member::Fields(mut declared) => {
+                        for field in &mut declared {
+                            field.order = order;
+                            order += 1;
+                        }
+                        fields.append(&mut declared);
+                    }
+                    Member::Init(mut block) => {
+                        block.order = order;
+                        order += 1;
+                        init_blocks.push(block);
+                    }
                 }
             } else {
                 self.recover_to_statement_boundary();
@@ -465,6 +481,7 @@ impl Parser<'_> {
             is_interface,
             fields,
             methods,
+            init_blocks,
             span: SourceSpan {
                 start: start.start,
                 end: name_span.end,
@@ -492,6 +509,22 @@ impl Parser<'_> {
     fn member(&mut self, class_name: &str) -> Parsed<Member> {
         let start = self.here();
         let modifiers = self.modifiers();
+
+        // Initializer block: `static { ... }` or a bare `{ ... }`.
+        if self.at_symbol("{") {
+            self.pos += 1; // '{'
+            let body = self.block_body();
+            let span = SourceSpan {
+                start: start.start,
+                end: self.here().start,
+            };
+            return Ok(Member::Init(InitBlock {
+                is_static: modifiers.is_static,
+                body,
+                order: 0,
+                span,
+            }));
+        }
 
         // Constructor: `ClassName(...)` with no return type.
         if let Some(TokenKind::Identifier(name)) = self.peek()
@@ -541,6 +574,7 @@ impl Parser<'_> {
                     is_private: modifiers.is_private,
                     is_final: modifiers.is_final,
                     init,
+                    order: 0,
                     span: current.1,
                 });
                 if !self.eat_symbol(",") {

@@ -34,6 +34,19 @@ pub struct ClassDecl {
     pub is_interface: bool,
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<MethodDecl>,
+    /// `static { ... }` and instance `{ ... }` initializer blocks.
+    pub init_blocks: Vec<InitBlock>,
+    pub span: SourceSpan,
+}
+
+/// A class-body initializer block (`static { ... }` or `{ ... }`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InitBlock {
+    pub is_static: bool,
+    pub body: Vec<Stmt>,
+    /// Textual position among the class's fields and blocks, so
+    /// initialization runs in source order (JLS §12.4.2 / §12.5).
+    pub order: usize,
     pub span: SourceSpan,
 }
 
@@ -47,6 +60,8 @@ pub struct FieldDecl {
     pub is_private: bool,
     pub is_final: bool,
     pub init: Option<Expr>,
+    /// Textual position among the class's fields and init blocks.
+    pub order: usize,
     pub span: SourceSpan,
 }
 

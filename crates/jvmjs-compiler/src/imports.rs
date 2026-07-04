@@ -309,6 +309,11 @@ fn check_class(
             check.stmt(stmt);
         }
     }
+    for block in &class.init_blocks {
+        for stmt in &block.body {
+            check.stmt(stmt);
+        }
+    }
 }
 
 impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {

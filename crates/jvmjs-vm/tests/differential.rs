@@ -1780,6 +1780,69 @@ public class DiffLabels {
 );
 
 differential_test!(
+    diff_initializer_blocks,
+    "DiffInit",
+    r#"
+public class DiffInit {
+    static int a = 1;
+    static int b;
+    static int counter;
+
+    // Static block interleaves with the static field inits above/below.
+    static {
+        b = a + 10;
+        counter = 100;
+    }
+
+    static int c = b * 2;
+
+    static {
+        counter += c;
+    }
+
+    int x = 5;
+    int y;
+    String tag;
+
+    // Instance block runs after super(), in source order with inits.
+    {
+        y = x * 2;
+        tag = "made:" + x;
+        counter++;
+    }
+
+    int z = y + 1;
+
+    DiffInit() {
+        // Constructor body runs after instance inits.
+        z += 100;
+    }
+
+    DiffInit(int seed) {
+        this();      // delegation: instance inits run once, via this()
+        z += seed;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(a + " " + b + " " + c + " " + counter);
+
+        DiffInit first = new DiffInit();
+        System.out.println(first.x + " " + first.y + " " + first.z + " " + first.tag);
+        System.out.println(counter);
+
+        DiffInit second = new DiffInit(1000);
+        System.out.println(second.z + " " + second.tag);
+        System.out.println(counter);
+
+        // A third, to confirm static blocks ran exactly once.
+        DiffInit third = new DiffInit();
+        System.out.println(a + " " + b + " " + c + " " + third.y);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

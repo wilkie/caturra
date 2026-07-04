@@ -299,6 +299,15 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   (`undefined label: x`, `not a loop label: x`). Sibling scopes may
   reuse a label independently.
 
+- **Initializer blocks** (2026-07-03): `static { ... }` blocks run in
+  the synthesized `<clinit>`, and instance `{ ... }` blocks run in
+  every constructor after `super(...)` — both interleaved with their
+  field initializers in source order (JLS §12.4.2 / §12.5), tracked by
+  a per-class textual-order counter. `this(...)` delegation runs the
+  instance initializers exactly once (in the delegated-to
+  constructor); static blocks run exactly once at class init. Each
+  block is its own local scope.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
