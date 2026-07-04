@@ -228,6 +228,40 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn comparable_interface_and_sorting() {
+    let out = run_stdout(
+        r#"
+        class Card implements Comparable<Card> {
+            private int rank;
+            public Card(int rank) { this.rank = rank; }
+            public int compareTo(Card other) { return rank - other.rank; }
+            public String toString() { return "" + rank; }
+        }
+        public class Cmp {
+            static void sort(Comparable[] arr) {
+                for (int i = 0; i < arr.length; i++) {
+                    int min = i;
+                    for (int j = i + 1; j < arr.length; j++)
+                        if (arr[j].compareTo(arr[min]) < 0) min = j;
+                    Comparable t = arr[min]; arr[min] = arr[i]; arr[i] = t;
+                }
+            }
+            public static void main(String[] args) {
+                Card a = new Card(8), b = new Card(3);
+                System.out.println((a.compareTo(b) > 0) + " " + a.compareTo(a));
+                Card[] cards = { new Card(5), new Card(1), new Card(9), new Card(3) };
+                sort(cards);
+                for (Card c : cards) System.out.print(c + " ");
+                System.out.println();
+            }
+        }
+        "#,
+        "Cmp",
+    );
+    assert_eq!(out, "true 0\n1 3 5 9 \n");
+}
+
+#[test]
 fn method_references_all_kinds() {
     let out = run_stdout(
         r#"

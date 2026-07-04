@@ -426,6 +426,17 @@ x)`) with type-parameter erasure — every type variable is rewritten
   Static-vs-instance is resolved precisely for user classes and via a
   curated static-method set for library types.
 
+- **`Comparable<T>` and generic supertype clauses** (2026-07-04):
+  `extends`/`implements` clauses now accept generic type arguments
+  (`class Foo implements Comparable<Foo>`, `class Bar extends
+Base<String>`), erased like everywhere else. `Comparable<T>` is
+  modeled as a built-in interface, so a class implementing it with
+  `int compareTo(Foo)` works — called directly on a concrete receiver
+  and through a `Comparable`-typed one (e.g. a selection sort over
+  `Comparable[]`). Array covariance (`Card[]` to `Comparable[]`) and
+  the erasure bridge (a `compareTo(Object)` interface call dispatching
+  to `compareTo(Card)`) are handled. This completes the AP CS A subset.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

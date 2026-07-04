@@ -474,6 +474,7 @@ impl Parser<'_> {
                 // Interfaces extend other interfaces (a list).
                 loop {
                     let (parent, _) = self.expect_ident("after 'extends'")?;
+                    self.skip_type_args();
                     interfaces.push(parent);
                     if !self.eat_symbol(",") {
                         break;
@@ -481,6 +482,7 @@ impl Parser<'_> {
                 }
             } else {
                 let (parent, _) = self.expect_ident("after 'extends'")?;
+                self.skip_type_args();
                 superclass = Some(parent);
             }
         }
@@ -491,6 +493,7 @@ impl Parser<'_> {
             }
             loop {
                 let (parent, _) = self.expect_ident("after 'implements'")?;
+                self.skip_type_args();
                 interfaces.push(parent);
                 if !self.eat_symbol(",") {
                     break;
@@ -569,6 +572,7 @@ impl Parser<'_> {
         if self.eat_keyword(Keyword::Implements) {
             loop {
                 let (parent, _) = self.expect_ident("after 'implements'")?;
+                self.skip_type_args();
                 interfaces.push(parent);
                 if !self.eat_symbol(",") {
                     break;
@@ -847,6 +851,28 @@ impl Parser<'_> {
         self.expect_symbol("{", "to open the method body")?;
         let body = self.block_body();
         Ok((params, Some(body)))
+    }
+
+    /// Skip a `<...>` type-argument list on a supertype reference
+    /// (`implements Comparable<Foo>`), balancing nested `<>`. Erased.
+    fn skip_type_args(&mut self) {
+        if !self.at_symbol("<") {
+            return;
+        }
+        let mut depth = 0i32;
+        while let Some(kind) = self.peek() {
+            match kind {
+                TokenKind::Symbol("<") => depth += 1,
+                TokenKind::Symbol(">") => depth -= 1,
+                TokenKind::Symbol(">>") => depth -= 2,
+                TokenKind::Symbol(">>>") => depth -= 3,
+                _ => {}
+            }
+            self.pos += 1;
+            if depth <= 0 {
+                break;
+            }
+        }
     }
 
     /// Parse a `<T, U extends Bound, ...>` type-parameter list,

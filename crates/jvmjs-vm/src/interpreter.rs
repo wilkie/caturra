@@ -1978,6 +1978,41 @@ impl<'run> Interpreter<'run> {
                 }
             }
         }
+        // Erasure bridge: a call through a generic interface uses the
+        // erased descriptor (`compareTo(Object)`), but the class holds
+        // the specific one (`compareTo(Card)`). Match by name and
+        // argument count when the exact descriptor is not present.
+        if found.is_none() {
+            let want_args = descriptor_arg_count(descriptor);
+            let mut current = classes.get(instance_class);
+            let mut steps = 0usize;
+            while let Some(candidate) = current {
+                steps += 1;
+                if steps > classes.len() + 1 {
+                    break;
+                }
+                if let Some(method) = candidate.methods.iter().find(|m| {
+                    !m.access_flags
+                        .contains(jvmjs_classfile::MethodAccessFlags::STATIC)
+                        && !m
+                            .access_flags
+                            .contains(jvmjs_classfile::MethodAccessFlags::ABSTRACT)
+                        && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                        && candidate
+                            .constant_pool
+                            .get_utf8(m.descriptor_index)
+                            .and_then(descriptor_arg_count)
+                            == want_args
+                }) {
+                    found = Some((candidate, method));
+                    break;
+                }
+                current = candidate
+                    .constant_pool
+                    .get_class_name(candidate.super_class)
+                    .and_then(|super_name| classes.get(super_name));
+            }
+        }
         let Some((class, method)) = found else {
             // Throwable-descended classes inherit getMessage/toString.
             if self.instance_is_throwable(instance_class)

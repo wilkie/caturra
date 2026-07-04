@@ -2586,6 +2586,78 @@ public class DiffMethodRef {
 );
 
 differential_test!(
+    diff_comparable,
+    "DiffComparable",
+    r#"
+class Card implements Comparable<Card> {
+    private int rank;
+    public Card(int rank) { this.rank = rank; }
+    public int getRank() { return rank; }
+    public int compareTo(Card other) { return rank - other.rank; }
+    public String toString() { return "C" + rank; }
+}
+
+interface Ranked<T> {
+    int rankAgainst(T other);
+}
+
+class Player implements Ranked<Player>, Comparable<Player> {
+    int score;
+    Player(int score) { this.score = score; }
+    public int rankAgainst(Player other) { return score - other.score; }
+    public int compareTo(Player other) { return score - other.score; }
+}
+
+public class DiffComparable {
+    // Selection sort over Comparable — array covariance + interface dispatch.
+    static void sort(Comparable[] arr) {
+        for (int i = 0; i < arr.length; i++) {
+            int min = i;
+            for (int j = i + 1; j < arr.length; j++) {
+                if (arr[j].compareTo(arr[min]) < 0) min = j;
+            }
+            Comparable t = arr[min];
+            arr[min] = arr[i];
+            arr[i] = t;
+        }
+    }
+
+    static Comparable maxOf(Comparable a, Comparable b) {
+        return a.compareTo(b) >= 0 ? a : b;
+    }
+
+    public static void main(String[] args) {
+        // Direct compareTo on a concrete type.
+        Card a = new Card(7), b = new Card(3);
+        System.out.println((a.compareTo(b) > 0) + " " + (b.compareTo(a) < 0) + " " + a.compareTo(a));
+
+        // Sort through the Comparable interface (covariant array).
+        Card[] cards = { new Card(5), new Card(2), new Card(8), new Card(1), new Card(4) };
+        sort(cards);
+        for (Card c : cards) System.out.print(c + " ");
+        System.out.println();
+
+        // A user generic interface implemented alongside Comparable.
+        Player p = new Player(50), q = new Player(30);
+        System.out.println(p.rankAgainst(q) + " " + p.compareTo(q));
+
+        // A method taking Comparable, returning the larger.
+        Card biggerCard = (Card) maxOf(a, b);
+        System.out.println(biggerCard.getRank());
+        Player winner = (Player) maxOf(p, q);
+        System.out.println(winner.score);
+
+        // Sort players too.
+        Player[] players = { new Player(40), new Player(10), new Player(70), new Player(20) };
+        sort(players);
+        for (Player pl : players) System.out.print(pl.score + " ");
+        System.out.println();
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

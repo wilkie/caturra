@@ -475,6 +475,33 @@ impl MethodTable {
             },
         );
         table.object_id = object_id;
+        // `java.lang.Comparable<T>` — a functional interface every
+        // user class may implement (`compareTo` compares to a peer).
+        let comparable_id = ClassId(1);
+        table.class_names.push(String::from("Comparable"));
+        table.classes.insert(
+            String::from("Comparable"),
+            ClassInfo {
+                id: comparable_id,
+                superclass: None,
+                library_superclass: None,
+                interfaces: Vec::new(),
+                is_abstract: true,
+                is_interface: true,
+                is_enum: false,
+                type_param_count: 1,
+                methods: vec![MethodSig {
+                    name: String::from("compareTo"),
+                    params: vec![JType::TypeVar],
+                    ret: Some(JType::Int),
+                    is_static: false,
+                    is_private: false,
+                    is_abstract: true,
+                    is_varargs: false,
+                }],
+                fields: Vec::new(),
+            },
+        );
         for (_, unit) in units {
             for class in &unit.classes {
                 if table.classes.contains_key(&class.name) {
@@ -916,11 +943,11 @@ impl MethodTable {
                     break;
                 }
                 if let Some(info) = self.info_by_id(id) {
-                    if info
-                        .methods
-                        .iter()
-                        .any(|m| m.name == sig.name && m.params == sig.params && !m.is_abstract)
-                    {
+                    if info.methods.iter().any(|m| {
+                        m.name == sig.name
+                            && !m.is_abstract
+                            && self.params_override(&m.params, &sig.params)
+                    }) {
                         continue 'outer;
                     }
                     current = info.superclass;
@@ -931,6 +958,20 @@ impl MethodTable {
             return Some((sig.name.clone(), self.class_name(owner).to_owned()));
         }
         None
+    }
+
+    /// Whether a concrete method's parameters override an abstract
+    /// method's, allowing for erasure: an abstract type-variable or
+    /// `Object` parameter is satisfied by any reference argument (the
+    /// generic-interface bridge, e.g. `compareTo(Foo)` implements
+    /// `Comparable<Foo>.compareTo(T)`).
+    fn params_override(&self, concrete: &[JType], abstract_: &[JType]) -> bool {
+        concrete.len() == abstract_.len()
+            && concrete.iter().zip(abstract_).all(|(c, a)| {
+                c == a
+                    || *a == JType::TypeVar
+                    || (*a == JType::Object(self.object_id) && c.is_reference())
+            })
     }
 
     fn has_class(&self, name: &str) -> bool {
@@ -961,6 +1002,11 @@ impl MethodTable {
                 // The synthetic Object top type.
                 if name == "Object" || name == "java.lang.Object" {
                     return Some(JType::Object(self.object_id));
+                }
+                if (name == "Comparable" || name == "java.lang.Comparable")
+                    && let Some(id) = self.class_id("Comparable")
+                {
+                    return Some(JType::Object(id));
                 }
                 // The erased single type variable of the enclosing
                 // generic class.
@@ -1468,6 +1514,14 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // Autoboxing / unboxing in assignment and method invocation.
         || matches!((from, to), (JType::Boxed(e), t) if e.base_type() == t)
         || matches!((from, to), (f, JType::Boxed(e)) if e.base_type() == f)
+        // Array covariance: `Card[]` widens to `Comparable[]`.
+        || matches!(
+            (from, to),
+            (
+                JType::Array { elem: ElemType::Object(sub), dims: d1 },
+                JType::Array { elem: ElemType::Object(sup), dims: d2 },
+            ) if d1 == d2 && table.is_subtype(sub, sup)
+        )
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -8795,6 +8849,17 @@ impl BodyGen<'_> {
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
             // A parameterized type and its raw class erase alike.
             (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
+            // Array covariance: `Card[]` assigns to `Comparable[]`.
+            (
+                JType::Array {
+                    elem: ElemType::Object(sub),
+                    dims: d1,
+                },
+                JType::Array {
+                    elem: ElemType::Object(sup),
+                    dims: d2,
+                },
+            ) if d1 == d2 && self.table.is_subtype(sub, sup) => {}
             // Any reference stores into a type variable; a type variable
             // reads out as Object.
             (from, JType::TypeVar) if from.is_reference() => {}
