@@ -928,6 +928,7 @@ fn replace_units(haystack: &[u16], from: &[u16], to: &[u16]) -> Vec<u16> {
 
 /// `java.util.Scanner` methods, pulling lines from the console on
 /// demand. Tokens are whitespace-delimited (Java's default).
+#[allow(clippy::too_many_lines)] // one arm per Scanner method
 fn scanner_method(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
@@ -969,6 +970,34 @@ fn scanner_method(
         "hasNextFloat" => {
             let token = scanner_peek_token(heap, console, receiver)?;
             let ok = token.is_some_and(|t| t.parse::<f32>().is_ok());
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
+        "nextShort" | "nextByte" => {
+            let (lo, hi) = if method == "nextShort" {
+                (i32::from(i16::MIN), i32::from(i16::MAX))
+            } else {
+                (i32::from(i8::MIN), i32::from(i8::MAX))
+            };
+            let token = scanner_next_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let value: i32 = token
+                .parse()
+                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            if value < lo || value > hi {
+                return Err(throw("java.util.InputMismatchException"));
+            }
+            Ok(Some(JValue::Int(value)))
+        }
+        "hasNextShort" | "hasNextByte" => {
+            let (lo, hi) = if method == "hasNextShort" {
+                (i32::from(i16::MIN), i32::from(i16::MAX))
+            } else {
+                (i32::from(i8::MIN), i32::from(i8::MAX))
+            };
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token
+                .and_then(|t| t.parse::<i32>().ok())
+                .is_some_and(|v| v >= lo && v <= hi);
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextBoolean" => {
@@ -1550,6 +1579,8 @@ pub fn invoke_static(
         "java/lang/Boolean" => boolean_static(heap, method, args),
         "java/lang/Long" => long_static(heap, method, args),
         "java/lang/Float" => float_static(heap, method, args),
+        "java/lang/Short" => small_int_static(heap, "Short", method, args),
+        "java/lang/Byte" => small_int_static(heap, "Byte", method, args),
         "java/lang/System" => match method {
             "currentTimeMillis" => Ok(Some(JValue::Long(console.now_millis()))),
             "nanoTime" => Ok(Some(JValue::Long(
@@ -2207,6 +2238,54 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
         ("reverseBytes", [JValue::Long(v)]) => l(v.swap_bytes()),
         _ => Err(VmError::UnknownIntrinsic(format!("Long.{method}"))),
     }
+}
+
+/// `Short` and `Byte` wrapper statics — identical shapes, differing
+/// only in range.
+fn small_int_static(
+    heap: &mut Heap,
+    class: &str,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let (lo, hi) = if class == "Short" {
+        (i32::from(i16::MIN), i32::from(i16::MAX))
+    } else {
+        (i32::from(i8::MIN), i32::from(i8::MAX))
+    };
+    match (method, args) {
+        ("parseShort" | "parseByte" | "valueOf", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            let value: i32 = text.parse().map_err(|_| number_format(&text))?;
+            if value < lo || value > hi {
+                return Err(number_format_range(&text, class));
+            }
+            Ok(Some(JValue::Int(value)))
+        }
+        ("valueOf" | "hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),
+        ("toString", [JValue::Int(v)]) => {
+            let reference = heap.alloc_string(&v.to_string());
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("compare", [JValue::Int(a), JValue::Int(b)]) => Ok(Some(JValue::Int(match a.cmp(b) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }))),
+        ("reverseBytes", [JValue::Int(v)]) => {
+            #[allow(clippy::cast_possible_truncation)]
+            let value = *v as i16;
+            Ok(Some(JValue::Int(i32::from(value.swap_bytes()))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+    }
+}
+
+/// javac range message for `Byte.parseByte("200")`.
+fn number_format_range(text: &str, class: &str) -> VmError {
+    VmError::UncaughtException(format!(
+        "java.lang.NumberFormatException: Value out of range. Value:\"{text}\" Radix:10          ({class})"
+    ))
 }
 
 fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<JValue>, VmError> {

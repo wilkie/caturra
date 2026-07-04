@@ -158,7 +158,9 @@ pub const L2I: u8 = 0x88;
 pub const L2D: u8 = 0x8A;
 pub const D2I: u8 = 0x8E;
 pub const D2L: u8 = 0x8F;
+pub const I2B: u8 = 0x91;
 pub const I2C: u8 = 0x92;
+pub const I2S: u8 = 0x93;
 
 // Comparisons.
 pub const DCMPL: u8 = 0x97;
@@ -219,3 +221,5 @@ pub const T_DOUBLE: u8 = 7;
 pub const T_INT: u8 = 10;
 pub const T_LONG: u8 = 11;
 pub const T_FLOAT: u8 = 6;
+pub const T_BYTE: u8 = 8;
+pub const T_SHORT: u8 = 9;

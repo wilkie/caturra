@@ -655,12 +655,13 @@ impl Parser<'_> {
                 self.pos += 1;
                 TypeRef::Float
             }
-            Some(TokenKind::Keyword(Keyword::Byte | Keyword::Short)) => {
-                self.error_here(
-                    "the byte and short primitives are not yet supported by jvmjs \
-                     (int, long, float, double, boolean, and char are)",
-                );
-                return Err(Abort);
+            Some(TokenKind::Keyword(Keyword::Short)) => {
+                self.pos += 1;
+                TypeRef::Short
+            }
+            Some(TokenKind::Keyword(Keyword::Byte)) => {
+                self.pos += 1;
+                TypeRef::Byte
             }
             Some(TokenKind::Identifier(_)) => {
                 let (mut name, _) = self.expect_ident("for the type")?;
@@ -1536,6 +1537,8 @@ impl Parser<'_> {
                         | Keyword::Char
                         | Keyword::Long
                         | Keyword::Float
+                        | Keyword::Short
+                        | Keyword::Byte
                 ))
             )
             && matches!(self.peek_at(2), Some(TokenKind::Symbol(")")))
@@ -1710,6 +1713,14 @@ impl Parser<'_> {
             Some(TokenKind::Keyword(Keyword::Float)) => {
                 self.pos += 1;
                 TypeRef::Float
+            }
+            Some(TokenKind::Keyword(Keyword::Short)) => {
+                self.pos += 1;
+                TypeRef::Short
+            }
+            Some(TokenKind::Keyword(Keyword::Byte)) => {
+                self.pos += 1;
+                TypeRef::Byte
             }
             Some(TokenKind::Identifier(_)) => {
                 let (mut name, _) = self.expect_ident("after 'new'")?;

@@ -836,6 +836,16 @@ impl<'run> Interpreter<'run> {
                             #[allow(clippy::cast_possible_truncation)]
                             frame.stack.push(JValue::Long(value as i64));
                         }
+                        op::I2B => {
+                            let value = frame.pop_int()?;
+                            #[allow(clippy::cast_possible_truncation)]
+                            frame.stack.push(JValue::Int(i32::from(value as i8)));
+                        }
+                        op::I2S => {
+                            let value = frame.pop_int()?;
+                            #[allow(clippy::cast_possible_truncation)]
+                            frame.stack.push(JValue::Int(i32::from(value as i16)));
+                        }
                         op::I2C => {
                             let value = frame.pop_int()?;
                             // i2c truncates to 16 bits and zero-extends.
@@ -1109,6 +1119,10 @@ impl<'run> Interpreter<'run> {
                                 op::T_FLOAT => {
                                     crate::value::HeapObject::FloatArray(vec![0.0; length])
                                 }
+                                op::T_SHORT => {
+                                    crate::value::HeapObject::ShortArray(vec![0; length])
+                                }
+                                op::T_BYTE => crate::value::HeapObject::ByteArray(vec![0; length]),
                                 other => {
                                     return Err(malformed(format!(
                                         "unsupported newarray type {other}"
@@ -1155,6 +1169,8 @@ impl<'run> Interpreter<'run> {
                                 Some(crate::value::HeapObject::RefArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::LongArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::FloatArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::ShortArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::ByteArray(v)) => v.len(),
                                 _ => {
                                     return Err(malformed(String::from(
                                         "arraylength on a non-array",
@@ -1165,16 +1181,28 @@ impl<'run> Interpreter<'run> {
                                 .stack
                                 .push(JValue::Int(i32::try_from(length).unwrap_or(i32::MAX)));
                         }
-                        op::IALOAD | op::BALOAD | op::CALOAD => {
+                        op::IALOAD | op::BALOAD | op::CALOAD | op::SALOAD => {
                             let (reference, index) = frame.pop_array_access()?;
-                            let Some(crate::value::HeapObject::IntArray(values)) =
-                                self.heap.get(reference)
-                            else {
-                                return Err(malformed(String::from(
-                                    "int-array load on a non-int-array",
-                                )));
+                            let value = match self.heap.get(reference) {
+                                Some(crate::value::HeapObject::IntArray(values)) => {
+                                    *array_get(values, index)?
+                                }
+                                Some(crate::value::HeapObject::ByteArray(values))
+                                    if opcode == op::BALOAD =>
+                                {
+                                    i32::from(*array_get(values, index)?)
+                                }
+                                Some(crate::value::HeapObject::ShortArray(values))
+                                    if opcode == op::SALOAD =>
+                                {
+                                    i32::from(*array_get(values, index)?)
+                                }
+                                _ => {
+                                    return Err(malformed(String::from(
+                                        "int-array load on a non-int-array",
+                                    )));
+                                }
                             };
-                            let value = *array_get(values, index)?;
                             frame.stack.push(JValue::Int(value));
                         }
                         op::FALOAD => {
@@ -1221,24 +1249,42 @@ impl<'run> Interpreter<'run> {
                             let value = *array_get(values, index)?;
                             frame.stack.push(value);
                         }
-                        op::IASTORE | op::BASTORE | op::CASTORE => {
+                        op::IASTORE | op::BASTORE | op::CASTORE | op::SASTORE => {
                             let value = frame.pop_int()?;
                             let (reference, index) = frame.pop_array_access()?;
-                            let Some(crate::value::HeapObject::IntArray(values)) =
-                                self.heap.get_mut(reference)
-                            else {
-                                return Err(malformed(String::from(
-                                    "int-array store on a non-int-array",
-                                )));
-                            };
-                            let slot = array_get_mut(values, index)?;
-                            // Stores mask to the element width (JVMS castore /
-                            // bastore); boolean arrays hold 0/1.
-                            *slot = match opcode {
-                                op::CASTORE => i32::from(value.cast_unsigned() as u16),
-                                op::BASTORE => value & 1,
-                                _ => value,
-                            };
+                            match self.heap.get_mut(reference) {
+                                Some(crate::value::HeapObject::IntArray(values)) => {
+                                    let slot = array_get_mut(values, index)?;
+                                    // castore masks to the element width
+                                    // (JVMS); boolean arrays hold 0/1.
+                                    *slot = if opcode == op::CASTORE {
+                                        i32::from(value.cast_unsigned() as u16)
+                                    } else {
+                                        value
+                                    };
+                                }
+                                Some(crate::value::HeapObject::ByteArray(values))
+                                    if opcode == op::BASTORE =>
+                                {
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    {
+                                        *array_get_mut(values, index)? = value as i8;
+                                    }
+                                }
+                                Some(crate::value::HeapObject::ShortArray(values))
+                                    if opcode == op::SASTORE =>
+                                {
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    {
+                                        *array_get_mut(values, index)? = value as i16;
+                                    }
+                                }
+                                _ => {
+                                    return Err(malformed(String::from(
+                                        "int-array store on a non-int-array",
+                                    )));
+                                }
+                            }
                         }
                         op::FASTORE => {
                             let value = frame.pop_float()?;
@@ -2281,6 +2327,8 @@ fn source_type_of(descriptor: &str) -> String {
         "I" => return String::from("int"),
         "J" => return String::from("long"),
         "F" => return String::from("float"),
+        "S" => return String::from("short"),
+        "B" => return String::from("byte"),
         "D" => return String::from("double"),
         "Z" => return String::from("boolean"),
         "C" => return String::from("char"),

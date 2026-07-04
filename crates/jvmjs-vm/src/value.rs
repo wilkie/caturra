@@ -50,6 +50,11 @@ pub enum HeapObject {
     LongArray(Vec<i64>),
     /// A `float[]`.
     FloatArray(Vec<f32>),
+    /// A `short[]`.
+    ShortArray(Vec<i16>),
+    /// A `byte[]` (distinct from boolean arrays, which reuse
+    /// [`HeapObject::IntArray`]: `bastore` truncates for bytes).
+    ByteArray(Vec<i8>),
     /// A reference array (e.g. `String[] args`, or the rows of a 2D
     /// array).
     RefArray(Vec<JValue>),

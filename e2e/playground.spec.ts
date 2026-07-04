@@ -659,16 +659,15 @@ test.describe('playground', () => {
       [
         'public class Main {',
         '    public static void main(String[] args) {',
-        '        short small = 12;',
-        '        System.out.println(small);',
+        '        synchronized (args) {',
+        '            System.out.println("hi");',
+        '        }',
         '    }',
         '}',
       ].join('\n'),
     );
     await page.getByTestId('run').click();
-    await expect(page.getByTestId('console')).toContainText(
-      'the byte and short primitives are not yet supported by jvmjs',
-    );
+    await expect(page.getByTestId('console')).toContainText('not yet supported by jvmjs');
   });
 });
 

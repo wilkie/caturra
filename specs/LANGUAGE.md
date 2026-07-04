@@ -277,6 +277,20 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   99.94% including every value ordinary programs produce; the residue
   is exotic subnormal bit patterns, documented in the corpus test.
 
+- **The `short` and `byte` types** (2026-07-03): stored as ints (the
+  JVM way), with the full conversion discipline — JLS §5.2 constant
+  narrowing (`byte b = 5;` compiles, `byte b = 200;` is javac's lossy
+  error), `I2B`/`I2S` truncating casts from every numeric type,
+  compound-assignment and `++`/`--` implicit narrow-back with
+  wraparound (`byte b = 126; b++; b++;` is -128), arithmetic promoting
+  to int, `byte[]`/`short[]` with true element semantics (`bastore`
+  truncates; byte arrays are distinct from boolean arrays on the
+  heap), switch selectors, `Byte`/`Short` wrapper classes with javac's
+  out-of-range `NumberFormatException`, `Scanner.nextByte/nextShort`
+  (range-checked `InputMismatchException`), and `%x` formatting that
+  masks to the argument width (`%x` of `(byte) -1` is `ff`, not
+  `ffffffff`).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

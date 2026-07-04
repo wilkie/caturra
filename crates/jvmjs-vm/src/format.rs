@@ -18,6 +18,8 @@ use crate::vm::VmError;
 #[derive(Debug, Clone, Copy)]
 pub enum FormatArg {
     Int(i32),
+    Short(i16),
+    Byte(i8),
     Long(i64),
     Float(f32),
     Double(f64),
@@ -32,6 +34,8 @@ impl FormatArg {
     fn java_class(self) -> &'static str {
         match self {
             FormatArg::Int(_) => "java.lang.Integer",
+            FormatArg::Short(_) => "java.lang.Short",
+            FormatArg::Byte(_) => "java.lang.Byte",
             FormatArg::Long(_) => "java.lang.Long",
             FormatArg::Float(_) => "java.lang.Float",
             FormatArg::Double(_) => "java.lang.Double",
@@ -251,6 +255,8 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Str(Some(reference)) => heap.string_text(reference).unwrap_or_default(),
                 FormatArg::Str(None) => String::from("null"),
                 FormatArg::Int(v) => v.to_string(),
+                FormatArg::Short(v) => v.to_string(),
+                FormatArg::Byte(v) => v.to_string(),
                 FormatArg::Long(v) => v.to_string(),
                 FormatArg::Float(v) => crate::intrinsics::java_float_to_string(v),
                 FormatArg::Double(v) => crate::intrinsics::java_double_to_string(v),
@@ -294,6 +300,8 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                     _ => reference.cast_signed(),
                 },
                 FormatArg::Int(v) => v,
+                FormatArg::Short(v) => i32::from(v),
+                FormatArg::Byte(v) => i32::from(v),
                 FormatArg::Long(v) => (((v.cast_unsigned() ^ (v.cast_unsigned() >> 32))
                     & 0xFFFF_FFFF) as u32)
                     .cast_signed(),
@@ -341,6 +349,8 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
         'd' => {
             let value = match arg {
                 FormatArg::Int(v) => i64::from(v),
+                FormatArg::Short(v) => i64::from(v),
+                FormatArg::Byte(v) => i64::from(v),
                 FormatArg::Long(v) => v,
                 other => return Err(conversion_mismatch(conversion, other)),
             };
@@ -366,6 +376,8 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
         'o' | 'x' => {
             let value = match arg {
                 FormatArg::Int(v) => u64::from(v.cast_unsigned()),
+                FormatArg::Short(v) => u64::from(v.cast_unsigned()),
+                FormatArg::Byte(v) => u64::from(v.cast_unsigned()),
                 FormatArg::Long(v) => v.cast_unsigned(),
                 other => return Err(conversion_mismatch(conversion, other)),
             };
@@ -685,7 +697,7 @@ pub fn args_from_descriptor(
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
         match c {
-            'I' | 'D' | 'C' | 'Z' | 'J' | 'F' => tags.push(c),
+            'I' | 'D' | 'C' | 'Z' | 'J' | 'F' | 'S' | 'B' => tags.push(c),
             'L' => {
                 for inner_char in chars.by_ref() {
                     if inner_char == ';' {
@@ -706,6 +718,16 @@ pub fn args_from_descriptor(
             ('D', JValue::Double(v)) => FormatArg::Double(*v),
             ('J', JValue::Long(v)) => FormatArg::Long(*v),
             ('F', JValue::Float(v)) => FormatArg::Float(*v),
+            ('S', JValue::Int(v)) =>
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                FormatArg::Short(*v as i16)
+            }
+            ('B', JValue::Int(v)) =>
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                FormatArg::Byte(*v as i8)
+            }
             ('L', JValue::Ref(reference)) => FormatArg::Str(*reference),
             _ => {
                 return Err(VmError::UncaughtException(String::from(

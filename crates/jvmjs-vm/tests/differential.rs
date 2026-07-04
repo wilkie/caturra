@@ -1597,6 +1597,93 @@ public class DiffFloat {
 );
 
 differential_test!(
+    diff_short_byte,
+    "DiffSmall",
+    r#"
+public class DiffSmall {
+    static short doubled(short value) {
+        return (short) (value * 2);
+    }
+
+    public static void main(String[] args) {
+        // Constant narrowing in declarations and assignments.
+        byte b = 100;
+        short s = 30000;
+        byte negative = -128;
+        s = 12; b = -5;
+        System.out.println(b + " " + s + " " + negative);
+
+        // Arithmetic promotes to int; casts truncate with wraparound.
+        byte a1 = 100, a2 = 27;
+        int sum = a1 + a2;
+        byte wrapped = (byte) (a1 + a2);
+        short bigger = (short) 70000;
+        System.out.println(sum + " " + wrapped + " " + bigger + " " + (byte) 130 + " " + (short) -70000);
+        System.out.println((byte) 3.99 + " " + (short) 3.99 + " " + (byte) 300L + " " + (char) (short) 66);
+        System.out.println(doubled((short) 12345) + " " + doubled((short) 30000));
+
+        // Widening into everything.
+        int wi = b; long wl = b; float wf = s; double wd = s;
+        System.out.println(wi + " " + wl + " " + wf + " " + wd);
+
+        // Compound assignment narrows back implicitly.
+        byte acc = 10;
+        acc += 5; acc *= 3; acc -= 100; acc /= 2;
+        System.out.println(acc);
+        short shifty = 1000;
+        shifty <<= 4; shifty >>= 2; shifty ^= 0xFF;
+        System.out.println(shifty);
+        byte counter = 126;
+        counter++; counter++; // wraps to -128
+        System.out.println(counter + " " + counter--);
+
+        // Arrays with distinct element semantics.
+        byte[] bytes = { 1, -2, 127 };
+        short[] shorts = { 100, -200, 32767 };
+        bytes[0] += 200;      // wraps within the array store
+        shorts[2]++;          // wraps to -32768
+        int total = 0;
+        for (byte x : bytes) { total += x; }
+        for (short x : shorts) { total += x; }
+        System.out.println(bytes[0] + " " + shorts[2] + " " + total + " " + bytes.length);
+
+        // Bitwise on bytes/shorts (int results).
+        System.out.println((b & 0xFF) + " " + (s | 1) + " " + (~b) + " " + (b << 2));
+
+        // switch on byte and short selectors.
+        switch (b) {
+            case -5:
+                System.out.println("minus five");
+                break;
+            default:
+                System.out.println("other");
+        }
+
+        // Wrapper classes.
+        System.out.println(Byte.MAX_VALUE + " " + Byte.MIN_VALUE + " " + Short.MAX_VALUE + " " + Short.MIN_VALUE);
+        System.out.println(Byte.parseByte("-77") + " " + Short.parseShort("22222"));
+        System.out.println(Byte.compare((byte) 1, (byte) 2) + " " + Short.compare((short) 5, (short) 5));
+        System.out.println(Byte.toString((byte) 88) + " " + Short.toString((short) -99));
+        System.out.println(Short.reverseBytes((short) 0x0102) + " " + Byte.hashCode((byte) 42));
+        try {
+            Byte.parseByte("200");
+        } catch (NumberFormatException e) {
+            System.out.println("range: " + (e.getMessage() != null));
+        }
+
+        // Formatting and concat go through int.
+        System.out.println(String.format("%d %d %x", b, s, (byte) -1));
+        System.out.println("" + b + s);
+
+        // Ternary joins to int.
+        int chosen = b > 0 ? b : s;
+        System.out.println(chosen);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

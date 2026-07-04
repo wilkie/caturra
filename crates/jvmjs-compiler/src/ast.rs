@@ -86,6 +86,8 @@ pub enum TypeRef {
     Char,
     Long,
     Float,
+    Short,
+    Byte,
     /// A class type by simple name, e.g. `String`.
     Named(String),
     /// A generic type, e.g. `ArrayList<Integer>`.
