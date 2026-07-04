@@ -382,7 +382,7 @@ impl Parser<'_> {
                     modifiers.is_abstract = true;
                     self.pos += 1;
                 }
-                Some(TokenKind::Keyword(Keyword::Protected)) => {
+                Some(TokenKind::Keyword(Keyword::Protected | Keyword::Default)) => {
                     self.pos += 1;
                 }
                 Some(TokenKind::Symbol("@")) => self.skip_annotation(),

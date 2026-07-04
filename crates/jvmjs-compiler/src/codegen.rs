@@ -1681,7 +1681,7 @@ fn emit_method(
 
     let descriptor = method_descriptor(path, diagnostics, table, decl);
     let mut flags = 0;
-    if decl.is_public {
+    if decl.is_public || (class_decl.is_interface && !decl.is_private) {
         flags |= MethodAccessFlags::PUBLIC;
     }
     if decl.is_private {

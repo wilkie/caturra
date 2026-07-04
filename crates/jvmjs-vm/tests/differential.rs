@@ -2085,6 +2085,63 @@ public class DiffNested {
 );
 
 differential_test!(
+    diff_interface_default_methods,
+    "DiffDefault",
+    r#"
+interface Greeter {
+    String name();
+    // A default method calls an abstract method of the same interface.
+    default String greet() {
+        return "Hello, " + name() + "!";
+    }
+    default String shout() {
+        return greet().toUpperCase();
+    }
+}
+
+interface Describable {
+    default String describe() { return "a thing"; }
+}
+
+class Person implements Greeter {
+    private String who;
+    Person(String who) { this.who = who; }
+    public String name() { return who; }
+}
+
+class Robot implements Greeter, Describable {
+    public String name() { return "R2"; }
+    // Override one default, inherit the other.
+    public String greet() { return "BEEP " + name(); }
+}
+
+public class DiffDefault {
+    static String greetAny(Greeter g) {
+        return g.greet();
+    }
+
+    public static void main(String[] args) {
+        Person p = new Person("Ada");
+        System.out.println(p.greet());
+        System.out.println(p.shout());
+
+        Robot r = new Robot();
+        System.out.println(r.greet());     // overridden
+        System.out.println(r.shout());     // inherited default, calls overridden greet
+        System.out.println(r.describe());  // inherited from a second interface
+
+        // Dispatch through an interface-typed reference.
+        System.out.println(greetAny(p));
+        System.out.println(greetAny(r));
+
+        Greeter g = p;
+        System.out.println(g.greet() + " / " + g.name());
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

@@ -1889,6 +1889,7 @@ impl<'run> Interpreter<'run> {
     /// Dispatch an instance method on a user-defined object, with the
     /// default `toString` when the class doesn't define one. Returns
     /// either a frame to push or an inline result value.
+    #[allow(clippy::too_many_lines)] // one dispatch resolution path
     fn user_virtual_dispatch(
         &mut self,
         receiver: HeapRef,
@@ -1930,6 +1931,40 @@ impl<'run> Interpreter<'run> {
                 .constant_pool
                 .get_class_name(candidate.super_class)
                 .and_then(|super_name| classes.get(super_name));
+        }
+        // No override on the superclass chain: fall back to an
+        // inherited interface default method (JLS §9.4). Search the
+        // implemented interfaces breadth-first, including
+        // super-interfaces.
+        if found.is_none() {
+            let mut queue: Vec<&'run ClassFile> = collect_interfaces(classes, instance_class);
+            let mut seen = 0usize;
+            while let Some(iface) = queue.pop() {
+                seen += 1;
+                if seen > classes.len() * 2 + 2 {
+                    break;
+                }
+                if let Some(method) = iface.methods.iter().find(|m| {
+                    !m.access_flags
+                        .contains(jvmjs_classfile::MethodAccessFlags::STATIC)
+                        && !m
+                            .access_flags
+                            .contains(jvmjs_classfile::MethodAccessFlags::ABSTRACT)
+                        && iface.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                        && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+                }) {
+                    found = Some((iface, method));
+                    break;
+                }
+                // Enqueue super-interfaces of this interface.
+                for index in &iface.interfaces {
+                    if let Some(name) = iface.constant_pool.get_class_name(*index)
+                        && let Some(parent) = classes.get(name)
+                    {
+                        queue.push(parent);
+                    }
+                }
+            }
         }
         let Some((class, method)) = found else {
             // Throwable-descended classes inherit getMessage/toString.
@@ -2644,6 +2679,36 @@ fn check_array_size(size: i32) -> Result<usize, VmError> {
 
 /// Bounds-checked array element access with Java 11's exception
 /// message format.
+/// The interfaces implemented by a class and its superclasses, as
+/// loaded `ClassFile`s (direct interfaces only; super-interfaces are
+/// enqueued during the default-method search).
+fn collect_interfaces<'run>(
+    classes: &'run HashMap<String, ClassFile>,
+    instance_class: &str,
+) -> Vec<&'run ClassFile> {
+    let mut result = Vec::new();
+    let mut current = classes.get(instance_class);
+    let mut steps = 0usize;
+    while let Some(class) = current {
+        steps += 1;
+        if steps > classes.len() + 1 {
+            break;
+        }
+        for index in &class.interfaces {
+            if let Some(name) = class.constant_pool.get_class_name(*index)
+                && let Some(iface) = classes.get(name)
+            {
+                result.push(iface);
+            }
+        }
+        current = class
+            .constant_pool
+            .get_class_name(class.super_class)
+            .and_then(|super_name| classes.get(super_name));
+    }
+    result
+}
+
 fn array_get<T>(values: &[T], index: i32) -> Result<&T, VmError> {
     usize::try_from(index)
         .ok()

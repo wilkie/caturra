@@ -342,6 +342,16 @@ Node` inside a linked structure. They are referenced by simple name
   reads and writes, and chains rooted at an implicit `this` field like
   `top.value`).
 
+- **Interface default methods** (2026-07-03): `default` instance
+  methods with bodies in an interface are inherited by implementers
+  (no override required) and callable on instances and through
+  interface-typed references. A default method may call the
+  interface's abstract methods (resolved virtually on the actual
+  instance) and is itself overridable. Virtual dispatch searches the
+  superclass chain first, then implemented interfaces breadth-first
+  (including super-interfaces) for an inherited default. Interface
+  concrete methods are implicitly public.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
