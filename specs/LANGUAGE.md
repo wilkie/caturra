@@ -352,6 +352,21 @@ Node` inside a linked structure. They are referenced by simple name
   (including super-interfaces) for an inherited default. Interface
   concrete methods are implicitly public.
 
+- **User-defined generics** (2026-07-03): generic classes (`class
+Box<T>`, `class Pair<A, B>`) and generic methods (`<T> T identity(T
+x)`) with type-parameter erasure — every type variable is rewritten
+  to `Object` at parse time, so the runtime is generics-unaware (as on
+  a real JVM). Type bounds (`<T extends Comparable<T>>`) parse and
+  erase. This also makes **`Object`** a usable top type: a synthetic
+  `Object` class is the supertype of every reference type, with
+  `toString`/`equals`/`hashCode`, and any reference widens to it.
+  `Box<String>` uses raw (erased) type arguments: reading a
+  type-variable-typed value yields `Object`, so specializing it needs
+  a cast (`String s = (String) box.get();`) — the compiler inserts the
+  `checkcast`. Not yet: cast-free reads via type-argument tracking,
+  autoboxing of primitives into `Object`, and nested type arguments
+  (`Box<Pair<A, B>>`).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

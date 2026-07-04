@@ -228,6 +228,33 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn generic_class_and_object_top_type() {
+    let out = run_stdout(
+        r#"
+        class Holder<T> {
+            private T item;
+            void put(T item) { this.item = item; }
+            T take() { return item; }
+        }
+        public class Gen {
+            static <T> T identity(T x) { return x; }
+            public static void main(String[] args) {
+                Holder<String> h = new Holder<>();
+                h.put("cached");
+                String s = (String) h.take();
+                System.out.println(s + " " + s.length());
+                System.out.println((String) identity("id"));
+                Object o = "top";
+                System.out.println(o + " " + o.equals("top"));
+            }
+        }
+        "#,
+        "Gen",
+    );
+    assert_eq!(out, "cached 6\nid\ntop true\n");
+}
+
+#[test]
 fn nested_classes_and_field_chains() {
     let out = run_stdout(
         r#"

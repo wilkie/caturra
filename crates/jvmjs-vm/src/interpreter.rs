@@ -927,10 +927,19 @@ impl<'run> Interpreter<'run> {
                             let reference = frame.pop_ref()?;
                             let matches_type = match reference {
                                 None => false,
+                                // Everything is an Object.
+                                Some(_) if target == "java/lang/Object" => true,
                                 Some(reference) => match self.heap.get(reference) {
                                     Some(crate::value::HeapObject::Instance {
                                         class_name, ..
                                     }) => self.is_runtime_subtype(class_name, &target),
+                                    Some(crate::value::HeapObject::JavaString(_)) => {
+                                        target == "java/lang/String"
+                                    }
+                                    Some(crate::value::HeapObject::ArrayList(_)) => {
+                                        target == "java/util/ArrayList"
+                                            || target == "java/util/List"
+                                    }
                                     _ => false,
                                 },
                             };
@@ -944,6 +953,9 @@ impl<'run> Interpreter<'run> {
                                             class_name,
                                             ..
                                         }) => class_name.clone(),
+                                        Some(crate::value::HeapObject::JavaString(_)) => {
+                                            String::from("java/lang/String")
+                                        }
                                         _ => String::from("<object>"),
                                     };
                                     return Err(VmError::UncaughtException(format!(

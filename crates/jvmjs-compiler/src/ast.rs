@@ -36,6 +36,8 @@ pub struct ClassDecl {
     /// class has synthesized constant fields and `values`/`valueOf`;
     /// switch case labels are unqualified constant names.
     pub is_enum: bool,
+    /// Generic type parameter names (`<T, U>`); erased to `Object`.
+    pub type_params: Vec<String>,
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<MethodDecl>,
     /// `static { ... }` and instance `{ ... }` initializer blocks.
@@ -84,6 +86,8 @@ pub struct MethodDecl {
     pub is_constructor: bool,
     /// Abstract or interface method — no body; `body` is empty.
     pub is_abstract: bool,
+    /// Generic method type parameters (`<T> T identity(T x)`).
+    pub type_params: Vec<String>,
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,

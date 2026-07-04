@@ -284,7 +284,11 @@ impl Parser<'_> {
                 }
                 _ => {
                     if let Ok(class) = self.class_decl() {
+                        let first = classes.len();
                         flatten_nested(class, &mut classes);
+                        for class in &mut classes[first..] {
+                            erase_type_vars(class);
+                        }
                     } else {
                         self.recover_to_statement_boundary();
                         // A stray `}` from a broken class body would stall
@@ -446,6 +450,7 @@ impl Parser<'_> {
             return Err(Abort);
         }
         let (name, name_span) = self.expect_ident("for the class")?;
+        let type_params = self.parse_type_params()?;
 
         let mut superclass = None;
         let mut interfaces = Vec::new();
@@ -525,6 +530,7 @@ impl Parser<'_> {
             is_abstract: is_abstract_modifier || is_interface,
             is_interface,
             is_enum: false,
+            type_params,
             fields,
             methods,
             init_blocks,
@@ -645,6 +651,7 @@ impl Parser<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per member kind
     fn member(&mut self, class_name: &str) -> Parsed<Member> {
         let start = self.here();
         let modifiers = self.modifiers();
@@ -690,6 +697,7 @@ impl Parser<'_> {
                 is_private: modifiers.is_private,
                 is_constructor: true,
                 is_abstract: false,
+                type_params: Vec::new(),
                 return_type: TypeRef::Void,
                 params,
                 body: body.unwrap_or_default(),
@@ -700,10 +708,15 @@ impl Parser<'_> {
             }));
         }
 
+        // Generic method: `<T> ReturnType method(...)`.
+        let method_type_params = self.parse_type_params()?;
         let member_type = self.type_ref()?;
         let (name, name_span) = self.expect_ident("for the class member")?;
 
         if !self.at_symbol("(") {
+            if !method_type_params.is_empty() {
+                self.error_at(name_span, "type parameters are only allowed on methods");
+            }
             // Field declaration(s): `int x = 1, y;`.
             let mut fields = Vec::new();
             let mut current = (name, name_span);
@@ -745,6 +758,7 @@ impl Parser<'_> {
             is_private: modifiers.is_private,
             is_constructor: false,
             is_abstract,
+            type_params: method_type_params,
             return_type: member_type,
             params,
             body: body.unwrap_or_default(),
@@ -817,6 +831,34 @@ impl Parser<'_> {
         self.expect_symbol("{", "to open the method body")?;
         let body = self.block_body();
         Ok((params, Some(body)))
+    }
+
+    /// Parse a `<T, U extends Bound, ...>` type-parameter list,
+    /// returning the parameter names (bounds are erased to `Object`).
+    fn parse_type_params(&mut self) -> Parsed<Vec<String>> {
+        if !self.at_symbol("<") {
+            return Ok(Vec::new());
+        }
+        self.pos += 1; // '<'
+        let mut names = Vec::new();
+        if !self.at_symbol(">") {
+            loop {
+                let (name, _) = self.expect_ident("for the type parameter")?;
+                names.push(name);
+                // `extends Bound & Other` — parsed and discarded.
+                if self.eat_keyword(Keyword::Extends) {
+                    self.type_ref()?;
+                    while self.eat_symbol("&") {
+                        self.type_ref()?;
+                    }
+                }
+                if !self.eat_symbol(",") {
+                    break;
+                }
+            }
+        }
+        self.expect_symbol(">", "to close the type parameters")?;
+        Ok(names)
     }
 
     fn type_ref(&mut self) -> Parsed<TypeRef> {
@@ -1452,16 +1494,44 @@ impl Parser<'_> {
             || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
                 && matches!(self.peek_at(1), Some(TokenKind::Symbol("[")))
                 && matches!(self.peek_at(2), Some(TokenKind::Symbol("]"))))
-            // `ArrayList<Integer> list = ...` — a generic declaration.
-            // (`a < b;` alone is not a valid statement, so this is safe.)
-            || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
-                && matches!(self.peek_at(1), Some(TokenKind::Symbol("<")))
-                && matches!(self.peek_at(2), Some(TokenKind::Identifier(_)))
-                && matches!(self.peek_at(3), Some(TokenKind::Symbol(">"))))
+            // `ArrayList<Integer> list = ...`, `Pair<A, B> p = ...` — a
+            // generic declaration. Scan a balanced `<...>` and require a
+            // following identifier. (`a < b;` alone is not a valid
+            // statement, so this is safe.)
+            || self.is_generic_declaration()
             // Fully qualified declarations: `java.util.Scanner sc = ...`
             // (scan `Ident (. Ident)+`, then an identifier or generic
             // arguments means a declaration, not an expression).
             || self.at_qualified_declaration()
+    }
+
+    /// Whether the cursor is `Ident < ... > Ident` — a generic local
+    /// declaration. Scans balanced angle brackets from the `<`.
+    fn is_generic_declaration(&self) -> bool {
+        if !matches!(self.peek(), Some(TokenKind::Identifier(_)))
+            || !matches!(self.peek_at(1), Some(TokenKind::Symbol("<")))
+        {
+            return false;
+        }
+        let mut depth = 0i32;
+        let mut offset = 1usize;
+        while let Some(kind) = self.peek_at(offset) {
+            match kind {
+                TokenKind::Symbol("<") => depth += 1,
+                TokenKind::Symbol(">") => depth -= 1,
+                TokenKind::Symbol(">>") => depth -= 2,
+                // Only type names, commas, dots, and nested `<>` appear
+                // in a type-argument list; anything else means this was
+                // a comparison expression.
+                TokenKind::Identifier(_) | TokenKind::Symbol("," | ".") => {}
+                _ => return false,
+            }
+            if depth <= 0 {
+                return matches!(self.peek_at(offset + 1), Some(TokenKind::Identifier(_)));
+            }
+            offset += 1;
+        }
+        false
     }
 
     /// The assignment operator at the cursor, if any: `Some(None)` for
@@ -2359,6 +2429,7 @@ fn desugar_enum(
             is_private: true,
             is_constructor: true,
             is_abstract: false,
+            type_params: Vec::new(),
             return_type: TypeRef::Void,
             params: lead_params(),
             body: store_stmts(),
@@ -2412,6 +2483,7 @@ fn desugar_enum(
             is_private: false,
             is_constructor: false,
             is_abstract: false,
+            type_params: Vec::new(),
             return_type: TypeRef::Array(Box::new(enum_ty.clone())),
             params: Vec::new(),
             body: vec![Stmt::Return {
@@ -2479,6 +2551,7 @@ fn desugar_enum(
             is_private: false,
             is_constructor: false,
             is_abstract: false,
+            type_params: Vec::new(),
             return_type: enum_ty.clone(),
             params: vec![Param {
                 ty: str_ty,
@@ -2497,6 +2570,7 @@ fn desugar_enum(
         is_abstract: false,
         is_interface: false,
         is_enum: true,
+        type_params: Vec::new(),
         fields: synth_fields,
         methods,
         init_blocks,
@@ -2517,6 +2591,223 @@ fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
     }
 }
 
+/// Erase generic type parameters to `Object` within a class: every
+/// `TypeRef` naming a class or method type parameter is rewritten to
+/// `Named("Object")`. Runtime semantics are unchanged (erasure); this
+/// keeps the rest of the compiler generics-unaware.
+fn erase_type_vars(class: &mut ClassDecl) {
+    use std::collections::HashSet;
+    let class_params: HashSet<String> = class.type_params.iter().cloned().collect();
+    for field in &mut class.fields {
+        erase_in_type(&mut field.ty, &class_params);
+        if let Some(init) = &mut field.init {
+            erase_in_expr(init, &class_params);
+        }
+    }
+    for method in &mut class.methods {
+        let mut scope = class_params.clone();
+        scope.extend(method.type_params.iter().cloned());
+        erase_in_type(&mut method.return_type, &scope);
+        for param in &mut method.params {
+            erase_in_type(&mut param.ty, &scope);
+        }
+        for stmt in &mut method.body {
+            erase_in_stmt(stmt, &scope);
+        }
+    }
+    for block in &mut class.init_blocks {
+        for stmt in &mut block.body {
+            erase_in_stmt(stmt, &class_params);
+        }
+    }
+}
+
+fn erase_in_type(ty: &mut TypeRef, params: &std::collections::HashSet<String>) {
+    match ty {
+        TypeRef::Named(name) if params.contains(name) => {
+            *ty = TypeRef::Named(String::from("Object"));
+        }
+        TypeRef::Array(inner) => erase_in_type(inner, params),
+        TypeRef::Generic { base, args } => {
+            if params.contains(base) {
+                *ty = TypeRef::Named(String::from("Object"));
+            } else {
+                for arg in args {
+                    erase_in_type(arg, params);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn erase_in_stmt(stmt: &mut Stmt, params: &std::collections::HashSet<String>) {
+    match stmt {
+        Stmt::Block(stmts) => {
+            for s in stmts {
+                erase_in_stmt(s, params);
+            }
+        }
+        Stmt::LocalDecl {
+            ty, declarators, ..
+        } => {
+            erase_in_type(ty, params);
+            for d in declarators {
+                if let Some(init) = &mut d.init {
+                    erase_in_expr(init, params);
+                }
+            }
+        }
+        Stmt::Expr(e)
+        | Stmt::Throw { value: e, .. }
+        | Stmt::Assign { value: e, .. }
+        | Stmt::Return { value: Some(e), .. } => erase_in_expr(e, params),
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        Stmt::If {
+            cond, then, els, ..
+        } => {
+            erase_in_expr(cond, params);
+            erase_in_stmt(then, params);
+            if let Some(e) = els {
+                erase_in_stmt(e, params);
+            }
+        }
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
+            erase_in_expr(cond, params);
+            erase_in_stmt(body, params);
+        }
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } => {
+            if let Some(s) = init {
+                erase_in_stmt(s, params);
+            }
+            if let Some(c) = cond {
+                erase_in_expr(c, params);
+            }
+            for s in update {
+                erase_in_stmt(s, params);
+            }
+            erase_in_stmt(body, params);
+        }
+        Stmt::ForEach {
+            ty, iterable, body, ..
+        } => {
+            erase_in_type(ty, params);
+            erase_in_expr(iterable, params);
+            erase_in_stmt(body, params);
+        }
+        Stmt::Switch { selector, arms, .. } => {
+            erase_in_expr(selector, params);
+            for arm in arms {
+                for label in arm.labels.iter_mut().flatten() {
+                    erase_in_expr(label, params);
+                }
+                for s in &mut arm.body {
+                    erase_in_stmt(s, params);
+                }
+            }
+        }
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            for s in body {
+                erase_in_stmt(s, params);
+            }
+            for c in catches {
+                for s in &mut c.body {
+                    erase_in_stmt(s, params);
+                }
+            }
+            if let Some(fin) = finally_body {
+                for s in fin {
+                    erase_in_stmt(s, params);
+                }
+            }
+        }
+        Stmt::Labeled { body, .. } => erase_in_stmt(body, params),
+        Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
+            for a in args {
+                erase_in_expr(a, params);
+            }
+        }
+    }
+}
+
+fn erase_in_expr(expr: &mut Expr, params: &std::collections::HashSet<String>) {
+    match expr {
+        Expr::Cast { ty, operand, .. } => {
+            erase_in_type(ty, params);
+            erase_in_expr(operand, params);
+        }
+        Expr::InstanceOf { value, ty, .. } => {
+            erase_in_type(ty, params);
+            erase_in_expr(value, params);
+        }
+        Expr::NewArray {
+            elem, dims, init, ..
+        } => {
+            erase_in_type(elem, params);
+            for d in dims.iter_mut().flatten() {
+                erase_in_expr(d, params);
+            }
+            if let Some(elements) = init {
+                for e in elements {
+                    erase_in_expr(e, params);
+                }
+            }
+        }
+        Expr::NewObject { args, .. } | Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                erase_in_expr(a, params);
+            }
+        }
+        Expr::Call { receiver, args, .. } => {
+            if let Some(r) = receiver {
+                erase_in_expr(r, params);
+            }
+            for a in args {
+                erase_in_expr(a, params);
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            erase_in_expr(lhs, params);
+            erase_in_expr(rhs, params);
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Field {
+            object: operand, ..
+        } => {
+            erase_in_expr(operand, params);
+        }
+        Expr::Index { array, index, .. } => {
+            erase_in_expr(array, params);
+            erase_in_expr(index, params);
+        }
+        Expr::Ternary {
+            cond, then, els, ..
+        } => {
+            erase_in_expr(cond, params);
+            erase_in_expr(then, params);
+            erase_in_expr(els, params);
+        }
+        Expr::IncDec { target, .. } => erase_in_expr(target, params),
+        Expr::ArrayLiteral { elements, .. } => {
+            for e in elements {
+                erase_in_expr(e, params);
+            }
+        }
+        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
+    }
+}
+
 /// A `Type m() { return expr; }` helper for synthesized enum methods.
 fn simple_return_method(
     name: &str,
@@ -2531,6 +2822,7 @@ fn simple_return_method(
         is_private: false,
         is_constructor: false,
         is_abstract: false,
+        type_params: Vec::new(),
         return_type,
         params: Vec::new(),
         body: vec![Stmt::Return {

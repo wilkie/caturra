@@ -2142,6 +2142,100 @@ public class DiffDefault {
 );
 
 differential_test!(
+    diff_user_generics,
+    "DiffGenerics",
+    r#"
+class Box<T> {
+    private T value;
+    Box(T value) { this.value = value; }
+    T get() { return value; }
+    void set(T value) { this.value = value; }
+    boolean has() { return value != null; }
+}
+
+class Pair<A, B> {
+    private final A first;
+    private final B second;
+    Pair(A first, B second) { this.first = first; this.second = second; }
+    A first() { return first; }
+    B second() { return second; }
+    String show() { return "(" + first + ", " + second + ")"; }
+}
+
+// A generic linked stack.
+class GStack<E> {
+    private Node<E> top;
+    private int size;
+
+    void push(E item) {
+        Node<E> node = new Node<>(item);
+        node.next = top;
+        top = node;
+        size++;
+    }
+    E pop() {
+        E item = top.data;
+        top = top.next;
+        size--;
+        return item;
+    }
+    boolean isEmpty() { return size == 0; }
+    int size() { return size; }
+}
+
+class Node<E> {
+    E data;
+    Node<E> next;
+    Node(E data) { this.data = data; }
+}
+
+public class DiffGenerics {
+    // A generic method with a bounded parameter.
+    static <T> String describe(T value) {
+        return value.toString();
+    }
+
+    static <T> T firstOf(T a, T b) {
+        return a;
+    }
+
+    public static void main(String[] args) {
+        Box<String> sbox = new Box<>("hi");
+        System.out.println((String) sbox.get() + " " + sbox.has());
+        sbox.set("bye");
+        System.out.println((String) sbox.get());
+
+        Pair<String, String> pair = new Pair<>("x", "y");
+        System.out.println(pair.show() + " " + (String) pair.first());
+
+        // Generic stack of strings.
+        GStack<String> stack = new GStack<>();
+        stack.push("a");
+        stack.push("b");
+        stack.push("c");
+        System.out.println(stack.size() + " " + stack.isEmpty());
+        String out = "";
+        while (!stack.isEmpty()) out += (String) stack.pop();
+        System.out.println(out + " " + stack.isEmpty());
+
+        // Generic methods.
+        System.out.println(describe("text"));
+        System.out.println((String) firstOf("one", "two"));
+
+        // Object as a top type.
+        Object obj = "erased";
+        System.out.println(obj + " " + obj.equals("erased") + " " + obj.equals("no"));
+
+        // A box holding a user object (raw type argument).
+        Box<Pair> nested = new Box<>(pair);
+        Pair back = (Pair) nested.get();
+        System.out.println(back.show());
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

@@ -144,6 +144,7 @@ fn emit_class(
             is_private: false,
             is_constructor: true,
             is_abstract: false,
+            type_params: Vec::new(),
             return_type: TypeRef::Void,
             params: Vec::new(),
             body: Vec::new(),
@@ -379,6 +380,9 @@ struct MethodTable {
     /// Indexed by [`ClassId`].
     class_names: Vec<String>,
     classes: std::collections::HashMap<String, ClassInfo>,
+    /// The synthetic `java.lang.Object` top type (every reference type
+    /// is a subtype). Type parameters erase to it.
+    object_id: ClassId,
 }
 
 /// Outcome of static overload resolution (JLS §15.12.2, without boxing
@@ -402,7 +406,56 @@ impl MethodTable {
         let mut table = Self {
             class_names: Vec::new(),
             classes: std::collections::HashMap::new(),
+            object_id: ClassId(0),
         };
+        // The synthetic top type: `Object`. It carries the universal
+        // methods; user classes are registered as its subtypes.
+        let object_id = ClassId(0);
+        table.class_names.push(String::from("Object"));
+        let string_ret = Some(JType::Str);
+        table.classes.insert(
+            String::from("Object"),
+            ClassInfo {
+                id: object_id,
+                superclass: None,
+                library_superclass: None,
+                interfaces: Vec::new(),
+                is_abstract: false,
+                is_interface: false,
+                is_enum: false,
+                methods: vec![
+                    MethodSig {
+                        name: String::from("toString"),
+                        params: Vec::new(),
+                        ret: string_ret,
+                        is_static: false,
+                        is_private: false,
+                        is_abstract: false,
+                        is_varargs: false,
+                    },
+                    MethodSig {
+                        name: String::from("hashCode"),
+                        params: Vec::new(),
+                        ret: Some(JType::Int),
+                        is_static: false,
+                        is_private: false,
+                        is_abstract: false,
+                        is_varargs: false,
+                    },
+                    MethodSig {
+                        name: String::from("equals"),
+                        params: vec![JType::Object(object_id)],
+                        ret: Some(JType::Boolean),
+                        is_static: false,
+                        is_private: false,
+                        is_abstract: false,
+                        is_varargs: false,
+                    },
+                ],
+                fields: Vec::new(),
+            },
+        );
+        table.object_id = object_id;
         for (_, unit) in units {
             for class in &unit.classes {
                 if table.classes.contains_key(&class.name) {
@@ -551,7 +604,16 @@ impl MethodTable {
                     .expect("registered in pass 1");
                 info.methods = methods;
                 info.fields = fields;
-                info.superclass = superclass;
+                // A class with no declared parent is a subtype of the
+                // synthetic Object top type (so `widens(C, Object)`
+                // holds), except interfaces and Object itself.
+                info.superclass = if superclass.is_some() || library_superclass.is_some() {
+                    superclass
+                } else if !class.is_interface {
+                    Some(object_id)
+                } else {
+                    None
+                };
                 info.library_superclass = library_superclass;
                 info.interfaces = interface_ids;
                 info.is_abstract = class.is_abstract;
@@ -837,6 +899,10 @@ impl MethodTable {
                 if simple == "String" {
                     return Some(JType::Str);
                 }
+                // The synthetic Object top type.
+                if name == "Object" || name == "java.lang.Object" {
+                    return Some(JType::Object(self.object_id));
+                }
                 // User classes shadow the intrinsic simple names.
                 if !name.contains('.')
                     && let Some(id) = self.class_id(simple)
@@ -871,7 +937,7 @@ impl MethodTable {
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
                 } else {
-                    None
+                    self.class_id(base).map(JType::Object)
                 }
             }
             TypeRef::Array(_) => {
@@ -1246,6 +1312,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 })
         )
         || (from == JType::Null && to.is_reference())
+        || (to == JType::Object(table.object_id) && from.is_reference())
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -7209,6 +7276,15 @@ impl BodyGen<'_> {
         if source == JType::Error {
             return JType::Error;
         }
+        // Casting a reference (commonly an erased Object) to String: a
+        // runtime checkcast to java/lang/String.
+        if target == JType::Str && source.is_reference() {
+            if source != JType::Str {
+                let class_index = intern_class(self.pool, "java/lang/String");
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return JType::Str;
+        }
         // Reference casts between class/interface types.
         if let JType::Object(target_id) = target {
             match source {
@@ -8281,6 +8357,8 @@ impl BodyGen<'_> {
             | (JType::Byte, JType::Short) => {}
             (JType::Null, to) if to.is_reference() => {}
             (JType::Object(sub), JType::Object(sup)) if self.table.is_subtype(sub, sup) => {}
+            // Any reference type widens to the Object top type.
+            (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
             (f, t) if f == t => {}
             (JType::Int | JType::Char | JType::Short | JType::Byte, JType::Double) => {
                 self.code.push_op(op::I2D, 1);
