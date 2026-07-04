@@ -32,6 +32,10 @@ pub struct ClassDecl {
     pub interfaces: Vec<String>,
     pub is_abstract: bool,
     pub is_interface: bool,
+    /// Set for `enum` declarations (after desugaring to a class): the
+    /// class has synthesized constant fields and `values`/`valueOf`;
+    /// switch case labels are unqualified constant names.
+    pub is_enum: bool,
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<MethodDecl>,
     /// `static { ... }` and instance `{ ... }` initializer blocks.

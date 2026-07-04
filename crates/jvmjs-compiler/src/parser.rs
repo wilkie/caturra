@@ -384,7 +384,41 @@ impl Parser<'_> {
                 Some(TokenKind::Keyword(Keyword::Protected)) => {
                     self.pos += 1;
                 }
+                Some(TokenKind::Symbol("@")) => self.skip_annotation(),
                 _ => return modifiers,
+            }
+        }
+    }
+
+    /// Skip an annotation (`@Override`, `@Deprecated`,
+    /// `@SuppressWarnings("x")`). jvmjs does not act on annotations;
+    /// this lets annotated code compile.
+    fn skip_annotation(&mut self) {
+        self.pos += 1; // '@'
+        // The annotation name (possibly dotted).
+        while matches!(self.peek(), Some(TokenKind::Identifier(_))) {
+            self.pos += 1;
+            if !self.eat_symbol(".") {
+                break;
+            }
+        }
+        // Optional `( ... )` with balanced parens.
+        if self.at_symbol("(") {
+            let mut depth = 0usize;
+            loop {
+                match self.peek() {
+                    Some(TokenKind::Symbol("(")) => depth += 1,
+                    Some(TokenKind::Symbol(")")) => {
+                        depth -= 1;
+                        if depth == 0 {
+                            self.pos += 1;
+                            break;
+                        }
+                    }
+                    None => break,
+                    _ => {}
+                }
+                self.pos += 1;
             }
         }
     }
@@ -394,8 +428,7 @@ impl Parser<'_> {
         let modifiers = self.class_modifiers();
 
         if self.at_keyword(Keyword::Enum) {
-            self.error_here("enums are not yet supported by jvmjs");
-            return Err(Abort);
+            return self.enum_decl(start);
         }
         let is_interface = self.eat_keyword(Keyword::Interface);
         if !is_interface && !self.eat_keyword(Keyword::Class) {
@@ -479,6 +512,7 @@ impl Parser<'_> {
             interfaces,
             is_abstract: modifiers.is_abstract || is_interface,
             is_interface,
+            is_enum: false,
             fields,
             methods,
             init_blocks,
@@ -487,6 +521,94 @@ impl Parser<'_> {
                 end: name_span.end,
             },
         })
+    }
+
+    /// Parse an `enum` declaration and desugar it to an ordinary class
+    /// with synthesized constant fields, a name/ordinal-storing
+    /// constructor, and `values`/`valueOf`/`ordinal`/`name`/`toString`.
+    fn enum_decl(&mut self, start: SourceSpan) -> Parsed<ClassDecl> {
+        self.pos += 1; // 'enum'
+        let (name, name_span) = self.expect_ident("for the enum")?;
+
+        let mut interfaces = Vec::new();
+        if self.eat_keyword(Keyword::Implements) {
+            loop {
+                let (parent, _) = self.expect_ident("after 'implements'")?;
+                interfaces.push(parent);
+                if !self.eat_symbol(",") {
+                    break;
+                }
+            }
+        }
+
+        self.expect_symbol("{", "to open the enum body")?;
+
+        // Constants: `NAME`, `NAME(args)`, comma-separated, ended by
+        // `;` (if members follow) or `}`.
+        let mut constants: Vec<(String, Vec<Expr>, SourceSpan)> = Vec::new();
+        while let Some(TokenKind::Identifier(_)) = self.peek() {
+            let (const_name, const_span) = self.expect_ident("for the enum constant")?;
+            let args = if self.at_symbol("(") {
+                self.arguments()?
+            } else {
+                Vec::new()
+            };
+            constants.push((const_name, args, const_span));
+            if !self.eat_symbol(",") {
+                break;
+            }
+        }
+        self.eat_symbol(";"); // optional separator before members
+
+        // Ordinary members after the constants.
+        let mut methods = Vec::new();
+        let mut fields = Vec::new();
+        let mut init_blocks = Vec::new();
+        let mut order = 0usize;
+        while !self.at_symbol("}") {
+            if self.peek().is_none() {
+                self.error_at(
+                    name_span,
+                    format!("enum '{name}' is missing its closing '}}'"),
+                );
+                break;
+            }
+            if let Ok(member) = self.member(&name) {
+                match member {
+                    Member::Method(method) => methods.push(method),
+                    Member::Fields(mut declared) => {
+                        for field in &mut declared {
+                            field.order = order;
+                            order += 1;
+                        }
+                        fields.append(&mut declared);
+                    }
+                    Member::Init(mut block) => {
+                        block.order = order;
+                        order += 1;
+                        init_blocks.push(block);
+                    }
+                }
+            } else {
+                self.recover_to_statement_boundary();
+                self.eat_symbol(";");
+            }
+        }
+        self.eat_symbol("}");
+
+        let span = SourceSpan {
+            start: start.start,
+            end: name_span.end,
+        };
+        Ok(desugar_enum(
+            name,
+            interfaces,
+            constants,
+            fields,
+            methods,
+            init_blocks,
+            span,
+        ))
     }
 
     /// Class-level modifiers (public/abstract/final tracked loosely).
@@ -501,6 +623,7 @@ impl Parser<'_> {
                 Some(TokenKind::Keyword(Keyword::Public | Keyword::Final)) => {
                     self.pos += 1;
                 }
+                Some(TokenKind::Symbol("@")) => self.skip_annotation(),
                 _ => return modifiers,
             }
         }
@@ -2039,6 +2162,327 @@ impl Parser<'_> {
     }
 }
 
+/// Build the synthesized class for an `enum`. Each constant becomes a
+/// `static final E` field initialized with `new E("NAME", ordinal,
+/// args...)`; the enum gets hidden `__name`/`__ordinal` instance
+/// fields, a constructor that stores them (user constructors are
+/// augmented with the two leading parameters), and the standard
+/// `values`/`valueOf`/`ordinal`/`name`/`toString` members unless the
+/// user supplied them.
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)] // one desugaring plan
+fn desugar_enum(
+    name: String,
+    interfaces: Vec<String>,
+    constants: Vec<(String, Vec<Expr>, SourceSpan)>,
+    mut fields: Vec<FieldDecl>,
+    mut methods: Vec<MethodDecl>,
+    init_blocks: Vec<InitBlock>,
+    span: SourceSpan,
+) -> ClassDecl {
+    let zero = SourceSpan {
+        start: span.start,
+        end: span.start,
+    };
+    let str_ty = TypeRef::Named(String::from("String"));
+    let enum_ty = TypeRef::Named(name.clone());
+
+    let lit_int = |n: i64| Expr::Literal {
+        value: Literal::Int(n),
+        span: zero,
+    };
+    let lit_str = |s: &str| Expr::Literal {
+        value: Literal::Str(String::from(s)),
+        span: zero,
+    };
+    let var = |n: &str| Expr::Name {
+        path: vec![String::from(n)],
+        span: zero,
+    };
+
+    // Shift user fields/blocks after the synthesized constant + array
+    // initializers so those run first in <clinit>.
+    let synth_order = constants.len() + 1;
+    for field in &mut fields {
+        field.order += synth_order;
+    }
+
+    // Hidden instance fields (no initializer; set by the constructor).
+    let mut synth_fields = vec![
+        FieldDecl {
+            name: String::from("__name"),
+            ty: str_ty.clone(),
+            is_static: false,
+            is_private: true,
+            is_final: true,
+            init: None,
+            order: 0,
+            span: zero,
+        },
+        FieldDecl {
+            name: String::from("__ordinal"),
+            ty: TypeRef::Int,
+            is_static: false,
+            is_private: true,
+            is_final: true,
+            init: None,
+            order: 0,
+            span: zero,
+        },
+    ];
+
+    // One `static final E NAME = new E("NAME", i, args...);` per
+    // constant, in source order.
+    for (index, (const_name, args, const_span)) in constants.iter().enumerate() {
+        let mut ctor_args = vec![
+            lit_str(const_name),
+            lit_int(i64::try_from(index).unwrap_or(i64::MAX)),
+        ];
+        ctor_args.extend(args.iter().cloned());
+        synth_fields.push(FieldDecl {
+            name: const_name.clone(),
+            ty: enum_ty.clone(),
+            is_static: true,
+            is_private: false,
+            is_final: true,
+            init: Some(Expr::NewObject {
+                class: name.clone(),
+                type_args: Vec::new(),
+                args: ctor_args,
+                span: *const_span,
+            }),
+            order: index,
+            span: *const_span,
+        });
+    }
+
+    synth_fields.extend(fields);
+
+    // Constructor: augment each user constructor with the two leading
+    // parameters and the field stores; synthesize one if none exist.
+    let store_stmts = || {
+        vec![
+            Stmt::Assign {
+                target: AssignTarget::Field {
+                    object: Box::new(Expr::This { span: zero }),
+                    name: String::from("__name"),
+                },
+                op: None,
+                value: var("__name"),
+                span: zero,
+            },
+            Stmt::Assign {
+                target: AssignTarget::Field {
+                    object: Box::new(Expr::This { span: zero }),
+                    name: String::from("__ordinal"),
+                },
+                op: None,
+                value: var("__ordinal"),
+                span: zero,
+            },
+        ]
+    };
+    let lead_params = || {
+        vec![
+            Param {
+                ty: str_ty.clone(),
+                name: String::from("__name"),
+            },
+            Param {
+                ty: TypeRef::Int,
+                name: String::from("__ordinal"),
+            },
+        ]
+    };
+
+    let has_ctor = methods.iter().any(|m| m.is_constructor);
+    if has_ctor {
+        for method in &mut methods {
+            if method.is_constructor {
+                let mut params = lead_params();
+                params.append(&mut method.params);
+                method.params = params;
+                let mut body = store_stmts();
+                body.append(&mut method.body);
+                method.body = body;
+                method.is_private = true;
+            }
+        }
+    } else {
+        methods.push(MethodDecl {
+            name: name.clone(),
+            is_static: false,
+            is_public: false,
+            is_private: true,
+            is_constructor: true,
+            is_abstract: false,
+            return_type: TypeRef::Void,
+            params: lead_params(),
+            body: store_stmts(),
+            span: zero,
+        });
+    }
+
+    let defines = |methods: &[MethodDecl], n: &str| methods.iter().any(|m| m.name == n);
+
+    // `int ordinal() { return __ordinal; }`
+    if !defines(&methods, "ordinal") {
+        methods.push(simple_return_method(
+            "ordinal",
+            TypeRef::Int,
+            var("__ordinal"),
+            zero,
+        ));
+    }
+    // `String name() { return __name; }`
+    if !defines(&methods, "name") {
+        methods.push(simple_return_method(
+            "name",
+            str_ty.clone(),
+            var("__name"),
+            zero,
+        ));
+    }
+    // `String toString() { return __name; }`
+    if !defines(&methods, "toString") {
+        methods.push(simple_return_method(
+            "toString",
+            str_ty.clone(),
+            var("__name"),
+            zero,
+        ));
+    }
+
+    // `static E[] values() { return new E[]{ A, B, ... }; }`
+    if !defines(&methods, "values") {
+        let elements: Vec<Expr> = constants.iter().map(|(n, _, _)| var(n)).collect();
+        let values_body = Expr::NewArray {
+            elem: enum_ty.clone(),
+            dims: vec![None],
+            init: Some(elements),
+            span: zero,
+        };
+        methods.push(MethodDecl {
+            name: String::from("values"),
+            is_static: true,
+            is_public: true,
+            is_private: false,
+            is_constructor: false,
+            is_abstract: false,
+            return_type: TypeRef::Array(Box::new(enum_ty.clone())),
+            params: Vec::new(),
+            body: vec![Stmt::Return {
+                value: Some(values_body),
+                span: zero,
+            }],
+            span: zero,
+        });
+    }
+
+    // `static E valueOf(String __n) {
+    //     for (E __e : values()) if (__e.__name.equals(__n)) return __e;
+    //     throw new IllegalArgumentException("No enum constant E." + __n);
+    // }`
+    if !defines(&methods, "valueOf") {
+        let match_test = Expr::Call {
+            receiver: Some(Box::new(Expr::Field {
+                object: Box::new(var("__e")),
+                name: String::from("__name"),
+                span: zero,
+            })),
+            method: String::from("equals"),
+            args: vec![var("__n")],
+            span: zero,
+        };
+        let loop_body = Stmt::If {
+            cond: match_test,
+            then: Box::new(Stmt::Return {
+                value: Some(var("__e")),
+                span: zero,
+            }),
+            els: None,
+            span: zero,
+        };
+        let for_each = Stmt::ForEach {
+            ty: enum_ty.clone(),
+            name: String::from("__e"),
+            iterable: Expr::Call {
+                receiver: None,
+                method: String::from("values"),
+                args: Vec::new(),
+                span: zero,
+            },
+            body: Box::new(loop_body),
+            span: zero,
+        };
+        let throw = Stmt::Throw {
+            value: Expr::NewObject {
+                class: String::from("IllegalArgumentException"),
+                type_args: Vec::new(),
+                args: vec![Expr::Binary {
+                    op: BinaryOp::Add,
+                    lhs: Box::new(lit_str(&format!("No enum constant {name}."))),
+                    rhs: Box::new(var("__n")),
+                    span: zero,
+                }],
+                span: zero,
+            },
+            span: zero,
+        };
+        methods.push(MethodDecl {
+            name: String::from("valueOf"),
+            is_static: true,
+            is_public: true,
+            is_private: false,
+            is_constructor: false,
+            is_abstract: false,
+            return_type: enum_ty.clone(),
+            params: vec![Param {
+                ty: str_ty,
+                name: String::from("__n"),
+            }],
+            body: vec![for_each, throw],
+            span: zero,
+        });
+    }
+
+    ClassDecl {
+        name,
+        superclass: None,
+        interfaces,
+        is_abstract: false,
+        is_interface: false,
+        is_enum: true,
+        fields: synth_fields,
+        methods,
+        init_blocks,
+        span,
+    }
+}
+
+/// A `Type m() { return expr; }` helper for synthesized enum methods.
+fn simple_return_method(
+    name: &str,
+    return_type: TypeRef,
+    value: Expr,
+    span: SourceSpan,
+) -> MethodDecl {
+    MethodDecl {
+        name: String::from(name),
+        is_static: false,
+        is_public: true,
+        is_private: false,
+        is_constructor: false,
+        is_abstract: false,
+        return_type,
+        params: Vec::new(),
+        body: vec![Stmt::Return {
+            value: Some(value),
+            span,
+        }],
+        span,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2266,6 +2710,33 @@ mod tests {
             "{}",
             errors[0].message
         );
+    }
+
+    #[test]
+    fn enum_desugars_to_a_class_with_synthesized_members() {
+        let unit = parse_ok(r"enum Suit { HEARTS, SPADES; int rank() { return 1; } }");
+        let class = &unit.classes[0];
+        assert!(class.is_enum);
+        // Two constants as static fields, plus hidden __name/__ordinal.
+        assert!(
+            class
+                .fields
+                .iter()
+                .any(|f| f.name == "HEARTS" && f.is_static)
+        );
+        assert!(
+            class
+                .fields
+                .iter()
+                .any(|f| f.name == "__ordinal" && !f.is_static)
+        );
+        // Synthesized accessors + the user method.
+        for expected in ["values", "valueOf", "ordinal", "name", "toString", "rank"] {
+            assert!(
+                class.methods.iter().any(|m| m.name == expected),
+                "missing {expected}"
+            );
+        }
     }
 
     #[test]

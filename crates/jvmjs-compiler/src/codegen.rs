@@ -365,6 +365,7 @@ struct ClassInfo {
     interfaces: Vec<ClassId>,
     is_abstract: bool,
     is_interface: bool,
+    is_enum: bool,
     methods: Vec<MethodSig>,
     fields: Vec<FieldSig>,
 }
@@ -414,6 +415,7 @@ impl MethodTable {
                         interfaces: Vec::new(),
                         is_abstract: false,
                         is_interface: false,
+                        is_enum: false,
                         methods: Vec::new(),
                         fields: Vec::new(),
                     },
@@ -548,6 +550,7 @@ impl MethodTable {
                 info.interfaces = interface_ids;
                 info.is_abstract = class.is_abstract;
                 info.is_interface = class.is_interface;
+                info.is_enum = class.is_enum;
             }
         }
         table.check_hierarchy(units, diagnostics);
@@ -719,6 +722,11 @@ impl MethodTable {
     fn info_by_id(&self, id: ClassId) -> Option<&ClassInfo> {
         let name = self.class_names.get(usize::from(id.0))?;
         self.classes.get(name)
+    }
+
+    /// Whether the class with this id is an `enum`.
+    fn is_enum(&self, id: ClassId) -> bool {
+        self.info_by_id(id).is_some_and(|info| info.is_enum)
     }
 
     /// Whether `sub` is `sup` or reachable via extends/implements.
@@ -3437,7 +3445,11 @@ impl BodyGen<'_> {
             selector_ty,
             JType::Int | JType::Char | JType::Short | JType::Byte
         );
-        if selector_ty != JType::Error && !is_string && !is_int {
+        let enum_class = match selector_ty {
+            JType::Object(id) if self.table.is_enum(id) => Some(id),
+            _ => None,
+        };
+        if selector_ty != JType::Error && !is_string && !is_int && enum_class.is_none() {
             // javac's wording for a long selector; other types get the
             // general incompatibility.
             self.error(
@@ -3473,7 +3485,30 @@ impl BodyGen<'_> {
                     default_arm = Some(index);
                     continue;
                 };
-                if is_string {
+                if let Some(enum_id) = enum_class {
+                    // Enum switch: the case label is an unqualified
+                    // constant name, compared by reference identity
+                    // (constants are singletons).
+                    let Expr::Name { path, .. } = value else {
+                        self.error(
+                            value.span(),
+                            "an enum switch case label must be the constant's simple name",
+                        );
+                        continue;
+                    };
+                    let const_name = path.join(".");
+                    if seen_strings.iter().any(|s| s == &const_name) {
+                        self.error(value.span(), "duplicate case label");
+                    }
+                    seen_strings.push(const_name.clone());
+                    self.emit_load(selector_slot, selector_ty);
+                    let enum_name = self.table.class_name(enum_id).to_owned();
+                    let descriptor = format!("L{enum_name};");
+                    let field_ref =
+                        intern_field_ref(self.pool, &enum_name, &const_name, &descriptor);
+                    self.code.push_op_u16(op::GETSTATIC, field_ref, 1);
+                    self.code.branch(op::IF_ACMPEQ, arm_labels[index], 2);
+                } else if is_string {
                     let Expr::Literal {
                         value: Literal::Str(text),
                         ..

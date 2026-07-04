@@ -308,6 +308,18 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   constructor); static blocks run exactly once at class init. Each
   block is its own local scope.
 
+- **`enum` types** (2026-07-03): desugared to an ordinary class whose
+  constants are `static final` singletons instantiated in source order
+  in `<clinit>`. Supports constants with constructor arguments, enum
+  fields/methods/constructors (user constructors gain the two implicit
+  leading `name`/`ordinal` parameters), and the standard members
+  `values()` (fresh array each call), `valueOf(String)` (javac's `No
+enum constant E.X` `IllegalArgumentException` on miss), `ordinal()`,
+  `name()`, and a default `toString()` returning the name (all
+  overridable). `switch` on an enum matches unqualified constant names
+  by reference identity; enum constants are singletons so `==` works.
+  `@Override` and other annotations are parsed and ignored.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

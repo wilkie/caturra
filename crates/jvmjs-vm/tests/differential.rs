@@ -1843,6 +1843,108 @@ public class DiffInit {
 );
 
 differential_test!(
+    diff_enum_simple,
+    "DiffEnumSimple",
+    r#"
+enum Direction { NORTH, EAST, SOUTH, WEST }
+
+public class DiffEnumSimple {
+    static Direction turnRight(Direction d) {
+        switch (d) {
+            case NORTH: return Direction.EAST;
+            case EAST: return Direction.SOUTH;
+            case SOUTH: return Direction.WEST;
+            default: return Direction.NORTH;
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(Direction.NORTH + " " + Direction.WEST.ordinal());
+        for (Direction d : Direction.values()) {
+            System.out.print(d.name() + "->" + turnRight(d).name() + " ");
+        }
+        System.out.println();
+        System.out.println(Direction.valueOf("SOUTH") == Direction.SOUTH);
+        System.out.println(Direction.values().length);
+
+        // Reference equality and use as a field/local.
+        Direction here = Direction.EAST;
+        boolean east = here == Direction.EAST;
+        System.out.println(east + " " + (here == Direction.WEST));
+
+        // valueOf failure.
+        try {
+            Direction.valueOf("UP");
+        } catch (IllegalArgumentException e) {
+            System.out.println("bad: " + (e.getMessage() != null));
+        }
+
+        // Enum in a String concat chain and equality in a loop.
+        int northish = 0;
+        for (Direction d : Direction.values()) {
+            if (d == Direction.NORTH || d == Direction.SOUTH) northish++;
+        }
+        System.out.println(northish);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_enum_with_fields,
+    "DiffEnumFields",
+    r#"
+enum Planet {
+    MERCURY(3.303e+23, 2.4397e6),
+    EARTH(5.976e+24, 6.37814e6),
+    JUPITER(1.9e+27, 7.1492e7);
+
+    private final double mass;
+    private final double radius;
+
+    Planet(double mass, double radius) {
+        this.mass = mass;
+        this.radius = radius;
+    }
+
+    static final double G = 6.67300E-11;
+
+    double surfaceGravity() {
+        return G * mass / (radius * radius);
+    }
+
+    double surfaceWeight(double otherMass) {
+        return otherMass * surfaceGravity();
+    }
+
+    @Override
+    public String toString() {
+        return name() + "[ordinal=" + ordinal() + "]";
+    }
+}
+
+public class DiffEnumFields {
+    public static void main(String[] args) {
+        double earthWeight = 175;
+        double mass = earthWeight / Planet.EARTH.surfaceGravity();
+        for (Planet p : Planet.values()) {
+            System.out.println(p + " weight: " + Math.round(p.surfaceWeight(mass)));
+        }
+        System.out.println(Planet.JUPITER.surfaceGravity() > Planet.EARTH.surfaceGravity());
+        System.out.println(Planet.valueOf("MERCURY").ordinal());
+
+        // Custom toString flows through switch and concat.
+        Planet home = Planet.EARTH;
+        switch (home) {
+            case EARTH: System.out.println("home is " + home); break;
+            default: System.out.println("away");
+        }
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

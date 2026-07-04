@@ -228,6 +228,38 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn enums_singletons_values_and_switch() {
+    let out = run_stdout(
+        r#"
+        enum Coin {
+            PENNY(1), NICKEL(5), DIME(10), QUARTER(25);
+            private final int cents;
+            Coin(int cents) { this.cents = cents; }
+            int cents() { return cents; }
+        }
+        public class Money {
+            public static void main(String[] args) {
+                int total = 0;
+                for (Coin c : Coin.values()) total += c.cents();
+                System.out.println(total + " " + Coin.values().length);
+                Coin c = Coin.valueOf("DIME");
+                System.out.println(c + " " + c.ordinal() + " " + c.cents());
+                String kind = "";
+                switch (c) {
+                    case PENNY: kind = "copper"; break;
+                    case DIME: case QUARTER: kind = "silver"; break;
+                    default: kind = "other";
+                }
+                System.out.println(kind + " " + (c == Coin.DIME));
+            }
+        }
+        "#,
+        "Money",
+    );
+    assert_eq!(out, "41 4\nDIME 2 10\nsilver true\n");
+}
+
+#[test]
 fn arithmetic_follows_java_semantics() {
     let out = run_stdout(
         r"
