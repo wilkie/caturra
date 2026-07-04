@@ -228,6 +228,30 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn autoboxing_wrappers_and_arithmetic() {
+    let out = run_stdout(
+        r#"
+        public class Box {
+            static int take(Integer n) { return n; }
+            public static void main(String[] args) {
+                Integer i = 5;
+                int x = i;
+                Double d = 2.5;
+                double y = d;
+                Object o = 42;
+                System.out.println(i + " " + x + " " + d + " " + y + " " + o);
+                Integer a = 10, b = 4;
+                System.out.println((a + b) + " " + (a * b) + " " + (a > b) + " " + a.compareTo(b));
+                System.out.println(take(99) + " " + i.doubleValue());
+            }
+        }
+        "#,
+        "Box",
+    );
+    assert_eq!(out, "5 5 2.5 2.5 42\n14 40 true 1\n99 5.0\n");
+}
+
+#[test]
 fn generic_class_and_object_top_type() {
     let out = run_stdout(
         r#"

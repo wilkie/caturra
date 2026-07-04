@@ -2226,6 +2226,85 @@ public class DiffGenerics {
 );
 
 differential_test!(
+    diff_autoboxing,
+    "DiffBox",
+    r#"
+import java.util.ArrayList;
+
+public class DiffBox {
+    // Boxing across a method boundary.
+    static int unwrap(Integer boxed) { return boxed; }
+    static Integer wrap(int primitive) { return primitive; }
+
+    public static void main(String[] args) {
+        // Box on assignment, unbox on assignment.
+        Integer i = 5;
+        int x = i;
+        System.out.println(i + " " + x);
+
+        Double d = 3.5;
+        double dv = d;
+        System.out.println(d + " " + dv);
+
+        Boolean flag = true;
+        boolean bv = flag;
+        System.out.println(flag + " " + bv);
+
+        Character c = 'Q';
+        char cv = c;
+        System.out.println(c + " " + cv);
+
+        Long bignum = 9000000000L;
+        long lv = bignum;
+        System.out.println(bignum + " " + lv);
+
+        // Box to Object.
+        Object o1 = 42;
+        Object o2 = 2.5;
+        Object o3 = true;
+        System.out.println(o1 + " " + o2 + " " + o3);
+
+        // Arithmetic auto-unboxes.
+        Integer a = 10, b = 3;
+        System.out.println((a + b) + " " + (a * b) + " " + (a - b) + " " + (a / b) + " " + (a % b));
+        System.out.println((a > b) + " " + (a <= b) + " " + (a == 10));
+        Double p = 1.5, q = 2.5;
+        System.out.println((p + q) + " " + (p < q));
+
+        // Mixed boxed/primitive arithmetic.
+        Integer m = 7;
+        int result = m + 3;
+        double mixed = m + 0.5;
+        System.out.println(result + " " + mixed);
+
+        // Wrapper instance methods.
+        Integer n = 15;
+        System.out.println(n.intValue() + " " + n.doubleValue() + " " + n.compareTo(20));
+        System.out.println(n.equals(15) + " " + n.equals(16) + " " + n.toString());
+        System.out.println(n.hashCode());
+
+        // Boxing through method calls.
+        System.out.println(unwrap(99) + " " + wrap(7));
+
+        // Autoboxing into a collection (already supported) plus reads.
+        ArrayList<Integer> list = new ArrayList<>();
+        list.add(1);
+        list.add(2);
+        list.add(3);
+        int sum = 0;
+        for (int v : list) sum += v;
+        System.out.println(sum + " " + list.get(1));
+
+        // Integer caching semantics don't matter for value use.
+        Integer big1 = 1000;
+        int backToPrim = big1 + 1;
+        System.out.println(backToPrim);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

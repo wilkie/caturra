@@ -369,6 +369,19 @@ x)`) with type-parameter erasure — every type variable is rewritten
   autoboxing of primitives into `Object`, and nested type arguments
   (`Box<Pair<A, B>>`).
 
+- **Autoboxing** (2026-07-03): the wrapper types `Integer`, `Double`,
+  `Long`, `Float`, `Short`, `Byte`, `Character`, and `Boolean` are
+  storable reference types (a boxed primitive on the heap). Boxing
+  (`Integer i = 5;`, `Object o = 42;`) and unboxing (`int x = i;`,
+  `double d = box;`) happen automatically at assignments, method
+  arguments, and returns (JLS §5.1.7/§5.1.8), via `Wrapper.valueOf` /
+  `wrapper.xValue()`. Arithmetic and comparison auto-unbox their
+  operands (`Integer a = 10, b = 3; int s = a + b;`), and the wrapper
+  instance methods work (`intValue`, `doubleValue`, `compareTo`,
+  `equals`, `hashCode`, `toString`). This also makes single-parameter
+  generics over primitives usable in the collection sense (values box
+  on the way in).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

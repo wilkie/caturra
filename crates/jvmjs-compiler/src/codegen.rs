@@ -914,6 +914,13 @@ impl MethodTable {
                 if name == crate::parser::TYPEVAR_SENTINEL {
                     return Some(JType::TypeVar);
                 }
+                // Wrapper types (`Integer`, `Double`, ...) as a boxed
+                // value — unless the name is a user class of that name.
+                if !self.has_class(simple)
+                    && let Some(elem) = wrapper_elem(simple)
+                {
+                    return Some(JType::Boxed(elem));
+                }
                 // User classes shadow the intrinsic simple names.
                 if !name.contains('.')
                     && let Some(id) = self.class_id(simple)
@@ -1245,6 +1252,61 @@ fn exception_internal(id: u8) -> &'static str {
         .map_or("java/lang/Throwable", |(class, _)| class)
 }
 
+/// A boxed wrapper viewed as its primitive for numeric operators
+/// (auto-unboxing); non-wrapper types pass through.
+fn numeric_view(ty: JType) -> JType {
+    match ty {
+        JType::Boxed(elem) => elem.base_type(),
+        other => other,
+    }
+}
+
+/// The `ElemType` a primitive `JType` boxes into (`int` -> Integer).
+fn boxable_primitive(ty: JType) -> Option<ElemType> {
+    Some(match ty {
+        JType::Int => ElemType::Int,
+        JType::Double => ElemType::Double,
+        JType::Long => ElemType::Long,
+        JType::Float => ElemType::Float,
+        JType::Short => ElemType::Short,
+        JType::Byte => ElemType::Byte,
+        JType::Char => ElemType::Char,
+        JType::Boolean => ElemType::Boolean,
+        _ => return None,
+    })
+}
+
+/// The boxed primitive kind for a wrapper class simple name, if any.
+fn wrapper_elem(name: &str) -> Option<ElemType> {
+    Some(match name {
+        "Integer" => ElemType::Int,
+        "Double" => ElemType::Double,
+        "Long" => ElemType::Long,
+        "Float" => ElemType::Float,
+        "Short" => ElemType::Short,
+        "Byte" => ElemType::Byte,
+        "Character" => ElemType::Char,
+        "Boolean" => ElemType::Boolean,
+        _ => return None,
+    })
+}
+
+/// The internal (slash) name of the wrapper class for a boxed
+/// primitive: `Integer`, `Double`, ...
+fn wrapper_internal(elem: ElemType) -> &'static str {
+    match elem {
+        ElemType::Int => "java/lang/Integer",
+        ElemType::Double => "java/lang/Double",
+        ElemType::Long => "java/lang/Long",
+        ElemType::Float => "java/lang/Float",
+        ElemType::Short => "java/lang/Short",
+        ElemType::Byte => "java/lang/Byte",
+        ElemType::Char => "java/lang/Character",
+        ElemType::Boolean => "java/lang/Boolean",
+        ElemType::Str | ElemType::Object(_) => "java/lang/Object",
+    }
+}
+
 /// The display name of a list element as its wrapper type.
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
@@ -1350,6 +1412,9 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // Any reference (including another type var) stores into a T.
         || (to == JType::TypeVar && from.is_reference())
         || (from == JType::TypeVar && to == JType::Object(table.object_id))
+        // Autoboxing / unboxing in assignment and method invocation.
+        || matches!((from, to), (JType::Boxed(e), t) if e.base_type() == t)
+        || matches!((from, to), (f, JType::Boxed(e)) if e.base_type() == f)
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -1453,6 +1518,9 @@ enum JType {
     /// compiling that class's own body. Erases to `Object`; at external
     /// use it substitutes to the receiver's tracked type argument.
     TypeVar,
+    /// A boxed primitive wrapper (`Integer`, `Double`, ...). The
+    /// `ElemType` is the primitive kind (never `Str`/`Object`).
+    Boxed(ElemType),
     /// A type jvmjs doesn't handle yet.
     Unsupported,
     /// A diagnostic was already reported for this subtree.
@@ -1463,6 +1531,7 @@ impl JType {
     fn describe(self, table: &MethodTable) -> String {
         match self {
             JType::Object(id) if id == table.object_id => String::from("Object"),
+            JType::Boxed(elem) => wrapper_name(elem, table),
             JType::Generic { class, arg } => {
                 format!(
                     "{}<{}>",
@@ -1532,6 +1601,7 @@ impl JType {
                 | JType::Exception(_)
                 | JType::Generic { .. }
                 | JType::TypeVar
+                | JType::Boxed(_)
         )
     }
 
@@ -1570,6 +1640,7 @@ impl JType {
         match self {
             // Erasure: a parameterized type is its raw class; a type
             // variable is Object.
+            JType::Boxed(elem) => format!("L{};", wrapper_internal(elem)),
             JType::Generic { class, .. } => format!("L{};", table.class_name(class)),
             JType::Int => String::from("I"),
             JType::Double => String::from("D"),
@@ -1908,6 +1979,12 @@ fn method_descriptor(
                     // Erasure: a type variable / Object both descriptor
                     // to java/lang/Object.
                     out.push_str("Ljava/lang/Object;");
+                } else if !table.has_class(simple)
+                    && let Some(elem) = wrapper_elem(simple)
+                {
+                    out.push('L');
+                    out.push_str(wrapper_internal(elem));
+                    out.push(';');
                 } else if !name.contains('.') && table.has_class(simple) {
                     out.push('L');
                     out.push_str(simple);
@@ -2930,7 +3007,7 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     bm("toHexString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     // valueOf returns the primitive value (no boxed identity/caching
     // semantics in this VM — a documented deviation).
-    bm("valueOf", &[I], BRet::Int, "(I)Ljava/lang/Integer;"),
+    bm("valueOf", &[I], BRet::Int, "(I)I"),
     bm(
         "valueOf",
         &[S],
@@ -2978,7 +3055,7 @@ const DOUBLE_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Str,
         descriptor: "(D)Ljava/lang/String;",
     },
-    bm("valueOf", &[D], BRet::Double, "(D)Ljava/lang/Double;"),
+    bm("valueOf", &[D], BRet::Double, "(D)D"),
     bm(
         "valueOf",
         &[S],
@@ -3057,7 +3134,7 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     bm("compare", &[C, C], BRet::Int, "(CC)I"),
     bm("hashCode", &[C], BRet::Int, "(C)I"),
     bm("toString", &[C], BRet::Str, "(C)Ljava/lang/String;"),
-    bm("valueOf", &[C], BRet::Char, "(C)Ljava/lang/Character;"),
+    bm("valueOf", &[C], BRet::Char, "(C)C"),
     bm("isHighSurrogate", &[C], BRet::Boolean, "(C)Z"),
     bm("isLowSurrogate", &[C], BRet::Boolean, "(C)Z"),
     bm("isSurrogate", &[C], BRet::Boolean, "(C)Z"),
@@ -3121,7 +3198,7 @@ const BYTE_METHODS: &[BuiltinMethod] = &[
 const FLOAT_METHODS: &[BuiltinMethod] = &[
     bm("parseFloat", &[S], BRet::Float, "(Ljava/lang/String;)F"),
     bm("toString", &[F], BRet::Str, "(F)Ljava/lang/String;"),
-    bm("valueOf", &[F], BRet::Float, "(F)Ljava/lang/Float;"),
+    bm("valueOf", &[F], BRet::Float, "(F)F"),
     bm(
         "valueOf",
         &[S],
@@ -3147,7 +3224,7 @@ const LONG_METHODS: &[BuiltinMethod] = &[
     bm("toBinaryString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
     bm("toOctalString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
     bm("toHexString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
-    bm("valueOf", &[L], BRet::Long, "(J)Ljava/lang/Long;"),
+    bm("valueOf", &[L], BRet::Long, "(J)J"),
     bm(
         "valueOf",
         &[S],
@@ -3175,7 +3252,7 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[
     bm("parseBoolean", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
     bm("toString", &[Z], BRet::Str, "(Z)Ljava/lang/String;"),
-    bm("valueOf", &[Z], BRet::Boolean, "(Z)Ljava/lang/Boolean;"),
+    bm("valueOf", &[Z], BRet::Boolean, "(Z)Z"),
     bm("compare", &[Z, Z], BRet::Int, "(ZZ)I"),
     bm("hashCode", &[Z], BRet::Int, "(Z)I"),
     bm("logicalAnd", &[Z, Z], BRet::Boolean, "(ZZ)Z"),
@@ -5239,6 +5316,75 @@ impl BodyGen<'_> {
         concrete
     }
 
+    /// A method call on a boxed wrapper receiver (already on the
+    /// stack): unboxing accessors and Object methods.
+    #[allow(clippy::option_option)]
+    fn boxed_instance_call(
+        &mut self,
+        elem: ElemType,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let internal = wrapper_internal(elem);
+        // (return type, descriptor, argument coercion)
+        let plan: Option<(JType, String)> = match method {
+            "intValue" | "hashCode" => Some((JType::Int, String::from("()I"))),
+            "shortValue" => Some((JType::Short, String::from("()S"))),
+            "byteValue" => Some((JType::Byte, String::from("()B"))),
+            "longValue" => Some((JType::Long, String::from("()J"))),
+            "doubleValue" => Some((JType::Double, String::from("()D"))),
+            "floatValue" => Some((JType::Float, String::from("()F"))),
+            "charValue" => Some((JType::Char, String::from("()C"))),
+            "booleanValue" => Some((JType::Boolean, String::from("()Z"))),
+            "toString" => Some((JType::Str, String::from("()Ljava/lang/String;"))),
+            _ => None,
+        };
+        if let Some((ret, descriptor)) = plan {
+            let method_ref = intern_method_ref(self.pool, internal, method, &descriptor);
+            let ret_width = ret.width();
+            self.code
+                .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
+            self.code.drop_stack(1);
+            return Some(Some(ret));
+        }
+        // equals(Object) / compareTo(Wrapper): one argument, boxed.
+        match method {
+            "equals" | "compareTo" => {
+                let [arg] = args else {
+                    self.error(span, format!("{method} takes one argument"));
+                    return None;
+                };
+                let arg_ty = self.expr(arg);
+                let (target, descriptor) = if method == "equals" {
+                    (
+                        JType::Object(self.table.object_id),
+                        String::from("(Ljava/lang/Object;)Z"),
+                    )
+                } else {
+                    (JType::Boxed(elem), format!("(L{internal};)I"))
+                };
+                self.convert_for_assignment(arg_ty, target, arg.span());
+                let method_ref = intern_method_ref(self.pool, internal, method, &descriptor);
+                self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+                self.code.drop_stack(2);
+                let ret = if method == "equals" {
+                    JType::Boolean
+                } else {
+                    JType::Int
+                };
+                Some(Some(ret))
+            }
+            other => {
+                self.error(
+                    span,
+                    format!("cannot find symbol: method {other} in class {internal}"),
+                );
+                None
+            }
+        }
+    }
+
     /// Resolve and emit an instance method call with the receiver
     /// expression. `None` means a diagnostic was reported.
     #[allow(clippy::option_option)] // error / void / value are distinct outcomes
@@ -5259,6 +5405,10 @@ impl BodyGen<'_> {
                 let result =
                     self.emit_virtual_call_on_stacked_receiver(class, method, args, span)?;
                 return Some(result.map(|ret| self.substitute_type_var(ret, arg)));
+            }
+            // Wrapper instance methods (intValue, compareTo, ...).
+            JType::Boxed(elem) => {
+                return self.boxed_instance_call(elem, method, args, span);
             }
             // A method on a type variable: only Object's methods.
             JType::TypeVar => self.table.object_id,
@@ -5638,6 +5788,15 @@ impl BodyGen<'_> {
                 "toString",
                 "()Ljava/lang/String;",
             );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return JType::Str;
+        }
+        if let JType::Boxed(elem) = ty {
+            // A boxed wrapper is never null here; call its toString.
+            let internal = wrapper_internal(elem);
+            let method_ref =
+                intern_method_ref(self.pool, internal, "toString", "()Ljava/lang/String;");
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
             self.code.drop_stack(1);
             return JType::Str;
@@ -6273,7 +6432,9 @@ impl BodyGen<'_> {
     fn print_descriptor(&mut self, ty: JType, span: SourceSpan) -> Option<String> {
         match ty {
             // Reached only if not already coerced; treat as Object.
-            JType::Generic { .. } | JType::TypeVar => Some(String::from("(Ljava/lang/Object;)V")),
+            JType::Generic { .. } | JType::TypeVar | JType::Boxed(_) => {
+                Some(String::from("(Ljava/lang/Object;)V"))
+            }
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
             JType::Long => Some(String::from("(J)V")),
@@ -6990,7 +7151,7 @@ impl BodyGen<'_> {
         if !sig.is_varargs {
             for (arg, param) in args.iter().zip(&sig.params) {
                 let actual = self.expr(arg);
-                self.numeric_conversion(actual, *param);
+                self.convert_for_assignment(actual, *param, arg.span());
             }
             return sig.params.iter().map(|p| p.width()).sum();
         }
@@ -6998,7 +7159,7 @@ impl BodyGen<'_> {
         let array_ty = sig.params[fixed];
         for (arg, param) in args.iter().zip(&sig.params).take(fixed) {
             let actual = self.expr(arg);
-            self.numeric_conversion(actual, *param);
+            self.convert_for_assignment(actual, *param, arg.span());
         }
         // Array form: a single trailing argument assignable to the
         // varargs array is passed straight through.
@@ -7795,7 +7956,10 @@ impl BodyGen<'_> {
                 self.bitwise(op, lhs, rhs, span)
             }
             BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => {
-                let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
+                let (lt, rt) = (
+                    numeric_view(self.type_of(lhs)),
+                    numeric_view(self.type_of(rhs)),
+                );
                 let integral = |t: JType| {
                     matches!(
                         t,
@@ -7850,7 +8014,10 @@ impl BodyGen<'_> {
                 self.concat(lhs, rhs)
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
+                let (lt, rt) = (
+                    numeric_view(self.type_of(lhs)),
+                    numeric_view(self.type_of(rhs)),
+                );
                 if lt == JType::Error || rt == JType::Error {
                     // Emit for nested diagnostics, then bail.
                     self.expr(lhs);
@@ -7885,7 +8052,10 @@ impl BodyGen<'_> {
     /// `& | ^`: bitwise on ints, non-short-circuit logical on
     /// booleans (both operands always evaluate — the JLS semantics).
     fn bitwise(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
-        let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
+        let (lt, rt) = (
+            numeric_view(self.type_of(lhs)),
+            numeric_view(self.type_of(rhs)),
+        );
         let boolean = lt == JType::Boolean && rt == JType::Boolean;
         let is_integral = |t: JType| {
             matches!(
@@ -7973,7 +8143,10 @@ impl BodyGen<'_> {
 
     #[allow(clippy::too_many_lines)] // one arm per operand-type family
     fn comparison(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
-        let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
+        let (lt, rt) = (
+            numeric_view(self.type_of(lhs)),
+            numeric_view(self.type_of(rhs)),
+        );
         if lt == JType::Error || rt == JType::Error {
             self.expr(lhs);
             self.expr(rhs);
@@ -8159,7 +8332,7 @@ impl BodyGen<'_> {
     fn append_part(&mut self, ty: JType, span: SourceSpan) {
         let ty = self.coerce_to_string_for_output(ty);
         let descriptor = match ty {
-            JType::Generic { .. } | JType::TypeVar => {
+            JType::Generic { .. } | JType::TypeVar | JType::Boxed(_) => {
                 "(Ljava/lang/Object;)Ljava/lang/StringBuilder;"
             }
             JType::Int | JType::Short | JType::Byte => "(I)Ljava/lang/StringBuilder;",
@@ -8281,7 +8454,48 @@ impl BodyGen<'_> {
 
     /// Widening numeric conversion toward `target` (no-op when types
     /// already agree or aren't numeric).
+    /// Box the primitive on the stack into its wrapper via
+    /// `Wrapper.valueOf(prim)`.
+    fn emit_box(&mut self, elem: ElemType) {
+        let internal = wrapper_internal(elem);
+        let prim = elem.base_type();
+        let descriptor = format!("({})L{internal};", prim.descriptor(self.table));
+        let method_ref = intern_method_ref(self.pool, internal, "valueOf", &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+        // prim (width w) -> one reference; net stack change 1 - w.
+        self.code.drop_stack(prim.width());
+        self.code.grow_stack(1);
+    }
+
+    /// Unbox the wrapper on the stack into its primitive via
+    /// `wrapper.xValue()`.
+    fn emit_unbox(&mut self, elem: ElemType) {
+        let internal = wrapper_internal(elem);
+        let prim = elem.base_type();
+        let method = match elem {
+            ElemType::Int | ElemType::Str | ElemType::Object(_) => "intValue",
+            ElemType::Double => "doubleValue",
+            ElemType::Long => "longValue",
+            ElemType::Float => "floatValue",
+            ElemType::Short => "shortValue",
+            ElemType::Byte => "byteValue",
+            ElemType::Char => "charValue",
+            ElemType::Boolean => "booleanValue",
+        };
+        let descriptor = format!("(){}", prim.descriptor(self.table));
+        let method_ref = intern_method_ref(self.pool, internal, method, &descriptor);
+        self.code
+            .push_op_u16(op::INVOKEVIRTUAL, method_ref, prim.width());
+        self.code.drop_stack(1);
+    }
+
     fn numeric_conversion(&mut self, from: JType, target: JType) {
+        // Auto-unbox a wrapper operand to its primitive, then convert.
+        if let JType::Boxed(elem) = from {
+            self.emit_unbox(elem);
+            self.numeric_conversion(elem.base_type(), target);
+            return;
+        }
         match (from, target) {
             (JType::Int | JType::Char | JType::Short | JType::Byte, JType::Double) => {
                 self.code.push_op(op::I2D, 1);
@@ -8472,6 +8686,29 @@ impl BodyGen<'_> {
                 _ => false,
             };
             if in_range {
+                return;
+            }
+        }
+        // Autoboxing / auto-unboxing (JLS §5.1.7 / §5.1.8).
+        if from != to {
+            // Box a primitive into its wrapper, or into Object.
+            if let JType::Boxed(elem) = to
+                && from == elem.base_type()
+            {
+                self.emit_box(elem);
+                return;
+            }
+            if to == JType::Object(self.table.object_id)
+                && let Some(elem) = boxable_primitive(from)
+            {
+                self.emit_box(elem);
+                return;
+            }
+            // Unbox a wrapper to its primitive (then widen if needed).
+            if let JType::Boxed(elem) = from {
+                let primitive = elem.base_type();
+                self.emit_unbox(elem);
+                self.convert_for_assignment(primitive, to, span);
                 return;
             }
         }

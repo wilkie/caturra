@@ -213,6 +213,12 @@ pub fn invoke_virtual(
         reason: format!("dangling heap reference {receiver}"),
     })?;
 
+    // Boxed wrapper methods: unboxing accessors and Object methods.
+    if let HeapObject::Boxed { class_name, value } = receiver_object {
+        let class_name = class_name.clone();
+        let value = *value;
+        return boxed_virtual(heap, &class_name, value, method, args);
+    }
     match (receiver_object, method) {
         (HeapObject::PrintStream(stream), "printf") => {
             let stream = *stream;
@@ -1562,6 +1568,145 @@ impl JavaRng {
 /// Intrinsic static methods, routed per class. Every method a student
 /// can find in the Java 11 documentation either works or reports an
 /// honest "not supported" reason at compile time.
+fn is_wrapper_class(class: &str) -> bool {
+    matches!(
+        class,
+        "java/lang/Integer"
+            | "java/lang/Double"
+            | "java/lang/Long"
+            | "java/lang/Float"
+            | "java/lang/Short"
+            | "java/lang/Byte"
+            | "java/lang/Character"
+            | "java/lang/Boolean"
+    )
+}
+
+/// Render a boxed primitive the way its wrapper's `toString` does.
+pub(crate) fn boxed_to_string(class_name: &str, value: JValue) -> String {
+    match (class_name, value) {
+        ("java/lang/Double", JValue::Double(v)) => java_double_to_string(v),
+        ("java/lang/Float", JValue::Float(v)) => java_float_to_string(v),
+        ("java/lang/Long", JValue::Long(v)) => v.to_string(),
+        ("java/lang/Boolean", JValue::Int(v)) => (v != 0).to_string(),
+        ("java/lang/Character", JValue::Int(v)) => char::from_u32(u32::try_from(v).unwrap_or(0))
+            .unwrap_or('\u{FFFD}')
+            .to_string(),
+        (_, JValue::Int(v)) => v.to_string(),
+        (_, other) => format!("{other:?}"),
+    }
+}
+
+/// Instance methods on a boxed wrapper: the unboxing accessors
+/// (`intValue`, ...) and the Object methods (`toString`, `equals`,
+/// `hashCode`, `compareTo`).
+fn boxed_virtual(
+    heap: &mut Heap,
+    class_name: &str,
+    value: JValue,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    // Unboxing accessors convert the stored primitive to the requested
+    // numeric type.
+    let as_double = |v: JValue| match v {
+        JValue::Int(n) => f64::from(n),
+        JValue::Long(n) => {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                n as f64
+            }
+        }
+        JValue::Float(n) => f64::from(n),
+        JValue::Double(n) => n,
+        JValue::Ref(_) => 0.0,
+    };
+    let as_long = |v: JValue| match v {
+        JValue::Int(n) => i64::from(n),
+        JValue::Long(n) => n,
+        #[allow(clippy::cast_possible_truncation)]
+        JValue::Float(n) => n as i64,
+        #[allow(clippy::cast_possible_truncation)]
+        JValue::Double(n) => n as i64,
+        JValue::Ref(_) => 0,
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let as_int = |v: JValue| match v {
+        JValue::Int(n) => n,
+        JValue::Long(n) => n as i32,
+        JValue::Float(n) => n as i32,
+        JValue::Double(n) => n as i32,
+        JValue::Ref(_) => 0,
+    };
+    match method {
+        "intValue" | "shortValue" | "byteValue" | "charValue" => {
+            Ok(Some(JValue::Int(as_int(value))))
+        }
+        "longValue" => Ok(Some(JValue::Long(as_long(value)))),
+        "doubleValue" => Ok(Some(JValue::Double(as_double(value)))),
+        #[allow(clippy::cast_possible_truncation)]
+        "floatValue" => Ok(Some(JValue::Float(as_double(value) as f32))),
+        "booleanValue" => Ok(Some(value)),
+        "toString" => {
+            let text = boxed_to_string(class_name, value);
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        "hashCode" => Ok(Some(JValue::Int(match value {
+            JValue::Int(n) => n,
+            JValue::Long(n) => (((n.cast_unsigned() ^ (n.cast_unsigned() >> 32)) & 0xFFFF_FFFF)
+                as u32)
+                .cast_signed(),
+            JValue::Double(n) => java_double_hash(n),
+            _ => 0,
+        }))),
+        "equals" => {
+            // Equal iff the other operand is a wrapper of the same class
+            // and value.
+            let equal = matches!(args.first(), Some(JValue::Ref(Some(other)))
+            if match heap.get(*other) {
+                Some(HeapObject::Boxed { class_name: other_class, value: other_value }) => {
+                    other_class == class_name && values_bit_equal(value, *other_value)
+                }
+                _ => false,
+            });
+            Ok(Some(JValue::Int(i32::from(equal))))
+        }
+        "compareTo" => {
+            let other = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::Boxed { value, .. }) => *value,
+                    _ => JValue::Int(0),
+                },
+                _ => JValue::Int(0),
+            };
+            let ordering = match (value, other) {
+                (JValue::Double(a), JValue::Double(b)) => a.total_cmp(&b),
+                (JValue::Float(a), JValue::Float(b)) => a.total_cmp(&b),
+                (JValue::Long(a), JValue::Long(b)) => a.cmp(&b),
+                _ => as_long(value).cmp(&as_long(other)),
+            };
+            Ok(Some(JValue::Int(match ordering {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "{class_name}.{method} on a boxed value"
+        ))),
+    }
+}
+
+fn values_bit_equal(a: JValue, b: JValue) -> bool {
+    match (a, b) {
+        (JValue::Int(x), JValue::Int(y)) => x == y,
+        (JValue::Long(x), JValue::Long(y)) => x == y,
+        (JValue::Double(x), JValue::Double(y)) => x.to_bits() == y.to_bits(),
+        (JValue::Float(x), JValue::Float(y)) => x.to_bits() == y.to_bits(),
+        _ => false,
+    }
+}
+
 pub fn invoke_static(
     heap: &mut Heap,
     rng: &mut JavaRng,
@@ -1571,6 +1716,21 @@ pub fn invoke_static(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
+    // Autoboxing: the compiler emits `Wrapper.valueOf(prim)LWrapper;`
+    // (a wrapper return) to box. User `Integer.valueOf(7)` is compiled
+    // with an `int` return and falls through unboxed.
+    if method == "valueOf"
+        && args.len() == 1
+        && is_wrapper_class(class)
+        && descriptor.ends_with(&format!("L{class};"))
+        && !matches!(args[0], JValue::Ref(_))
+    {
+        let reference = heap.alloc(HeapObject::Boxed {
+            class_name: class.to_owned(),
+            value: args[0],
+        });
+        return Ok(Some(JValue::Ref(Some(reference))));
+    }
     match class {
         "java/lang/Math" => math_static(rng, method, args),
         "java/lang/Integer" => integer_static(heap, method, args),

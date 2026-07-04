@@ -50,6 +50,9 @@ pub enum HeapObject {
     LongArray(Vec<i64>),
     /// A `float[]`.
     FloatArray(Vec<f32>),
+    /// A boxed primitive wrapper (`Integer`, `Double`, ...). Holds the
+    /// wrapper's internal class name and the primitive value.
+    Boxed { class_name: String, value: JValue },
     /// A `short[]`.
     ShortArray(Vec<i16>),
     /// A `byte[]` (distinct from boolean arrays, which reuse
