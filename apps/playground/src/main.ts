@@ -20,25 +20,51 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 
-/** A default 10×10 grid (a wall and a paint bucket) for neighborhood runs. */
-function defaultNeighborhoodGrid(): string {
-  const size = 10;
-  const rows: string[] = [];
-  for (let y = 0; y < size; y++) {
-    const cells: string[] = [];
-    for (let x = 0; x < size; x++) {
-      let cell = '1,0';
-      if (x === 4 && (y === 4 || y === 5)) {
-        cell = '0,0'; // wall
-      } else if (x === 7 && y === 2) {
-        cell = '1,3'; // paint bucket
-      }
-      cells.push(cell);
+// A real Code.org neighborhood level (CSA U1L9 "traffic" maze): a 10×10
+// grid of roads with two paint buckets. `tileType,paintCount` per cell,
+// exactly the `grid.txt` the bundled World reads.
+const NEIGHBORHOOD_GRID = `1,0 1,0 1,0 1,6 0,0 0,0 1,0 1,0 1,0 0,0
+0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
+0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
+0,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0
+0,0 0,0 0,0 1,0 0,0 0,0 1,0 1,0 1,0 0,0
+0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
+0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
+0,0 0,0 0,0 1,0 1,0 1,0 1,6 0,0 0,0 0,0
+0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0
+0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0
+`;
+
+// A runnable starter in the style of the real level: drive to the paint
+// bucket, fill up, then paint a yellow line down the road.
+const NEIGHBORHOOD_SAMPLE = `import org.code.neighborhood.*;
+
+public class Main {
+  public static void main(String[] args) {
+    Painter painter = new Painter(0, 0, "east", 0);
+
+    // Drive east until reaching the paint bucket.
+    while (!painter.isOnBucket() && painter.canMove()) {
+      painter.move();
     }
-    rows.push(cells.join(' '));
+
+    // Collect all the paint from the bucket.
+    while (painter.isOnBucket()) {
+      painter.takePaint();
+    }
+
+    // Turn to face south and paint a line down the road.
+    painter.turnLeft();
+    painter.turnLeft();
+    painter.turnLeft();
+    while (painter.hasPaint() && painter.canMove()) {
+      painter.paint("yellow");
+      painter.move();
+    }
+    painter.paint("yellow");
   }
-  return `${rows.join('\n')}\n`;
 }
+`;
 
 const DEFAULT_PROGRAM = `public class Main {
     public static void main(String[] args) {
@@ -74,6 +100,7 @@ const watchExpressions: string[] = [];
 const fileTabsEl = mustGet('#file-tabs', HTMLDivElement);
 const addFileEl = mustGet('#add-file', HTMLButtonElement);
 const vizEl = mustGet('#viz', HTMLDivElement);
+const neighborhoodExampleEl = mustGet('#neighborhood-example', HTMLButtonElement);
 const neighborhoodViz = new NeighborhoodViz(mustGet('#neighborhood-canvas', HTMLCanvasElement));
 
 const editor = createEditor(sourceEl, DEFAULT_PROGRAM);
@@ -166,6 +193,14 @@ addFileEl.addEventListener('click', () => {
   }
 });
 renderTabs();
+
+// Load a Neighborhood level: swap in the starter program and show the
+// level's grid straight away, so Run animates over the real maze.
+neighborhoodExampleEl.addEventListener('click', () => {
+  setSource(editor, NEIGHBORHOOD_SAMPLE);
+  vizEl.hidden = false;
+  neighborhoodViz.load(NEIGHBORHOOD_GRID, '');
+});
 
 /** All files as compiler inputs (the active tab reads the live view). */
 function collectSources(): { path: string; text: string }[] {
@@ -469,7 +504,7 @@ async function runProgram(): Promise<void> {
     const neighborhood = isNeighborhoodProgram();
     if (neighborhood) {
       // Seed the grid and clear any prior run's animation stream.
-      await session.writeFile('grid.txt', defaultNeighborhoodGrid());
+      await session.writeFile('grid.txt', NEIGHBORHOOD_GRID);
       await session.remove('neighborhood.jsonl').catch(() => undefined);
     } else {
       vizEl.hidden = true;

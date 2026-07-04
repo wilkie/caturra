@@ -107,42 +107,30 @@ test.describe('playground', () => {
     await expect(consoleOutput).toContainText('Hello, World!');
   });
 
-  test('animates a neighborhood program on the canvas', async ({ page }) => {
+  test('loads a neighborhood level and animates it on the canvas', async ({ page }) => {
     await page.goto('/');
-    await setSource(
-      page,
-      [
-        'import org.code.neighborhood.*;',
-        'public class Main {',
-        '  public static void main(String[] args) {',
-        '    Painter p = new Painter(0, 0, "east", 5);',
-        '    p.paint("red");',
-        '    p.move();',
-        '    p.paint("blue");',
-        '    p.move();',
-        '    p.move();',
-        '  }',
-        '}',
-      ].join('\n'),
-    );
-    await page.getByTestId('run').click();
-    // The visualization pane appears and the emitted stream animates the
-    // painter to its final cell (3, 0), painting (0,0) and (1,0).
+    // The Neighborhood button swaps in the level starter and shows its grid.
+    await page.getByTestId('neighborhood-example').click();
     await expect(page.getByTestId('viz')).toBeVisible();
+    await expect(page.getByTestId('neighborhood-canvas')).toBeVisible();
+
+    await page.getByTestId('run').click();
+    // The starter drives east to the bucket, then paints a yellow line
+    // south down the road, ending at (3, 6).
     const handle = await page.waitForFunction(() => {
       const state = (
         window as unknown as { playground: PlaygroundHooks }
       ).playground.neighborhoodState();
       const painter = state.painters[0];
-      return painter?.x === 3 && painter.y === 0 ? state : null;
+      return painter?.x === 3 && painter.y === 6 ? state : null;
     });
     const state = (await handle.jsonValue()) as {
       colors: (string | null)[][];
       painters: { dir: string }[];
     };
-    expect(state.colors[0][0]).toBe('red');
-    expect(state.colors[0][1]).toBe('blue');
-    expect(state.painters[0].dir).toBe('east');
+    expect(state.colors[0][3]).toBe('yellow');
+    expect(state.colors[5][3]).toBe('yellow');
+    expect(state.painters[0].dir).toBe('south');
   });
 
   test('reports source errors with locations', async ({ page }) => {
