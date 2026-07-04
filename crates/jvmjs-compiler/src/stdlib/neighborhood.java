@@ -78,6 +78,20 @@ class __NbhdGrid {
 
 class __NbhdWorld {
   static __NbhdGrid grid;
+  // The animation command stream the frontend replays: one JSON
+  // ClientMessage per line, matching javabuilder's wire format
+  // ({"type":"NEIGHBORHOOD","value":...,"detail":...}). Rewritten to
+  // the VFS on each action so it is complete when main returns.
+  // A single writer kept open for the whole run: PrintWriter.println
+  // appends write-through to the VFS, so each action is O(1) and the
+  // file is always complete (no end-of-program hook needed).
+  static java.io.PrintWriter writer;
+  static void emit(String value, String detail) {
+    try {
+      if (writer == null) writer = new java.io.PrintWriter(new java.io.File("neighborhood.jsonl"));
+      writer.println("{\"type\":\"NEIGHBORHOOD\",\"value\":\"" + value + "\",\"detail\":" + detail + "}");
+    } catch (Exception e) {}
+  }
   static __NbhdGrid getGrid() {
     if (grid == null) grid = load();
     return grid;
@@ -130,8 +144,14 @@ class Painter {
     this.hasInfinitePaint = couldBeInfinite ? gridSize >= 20 : false;
     if (x < 0 || y < 0 || x >= gridSize || y >= gridSize) throw new RuntimeException("Invalid location");
     this.id = "painter-" + lastId; lastId++;
+    __NbhdWorld.emit("INITIALIZE_PAINTER", "{" + __idf() + ",\"direction\":\"" + this.direction.getDirectionString()
+        + "\",\"x\":\"" + x + "\",\"y\":\"" + y + "\",\"paint\":\"" + remainingPaint + "\"}");
   }
-  public void turnLeft() { direction = direction.turnLeft(); }
+  private String __idf() { return "\"id\":\"" + id + "\""; }
+  public void turnLeft() {
+    direction = direction.turnLeft();
+    __NbhdWorld.emit("TURN_LEFT", "{" + __idf() + ",\"direction\":\"" + direction.getDirectionString() + "\"}");
+  }
   public void move() {
     if (isValidMovement(direction)) {
       if (direction.isNorth()) y--;
@@ -141,18 +161,32 @@ class Painter {
     } else {
       throw new RuntimeException("Invalid move");
     }
+    __NbhdWorld.emit("MOVE", "{" + __idf() + ",\"direction\":\"" + direction.getDirectionString() + "\"}");
   }
   public void paint(String color) {
-    if (hasPaint()) { grid.getSquare(x, y).setColor(color); remainingPaint--; }
-    else System.out.println("There is no more paint in the painter's bucket");
+    if (hasPaint()) {
+      grid.getSquare(x, y).setColor(color);
+      remainingPaint--;
+      __NbhdWorld.emit("PAINT", "{" + __idf() + ",\"color\":\"" + color + "\"}");
+    } else {
+      System.out.println("There is no more paint in the painter's bucket");
+    }
   }
-  public void scrapePaint() { grid.getSquare(x, y).removePaint(); }
+  public void scrapePaint() {
+    grid.getSquare(x, y).removePaint();
+    __NbhdWorld.emit("REMOVE_PAINT", "{" + __idf() + "}");
+  }
   public int getMyPaint() { return remainingPaint; }
-  public void hidePainter() {}
-  public void showPainter() {}
+  public void hidePainter() { __NbhdWorld.emit("HIDE_PAINTER", "{" + __idf() + "}"); }
+  public void showPainter() { __NbhdWorld.emit("SHOW_PAINTER", "{" + __idf() + "}"); }
   public void takePaint() {
-    if (grid.getSquare(x, y).containsPaint()) { grid.getSquare(x, y).collectPaint(); remainingPaint++; }
-    else System.out.println("There is no paint to collect here");
+    if (grid.getSquare(x, y).containsPaint()) {
+      grid.getSquare(x, y).collectPaint();
+      remainingPaint++;
+      __NbhdWorld.emit("TAKE_PAINT", "{" + __idf() + "}");
+    } else {
+      System.out.println("There is no paint to collect here");
+    }
   }
   public boolean isOnPaint() { return grid.getSquare(x, y).hasColor(); }
   public boolean isOnBucket() { return grid.getSquare(x, y).containsPaint(); }
@@ -171,8 +205,8 @@ class Painter {
   public int getX() { return x; }
   public int getY() { return y; }
   public String getDirection() { return direction.getDirectionString(); }
-  public void showBuckets() {}
-  public void hideBuckets() {}
+  public void showBuckets() { __NbhdWorld.emit("SHOW_BUCKETS", "{}"); }
+  public void hideBuckets() { __NbhdWorld.emit("HIDE_BUCKETS", "{}"); }
   public void setPaint(int paint) {
     if (paint < 0) { System.out.println("Paint amount must not be a negative number."); return; }
     if (hasInfinitePaint) return;

@@ -48,8 +48,18 @@ JSON parsing lives in the VM. Missing `grid.txt` falls back to an empty 10×10.
 
 Phase 1 is a **headless simulation**: painter/grid state and console output are
 byte-identical to the real library (601/614 real neighborhood solutions run to
-completion; the rest need interactive stdin or exceed the recursion limit). The
-visual signal-message stream that drives the web animation is Phase 2.
+completion; the rest need interactive stdin or exceed the recursion limit).
+
+**Phase 2 (animation stream)** is wired for neighborhood: each Painter action
+also emits the exact javabuilder `ClientMessage` — `{"type":"NEIGHBORHOOD",
+"value":"MOVE","detail":{"id","direction",…}}` — that the real
+`apps/src/miniApps/neighborhood/Neighborhood.ts` renderer consumes. Messages are
+appended write-through to the VFS file `neighborhood.jsonl` via a single
+kept-open `PrintWriter` (append is O(1), so a 1500-action level costs ~0.3s, not
+the O(n²) of rewriting). The frontend replays that stream over the grid; the
+worker/renderer wiring in `apps/playground` is the remaining integration. Theater
+differs — the real system renders it to a GIF server-side (`GifWriter`), so its
+Phase 2 is a browser Canvas port, not a message stream.
 
 The same pattern covers **`org.code.theater` + `org.code.media`**
 (`compiler/src/stdlib/theater.java`, injected on either import). `Scene` records

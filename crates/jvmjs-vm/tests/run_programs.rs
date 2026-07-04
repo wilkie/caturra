@@ -410,6 +410,52 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn neighborhood_emits_javabuilder_message_stream() {
+    // The bundled Painter emits the same NEIGHBORHOOD ClientMessages the
+    // real javabuilder marshals to the frontend renderer.
+    let grid = "1,0 1,0 1,0\n1,0 1,0 1,0\n1,0 1,0 1,0\n";
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: "Runner.java".to_owned(),
+        text: r#"
+            import org.code.neighborhood.*;
+            public class Runner {
+                public static void main(String[] args) {
+                    Painter p = new Painter(0, 0, "east", 3);
+                    p.paint("red");
+                    p.move();
+                    p.turnLeft();
+                    p.scrapePaint();
+                }
+            }
+        "#
+        .to_owned(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    vfs.write_file("grid.txt", grid.as_bytes().to_vec())
+        .unwrap();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    assert!(matches!(
+        vm.run_main("Runner", &[]),
+        Ok(ExitStatus::Completed)
+    ));
+    let messages =
+        String::from_utf8_lossy(vfs.read_file("neighborhood.jsonl").unwrap()).into_owned();
+    assert_eq!(
+        messages,
+        "{\"type\":\"NEIGHBORHOOD\",\"value\":\"INITIALIZE_PAINTER\",\"detail\":{\"id\":\"painter-0\",\"direction\":\"east\",\"x\":\"0\",\"y\":\"0\",\"paint\":\"3\"}}\n\
+         {\"type\":\"NEIGHBORHOOD\",\"value\":\"PAINT\",\"detail\":{\"id\":\"painter-0\",\"color\":\"red\"}}\n\
+         {\"type\":\"NEIGHBORHOOD\",\"value\":\"MOVE\",\"detail\":{\"id\":\"painter-0\",\"direction\":\"east\"}}\n\
+         {\"type\":\"NEIGHBORHOOD\",\"value\":\"TURN_LEFT\",\"detail\":{\"id\":\"painter-0\",\"direction\":\"north\"}}\n\
+         {\"type\":\"NEIGHBORHOOD\",\"value\":\"REMOVE_PAINT\",\"detail\":{\"id\":\"painter-0\"}}\n"
+    );
+}
+
+#[test]
 fn neighborhood_painter_subclass_and_walls() {
     // Painter subclass (the canonical PainterPlus level), a wall stops
     // the run, and the default painter has infinite paint on a 20x20.
