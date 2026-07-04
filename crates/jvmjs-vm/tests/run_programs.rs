@@ -228,6 +228,37 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn anonymous_class_captures_locals() {
+    let out = run_stdout(
+        r#"
+        interface Fn { int apply(int x); }
+        public class Cap {
+            public static void main(String[] args) {
+                int offset = 100;
+                int scale = 2;
+                Fn f = new Fn() {
+                    public int apply(int x) { return x * scale + offset; }
+                };
+                System.out.println(f.apply(5) + " " + f.apply(10));
+                String tag = "n=";
+                Fn g = new Fn() {
+                    private int calls = 0;
+                    public int apply(int x) {
+                        calls++;
+                        System.out.print(tag + calls + " ");
+                        return x + offset;
+                    }
+                };
+                System.out.println(g.apply(1) + " " + g.apply(2));
+            }
+        }
+        "#,
+        "Cap",
+    );
+    assert_eq!(out, "110 120\nn=1 n=2 101 102\n");
+}
+
+#[test]
 fn anonymous_class_implements_interface() {
     let out = run_stdout(
         r#"

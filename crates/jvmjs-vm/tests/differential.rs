@@ -2377,6 +2377,80 @@ public class DiffAnon {
 );
 
 differential_test!(
+    diff_anonymous_capture,
+    "DiffCapture",
+    r#"
+interface IntFn { int apply(int x); }
+interface Sink { void accept(int x); }
+interface Producer { String make(); }
+
+public class DiffCapture {
+    static int applyTo(IntFn f, int v) { return f.apply(v); }
+
+    public static void main(String[] args) {
+        // Capture a single effectively-final local.
+        int offset = 100;
+        IntFn addOffset = new IntFn() {
+            public int apply(int x) { return x + offset; }
+        };
+        System.out.println(addOffset.apply(5) + " " + applyTo(addOffset, 20));
+
+        // Capture several locals of mixed types.
+        int base = 10;
+        int scale = 3;
+        String label = "result=";
+        Producer p = new Producer() {
+            public String make() { return label + (base * scale); }
+        };
+        System.out.println(p.make());
+
+        // Capture in a loop: each anonymous instance sees its own value.
+        IntFn[] fns = new IntFn[3];
+        for (int i = 0; i < 3; i++) {
+            final int captured = i * 10;
+            fns[i] = new IntFn() {
+                public int apply(int x) { return x + captured; }
+            };
+        }
+        System.out.println(fns[0].apply(1) + " " + fns[1].apply(1) + " " + fns[2].apply(1));
+
+        // Capture strings and an int used in a loop.
+        String greeting = "hi";
+        int times = 3;
+        Producer repeater = new Producer() {
+            public String make() {
+                String out = "";
+                for (int k = 0; k < times; k++) out += greeting;
+                return out;
+            }
+        };
+        System.out.println(repeater.make());
+
+        // A captured value combined with the method's own parameter and
+        // a field the anonymous class declares.
+        int seed = 7;
+        IntFn accumulate = new IntFn() {
+            private int total = 0;
+            public int apply(int x) {
+                total += x + seed;
+                return total;
+            }
+        };
+        System.out.println(accumulate.apply(1) + " " + accumulate.apply(2) + " " + accumulate.apply(3));
+
+        // Capturing an array and indexing into it.
+        int[] data = { 5, 10, 15 };
+        int index = 2;
+        IntFn lookup = new IntFn() {
+            public int apply(int x) { return data[index] + x; }
+        };
+        System.out.println(lookup.apply(100));
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

@@ -389,9 +389,20 @@ x)`) with type-parameter erasure — every type variable is rewritten
   and methods, override abstract methods, and inherit concrete and
   interface-default methods; the instance is used through its
   supertype. Not yet: constructor arguments (`new Base(args) {...}`)
-  and capture of enclosing local variables or `Outer.this` — an
-  anonymous class that references an enclosing local reports an
-  unresolved-symbol error.
+  and capture of `Outer.this` (the enclosing instance).
+
+- **Closure capture** (2026-07-03): an anonymous class body may
+  reference effectively-final local variables of the enclosing method
+  (`int t = 5; new Predicate() { boolean test(int x) { return x > t; }
+}`). A capture pass runs after parsing: it walks each method with a
+  local-variable scope, computes each anonymous class's captured free
+  names and their types, synthesizes a private field and a constructor
+  per capture, and passes the captured locals at the `new` site. Bare
+  references in the body then resolve to the implicit `this`-field.
+  Captures of any type work (primitives, objects, arrays), each `new`
+  in a loop captures the value at that iteration, and captures combine
+  with the anonymous class's own fields and the overriding method's
+  parameters. (This is the machinery lambdas will reuse.)
 
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.

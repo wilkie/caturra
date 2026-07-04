@@ -7,6 +7,7 @@
 //! current stage produce friendly "not yet supported" diagnostics.
 
 pub mod ast;
+mod capture;
 pub mod codegen;
 pub mod diagnostics;
 mod imports;
@@ -97,6 +98,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
+    capture::resolve_captures(&mut units);
     let (classes, mut codegen_errors) = codegen::generate(&units);
     compilation.diagnostics.append(&mut codegen_errors);
 
