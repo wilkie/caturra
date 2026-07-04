@@ -329,6 +329,19 @@ enum constant E.X` `IllegalArgumentException` on miss), `ordinal()`,
   trailing arguments widen to the element type. Works for methods,
   static methods, constructors, and `super`/`this` calls.
 
+- **Nested classes** (2026-07-03): `class`/`interface`/`enum`
+  declarations inside a class body are hoisted to top level with their
+  simple name (jvmjs shares one flat namespace). Static nested classes
+  work fully — the dominant AP CS A pattern of a `private static class
+Node` inside a linked structure. They are referenced by simple name
+  inside the enclosing class and as `Outer.Inner` elsewhere (including
+  `new Outer.Inner(...)`). Nested enums are supported. Non-static inner
+  classes flatten the same way but cannot reach the enclosing
+  instance's state (no `Outer.this` capture yet). This work also fixed
+  multi-level field-access chains generally (`head.next.next.value`,
+  reads and writes, and chains rooted at an implicit `this` field like
+  `top.value`).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

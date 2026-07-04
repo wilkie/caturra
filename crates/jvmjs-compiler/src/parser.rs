@@ -123,6 +123,7 @@ enum Member {
     Fields(Vec<FieldDecl>),
     Method(MethodDecl),
     Init(InitBlock),
+    Nested(ClassDecl),
 }
 
 /// Internal marker: a construct failed to parse and a diagnostic was
@@ -283,7 +284,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     if let Ok(class) = self.class_decl() {
-                        classes.push(class);
+                        flatten_nested(class, &mut classes);
                     } else {
                         self.recover_to_statement_boundary();
                         // A stray `}` from a broken class body would stall
@@ -426,7 +427,16 @@ impl Parser<'_> {
     fn class_decl(&mut self) -> Parsed<ClassDecl> {
         let start = self.here();
         let modifiers = self.class_modifiers();
+        self.type_after_modifiers(start, modifiers.is_abstract)
+    }
 
+    /// Parse a class/interface/enum whose modifiers were already
+    /// consumed (shared by top-level and nested declarations).
+    fn type_after_modifiers(
+        &mut self,
+        start: SourceSpan,
+        is_abstract_modifier: bool,
+    ) -> Parsed<ClassDecl> {
         if self.at_keyword(Keyword::Enum) {
             return self.enum_decl(start);
         }
@@ -472,6 +482,7 @@ impl Parser<'_> {
         let mut methods = Vec::new();
         let mut fields = Vec::new();
         let mut init_blocks = Vec::new();
+        let mut nested = Vec::new();
         // Monotonic source-order counter shared by fields and blocks so
         // initialization runs in textual order.
         let mut order = 0usize;
@@ -498,6 +509,7 @@ impl Parser<'_> {
                         order += 1;
                         init_blocks.push(block);
                     }
+                    Member::Nested(decl) => nested.push(decl),
                 }
             } else {
                 self.recover_to_statement_boundary();
@@ -510,12 +522,13 @@ impl Parser<'_> {
             name,
             superclass,
             interfaces,
-            is_abstract: modifiers.is_abstract || is_interface,
+            is_abstract: is_abstract_modifier || is_interface,
             is_interface,
             is_enum: false,
             fields,
             methods,
             init_blocks,
+            nested,
             span: SourceSpan {
                 start: start.start,
                 end: name_span.end,
@@ -564,6 +577,7 @@ impl Parser<'_> {
         let mut methods = Vec::new();
         let mut fields = Vec::new();
         let mut init_blocks = Vec::new();
+        let mut nested = Vec::new();
         let mut order = 0usize;
         while !self.at_symbol("}") {
             if self.peek().is_none() {
@@ -588,6 +602,7 @@ impl Parser<'_> {
                         order += 1;
                         init_blocks.push(block);
                     }
+                    Member::Nested(decl) => nested.push(decl),
                 }
             } else {
                 self.recover_to_statement_boundary();
@@ -607,6 +622,7 @@ impl Parser<'_> {
             fields,
             methods,
             init_blocks,
+            nested,
             span,
         ))
     }
@@ -632,6 +648,17 @@ impl Parser<'_> {
     fn member(&mut self, class_name: &str) -> Parsed<Member> {
         let start = self.here();
         let modifiers = self.modifiers();
+
+        // Nested type declaration: `class`/`interface`/`enum`.
+        if matches!(
+            self.peek(),
+            Some(TokenKind::Keyword(
+                Keyword::Class | Keyword::Interface | Keyword::Enum
+            ))
+        ) {
+            let nested = self.type_after_modifiers(start, modifiers.is_abstract)?;
+            return Ok(Member::Nested(nested));
+        }
 
         // Initializer block: `static { ... }` or a bare `{ ... }`.
         if self.at_symbol("{") {
@@ -2179,7 +2206,11 @@ impl Parser<'_> {
 /// augmented with the two leading parameters), and the standard
 /// `values`/`valueOf`/`ordinal`/`name`/`toString` members unless the
 /// user supplied them.
-#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)] // one desugaring plan
+#[allow(
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments
+)] // one desugaring plan
 fn desugar_enum(
     name: String,
     interfaces: Vec<String>,
@@ -2187,6 +2218,7 @@ fn desugar_enum(
     mut fields: Vec<FieldDecl>,
     mut methods: Vec<MethodDecl>,
     init_blocks: Vec<InitBlock>,
+    nested: Vec<ClassDecl>,
     span: SourceSpan,
 ) -> ClassDecl {
     let zero = SourceSpan {
@@ -2468,7 +2500,20 @@ fn desugar_enum(
         fields: synth_fields,
         methods,
         init_blocks,
+        nested,
         span,
+    }
+}
+
+/// Recursively hoist nested classes to the top level. Nested classes
+/// become independent top-level classes with their simple name (JVM
+/// `Outer$Inner` mangling is unnecessary — jvmjs shares one flat
+/// namespace and rejects duplicate simple names).
+fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
+    let nested = std::mem::take(&mut class.nested);
+    out.push(class);
+    for inner in nested {
+        flatten_nested(inner, out);
     }
 }
 

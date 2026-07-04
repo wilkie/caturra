@@ -228,6 +228,39 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn nested_classes_and_field_chains() {
+    let out = run_stdout(
+        r#"
+        public class Chain {
+            static class Cell {
+                int v;
+                Cell link;
+                Cell(int v) { this.v = v; }
+            }
+            static class Holder {
+                Cell head;
+                int firstTwo() { return head.v + head.link.v; }
+            }
+            public static void main(String[] args) {
+                Cell a = new Cell(3);
+                a.link = new Cell(4);
+                a.link.link = new Cell(5);
+                // Deep field-access chain and mutation through it.
+                System.out.println(a.v + a.link.v + a.link.link.v);
+                a.link.link.v = 50;
+                System.out.println(a.link.link.v);
+                Holder h = new Holder();
+                h.head = a;
+                System.out.println(h.firstTwo() + " " + h.head.link.v);
+            }
+        }
+        "#,
+        "Chain",
+    );
+    assert_eq!(out, "12\n50\n7 4\n");
+}
+
+#[test]
 fn enums_singletons_values_and_switch() {
     let out = run_stdout(
         r#"

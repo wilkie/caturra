@@ -843,6 +843,15 @@ impl MethodTable {
                 {
                     return Some(JType::Object(id));
                 }
+                // `Outer.Inner`: a qualified reference to a nested user
+                // class (flattened to a top-level simple name).
+                if name.contains('.')
+                    && crate::imports::canonical_library_class(name).is_none()
+                    && let Some(last) = name.rsplit('.').next()
+                    && let Some(id) = self.class_id(last)
+                {
+                    return Some(JType::Object(id));
+                }
                 match simple {
                     "Scanner" => Some(JType::Scanner),
                     "File" => Some(JType::File),
@@ -4754,6 +4763,12 @@ impl BodyGen<'_> {
         let class_name = if class_name.contains('.') {
             if let Some(simple) = crate::imports::canonical_library_class(class_name) {
                 simple
+            } else if let Some(last) = class_name.rsplit('.').next()
+                && self.table.class_id(last).is_some()
+            {
+                // `new Outer.Inner(...)`: a qualified reference to a
+                // flattened nested user class.
+                last
             } else {
                 self.error(span, crate::imports::unknown_qualified_message(class_name));
                 return JType::Error;
@@ -6147,6 +6162,22 @@ impl BodyGen<'_> {
                     span: *span,
                 })
             }
+            Expr::Name { path, span }
+                if path.len() >= 2
+                    && (self.lookup(&path[0]).is_some()
+                        || self.table.field(self.current_class, &path[0]).is_some()) =>
+            {
+                let (prefix, last) = path.split_at(path.len() - 1);
+                let object = Expr::Name {
+                    path: prefix.to_vec(),
+                    span: *span,
+                };
+                self.type_of(&Expr::Field {
+                    object: Box::new(object),
+                    name: last[0].clone(),
+                    span: *span,
+                })
+            }
             Expr::Name { path, .. } if path.len() == 1 => {
                 if let Some(var) = self.lookup(&path[0]) {
                     return var.ty;
@@ -6194,6 +6225,18 @@ impl BodyGen<'_> {
                 self.table
                     .field(&path[0], &path[1])
                     .map_or(JType::Error, |(_, f)| f.ty)
+            }
+            Expr::Name { path, span } if path.len() > 2 => {
+                let (prefix, last) = path.split_at(path.len() - 1);
+                let object = Expr::Name {
+                    path: prefix.to_vec(),
+                    span: *span,
+                };
+                self.type_of(&Expr::Field {
+                    object: Box::new(object),
+                    name: last[0].clone(),
+                    span: *span,
+                })
             }
             Expr::Name { .. } | Expr::ArrayLiteral { .. } => JType::Error,
             Expr::Index { array, .. } => self.type_of(array).element_type().unwrap_or(JType::Error),
@@ -6902,6 +6945,21 @@ impl BodyGen<'_> {
         if let Some(short) = self.strip_package_prefix(path) {
             return self.name(&short, span);
         }
+        // A dotted path whose head is a value — a local, or an implicit
+        // field of `this` — is a field-access chain (`node.next.value`,
+        // `top.value`, `arr.length`). Resolve all but the last segment
+        // to an object, then read the final field.
+        if path.len() >= 2
+            && (self.lookup(&path[0]).is_some()
+                || self.table.field(self.current_class, &path[0]).is_some())
+        {
+            let (prefix, last) = path.split_at(path.len() - 1);
+            let object = Expr::Name {
+                path: prefix.to_vec(),
+                span,
+            };
+            return self.field(&object, &last[0], span);
+        }
         // `a.length` parses as a dotted name; resolve it as array
         // length when `a` is an array-typed local.
         if path.len() == 2
@@ -6986,6 +7044,17 @@ impl BodyGen<'_> {
                 }
                 return self.emit_getfield(owner, &field);
             }
+        }
+        // Longer dotted paths (`a.next.value`, `Class.field.x`) are a
+        // field-access chain: resolve all but the last segment to an
+        // object, then read the final field.
+        if path.len() > 2 {
+            let (prefix, last) = path.split_at(path.len() - 1);
+            let object = Expr::Name {
+                path: prefix.to_vec(),
+                span,
+            };
+            return self.field(&object, &last[0], span);
         }
         if path.len() != 1 {
             self.error(span, format!("cannot find symbol: '{}'", path.join(".")));

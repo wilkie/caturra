@@ -40,6 +40,8 @@ pub struct ClassDecl {
     pub methods: Vec<MethodDecl>,
     /// `static { ... }` and instance `{ ... }` initializer blocks.
     pub init_blocks: Vec<InitBlock>,
+    /// Nested type declarations, hoisted to top level after parsing.
+    pub nested: Vec<ClassDecl>,
     pub span: SourceSpan,
 }
 

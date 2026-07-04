@@ -2005,6 +2005,86 @@ public class DiffVarargs {
 );
 
 differential_test!(
+    diff_nested_classes,
+    "DiffNested",
+    r#"
+public class DiffNested {
+    static class Node {
+        int value;
+        Node next;
+        Node(int value) { this.value = value; }
+        int reach() {
+            int count = 1;
+            Node n = next;
+            while (n != null) { count++; n = n.next; }
+            return count;
+        }
+    }
+
+    static class Stack {
+        private Node top;
+        private int size;
+        void push(int v) {
+            Node node = new Node(v);
+            node.next = top;
+            top = node;
+            size++;
+        }
+        int pop() {
+            int v = top.value;
+            top = top.next;
+            size--;
+            return v;
+        }
+        boolean isEmpty() { return top == null; }
+        int size() { return size; }
+    }
+
+    enum Op { ADD, SUB, MUL }
+
+    static int apply(Op op, int a, int b) {
+        switch (op) {
+            case ADD: return a + b;
+            case SUB: return a - b;
+            default: return a * b;
+        }
+    }
+
+    public static void main(String[] args) {
+        // Linked list via nested Node, chained field access.
+        Node head = new Node(1);
+        head.next = new Node(2);
+        head.next.next = new Node(3);
+        head.next.next.next = new Node(4);
+        System.out.println(head.value + " " + head.next.next.value + " " + head.reach());
+
+        // Field mutation through a chain.
+        head.next.value = 20;
+        System.out.println(head.next.value + " " + head.next.next.value);
+
+        // A second nested class using the first.
+        Stack stack = new Stack();
+        for (int i = 1; i <= 5; i++) stack.push(i * i);
+        System.out.println(stack.size() + " " + stack.isEmpty());
+        int sum = 0;
+        while (!stack.isEmpty()) sum += stack.pop();
+        System.out.println(sum + " " + stack.isEmpty());
+
+        // Nested enum with switch.
+        for (Op op : Op.values()) {
+            System.out.print(op + "=" + apply(op, 6, 4) + " ");
+        }
+        System.out.println();
+
+        // Qualified nested-type reference from the outer class.
+        DiffNested.Node solo = new DiffNested.Node(99);
+        System.out.println(solo.value + " " + solo.reach());
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"
