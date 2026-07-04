@@ -1945,6 +1945,66 @@ public class DiffEnumFields {
 );
 
 differential_test!(
+    diff_varargs,
+    "DiffVarargs",
+    r#"
+public class DiffVarargs {
+    static int sum(int... numbers) {
+        int total = 0;
+        for (int n : numbers) total += n;
+        return total;
+    }
+
+    static String join(String sep, String... parts) {
+        String result = "";
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) result += sep;
+            result += parts[i];
+        }
+        return result;
+    }
+
+    static double avg(double first, double... rest) {
+        double total = first;
+        for (double d : rest) total += d;
+        return total / (rest.length + 1);
+    }
+
+    // Overloading: a fixed-arity method wins over varargs.
+    static String pick(int a, int b) { return "fixed:" + (a + b); }
+    static String pick(int... xs) { return "varargs:" + xs.length; }
+
+    public static void main(String[] args) {
+        // Spread form with varying counts, including zero.
+        System.out.println(sum() + " " + sum(5) + " " + sum(1, 2, 3) + " " + sum(1, 2, 3, 4, 5));
+
+        // Passing an actual array (array form).
+        int[] arr = { 10, 20, 30 };
+        System.out.println(sum(arr));
+
+        // A fixed leading parameter plus varargs.
+        System.out.println(join("-", "a", "b", "c"));
+        System.out.println(join(", ", "solo"));
+        System.out.println(join("+") + "|");   // zero trailing args
+
+        // Widening of trailing args to the element type.
+        System.out.println(avg(2.0, 4, 6));    // ints widen to double
+        System.out.println(avg(5.0));
+
+        // Overload resolution: fixed-arity beats varargs at arity 2.
+        System.out.println(pick(3, 4));
+        System.out.println(pick(1));
+        System.out.println(pick(1, 2, 3));
+
+        // Varargs argument built from expressions.
+        int x = 7;
+        System.out.println(sum(x, x * 2, x - 1));
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

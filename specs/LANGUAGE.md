@@ -320,6 +320,15 @@ enum constant E.X` `IllegalArgumentException` on miss), `ordinal()`,
   by reference identity; enum constants are singletons so `==` works.
   `@Override` and other annotations are parsed and ignored.
 
+- **Varargs declarations** (2026-07-03): `Type... name` as the last
+  parameter (an array at runtime). Overload resolution follows JLS
+  §15.12.2 phase ordering — fixed-arity applicability is tried first,
+  so `pick(int, int)` beats `pick(int...)` at arity two. Callers may
+  spread any number of trailing arguments (packed into a fresh array,
+  including zero), pass an assignable array directly (array form), and
+  trailing arguments widen to the element type. Works for methods,
+  static methods, constructors, and `super`/`this` calls.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

@@ -739,12 +739,22 @@ impl Parser<'_> {
         let mut params = Vec::new();
         if !self.at_symbol(")") {
             loop {
-                let ty = self.type_ref()?;
+                let mut ty = self.type_ref()?;
+                // Varargs: `Type... name` — the parameter is an array.
+                let is_varargs = self.eat_symbol("...");
+                if is_varargs {
+                    ty = TypeRef::Array(Box::new(ty));
+                }
                 let (param_name, _) = self.expect_ident("for the parameter")?;
                 params.push(Param {
                     ty,
                     name: param_name,
+                    is_varargs,
                 });
+                if is_varargs {
+                    // A varargs parameter must be last.
+                    break;
+                }
                 if !self.eat_symbol(",") {
                     break;
                 }
@@ -2286,10 +2296,12 @@ fn desugar_enum(
             Param {
                 ty: str_ty.clone(),
                 name: String::from("__name"),
+                is_varargs: false,
             },
             Param {
                 ty: TypeRef::Int,
                 name: String::from("__ordinal"),
+                is_varargs: false,
             },
         ]
     };
@@ -2439,6 +2451,7 @@ fn desugar_enum(
             params: vec![Param {
                 ty: str_ty,
                 name: String::from("__n"),
+                is_varargs: false,
             }],
             body: vec![for_each, throw],
             span: zero,

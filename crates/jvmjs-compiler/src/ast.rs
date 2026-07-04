@@ -93,6 +93,9 @@ pub struct MethodDecl {
 pub struct Param {
     pub ty: TypeRef,
     pub name: String,
+    /// The trailing `Type... name` varargs parameter (`ty` is the
+    /// array type). Only valid as the last parameter.
+    pub is_varargs: bool,
 }
 
 /// A type reference as written in source.

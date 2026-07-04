@@ -315,6 +315,7 @@ struct ClassId(u16);
 /// One method or constructor signature, as seen by call resolution.
 /// Constructors use the JVM name `<init>` and a void return.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)] // mirrors Java method modifiers
 struct MethodSig {
     name: String,
     params: Vec<JType>,
@@ -323,6 +324,9 @@ struct MethodSig {
     is_static: bool,
     is_private: bool,
     is_abstract: bool,
+    /// The last parameter is `Type... name` — extra trailing arguments
+    /// pack into the array.
+    is_varargs: bool,
 }
 
 impl MethodSig {
@@ -471,6 +475,7 @@ impl MethodTable {
                         is_static: method.is_static,
                         is_private: method.is_private,
                         is_abstract: method.is_abstract,
+                        is_varargs: method.params.last().is_some_and(|p| p.is_varargs),
                     };
                     if methods
                         .iter()
@@ -501,6 +506,7 @@ impl MethodTable {
                         is_static: false,
                         is_private: false,
                         is_abstract: false,
+                        is_varargs: false,
                     });
                 }
 
@@ -973,6 +979,25 @@ impl MethodTable {
                     && m.params.iter().zip(args).all(|(p, a)| widens(*a, *p, self))
             })
             .collect();
+        // JLS §15.12.2: fixed-arity applicability is tried first; only
+        // if nothing matches do varargs methods enter the running.
+        if applicable.is_empty() {
+            let varargs_applicable: Vec<&MethodSig> = named
+                .iter()
+                .copied()
+                .filter(|m| m.is_varargs && self.varargs_applicable(m, args))
+                .collect();
+            return match varargs_applicable.len() {
+                0 => Resolution::NoneApplicable,
+                1 => Resolution::Found(varargs_applicable[0]),
+                _ => Resolution::Ambiguous(
+                    varargs_applicable
+                        .iter()
+                        .map(|m| m.describe(self))
+                        .collect(),
+                ),
+            };
+        }
         match applicable.len() {
             0 => Resolution::NoneApplicable,
             1 => Resolution::Found(applicable[0]),
@@ -1002,6 +1027,34 @@ impl MethodTable {
                 }
             }
         }
+    }
+
+    /// Whether a varargs method accepts `args` in spread or array form:
+    /// the fixed leading parameters must widen, and either the trailing
+    /// arguments each widen to the element type (spread), or a single
+    /// trailing argument is the array itself (array form).
+    fn varargs_applicable(&self, m: &MethodSig, args: &[JType]) -> bool {
+        let fixed = m.params.len() - 1;
+        if args.len() < fixed {
+            return false;
+        }
+        if !m.params[..fixed]
+            .iter()
+            .zip(args)
+            .all(|(p, a)| widens(*a, *p, self))
+        {
+            return false;
+        }
+        let array_ty = m.params[fixed];
+        let Some(elem) = array_ty.element_type() else {
+            return false;
+        };
+        // Array form: exactly one trailing arg, assignable to the array.
+        if args.len() == m.params.len() && widens(args[fixed], array_ty, self) {
+            return true;
+        }
+        // Spread form: every trailing arg widens to the element type.
+        args[fixed..].iter().all(|a| widens(*a, elem, self))
     }
 }
 
@@ -4562,14 +4615,10 @@ impl BodyGen<'_> {
             );
             return;
         };
-        for (arg, param) in args.iter().zip(&sig.params) {
-            let actual = self.expr(arg);
-            self.numeric_conversion(actual, *param);
-        }
+        let args_width = self.emit_call_args(args, &sig, span);
         let descriptor = sig.descriptor(self.table);
         let init_ref = intern_method_ref(self.pool, class_name, "<init>", &descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
-        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
         self.code.drop_stack(1 + args_width);
     }
 
@@ -4801,14 +4850,10 @@ impl BodyGen<'_> {
         let class_index = intern_class(self.pool, class_name);
         self.code.push_op_u16(op::NEW, class_index, 1);
         self.code.push_op(op::DUP, 1);
-        for (arg, param) in args.iter().zip(&sig.params) {
-            let actual = self.expr(arg);
-            self.numeric_conversion(actual, *param);
-        }
+        let args_width = self.emit_call_args(args, &sig, span);
         let descriptor = sig.descriptor(self.table);
         let init_ref = intern_method_ref(self.pool, class_name, "<init>", &descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
-        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
         self.code.drop_stack(1 + args_width);
         JType::Object(class_id)
     }
@@ -5357,16 +5402,12 @@ impl BodyGen<'_> {
             return None;
         }
 
-        for (arg, param) in args.iter().zip(&sig.params) {
-            let actual = self.expr(arg);
-            self.numeric_conversion(actual, *param);
-        }
+        let args_width = self.emit_call_args(args, &sig, span);
         let descriptor = sig.descriptor(self.table);
         let method_ref = intern_method_ref(self.pool, &class_name, method, &descriptor);
         let ret_width = sig.ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
-        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
         self.code.drop_stack(1 + args_width);
         Some(sig.ret)
     }
@@ -5954,15 +5995,11 @@ impl BodyGen<'_> {
             return None;
         }
 
-        for (arg, param) in args.iter().zip(&sig.params) {
-            let actual = self.expr(arg);
-            self.numeric_conversion(actual, *param);
-        }
+        let args_width = self.emit_call_args(args, &sig, span);
         let method_ref = intern_method_ref(self.pool, class, method, &sig.descriptor(self.table));
         let ret_width = sig.ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
-        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
         self.code.drop_stack(args_width);
         Some(sig.ret)
     }
@@ -6549,16 +6586,12 @@ impl BodyGen<'_> {
         }
 
         self.code.push_op(op::ALOAD_0, 1);
-        for (arg, param) in args.iter().zip(&sig.params) {
-            let actual = self.expr(arg);
-            self.numeric_conversion(actual, *param);
-        }
+        let args_width = self.emit_call_args(args, &sig, span);
         let descriptor = sig.descriptor(self.table);
         let method_ref = intern_method_ref(self.pool, &super_name, method, &descriptor);
         let ret_width = sig.ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
-        let args_width: u16 = sig.params.iter().map(|p| p.width()).sum();
         self.code.drop_stack(1 + args_width);
         Some(sig.ret)
     }
@@ -6716,6 +6749,39 @@ impl BodyGen<'_> {
 
     /// Emit an array from a `{...}` literal, leaving the reference on
     /// the stack. Nested literals build the inner dimensions.
+    /// Emit a resolved method/constructor's arguments, packing the
+    /// trailing arguments of a varargs call into a fresh array (unless
+    /// the call already passes an assignable array). Returns the total
+    /// stack width of the pushed arguments.
+    fn emit_call_args(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
+        if !sig.is_varargs {
+            for (arg, param) in args.iter().zip(&sig.params) {
+                let actual = self.expr(arg);
+                self.numeric_conversion(actual, *param);
+            }
+            return sig.params.iter().map(|p| p.width()).sum();
+        }
+        let fixed = sig.params.len() - 1;
+        let array_ty = sig.params[fixed];
+        for (arg, param) in args.iter().zip(&sig.params).take(fixed) {
+            let actual = self.expr(arg);
+            self.numeric_conversion(actual, *param);
+        }
+        // Array form: a single trailing argument assignable to the
+        // varargs array is passed straight through.
+        let array_form = args.len() == sig.params.len()
+            && widens(self.type_of(&args[fixed]), array_ty, self.table);
+        if array_form {
+            let actual = self.expr(&args[fixed]);
+            self.numeric_conversion(actual, array_ty);
+        } else {
+            let literal_span = args.get(fixed).map_or(span, Expr::span);
+            self.emit_array_literal(&args[fixed..], array_ty, literal_span);
+        }
+        let fixed_width: u16 = sig.params[..fixed].iter().map(|p| p.width()).sum();
+        fixed_width + 1
+    }
+
     fn emit_array_literal(&mut self, elements: &[Expr], array_ty: JType, span: SourceSpan) {
         let Some(element) = array_ty.element_type() else {
             self.error(
