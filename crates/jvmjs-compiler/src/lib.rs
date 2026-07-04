@@ -62,6 +62,10 @@ impl Compilation {
 /// injected when a source imports that package.
 const NEIGHBORHOOD_LIB: &str = include_str!("stdlib/neighborhood.java");
 
+/// Bundled clean-room implementation of `org.code.theater` and
+/// `org.code.media`, injected when either package is imported.
+const THEATER_LIB: &str = include_str!("stdlib/theater.java");
+
 /// Whether any unit imports a class from the given package path
 /// (matches both `import pkg.*` and `import pkg.Class`).
 fn imports_package(units: &[(String, ast::CompilationUnit)], package: &[&str]) -> bool {
@@ -116,6 +120,14 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<neighborhood>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<neighborhood>"), unit));
+    }
+    if imports_package(&units, &["org", "code", "theater"])
+        || imports_package(&units, &["org", "code", "media"])
+    {
+        let (tokens, _) = lexer::lex("<theater>", THEATER_LIB);
+        let (unit, mut errs) = parser::parse("<theater>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<theater>"), unit));
     }
 
     // Import validation and enforcement (after all units parse, since

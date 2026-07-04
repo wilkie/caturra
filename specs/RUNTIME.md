@@ -51,6 +51,17 @@ byte-identical to the real library (601/614 real neighborhood solutions run to
 completion; the rest need interactive stdin or exceed the recursion limit). The
 visual signal-message stream that drives the web animation is Phase 2.
 
+The same pattern covers **`org.code.theater` + `org.code.media`**
+(`compiler/src/stdlib/theater.java`, injected on either import). `Scene` records
+each draw call (rectangle/ellipse/line/text/image/shape, colours, notes) into a
+command log; `Theater.playScenes` writes the log to the VFS file `theater.log`.
+The canvas is 400×400 and `Color` values (27 named + hex) match the real
+library; `Image`/`Pixel` back real pixel arrays so image-processing exercises
+compute correctly. 448/617 real theater solutions run headless to completion
+(94% of those that terminate without needing an unseeded data-file asset or
+looping forever on animation). Actual pixel/GIF rendering and audio decoding are
+Phase 2; `SoundLoader.read` returns silence and file-loaded `Image`s are blank.
+
 ## Exceptions
 
 Java exceptions are heap objects; the interpreter carries them as the `Err`

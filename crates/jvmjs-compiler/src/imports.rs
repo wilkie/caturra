@@ -194,12 +194,25 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         // Bundled clean-room library (auto-injected in `compile`); the
         // classes resolve like user classes, the import just validates.
         "org.code.neighborhood" => Some(ORG_CODE_NEIGHBORHOOD),
+        "org.code.theater" => Some(ORG_CODE_THEATER),
+        "org.code.media" => Some(ORG_CODE_MEDIA),
         _ => None,
     }
 }
 
 /// The public class of the bundled neighborhood library.
 static ORG_CODE_NEIGHBORHOOD: &[&str] = &["Painter"];
+
+/// Public classes of the bundled theater/media library.
+static ORG_CODE_THEATER: &[&str] = &["Scene", "Theater", "Instrument"];
+static ORG_CODE_MEDIA: &[&str] = &[
+    "Image",
+    "Pixel",
+    "Color",
+    "Font",
+    "FontStyle",
+    "SoundLoader",
+];
 
 fn not_supported(what: &str) -> String {
     format!("{what} is not supported by jvmjs (the class library covers the AP CS A subset)")

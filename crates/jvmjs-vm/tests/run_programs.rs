@@ -256,6 +256,118 @@ fn run_neighborhood(source: &str, main: &str, grid: &str) -> String {
     console.stdout_text()
 }
 
+/// Compile a theater program (the bundled `org.code.theater` /
+/// `org.code.media` library is auto-injected), run it, and return
+/// `(stdout, theater.log)` — the log is the recorded draw commands.
+fn run_theater(source: &str, main: &str) -> (String, String) {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: format!("{main}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "compile failed: {:?}",
+        compilation.diagnostics
+    );
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    let result = vm.run_main(main, &[]);
+    assert!(
+        matches!(result, Ok(ExitStatus::Completed)),
+        "{result:?}; stderr: {}",
+        console.stderr_text()
+    );
+    let log = vfs
+        .read_file("theater.log")
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default();
+    (console.stdout_text(), log)
+}
+
+#[test]
+fn theater_scene_draw_commands() {
+    let (stdout, log) = run_theater(
+        r#"
+        import org.code.theater.*;
+        import org.code.media.*;
+        public class ArtScene extends Scene {
+            public static void main(String[] args) {
+                ArtScene s = new ArtScene();
+                s.clear("white");
+                s.setFillColor("blue");
+                s.setStrokeColor(new Color(0, 0, 0));
+                s.setStrokeWidth(2.0);
+                s.drawRectangle(10, 20, 100, 50);
+                s.setFillColor(Color.RED);
+                s.drawEllipse(150, 150, 80, 80);
+                s.setTextStyle(Font.SANS, FontStyle.BOLD);
+                s.drawText("Hello", 200, 300);
+                Image img = new Image(64, 48);
+                s.drawImage(img, 5, 5, 64);
+                s.playNote(60, 1.0);
+                System.out.println("canvas " + s.getWidth() + "x" + s.getHeight());
+                Theater.playScenes(s);
+            }
+        }
+        "#,
+        "ArtScene",
+    );
+    assert_eq!(stdout, "canvas 400x400\n");
+    assert_eq!(
+        log,
+        "clear 255 255 255\n\
+         fillColor 0 0 255\n\
+         strokeColor 0 0 0\n\
+         strokeWidth 2.0\n\
+         rectangle 10 20 100 50\n\
+         fillColor 255 0 0\n\
+         ellipse 150 150 80 80\n\
+         textStyle SANS BOLD\n\
+         text \"Hello\" 200 300 0.0\n\
+         image 64x48 5 5 64\n\
+         note PIANO 60 1.0\n"
+    );
+}
+
+#[test]
+fn theater_image_pixel_manipulation() {
+    let (stdout, _log) = run_theater(
+        r##"
+        import org.code.theater.*;
+        import org.code.media.*;
+        public class ImgScene extends Scene {
+            public static void main(String[] args) {
+                Image img = new Image(4, 3);
+                img.clear(new Color(10, 20, 30));
+                for (int x = 0; x < img.getWidth(); x++) {
+                    for (int y = 0; y < img.getHeight(); y++) {
+                        Pixel p = img.getPixel(x, y);
+                        p.setRed(255 - p.getRed());
+                        p.setGreen(255 - p.getGreen());
+                        p.setBlue(255 - p.getBlue());
+                    }
+                }
+                Pixel c = img.getPixel(0, 0);
+                System.out.println("corner=" + c.getRed() + "," + c.getGreen() + "," + c.getBlue());
+                Color orange = new Color("orange");
+                System.out.println("orange=" + orange.getRed() + "," + orange.getGreen() + "," + orange.getBlue());
+                Color hex = new Color("#40E0D0");
+                System.out.println("hex=" + hex.getRed() + "," + hex.getGreen() + "," + hex.getBlue());
+            }
+        }
+        "##,
+        "ImgScene",
+    );
+    assert_eq!(
+        stdout,
+        "corner=245,235,225\norange=255,165,0\nhex=64,224,208\n"
+    );
+}
+
 #[test]
 fn neighborhood_painter_simulation() {
     // A 4x4 grid: a wall at (2,1) and a one-unit paint bucket at (1,2).
