@@ -23,13 +23,14 @@
         <div class="run-row">
           <button id="run" data-testid="run" disabled>Compile &amp; Run</button>
           <button id="debug" data-testid="debug" disabled>Debug</button>
-          <button
-            id="neighborhood-example"
-            data-testid="neighborhood-example"
+          <select
+            id="neighborhood-level"
+            data-testid="neighborhood-level"
             title="Load a Neighborhood level"
+            aria-label="Load a Neighborhood level"
           >
-            Neighborhood
-          </button>
+            <option value="" disabled selected>Neighborhood…</option>
+          </select>
         </div>
       </section>
       <section class="console-pane">

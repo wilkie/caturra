@@ -20,10 +20,26 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 
-// A real Code.org neighborhood level (CSA U1L9 "traffic" maze): a 10×10
-// grid of roads with two paint buckets. `tileType,paintCount` per cell,
-// exactly the `grid.txt` the bundled World reads.
-const NEIGHBORHOOD_GRID = `1,0 1,0 1,0 1,6 0,0 0,0 1,0 1,0 1,0 0,0
+interface NeighborhoodLevel {
+  name: string;
+  grid: string;
+  starter: string;
+}
+
+/** A fully open size×size grid (a paintable sandbox). */
+function openGrid(size: number): string {
+  const row = Array.from({ length: size }, () => '1,0').join(' ');
+  return `${Array.from({ length: size }, () => row).join('\n')}\n`;
+}
+
+// Real / real-style Code.org neighborhood levels. Each grid is the
+// `tileType,paintCount` text the bundled World reads; each starter is a
+// runnable program in the style of the level.
+const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
+  {
+    name: 'Traffic Maze',
+    // CSA U1L9: a 10×10 road maze with two paint buckets.
+    grid: `1,0 1,0 1,0 1,6 0,0 0,0 1,0 1,0 1,0 0,0
 0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
 0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
 0,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0
@@ -33,11 +49,8 @@ const NEIGHBORHOOD_GRID = `1,0 1,0 1,0 1,6 0,0 0,0 1,0 1,0 1,0 0,0
 0,0 0,0 0,0 1,0 1,0 1,0 1,6 0,0 0,0 0,0
 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0
 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0
-`;
-
-// A runnable starter in the style of the real level: drive to the paint
-// bucket, fill up, then paint a yellow line down the road.
-const NEIGHBORHOOD_SAMPLE = `import org.code.neighborhood.*;
+`,
+    starter: `import org.code.neighborhood.*;
 
 public class Main {
   public static void main(String[] args) {
@@ -64,7 +77,92 @@ public class Main {
     painter.paint("yellow");
   }
 }
-`;
+`,
+  },
+  {
+    name: 'Paint Studio',
+    grid: openGrid(10),
+    starter: `import org.code.neighborhood.*;
+
+public class Main {
+  public static void main(String[] args) {
+    Painter painter = new Painter(0, 0, "east", 200);
+    String[] colors = {"red", "orange", "yellow", "green", "blue", "purple"};
+
+    // Paint the whole grid in rainbow rows, snaking back and forth.
+    boolean facingEast = true;
+    for (int row = 0; row < 10; row++) {
+      String color = colors[row % colors.length];
+      painter.paint(color);
+      while (painter.canMove()) {
+        painter.move();
+        painter.paint(color);
+      }
+      if (row == 9) {
+        break;
+      }
+      // Drop down one row and reverse direction.
+      turnDown(painter, facingEast);
+      facingEast = !facingEast;
+    }
+  }
+
+  static void turnDown(Painter painter, boolean facingEast) {
+    if (facingEast) {
+      painter.turnLeft();
+      painter.turnLeft();
+      painter.turnLeft();
+      painter.move();
+      painter.turnLeft();
+      painter.turnLeft();
+      painter.turnLeft();
+    } else {
+      painter.turnLeft();
+      painter.move();
+      painter.turnLeft();
+    }
+  }
+}
+`,
+  },
+  {
+    name: 'Border Painter',
+    grid: openGrid(8),
+    starter: `import org.code.neighborhood.*;
+
+// A Painter that can turn right and paint a straight side.
+class BorderPainter extends Painter {
+  public BorderPainter() {
+    super(0, 0, "east", 100);
+  }
+
+  public void turnRight() {
+    turnLeft();
+    turnLeft();
+    turnLeft();
+  }
+
+  public void paintSide(String color, int length) {
+    for (int i = 0; i < length; i++) {
+      paint(color);
+      move();
+    }
+  }
+}
+
+public class Main {
+  public static void main(String[] args) {
+    BorderPainter painter = new BorderPainter();
+    for (int side = 0; side < 4; side++) {
+      painter.paintSide("teal", 7);
+      painter.turnRight();
+    }
+    painter.paint("teal");
+  }
+}
+`,
+  },
+];
 
 const DEFAULT_PROGRAM = `public class Main {
     public static void main(String[] args) {
@@ -100,8 +198,11 @@ const watchExpressions: string[] = [];
 const fileTabsEl = mustGet('#file-tabs', HTMLDivElement);
 const addFileEl = mustGet('#add-file', HTMLButtonElement);
 const vizEl = mustGet('#viz', HTMLDivElement);
-const neighborhoodExampleEl = mustGet('#neighborhood-example', HTMLButtonElement);
+const neighborhoodLevelEl = mustGet('#neighborhood-level', HTMLSelectElement);
 const neighborhoodViz = new NeighborhoodViz(mustGet('#neighborhood-canvas', HTMLCanvasElement));
+
+/** Grid seeded on the next neighborhood run (a picked level's maze). */
+let currentNeighborhoodGrid = NEIGHBORHOOD_LEVELS[0]?.grid ?? '';
 
 const editor = createEditor(sourceEl, DEFAULT_PROGRAM);
 
@@ -194,12 +295,24 @@ addFileEl.addEventListener('click', () => {
 });
 renderTabs();
 
-// Load a Neighborhood level: swap in the starter program and show the
-// level's grid straight away, so Run animates over the real maze.
-neighborhoodExampleEl.addEventListener('click', () => {
-  setSource(editor, NEIGHBORHOOD_SAMPLE);
+// Level picker: populate from NEIGHBORHOOD_LEVELS. Picking a level swaps
+// in its starter program and shows its grid, so Run animates over the
+// real maze.
+for (const [index, level] of NEIGHBORHOOD_LEVELS.entries()) {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = level.name;
+  neighborhoodLevelEl.appendChild(option);
+}
+neighborhoodLevelEl.addEventListener('change', () => {
+  const level = NEIGHBORHOOD_LEVELS[Number(neighborhoodLevelEl.value)];
+  if (!level) {
+    return;
+  }
+  currentNeighborhoodGrid = level.grid;
+  setSource(editor, level.starter);
   vizEl.hidden = false;
-  neighborhoodViz.load(NEIGHBORHOOD_GRID, '');
+  neighborhoodViz.load(level.grid, '');
 });
 
 /** All files as compiler inputs (the active tab reads the live view). */
@@ -504,7 +617,7 @@ async function runProgram(): Promise<void> {
     const neighborhood = isNeighborhoodProgram();
     if (neighborhood) {
       // Seed the grid and clear any prior run's animation stream.
-      await session.writeFile('grid.txt', NEIGHBORHOOD_GRID);
+      await session.writeFile('grid.txt', currentNeighborhoodGrid);
       await session.remove('neighborhood.jsonl').catch(() => undefined);
     } else {
       vizEl.hidden = true;

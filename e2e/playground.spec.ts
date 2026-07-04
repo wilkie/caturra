@@ -109,8 +109,10 @@ test.describe('playground', () => {
 
   test('loads a neighborhood level and animates it on the canvas', async ({ page }) => {
     await page.goto('/');
-    // The Neighborhood button swaps in the level starter and shows its grid.
-    await page.getByTestId('neighborhood-example').click();
+    // The picker offers several levels; choosing one shows its grid.
+    const picker = page.getByTestId('neighborhood-level');
+    await expect(picker.locator('option')).toHaveCount(4); // placeholder + 3 levels
+    await picker.selectOption({ label: 'Traffic Maze' });
     await expect(page.getByTestId('viz')).toBeVisible();
     await expect(page.getByTestId('neighborhood-canvas')).toBeVisible();
 
