@@ -404,6 +404,19 @@ x)`) with type-parameter erasure — every type variable is rewritten
   with the anonymous class's own fields and the overriding method's
   parameters. (This is the machinery lambdas will reuse.)
 
+- **Lambda expressions** (2026-07-04): `x -> expr`, `(a, b) -> expr`,
+  `() -> { ... }`, and typed-parameter forms. A lambda is target-typed
+  against a _functional interface_ (an interface with a single abstract
+  method) and desugared to an anonymous class implementing that method,
+  reusing the anonymous-class and capture machinery — so lambdas
+  capture effectively-final locals exactly as anonymous classes do.
+  The target type is read from a declaration or field type (`Fn f = x
+-> ...`), an assignment target (including array elements), a `return`
+  statement, or a method-call parameter (single-candidate resolution).
+  Expression bodies become `return e;` (or `e;` for a void SAM); block
+  bodies are used directly. A lambda in a position with no functional
+  target type is reported.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

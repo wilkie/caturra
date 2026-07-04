@@ -228,6 +228,34 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn lambdas_target_typed_and_capturing() {
+    let out = run_stdout(
+        r#"
+        interface IntFn { int apply(int x); }
+        interface BiFn { int apply(int a, int b); }
+        interface Act { void run(); }
+        public class La {
+            static int applyTo(IntFn f, int v) { return f.apply(v); }
+            public static void main(String[] args) {
+                IntFn inc = x -> x + 1;
+                BiFn add = (a, b) -> a + b;
+                System.out.println(inc.apply(9) + " " + add.apply(3, 4));
+                System.out.println(applyTo(x -> x * x, 5));
+                int base = 100;
+                IntFn shift = x -> x + base;
+                System.out.println(shift.apply(7));
+                Act a = () -> System.out.print("hi ");
+                a.run();
+                System.out.println("done");
+            }
+        }
+        "#,
+        "La",
+    );
+    assert_eq!(out, "10 7\n25\n107\nhi done\n");
+}
+
+#[test]
 fn anonymous_class_captures_locals() {
     let out = run_stdout(
         r#"

@@ -11,6 +11,7 @@ mod capture;
 pub mod codegen;
 pub mod diagnostics;
 mod imports;
+mod lambda;
 pub mod lexer;
 pub mod parser;
 
@@ -98,6 +99,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
+    lambda::desugar_lambdas(&mut units);
     capture::resolve_captures(&mut units);
     let (classes, mut codegen_errors) = codegen::generate(&units);
     compilation.diagnostics.append(&mut codegen_errors);

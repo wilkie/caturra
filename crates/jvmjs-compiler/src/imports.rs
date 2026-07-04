@@ -543,6 +543,14 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                 self.expr(els);
             }
             Expr::IncDec { target, .. } => self.expr(target),
+            Expr::Lambda { body, .. } => match body {
+                crate::ast::LambdaBody::Expr(e) => self.expr(e),
+                crate::ast::LambdaBody::Block(stmts) => {
+                    for s in stmts {
+                        self.stmt(s);
+                    }
+                }
+            },
         }
     }
 }

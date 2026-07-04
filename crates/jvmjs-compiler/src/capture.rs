@@ -21,7 +21,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{ClassDecl, CompilationUnit, Expr, FieldDecl, MethodDecl, Param, Stmt, TypeRef};
+use crate::ast::{
+    ClassDecl, CompilationUnit, Expr, FieldDecl, LambdaBody, MethodDecl, Param, Stmt, TypeRef,
+};
 
 /// Resolve captures for all anonymous classes in the compilation.
 pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
@@ -336,6 +338,14 @@ fn find_in_expr(
                 find_in_expr(e, scope, anon, out);
             }
         }
+        Expr::Lambda { body, .. } => match body {
+            LambdaBody::Expr(e) => find_in_expr(e, scope, anon, out),
+            LambdaBody::Block(stmts) => {
+                for s in stmts {
+                    find_in_stmt(s, scope, anon, out);
+                }
+            }
+        },
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
     }
 }
@@ -574,6 +584,14 @@ fn free_in_expr(expr: &Expr, bound: &mut HashSet<String>, free: &mut HashSet<Str
                 free_in_expr(e, bound, free);
             }
         }
+        Expr::Lambda { body, .. } => match body {
+            LambdaBody::Expr(e) => free_in_expr(e, bound, free),
+            LambdaBody::Block(stmts) => {
+                for s in stmts {
+                    free_in_stmt(s, bound, free);
+                }
+            }
+        },
         Expr::Literal { .. } | Expr::This { .. } => {}
     }
 }
@@ -743,6 +761,11 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         }
         Expr::ArrayLiteral { elements, .. } => {
             for e in elements {
+                f(e);
+            }
+        }
+        Expr::Lambda { body, .. } => {
+            if let LambdaBody::Expr(e) = body {
                 f(e);
             }
         }

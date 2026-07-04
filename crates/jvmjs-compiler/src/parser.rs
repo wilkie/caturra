@@ -8,7 +8,8 @@
 
 use crate::ast::{
     AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, ImportDecl,
-    InitBlock, Literal, LocalDeclarator, MethodDecl, Param, Stmt, SwitchArm, TypeRef, UnaryOp,
+    InitBlock, LambdaBody, LambdaParam, Literal, LocalDeclarator, MethodDecl, Param, Stmt,
+    SwitchArm, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -1614,7 +1615,88 @@ impl Parser<'_> {
     // ----- expressions, by descending precedence -----
 
     fn expression(&mut self) -> Parsed<Expr> {
+        if let Some(lambda) = self.try_lambda()? {
+            return Ok(lambda);
+        }
         self.ternary()
+    }
+
+    /// Detect and parse a lambda: `x -> body`, `(a, b) -> body`, or
+    /// `(Type a) -> body`. Returns `None` if the cursor is not a lambda.
+    fn try_lambda(&mut self) -> Parsed<Option<Expr>> {
+        let start = self.here();
+        // `identifier ->`
+        if matches!(self.peek(), Some(TokenKind::Identifier(_)))
+            && self.peek_at(1) == Some(&TokenKind::Symbol("->"))
+        {
+            let (name, _) = self.expect_ident("for the lambda parameter")?;
+            self.pos += 1; // '->'
+            let params = vec![LambdaParam { name, ty: None }];
+            return Ok(Some(self.lambda_body(params, start)?));
+        }
+        // `( ... ) ->`
+        if self.at_symbol("(") && self.parenthesized_is_lambda() {
+            self.pos += 1; // '('
+            let mut params = Vec::new();
+            if !self.at_symbol(")") {
+                loop {
+                    // A parameter is `Type name` or just `name`.
+                    // A parameter has an explicit type unless it is a
+                    // bare name (an identifier followed by `,` or `)`).
+                    let bare_name = matches!(self.peek(), Some(TokenKind::Identifier(_)))
+                        && !matches!(self.peek_at(1), Some(TokenKind::Identifier(_)));
+                    let ty = if bare_name {
+                        None
+                    } else {
+                        Some(self.type_ref()?)
+                    };
+                    let (name, _) = self.expect_ident("for the lambda parameter")?;
+                    params.push(LambdaParam { name, ty });
+                    if !self.eat_symbol(",") {
+                        break;
+                    }
+                }
+            }
+            self.expect_symbol(")", "to close the lambda parameters")?;
+            self.expect_symbol("->", "in the lambda")?;
+            return Ok(Some(self.lambda_body(params, start)?));
+        }
+        Ok(None)
+    }
+
+    /// Whether a `(...)` at the cursor is a lambda parameter list:
+    /// scan to the matching `)` and check for a following `->`.
+    fn parenthesized_is_lambda(&self) -> bool {
+        let mut depth = 0i32;
+        let mut offset = 0usize;
+        while let Some(kind) = self.peek_at(offset) {
+            match kind {
+                TokenKind::Symbol("(") => depth += 1,
+                TokenKind::Symbol(")") => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self.peek_at(offset + 1) == Some(&TokenKind::Symbol("->"));
+                    }
+                }
+                _ => {}
+            }
+            offset += 1;
+        }
+        false
+    }
+
+    fn lambda_body(&mut self, params: Vec<LambdaParam>, start: SourceSpan) -> Parsed<Expr> {
+        let body = if self.at_symbol("{") {
+            self.pos += 1;
+            LambdaBody::Block(self.block_body())
+        } else {
+            LambdaBody::Expr(Box::new(self.expression()?))
+        };
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        Ok(Expr::Lambda { params, body, span })
     }
 
     /// `cond ? then : else` (right-associative, lowest precedence
@@ -2946,6 +3028,21 @@ fn erase_in_expr(
         Expr::ArrayLiteral { elements, .. } => {
             for e in elements {
                 erase_in_expr(e, to_object, tracked);
+            }
+        }
+        Expr::Lambda { params, body, .. } => {
+            for p in params.iter_mut() {
+                if let Some(ty) = &mut p.ty {
+                    erase_in_type(ty, to_object, tracked);
+                }
+            }
+            match body {
+                LambdaBody::Expr(e) => erase_in_expr(e, to_object, tracked),
+                LambdaBody::Block(stmts) => {
+                    for s in stmts {
+                        erase_in_stmt(s, to_object, tracked);
+                    }
+                }
             }
         }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}

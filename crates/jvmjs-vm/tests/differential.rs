@@ -2451,6 +2451,81 @@ public class DiffCapture {
 );
 
 differential_test!(
+    diff_lambdas,
+    "DiffLambda",
+    r#"
+interface IntFn { int apply(int x); }
+interface IntBiFn { int apply(int a, int b); }
+interface Pred { boolean test(int x); }
+interface Runner { void run(); }
+interface Producer { String make(); }
+
+public class DiffLambda {
+    static int applyTo(IntFn f, int v) { return f.apply(v); }
+    static int count(int[] xs, Pred p) {
+        int n = 0;
+        for (int x : xs) if (p.test(x)) n++;
+        return n;
+    }
+    static IntFn compose(IntFn f, IntFn g) {
+        return x -> f.apply(g.apply(x));
+    }
+
+    public static void main(String[] args) {
+        // Expression and parenthesized forms.
+        IntFn inc = x -> x + 1;
+        IntFn sq = (x) -> x * x;
+        System.out.println(inc.apply(10) + " " + sq.apply(6));
+
+        // Multiple parameters, expression and block bodies.
+        IntBiFn add = (a, b) -> a + b;
+        IntBiFn max = (a, b) -> {
+            if (a > b) return a;
+            return b;
+        };
+        System.out.println(add.apply(3, 4) + " " + max.apply(9, 2));
+
+        // Lambda as a method argument.
+        System.out.println(applyTo(x -> x * 10, 5));
+        int[] nums = { 1, 2, 3, 4, 5, 6 };
+        System.out.println(count(nums, x -> x % 2 == 0));
+
+        // Capturing lambdas.
+        int base = 100;
+        int factor = 3;
+        IntFn affine = x -> x * factor + base;
+        System.out.println(affine.apply(5));
+
+        String prefix = "value: ";
+        Producer p = () -> prefix + affine.apply(1);
+        System.out.println(p.make());
+
+        // Void lambda with a side effect.
+        Runner r = () -> System.out.println("ran");
+        r.run();
+
+        // Lambda returned from a method (capturing its parameters).
+        IntFn plusOneThenDouble = compose(x -> x * 2, x -> x + 1);
+        System.out.println(plusOneThenDouble.apply(4));
+
+        // Lambda stored in an array and called.
+        IntFn[] table = new IntFn[3];
+        for (int i = 0; i < 3; i++) {
+            final int mult = i + 1;
+            table[i] = x -> x * mult;
+        }
+        System.out.println(table[0].apply(10) + " " + table[1].apply(10) + " " + table[2].apply(10));
+
+        // A lambda whose body captures and uses several things.
+        int threshold = 4;
+        Pred big = x -> x > threshold;
+        System.out.println(big.test(5) + " " + big.test(2) + " " + count(nums, big));
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

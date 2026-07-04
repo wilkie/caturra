@@ -264,6 +264,20 @@ pub struct LocalDeclarator {
     pub span: SourceSpan,
 }
 
+/// A lambda parameter: a name, optionally with an explicit type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LambdaParam {
+    pub name: String,
+    pub ty: Option<TypeRef>,
+}
+
+/// A lambda body: a single expression, or a statement block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LambdaBody {
+    Expr(Box<Expr>),
+    Block(Vec<Stmt>),
+}
+
 /// The left side of an assignment.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssignTarget {
@@ -415,6 +429,13 @@ pub enum Expr {
         els: Box<Expr>,
         span: SourceSpan,
     },
+    /// `x -> body` / `(a, b) -> { ... }`. Target-typed against a
+    /// functional interface and desugared to an anonymous class.
+    Lambda {
+        params: Vec<LambdaParam>,
+        body: LambdaBody,
+        span: SourceSpan,
+    },
     /// `x++` / `--a[i]` in expression position (statement-only forms
     /// still lower to compound assignments).
     IncDec {
@@ -446,6 +467,7 @@ impl Expr {
             | Expr::InstanceOf { span, .. }
             | Expr::SuperMethodCall { span, .. }
             | Expr::Ternary { span, .. }
+            | Expr::Lambda { span, .. }
             | Expr::IncDec { span, .. } => *span,
         }
     }
