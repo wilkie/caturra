@@ -429,6 +429,16 @@ pub enum Expr {
         els: Box<Expr>,
         span: SourceSpan,
     },
+    /// `Type::method`, `expr::method`, or `Type::new`. Target-typed
+    /// against a functional interface and desugared to a lambda.
+    MethodRef {
+        /// The qualifier: a class name (`String`) or a value
+        /// expression (`System.out`).
+        qualifier: Box<Expr>,
+        /// The referenced method, or `new` for a constructor reference.
+        method: String,
+        span: SourceSpan,
+    },
     /// `x -> body` / `(a, b) -> { ... }`. Target-typed against a
     /// functional interface and desugared to an anonymous class.
     Lambda {
@@ -468,6 +478,7 @@ impl Expr {
             | Expr::SuperMethodCall { span, .. }
             | Expr::Ternary { span, .. }
             | Expr::Lambda { span, .. }
+            | Expr::MethodRef { span, .. }
             | Expr::IncDec { span, .. } => *span,
         }
     }

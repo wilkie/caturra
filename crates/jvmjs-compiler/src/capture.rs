@@ -338,6 +338,7 @@ fn find_in_expr(
                 find_in_expr(e, scope, anon, out);
             }
         }
+        Expr::MethodRef { qualifier, .. } => find_in_expr(qualifier, scope, anon, out),
         Expr::Lambda { body, .. } => match body {
             LambdaBody::Expr(e) => find_in_expr(e, scope, anon, out),
             LambdaBody::Block(stmts) => {
@@ -584,6 +585,7 @@ fn free_in_expr(expr: &Expr, bound: &mut HashSet<String>, free: &mut HashSet<Str
                 free_in_expr(e, bound, free);
             }
         }
+        Expr::MethodRef { qualifier, .. } => free_in_expr(qualifier, bound, free),
         Expr::Lambda { body, .. } => match body {
             LambdaBody::Expr(e) => free_in_expr(e, bound, free),
             LambdaBody::Block(stmts) => {
@@ -764,6 +766,7 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 f(e);
             }
         }
+        Expr::MethodRef { qualifier, .. } => f(qualifier),
         Expr::Lambda { body, .. } => {
             if let LambdaBody::Expr(e) = body {
                 f(e);

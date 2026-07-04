@@ -1975,10 +1975,30 @@ impl Parser<'_> {
         self.postfix_expression()
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per postfix operator
     fn postfix_expression(&mut self) -> Parsed<Expr> {
         let mut expr = self.primary_expression()?;
 
         loop {
+            // Method reference: `qualifier::method` or `Type::new`.
+            if self.at_symbol("::") {
+                self.pos += 1;
+                let method = if self.eat_keyword(Keyword::New) {
+                    String::from("new")
+                } else {
+                    self.expect_ident("after '::'")?.0
+                };
+                let span = SourceSpan {
+                    start: expr.span().start,
+                    end: self.here().start,
+                };
+                expr = Expr::MethodRef {
+                    qualifier: Box::new(expr),
+                    method,
+                    span,
+                };
+                continue;
+            }
             // Postfix increment/decrement in expression position. The
             // statement parser intercepts the statement-only form
             // before expressions are involved, so reaching here means
@@ -3030,6 +3050,7 @@ fn erase_in_expr(
                 erase_in_expr(e, to_object, tracked);
             }
         }
+        Expr::MethodRef { qualifier, .. } => erase_in_expr(qualifier, to_object, tracked),
         Expr::Lambda { params, body, .. } => {
             for p in params.iter_mut() {
                 if let Some(ty) = &mut p.ty {

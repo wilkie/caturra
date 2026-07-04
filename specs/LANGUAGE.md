@@ -417,6 +417,15 @@ x)`) with type-parameter erasure — every type variable is rewritten
   bodies are used directly. A lambda in a position with no functional
   target type is reported.
 
+- **Method references** (2026-07-04): all four kinds — static
+  (`Integer::parseInt`), unbound instance (`String::length`, where the
+  first SAM parameter is the receiver), bound instance
+  (`System.out::println`, on a value), and constructor (`Point::new`).
+  Each is target-typed against a functional interface and desugared to
+  the equivalent lambda, then handled by the lambda pipeline.
+  Static-vs-instance is resolved precisely for user classes and via a
+  curated static-method set for library types.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

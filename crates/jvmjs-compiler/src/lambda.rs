@@ -29,6 +29,8 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
     let sams = functional_interfaces(units);
     // Signatures for single-candidate method-argument target typing.
     let methods = method_signatures(units);
+    let static_methods = static_method_names(units);
+    let class_names = class_name_set(units);
 
     let mut new_classes: Vec<ClassDecl> = Vec::new();
     let mut counter = 0usize;
@@ -51,6 +53,8 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                 let mut ctx = Ctx {
                     sams: &sams,
                     methods: &methods,
+                    static_methods: &static_methods,
+                    class_names: &class_names,
                     ret: ret.as_ref(),
                     new_classes: &mut new_classes,
                     counter: &mut counter,
@@ -65,6 +69,8 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                     let mut ctx = Ctx {
                         sams: &sams,
                         methods: &methods,
+                        static_methods: &static_methods,
+                        class_names: &class_names,
                         ret: None,
                         new_classes: &mut new_classes,
                         counter: &mut counter,
@@ -87,6 +93,11 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
 struct Ctx<'a> {
     sams: &'a HashMap<String, Sam>,
     methods: &'a HashMap<String, Vec<Vec<TypeRef>>>,
+    /// Class name -> its static method names, for method-reference
+    /// static-vs-instance disambiguation.
+    static_methods: &'a HashMap<String, std::collections::HashSet<String>>,
+    /// All class/interface names (user + known library types).
+    class_names: &'a std::collections::HashSet<String>,
     ret: Option<&'a TypeRef>,
     new_classes: &'a mut Vec<ClassDecl>,
     counter: &'a mut usize,
@@ -131,6 +142,85 @@ fn functional_interfaces(units: &[(String, CompilationUnit)]) -> HashMap<String,
 
 /// Method name -> the parameter-type lists of each declaration, for
 /// single-candidate target typing of a lambda argument.
+/// Class name -> its declared static method names.
+fn static_method_names(
+    units: &[(String, CompilationUnit)],
+) -> HashMap<String, std::collections::HashSet<String>> {
+    let mut out: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            let entry = out.entry(class.name.clone()).or_default();
+            for method in &class.methods {
+                if method.is_static {
+                    entry.insert(method.name.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every class/interface name, plus the library types that can qualify
+/// a method reference.
+fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::HashSet<String> {
+    let mut set: std::collections::HashSet<String> = units
+        .iter()
+        .flat_map(|(_, u)| u.classes.iter().map(|c| c.name.clone()))
+        .collect();
+    for lib in [
+        "String",
+        "Integer",
+        "Double",
+        "Long",
+        "Float",
+        "Short",
+        "Byte",
+        "Character",
+        "Boolean",
+        "Math",
+        "System",
+        "Object",
+        "ArrayList",
+    ] {
+        set.insert(String::from(lib));
+    }
+    set
+}
+
+/// Whether `method` is a static method of the library type `class`
+/// (a curated set; used only for method-reference disambiguation).
+fn is_library_static(method: &str) -> bool {
+    matches!(
+        method,
+        "parseInt"
+            | "parseLong"
+            | "parseDouble"
+            | "parseFloat"
+            | "parseShort"
+            | "parseByte"
+            | "parseBoolean"
+            | "valueOf"
+            | "abs"
+            | "max"
+            | "min"
+            | "sqrt"
+            | "cbrt"
+            | "pow"
+            | "floor"
+            | "ceil"
+            | "round"
+            | "random"
+            | "signum"
+            | "sum"
+            | "compare"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "log"
+            | "exp"
+    )
+}
+
 fn method_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<Vec<TypeRef>>> {
     let mut out: HashMap<String, Vec<Vec<TypeRef>>> = HashMap::new();
     for (_, unit) in units {
@@ -285,6 +375,21 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
 }
 
 fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
+    // A method reference in a target-typed position becomes a lambda.
+    if matches!(expr, Expr::MethodRef { .. }) {
+        if let Some(target) = expected
+            && let Some(name) = interface_name(target)
+            && let Some(sam) = ctx.sams.get(name).cloned()
+        {
+            *expr = method_ref_to_lambda(expr, &sam, ctx);
+            // Fall through to lambda handling below.
+        } else {
+            if let Expr::MethodRef { qualifier, .. } = expr {
+                desugar_expr(qualifier, None, ctx);
+            }
+            return;
+        }
+    }
     // A lambda in a target-typed position: rewrite it.
     if matches!(expr, Expr::Lambda { .. }) {
         if let Some(target) = expected
@@ -360,7 +465,104 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 desugar_expr(e, None, ctx);
             }
         }
-        Expr::Lambda { .. } | Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
+        Expr::Lambda { .. }
+        | Expr::MethodRef { .. }
+        | Expr::Literal { .. }
+        | Expr::Name { .. }
+        | Expr::This { .. } => {}
+    }
+}
+
+/// Convert a method reference into an equivalent lambda, choosing the
+/// call form (static, unbound-instance, bound-instance, or
+/// constructor) from the qualifier and the SAM's arity.
+fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &Ctx) -> Expr {
+    let Expr::MethodRef {
+        qualifier,
+        method,
+        span,
+    } = expr
+    else {
+        unreachable!("guarded by caller");
+    };
+    let span = *span;
+    let arity = sam.params.len();
+    let param_names: Vec<String> = (0..arity).map(|i| format!("__p{i}")).collect();
+    let name_expr = |name: &str| Expr::Name {
+        path: vec![name.to_owned()],
+        span,
+    };
+
+    // Is the qualifier a bare class name?
+    let qualifier_class = match qualifier.as_ref() {
+        Expr::Name { path, .. } if path.len() == 1 && ctx.class_names.contains(&path[0]) => {
+            Some(path[0].clone())
+        }
+        _ => None,
+    };
+
+    let call: Expr = if method == "new" {
+        // Constructor reference: `new Type(p0, ...)`.
+        let class = qualifier_type_name(qualifier);
+        Expr::NewObject {
+            class,
+            type_args: Vec::new(),
+            args: param_names.iter().map(|n| name_expr(n)).collect(),
+            span,
+        }
+    } else if let Some(class) = qualifier_class {
+        let is_static = ctx
+            .static_methods
+            .get(&class)
+            .is_some_and(|set| set.contains(method))
+            || (!ctx_user_class(ctx, &class) && is_library_static(method));
+        if is_static {
+            // `Type.method(p0, ...)`.
+            Expr::Call {
+                receiver: Some(Box::new(name_expr(&class))),
+                method: method.clone(),
+                args: param_names.iter().map(|n| name_expr(n)).collect(),
+                span,
+            }
+        } else {
+            // Unbound instance: `p0.method(p1, ...)`.
+            Expr::Call {
+                receiver: Some(Box::new(name_expr(&param_names[0]))),
+                method: method.clone(),
+                args: param_names[1..].iter().map(|n| name_expr(n)).collect(),
+                span,
+            }
+        }
+    } else {
+        // Bound instance: `qualifier.method(p0, ...)`.
+        Expr::Call {
+            receiver: Some(qualifier.clone()),
+            method: method.clone(),
+            args: param_names.iter().map(|n| name_expr(n)).collect(),
+            span,
+        }
+    };
+
+    let params = param_names
+        .into_iter()
+        .map(|name| crate::ast::LambdaParam { name, ty: None })
+        .collect();
+    Expr::Lambda {
+        params,
+        body: LambdaBody::Expr(Box::new(call)),
+        span,
+    }
+}
+
+fn ctx_user_class(ctx: &Ctx, class: &str) -> bool {
+    ctx.static_methods.contains_key(class)
+}
+
+/// The type name a constructor-reference qualifier denotes.
+fn qualifier_type_name(qualifier: &Expr) -> String {
+    match qualifier {
+        Expr::Name { path, .. } => path.join("."),
+        _ => String::from("Object"),
     }
 }
 

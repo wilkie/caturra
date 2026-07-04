@@ -6639,7 +6639,10 @@ impl BodyGen<'_> {
                     span: *span,
                 })
             }
-            Expr::Name { .. } | Expr::ArrayLiteral { .. } | Expr::Lambda { .. } => JType::Error,
+            Expr::Name { .. }
+            | Expr::ArrayLiteral { .. }
+            | Expr::Lambda { .. }
+            | Expr::MethodRef { .. } => JType::Error,
             Expr::Index { array, .. } => self.type_of(array).element_type().unwrap_or(JType::Error),
             Expr::Field { object, name, .. } => match self.type_of(object) {
                 JType::Array { .. } if name == "length" => JType::Int,
@@ -6842,10 +6845,11 @@ impl BodyGen<'_> {
         match expr {
             Expr::Literal { value, span } => self.literal(value, *span),
             Expr::Name { path, span } => self.name(path, *span),
-            Expr::Lambda { span, .. } => {
+            Expr::Lambda { span, .. } | Expr::MethodRef { span, .. } => {
                 self.error(
                     *span,
-                    "a lambda is only allowed where a functional-interface type is expected",
+                    "a lambda or method reference is only allowed where a \
+                     functional-interface type is expected",
                 );
                 JType::Error
             }

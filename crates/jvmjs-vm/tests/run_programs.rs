@@ -228,6 +228,34 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn method_references_all_kinds() {
+    let out = run_stdout(
+        r#"
+        interface StrToInt { int apply(String s); }
+        interface IntBiOp { int apply(int a, int b); }
+        interface Factory { Cell make(int v); }
+        class Cell {
+            int v;
+            Cell(int v) { this.v = v; }
+            public String toString() { return "Cell:" + v; }
+        }
+        public class Mr {
+            public static void main(String[] args) {
+                StrToInt len = String::length;
+                StrToInt parse = Integer::parseInt;
+                IntBiOp mx = Math::max;
+                Factory f = Cell::new;
+                System.out.println(len.apply("hello") + " " + parse.apply("77"));
+                System.out.println(mx.apply(4, 9) + " " + f.make(3));
+            }
+        }
+        "#,
+        "Mr",
+    );
+    assert_eq!(out, "5 77\n9 Cell:3\n");
+}
+
+#[test]
 fn lambdas_target_typed_and_capturing() {
     let out = run_stdout(
         r#"

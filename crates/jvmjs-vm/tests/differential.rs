@@ -2526,6 +2526,66 @@ public class DiffLambda {
 );
 
 differential_test!(
+    diff_method_references,
+    "DiffMethodRef",
+    r#"
+interface StrToInt { int apply(String s); }
+interface IntBiOp { int apply(int a, int b); }
+interface Factory { Box make(int v); }
+interface Consumer { void accept(String s); }
+interface Mapper { String apply(String s); }
+
+class Box {
+    int value;
+    Box(int value) { this.value = value; }
+    public String toString() { return "Box(" + value + ")"; }
+    int doubled() { return value * 2; }
+    static int triple(int n) { return n * 3; }
+}
+
+public class DiffMethodRef {
+    static int useStrFn(StrToInt f, String s) { return f.apply(s); }
+
+    public static void main(String[] args) {
+        // Unbound instance method references.
+        StrToInt len = String::length;
+        System.out.println(len.apply("method") + " " + len.apply("reference"));
+
+        Mapper upper = String::toUpperCase;
+        Mapper trim = String::trim;
+        System.out.println(upper.apply("hi") + "|" + trim.apply("  pad  ") + "|");
+
+        // Static method references (library and user).
+        StrToInt parse = Integer::parseInt;
+        System.out.println(parse.apply("42") + " " + parse.apply("-8"));
+
+        IntBiOp mx = Math::max;
+        IntBiOp mn = Math::min;
+        System.out.println(mx.apply(3, 9) + " " + mn.apply(3, 9));
+
+        // Constructor reference.
+        Factory f = Box::new;
+        Box b = f.make(21);
+        System.out.println(b + " " + b.doubled());
+
+        // Bound instance method reference (on a value).
+        Consumer out = System.out::println;
+        out.accept("bound instance ref");
+
+        // A method reference passed as an argument.
+        System.out.println(useStrFn(String::length, "argument"));
+
+        // Method reference used in a loop, and stored in an array.
+        StrToInt[] fns = new StrToInt[2];
+        fns[0] = String::length;
+        fns[1] = Integer::parseInt;
+        System.out.println(fns[0].apply("abcd") + " " + fns[1].apply("1000"));
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"
