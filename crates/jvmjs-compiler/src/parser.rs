@@ -651,10 +651,14 @@ impl Parser<'_> {
                 self.pos += 1;
                 TypeRef::Long
             }
-            Some(TokenKind::Keyword(Keyword::Float | Keyword::Byte | Keyword::Short)) => {
+            Some(TokenKind::Keyword(Keyword::Float)) => {
+                self.pos += 1;
+                TypeRef::Float
+            }
+            Some(TokenKind::Keyword(Keyword::Byte | Keyword::Short)) => {
                 self.error_here(
-                    "the float, byte, and short primitives are not yet supported by jvmjs \
-                     (int, long, double, boolean, and char are)",
+                    "the byte and short primitives are not yet supported by jvmjs \
+                     (int, long, float, double, boolean, and char are)",
                 );
                 return Err(Abort);
             }
@@ -1531,6 +1535,7 @@ impl Parser<'_> {
                         | Keyword::Boolean
                         | Keyword::Char
                         | Keyword::Long
+                        | Keyword::Float
                 ))
             )
             && matches!(self.peek_at(2), Some(TokenKind::Symbol(")")))
@@ -1702,6 +1707,10 @@ impl Parser<'_> {
                 self.pos += 1;
                 TypeRef::Long
             }
+            Some(TokenKind::Keyword(Keyword::Float)) => {
+                self.pos += 1;
+                TypeRef::Float
+            }
             Some(TokenKind::Identifier(_)) => {
                 let (mut name, _) = self.expect_ident("after 'new'")?;
                 // `new java.util.Scanner(...)` — fully qualified.
@@ -1866,6 +1875,11 @@ impl Parser<'_> {
             }
             Some(TokenKind::LongLiteral(v)) => {
                 let value = Literal::Long(*v);
+                self.pos += 1;
+                Ok(Expr::Literal { value, span })
+            }
+            Some(TokenKind::FloatLiteral(v)) => {
+                let value = Literal::Float(*v);
                 self.pos += 1;
                 Ok(Expr::Literal { value, span })
             }

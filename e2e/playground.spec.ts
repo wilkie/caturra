@@ -659,15 +659,15 @@ test.describe('playground', () => {
       [
         'public class Main {',
         '    public static void main(String[] args) {',
-        '        float ratio = 0.5f;',
-        '        System.out.println(ratio);',
+        '        short small = 12;',
+        '        System.out.println(small);',
         '    }',
         '}',
       ].join('\n'),
     );
     await page.getByTestId('run').click();
     await expect(page.getByTestId('console')).toContainText(
-      'the float type is not yet supported by jvmjs',
+      'the byte and short primitives are not yet supported by jvmjs',
     );
   });
 });

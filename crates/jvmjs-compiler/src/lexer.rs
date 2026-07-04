@@ -14,6 +14,7 @@ pub enum TokenKind {
     Keyword(Keyword),
     IntLiteral(i64),
     LongLiteral(i64),
+    FloatLiteral(f32),
     DoubleLiteral(f64),
     StringLiteral(String),
     CharLiteral(char),
@@ -398,10 +399,13 @@ impl Lexer<'_> {
             }
             Some('f' | 'F') => {
                 self.bump();
-                self.error(
-                    "the float type is not yet supported by jvmjs (use double)",
-                    start,
-                );
+                let digits = digits.replace('_', "");
+                match digits.parse::<f32>() {
+                    Ok(value) => self.push(TokenKind::FloatLiteral(value), start),
+                    Err(_) => {
+                        self.error(format!("invalid float literal '{digits}'"), start);
+                    }
+                }
                 return;
             }
             _ => {}

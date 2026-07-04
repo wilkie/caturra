@@ -48,6 +48,8 @@ pub enum HeapObject {
     DoubleArray(Vec<f64>),
     /// A `long[]`.
     LongArray(Vec<i64>),
+    /// A `float[]`.
+    FloatArray(Vec<f32>),
     /// A reference array (e.g. `String[] args`, or the rows of a 2D
     /// array).
     RefArray(Vec<JValue>),

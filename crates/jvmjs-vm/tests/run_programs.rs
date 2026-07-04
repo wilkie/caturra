@@ -3032,8 +3032,8 @@ fn try_catch_compile_errors_match_javac() {
             "ArrayList.iterator exists in Java, but iterators are not supported by jvmjs (use for-each or an index loop)",
         ),
         (
-            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextFloat(); } }",
-            "Scanner.nextFloat exists in Java, but the float type is not supported by jvmjs",
+            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextByte(); } }",
+            "Scanner.nextByte exists in Java, but the byte type is not supported by jvmjs",
         ),
     ];
     for (source, expected) in cases {

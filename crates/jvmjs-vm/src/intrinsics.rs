@@ -958,6 +958,19 @@ fn scanner_method(
             let ok = token.is_some_and(|t| t.parse::<i64>().is_ok());
             Ok(Some(JValue::Int(i32::from(ok))))
         }
+        "nextFloat" => {
+            let token = scanner_next_token(heap, console, receiver)?
+                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+            let value: f32 = token
+                .parse()
+                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            Ok(Some(JValue::Float(value)))
+        }
+        "hasNextFloat" => {
+            let token = scanner_peek_token(heap, console, receiver)?;
+            let ok = token.is_some_and(|t| t.parse::<f32>().is_ok());
+            Ok(Some(JValue::Int(i32::from(ok))))
+        }
         "nextBoolean" => {
             let token = scanner_next_token(heap, console, receiver)?
                 .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
@@ -1536,6 +1549,7 @@ pub fn invoke_static(
         "java/lang/Character" => character_static(heap, method, args),
         "java/lang/Boolean" => boolean_static(heap, method, args),
         "java/lang/Long" => long_static(heap, method, args),
+        "java/lang/Float" => float_static(heap, method, args),
         "java/lang/System" => match method {
             "currentTimeMillis" => Ok(Some(JValue::Long(console.now_millis()))),
             "nanoTime" => Ok(Some(JValue::Long(
@@ -1601,6 +1615,18 @@ fn math_static(
     match (method, args) {
         ("abs", [JValue::Int(v)]) => i(v.wrapping_abs()),
         ("abs", [JValue::Long(v)]) => Ok(Some(JValue::Long(v.wrapping_abs()))),
+        ("abs", [JValue::Float(v)]) => Ok(Some(JValue::Float(v.abs()))),
+        ("max", [JValue::Float(a), JValue::Float(b)]) => {
+            Ok(Some(JValue::Float(java_float_max(*a, *b))))
+        }
+        ("min", [JValue::Float(a), JValue::Float(b)]) => {
+            Ok(Some(JValue::Float(java_float_min(*a, *b))))
+        }
+        ("signum", [JValue::Float(v)]) => Ok(Some(JValue::Float(if *v == 0.0 || v.is_nan() {
+            *v
+        } else {
+            v.signum()
+        }))),
         ("max", [JValue::Long(a), JValue::Long(b)]) => Ok(Some(JValue::Long((*a).max(*b)))),
         ("min", [JValue::Long(a), JValue::Long(b)]) => Ok(Some(JValue::Long((*a).min(*b)))),
         ("toIntExact", [JValue::Long(v)]) => {
@@ -2183,6 +2209,80 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
     }
 }
 
+fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<JValue>, VmError> {
+    let f = |v: f32| Ok(Some(JValue::Float(v)));
+    let b = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
+    match (method, args) {
+        ("parseFloat" | "valueOf", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            text.trim()
+                .parse()
+                .map_or_else(|_| Err(number_format(&text)), f)
+        }
+        ("valueOf", [JValue::Float(v)]) => f(*v),
+        ("toString", [JValue::Float(v)]) => {
+            let reference = heap.alloc_string(&java_float_to_string(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("isNaN", [JValue::Float(v)]) => b(v.is_nan()),
+        ("isInfinite", [JValue::Float(v)]) => b(v.is_infinite()),
+        ("isFinite", [JValue::Float(v)]) => b(v.is_finite()),
+        ("compare", [JValue::Float(a), JValue::Float(b)]) => {
+            // Java total order: -0.0 < 0.0, NaN greatest.
+            Ok(Some(JValue::Int(match a.total_cmp(b) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })))
+        }
+        ("max", [JValue::Float(a), JValue::Float(b)]) => f(java_float_max(*a, *b)),
+        ("min", [JValue::Float(a), JValue::Float(b)]) => f(java_float_min(*a, *b)),
+        ("sum", [JValue::Float(a), JValue::Float(b)]) => f(a + b),
+        ("hashCode" | "floatToIntBits", [JValue::Float(v)]) => {
+            let bits = if v.is_nan() {
+                0x7FC0_0000_u32
+            } else {
+                v.to_bits()
+            };
+            Ok(Some(JValue::Int(bits.cast_signed())))
+        }
+        ("floatToRawIntBits", [JValue::Float(v)]) => {
+            Ok(Some(JValue::Int(v.to_bits().cast_signed())))
+        }
+        ("intBitsToFloat", [JValue::Int(v)]) => f(f32::from_bits(v.cast_unsigned())),
+        _ => Err(VmError::UnknownIntrinsic(format!("Float.{method}"))),
+    }
+}
+
+/// Java `Math.max(float)`: NaN wins; +0.0 beats -0.0.
+fn java_float_max(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        return f32::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_positive() || b.is_sign_positive() {
+            0.0
+        } else {
+            -0.0
+        };
+    }
+    if a > b { a } else { b }
+}
+
+fn java_float_min(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        return f32::NAN;
+    }
+    if a == 0.0 && b == 0.0 {
+        return if a.is_sign_negative() || b.is_sign_negative() {
+            -0.0
+        } else {
+            0.0
+        };
+    }
+    if a < b { a } else { b }
+}
+
 fn string_static(
     heap: &mut Heap,
     method: &str,
@@ -2217,6 +2317,7 @@ fn string_static(
                 }
                 (_, JValue::Int(v)) => v.to_string(),
                 (_, JValue::Long(v)) => v.to_string(),
+                ("(F)Ljava/lang/String;", JValue::Float(v)) => java_float_to_string(*v),
                 (_, JValue::Double(v)) => java_double_to_string(*v),
                 (_, JValue::Ref(Some(reference))) => match heap.get(*reference) {
                     Some(HeapObject::IntArray(values)) => values
@@ -2242,6 +2343,7 @@ fn append_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Resul
     let text = match (descriptor, args) {
         ("(I)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => v.to_string(),
         ("(J)Ljava/lang/StringBuilder;", [JValue::Long(v)]) => v.to_string(),
+        ("(F)Ljava/lang/StringBuilder;", [JValue::Float(v)]) => java_float_to_string(*v),
         ("(Z)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => {
             if *v != 0 { "true" } else { "false" }.to_owned()
         }
@@ -2275,6 +2377,7 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
         ("()V", []) => String::new(),
         ("(I)V", [JValue::Int(v)]) => v.to_string(),
         ("(J)V", [JValue::Long(v)]) => v.to_string(),
+        ("(F)V", [JValue::Float(v)]) => java_float_to_string(*v),
         ("(Z)V", [JValue::Int(v)]) => if *v != 0 { "true" } else { "false" }.to_owned(),
         ("(C)V", [JValue::Int(v)]) => {
             let unit = u32::try_from(*v).unwrap_or(u32::from(u16::MAX));
@@ -2333,6 +2436,11 @@ pub(crate) fn java_double_to_string(value: f64) -> String {
         return format!("{value:.1}");
     }
     format!("{value}")
+}
+
+/// `Float.toString`, matching `OpenJDK` 11's `FloatingDecimal`.
+pub(crate) fn java_float_to_string(value: f32) -> String {
+    crate::floatdec::java_float_to_string(value)
 }
 
 #[cfg(test)]

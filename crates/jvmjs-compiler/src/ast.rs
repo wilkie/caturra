@@ -85,6 +85,7 @@ pub enum TypeRef {
     Boolean,
     Char,
     Long,
+    Float,
     /// A class type by simple name, e.g. `String`.
     Named(String),
     /// A generic type, e.g. `ArrayList<Integer>`.
@@ -408,6 +409,7 @@ impl Expr {
 pub enum Literal {
     Int(i64),
     Long(i64),
+    Float(f32),
     Double(f64),
     Str(String),
     Char(char),

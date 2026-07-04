@@ -19,6 +19,7 @@ use crate::vm::VmError;
 pub enum FormatArg {
     Int(i32),
     Long(i64),
+    Float(f32),
     Double(f64),
     Char(u16),
     Boolean(bool),
@@ -32,6 +33,7 @@ impl FormatArg {
         match self {
             FormatArg::Int(_) => "java.lang.Integer",
             FormatArg::Long(_) => "java.lang.Long",
+            FormatArg::Float(_) => "java.lang.Float",
             FormatArg::Double(_) => "java.lang.Double",
             FormatArg::Char(_) => "java.lang.Character",
             FormatArg::Boolean(_) => "java.lang.Boolean",
@@ -250,6 +252,7 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Str(None) => String::from("null"),
                 FormatArg::Int(v) => v.to_string(),
                 FormatArg::Long(v) => v.to_string(),
+                FormatArg::Float(v) => crate::intrinsics::java_float_to_string(v),
                 FormatArg::Double(v) => crate::intrinsics::java_double_to_string(v),
                 FormatArg::Char(u) => char::from_u32(u32::from(u))
                     .unwrap_or('\u{FFFD}')
@@ -294,6 +297,14 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 FormatArg::Long(v) => (((v.cast_unsigned() ^ (v.cast_unsigned() >> 32))
                     & 0xFFFF_FFFF) as u32)
                     .cast_signed(),
+                FormatArg::Float(v) => {
+                    let bits = if v.is_nan() {
+                        0x7FC0_0000_u32
+                    } else {
+                        v.to_bits()
+                    };
+                    bits.cast_signed()
+                }
                 FormatArg::Double(v) => crate::intrinsics::java_double_hash_public(v),
                 FormatArg::Char(u) => i32::from(u),
                 FormatArg::Boolean(b) => {
@@ -376,6 +387,8 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
         'f' | 'e' | 'g' => {
             let value = match arg {
                 FormatArg::Double(v) => v,
+                // Java's Formatter widens Float via doubleValue().
+                FormatArg::Float(v) => f64::from(v),
                 other => return Err(conversion_mismatch(conversion, other)),
             };
             let text = format_float(spec, value);
@@ -672,7 +685,7 @@ pub fn args_from_descriptor(
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
         match c {
-            'I' | 'D' | 'C' | 'Z' | 'J' => tags.push(c),
+            'I' | 'D' | 'C' | 'Z' | 'J' | 'F' => tags.push(c),
             'L' => {
                 for inner_char in chars.by_ref() {
                     if inner_char == ';' {
@@ -692,6 +705,7 @@ pub fn args_from_descriptor(
             ('Z', JValue::Int(v)) => FormatArg::Boolean(*v != 0),
             ('D', JValue::Double(v)) => FormatArg::Double(*v),
             ('J', JValue::Long(v)) => FormatArg::Long(*v),
+            ('F', JValue::Float(v)) => FormatArg::Float(*v),
             ('L', JValue::Ref(reference)) => FormatArg::Str(*reference),
             _ => {
                 return Err(VmError::UncaughtException(String::from(

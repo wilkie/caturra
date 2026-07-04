@@ -262,6 +262,21 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   `System.currentTimeMillis`/`nanoTime` via a host clock
   (`ConsoleIo::now_millis`; JS `Date.now()` in the browser).
 
+- **The `float` type** (2026-07-03): `f`/`F` literals, JLS promotion
+  (`long op float → float`, `float op double → double`), widening
+  int/char/long→float→double with lossy-conversion errors otherwise,
+  casts in every direction, f32-precision arithmetic (`0.1f + 0.2f`
+  is `0.3`, not `0.30000000000000004`), `FCMPL`/`FCMPG` NaN
+  comparisons, `float[]`, the `Float` wrapper class with the bits
+  functions and Java's total-order `compare`, `Math` float overloads,
+  `Scanner.nextFloat`, and `%f`-family formatting via `doubleValue()`
+  widening. Rendering matches OpenJDK 11's FloatingDecimal — which is
+  NOT shortest-round-trip (pre-Ryū): a clean-room implementation
+  (`crates/jvmjs-vm/src/floatdec.rs`) validated against a 25k-value
+  reference corpus (`tools/FloatCorpus.java`), byte-identical on
+  99.94% including every value ordinary programs produce; the residue
+  is exotic subnormal bit patterns, documented in the corpus test.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

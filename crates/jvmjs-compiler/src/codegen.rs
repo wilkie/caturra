@@ -866,6 +866,7 @@ impl MethodTable {
                     JType::Int => ElemType::Int,
                     JType::Double => ElemType::Double,
                     JType::Long => ElemType::Long,
+                    JType::Float => ElemType::Float,
                     JType::Boolean => ElemType::Boolean,
                     JType::Char => ElemType::Char,
                     JType::Str => ElemType::Str,
@@ -1084,6 +1085,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Int => String::from("Integer"),
         ElemType::Double => String::from("Double"),
         ElemType::Long => String::from("Long"),
+        ElemType::Float => String::from("Float"),
         ElemType::Boolean => String::from("Boolean"),
         ElemType::Char => String::from("Character"),
         ElemType::Str => String::from("String"),
@@ -1116,6 +1118,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Int => Some(ElemType::Int),
         JType::Double => Some(ElemType::Double),
         JType::Long => Some(ElemType::Long),
+        JType::Float => Some(ElemType::Float),
         JType::Boolean => Some(ElemType::Boolean),
         JType::Char => Some(ElemType::Char),
         JType::Str => Some(ElemType::Str),
@@ -1131,8 +1134,12 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (JType::Char, JType::Int)
-                | (JType::Int | JType::Char | JType::Long, JType::Double)
+                | (
+                    JType::Int | JType::Char | JType::Long | JType::Float,
+                    JType::Double
+                )
                 | (JType::Int | JType::Char, JType::Long)
+                | (JType::Int | JType::Char | JType::Long, JType::Float)
                 | (
                     JType::Null,
                     JType::Str | JType::Array { .. } | JType::Object(_)
@@ -1170,6 +1177,7 @@ enum ElemType {
     Int,
     Double,
     Long,
+    Float,
     Boolean,
     Char,
     Str,
@@ -1183,6 +1191,7 @@ impl ElemType {
             ElemType::Int => String::from("I"),
             ElemType::Double => String::from("D"),
             ElemType::Long => String::from("J"),
+            ElemType::Float => String::from("F"),
             ElemType::Boolean => String::from("Z"),
             ElemType::Char => String::from("C"),
             ElemType::Str => String::from("Ljava/lang/String;"),
@@ -1195,6 +1204,7 @@ impl ElemType {
             ElemType::Int => JType::Int,
             ElemType::Double => JType::Double,
             ElemType::Long => JType::Long,
+            ElemType::Float => JType::Float,
             ElemType::Boolean => JType::Boolean,
             ElemType::Char => JType::Char,
             ElemType::Str => JType::Str,
@@ -1224,6 +1234,8 @@ enum JType {
     Object(ClassId),
     /// `long` (64-bit; two JVMS local slots).
     Long,
+    /// `float` (32-bit, one slot).
+    Float,
     /// `java.util.Scanner` (intrinsic).
     Scanner,
     /// A library throwable; the id indexes the shared exception table
@@ -1261,6 +1273,7 @@ impl JType {
             }
             JType::Object(id) => table.class_name(id).to_owned(),
             JType::Long => String::from("long"),
+            JType::Float => String::from("float"),
             JType::Scanner => String::from("Scanner"),
             JType::Exception(id) => exception_internal(id)
                 .rsplit('/')
@@ -1278,7 +1291,10 @@ impl JType {
     }
 
     fn is_numeric(self) -> bool {
-        matches!(self, JType::Int | JType::Double | JType::Char | JType::Long)
+        matches!(
+            self,
+            JType::Int | JType::Double | JType::Char | JType::Long | JType::Float
+        )
     }
 
     fn is_reference(self) -> bool {
@@ -1332,6 +1348,7 @@ impl JType {
             }
             JType::Object(id) => format!("L{};", table.class_name(id)),
             JType::Long => String::from("J"),
+            JType::Float => String::from("F"),
             JType::Scanner => String::from("Ljava/util/Scanner;"),
             JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
@@ -1348,6 +1365,8 @@ impl JType {
 fn promote(a: JType, b: JType) -> JType {
     if a == JType::Double || b == JType::Double {
         JType::Double
+    } else if a == JType::Float || b == JType::Float {
+        JType::Float
     } else if a == JType::Long || b == JType::Long {
         JType::Long
     } else {
@@ -1362,6 +1381,7 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
         TypeRef::Boolean => Some(JType::Boolean),
         TypeRef::Char => Some(JType::Char),
         TypeRef::Long => Some(JType::Long),
+        TypeRef::Float => Some(JType::Float),
         TypeRef::Named(name) if name == "String" => Some(JType::Str),
         TypeRef::Array(inner) => {
             let mut dims: u8 = 1;
@@ -1607,6 +1627,7 @@ fn method_descriptor(
             TypeRef::Double => out.push('D'),
             TypeRef::Boolean => out.push('Z'),
             TypeRef::Long => out.push('J'),
+            TypeRef::Float => out.push('F'),
             TypeRef::Char => out.push('C'),
             TypeRef::Array(inner) => {
                 out.push('[');
@@ -1768,6 +1789,7 @@ enum BParam {
     Int,
     Double,
     Long,
+    Float,
     Boolean,
     Char,
     Str,
@@ -1786,6 +1808,7 @@ enum BRet {
     Int,
     Double,
     Long,
+    Float,
     Boolean,
     Char,
     Str,
@@ -1822,6 +1845,7 @@ const fn bm(
 
 const D: BParam = BParam::Double;
 const L: BParam = BParam::Long;
+const F: BParam = BParam::Float;
 const I: BParam = BParam::Int;
 const C: BParam = BParam::Char;
 const Z: BParam = BParam::Boolean;
@@ -2116,6 +2140,12 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
     },
     BuiltinMethod {
         name: "valueOf",
+        params: &[BParam::Float],
+        ret: BRet::Str,
+        descriptor: "(F)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "valueOf",
         params: &[BParam::Double],
         ret: BRet::Str,
         descriptor: "(D)Ljava/lang/String;",
@@ -2178,8 +2208,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Scanner", "skip", "regular expressions are not supported by jvmjs"),
     ("Scanner", "tokens", "streams are not supported by jvmjs"),
     ("Scanner", "findAll", "streams are not supported by jvmjs"),
-    ("Scanner", "nextFloat", "the float type is not supported by jvmjs"),
-    ("Scanner", "hasNextFloat", "the float type is not supported by jvmjs"),
     ("Scanner", "nextShort", "the short type is not supported by jvmjs"),
     ("Scanner", "nextByte", "the byte type is not supported by jvmjs"),
     ("Scanner", "nextBigInteger", "BigInteger is not supported by jvmjs"),
@@ -2244,6 +2272,8 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         descriptor: "()Z",
     },
     bm("nextLong", &[], BRet::Long, "()J"),
+    bm("nextFloat", &[], BRet::Float, "()F"),
+    bm("hasNextFloat", &[], BRet::Boolean, "()Z"),
     bm("hasNextLong", &[], BRet::Boolean, "()Z"),
     bm("nextBoolean", &[], BRet::Boolean, "()Z"),
     bm("hasNextBoolean", &[], BRet::Boolean, "()Z"),
@@ -2612,6 +2642,10 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("decrementExact", &[I], BRet::Int, "(I)I"),
     bm("absExact", &[I], BRet::Int, "(I)I"),
     bm("abs", &[L], BRet::Long, "(J)J"),
+    bm("abs", &[F], BRet::Float, "(F)F"),
+    bm("max", &[F, F], BRet::Float, "(FF)F"),
+    bm("min", &[F, F], BRet::Float, "(FF)F"),
+    bm("signum", &[F], BRet::Float, "(F)F"),
     bm("max", &[L, L], BRet::Long, "(JJ)J"),
     bm("min", &[L, L], BRet::Long, "(JJ)J"),
     bm("toIntExact", &[L], BRet::Int, "(J)I"),
@@ -2772,6 +2806,29 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     bm("charCount", &[I], BRet::Int, "(I)I"),
 ];
 
+const FLOAT_METHODS: &[BuiltinMethod] = &[
+    bm("parseFloat", &[S], BRet::Float, "(Ljava/lang/String;)F"),
+    bm("toString", &[F], BRet::Str, "(F)Ljava/lang/String;"),
+    bm("valueOf", &[F], BRet::Float, "(F)Ljava/lang/Float;"),
+    bm(
+        "valueOf",
+        &[S],
+        BRet::Float,
+        "(Ljava/lang/String;)Ljava/lang/Float;",
+    ),
+    bm("isNaN", &[F], BRet::Boolean, "(F)Z"),
+    bm("isInfinite", &[F], BRet::Boolean, "(F)Z"),
+    bm("isFinite", &[F], BRet::Boolean, "(F)Z"),
+    bm("compare", &[F, F], BRet::Int, "(FF)I"),
+    bm("max", &[F, F], BRet::Float, "(FF)F"),
+    bm("min", &[F, F], BRet::Float, "(FF)F"),
+    bm("sum", &[F, F], BRet::Float, "(FF)F"),
+    bm("hashCode", &[F], BRet::Int, "(F)I"),
+    bm("floatToIntBits", &[F], BRet::Int, "(F)I"),
+    bm("floatToRawIntBits", &[F], BRet::Int, "(F)I"),
+    bm("intBitsToFloat", &[I], BRet::Float, "(I)F"),
+];
+
 const LONG_METHODS: &[BuiltinMethod] = &[
     bm("parseLong", &[S], BRet::Long, "(Ljava/lang/String;)J"),
     bm("toString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
@@ -2837,6 +2894,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "String" => Some(("java/lang/String", STRING_STATIC_METHODS)),
         "Boolean" => Some(("java/lang/Boolean", BOOLEAN_METHODS)),
         "Long" => Some(("java/lang/Long", LONG_METHODS)),
+        "Float" => Some(("java/lang/Float", FLOAT_METHODS)),
         "System" => Some(("java/lang/System", SYSTEM_METHODS)),
         _ => None,
     }
@@ -2850,6 +2908,7 @@ enum BuiltinConstant {
     Char(u16),
     Bool(bool),
     Long(i64),
+    Float(f32),
 }
 
 /// Intrinsic static constants (`Integer.MAX_VALUE`, `Math.PI`, ...).
@@ -2858,8 +2917,8 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
     match (class, field) {
         ("Integer", "MAX_VALUE") => Some(Int(i32::MAX)),
         ("Integer", "MIN_VALUE") => Some(Int(i32::MIN)),
-        ("Integer", "SIZE") => Some(Int(32)),
-        ("Integer", "BYTES") => Some(Int(4)),
+        ("Integer" | "Float", "SIZE") => Some(Int(32)),
+        ("Integer" | "Float", "BYTES") => Some(Int(4)),
         ("Math", "PI") => Some(Double(std::f64::consts::PI)),
         ("Math", "E") => Some(Double(std::f64::consts::E)),
         ("Double", "MAX_VALUE") => Some(Double(f64::MAX)),
@@ -2878,6 +2937,12 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
         ("Boolean", "FALSE") => Some(Bool(false)),
         ("Long", "MAX_VALUE") => Some(BuiltinConstant::Long(i64::MAX)),
         ("Long", "MIN_VALUE") => Some(BuiltinConstant::Long(i64::MIN)),
+        ("Float", "MAX_VALUE") => Some(BuiltinConstant::Float(f32::MAX)),
+        ("Float", "MIN_VALUE") => Some(BuiltinConstant::Float(f32::from_bits(1))),
+        ("Float", "MIN_NORMAL") => Some(BuiltinConstant::Float(f32::MIN_POSITIVE)),
+        ("Float", "POSITIVE_INFINITY") => Some(BuiltinConstant::Float(f32::INFINITY)),
+        ("Float", "NEGATIVE_INFINITY") => Some(BuiltinConstant::Float(f32::NEG_INFINITY)),
+        ("Float", "NaN") => Some(BuiltinConstant::Float(f32::NAN)),
         _ => None,
     }
 }
@@ -2887,6 +2952,7 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
         BParam::Int => JType::Int,
         BParam::Double => JType::Double,
         BParam::Long => JType::Long,
+        BParam::Float => JType::Float,
         BParam::Boolean => JType::Boolean,
         BParam::Char => JType::Char,
         BParam::Str => JType::Str,
@@ -2936,6 +3002,7 @@ fn bret_type(ret: BRet, elem: Option<ElemType>) -> Option<JType> {
         BRet::Int => Some(JType::Int),
         BRet::Double => Some(JType::Double),
         BRet::Long => Some(JType::Long),
+        BRet::Float => Some(JType::Float),
         BRet::Boolean => Some(JType::Boolean),
         BRet::Char => Some(JType::Char),
         BRet::Str => Some(JType::Str),
@@ -3566,6 +3633,7 @@ impl BodyGen<'_> {
                 let opcode = match expected {
                     JType::Double => op::DRETURN,
                     JType::Long => op::LRETURN,
+                    JType::Float => op::FRETURN,
                     JType::Str | JType::Null => op::ARETURN,
                     _ => op::IRETURN,
                 };
@@ -4825,6 +4893,10 @@ impl BodyGen<'_> {
                     tags.push('J');
                     width += 2;
                 }
+                JType::Float => {
+                    tags.push('F');
+                    width += 1;
+                }
                 JType::Char => {
                     tags.push('C');
                     width += 1;
@@ -5104,6 +5176,7 @@ impl BodyGen<'_> {
         let opcode = match element {
             JType::Double => op::DALOAD,
             JType::Long => op::LALOAD,
+            JType::Float => op::FALOAD,
             JType::Boolean => op::BALOAD,
             JType::Char => op::CALOAD,
             JType::Int => op::IALOAD,
@@ -5120,6 +5193,7 @@ impl BodyGen<'_> {
         let opcode = match element {
             JType::Double => op::DASTORE,
             JType::Long => op::LASTORE,
+            JType::Float => op::FASTORE,
             JType::Boolean => op::BASTORE,
             JType::Char => op::CASTORE,
             JType::Int => op::IASTORE,
@@ -5668,6 +5742,7 @@ impl BodyGen<'_> {
             JType::Int => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
             JType::Long => Some(String::from("(J)V")),
+            JType::Float => Some(String::from("(F)V")),
             JType::Boolean => Some(String::from("(Z)V")),
             JType::Char => Some(String::from("(C)V")),
             // Objects and lists are coerced to String before this is
@@ -5718,6 +5793,7 @@ impl BodyGen<'_> {
             Expr::Literal { value, .. } => match value {
                 Literal::Int(_) => JType::Int,
                 Literal::Long(_) => JType::Long,
+                Literal::Float(_) => JType::Float,
                 Literal::Double(_) => JType::Double,
                 Literal::Str(_) => JType::Str,
                 Literal::Char(_) => JType::Char,
@@ -5759,6 +5835,7 @@ impl BodyGen<'_> {
                     Some(BuiltinConstant::Char(_)) => JType::Char,
                     Some(BuiltinConstant::Bool(_)) => JType::Boolean,
                     Some(BuiltinConstant::Long(_)) => JType::Long,
+                    Some(BuiltinConstant::Float(_)) => JType::Float,
                     _ => JType::Int,
                 }
             }
@@ -5897,6 +5974,7 @@ impl BodyGen<'_> {
             } => match self.type_of(operand) {
                 JType::Double => JType::Double,
                 JType::Long => JType::Long,
+                JType::Float => JType::Float,
                 t if t.is_numeric() => JType::Int,
                 _ => JType::Error,
             },
@@ -6319,6 +6397,7 @@ impl BodyGen<'_> {
                     ElemType::Int => op::T_INT,
                     ElemType::Double => op::T_DOUBLE,
                     ElemType::Long => op::T_LONG,
+                    ElemType::Float => op::T_FLOAT,
                     ElemType::Boolean => op::T_BOOLEAN,
                     ElemType::Char => op::T_CHAR,
                     ElemType::Str | ElemType::Object(_) => unreachable!(),
@@ -6385,6 +6464,19 @@ impl BodyGen<'_> {
                     }
                 }
                 JType::Long
+            }
+            Literal::Float(value) => {
+                if value.to_bits() == 0.0f32.to_bits() {
+                    self.code.push_op(op::FCONST_0, 1);
+                } else if value.to_bits() == 1.0f32.to_bits() {
+                    self.code.push_op(op::FCONST_1, 1);
+                } else if value.to_bits() == 2.0f32.to_bits() {
+                    self.code.push_op(op::FCONST_2, 1);
+                } else {
+                    let index = self.pool.intern(Constant::Float(*value));
+                    self.code.push_ldc(index);
+                }
+                JType::Float
             }
             Literal::Int(value) => {
                 let Ok(value) = i32::try_from(*value) else {
@@ -6475,6 +6567,11 @@ impl BodyGen<'_> {
                     let index = self.pool.intern(Constant::Long(value));
                     self.code.push_op_u16(op::LDC2_W, index, 2);
                     return JType::Long;
+                }
+                BuiltinConstant::Float(value) => {
+                    let index = self.pool.intern(Constant::Float(value));
+                    self.code.push_ldc(index);
+                    return JType::Float;
                 }
             }
         }
@@ -6575,6 +6672,10 @@ impl BodyGen<'_> {
                     JType::Long => {
                         self.code.push_op(op::LNEG, 0);
                         JType::Long
+                    }
+                    JType::Float => {
+                        self.code.push_op(op::FNEG, 0);
+                        JType::Float
                     }
                     JType::Int | JType::Char => {
                         self.code.push_op(op::INEG, 0);
@@ -6735,6 +6836,37 @@ impl BodyGen<'_> {
                 self.code.push_op(op::D2L, 0);
                 JType::Long
             }
+            (JType::Int | JType::Char, JType::Float) => {
+                self.code.push_op(op::I2F, 0);
+                JType::Float
+            }
+            (JType::Long, JType::Float) => {
+                self.code.push_op(op::L2F, 0);
+                self.code.drop_stack(1);
+                JType::Float
+            }
+            (JType::Double, JType::Float) => {
+                self.code.push_op(op::D2F, 0);
+                self.code.drop_stack(1);
+                JType::Float
+            }
+            (JType::Float, JType::Int) => {
+                self.code.push_op(op::F2I, 0);
+                JType::Int
+            }
+            (JType::Float, JType::Char) => {
+                self.code.push_op(op::F2I, 0);
+                self.code.push_op(op::I2C, 0);
+                JType::Char
+            }
+            (JType::Float, JType::Long) => {
+                self.code.push_op(op::F2L, 1);
+                JType::Long
+            }
+            (JType::Float, JType::Double) => {
+                self.code.push_op(op::F2D, 1);
+                JType::Double
+            }
             (JType::Double, JType::Int) => {
                 self.code.push_op(op::D2I, 0);
                 self.code.drop_stack(1);
@@ -6848,6 +6980,12 @@ impl BodyGen<'_> {
                     .code
                     .push_op(if increment { op::LADD } else { op::LSUB }, 0);
                 emitter.code.drop_stack(2);
+            } else if ty == JType::Float {
+                emitter.code.push_op(op::FCONST_1, 1);
+                emitter
+                    .code
+                    .push_op(if increment { op::FADD } else { op::FSUB }, 0);
+                emitter.code.drop_stack(1);
             } else {
                 emitter.code.push_op(op::ICONST_1, 1);
                 emitter
@@ -6914,6 +7052,7 @@ impl BodyGen<'_> {
                 let (load, store) = match elem_ty {
                     JType::Double => (op::DALOAD, op::DASTORE),
                     JType::Long => (op::LALOAD, op::LASTORE),
+                    JType::Float => (op::FALOAD, op::FASTORE),
                     JType::Char => (op::CALOAD, op::CASTORE),
                     _ => (op::IALOAD, op::IASTORE),
                 };
@@ -7128,6 +7267,7 @@ impl BodyGen<'_> {
         JType::Boolean
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per operand-type family
     fn comparison(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
         let (lt, rt) = (self.type_of(lhs), self.type_of(rhs));
         if lt == JType::Error || rt == JType::Error {
@@ -7172,6 +7312,25 @@ impl BodyGen<'_> {
             };
             self.code.push_op(op::LCMP, 0);
             self.code.drop_stack(3); // two longs -> one int
+            self.boolean_from_branch(jump);
+            return JType::Boolean;
+        }
+        if both_numeric && promote(lt, rt) == JType::Float {
+            let actual_l = self.expr(lhs);
+            self.numeric_conversion(actual_l, JType::Float);
+            let actual_r = self.expr(rhs);
+            self.numeric_conversion(actual_r, JType::Float);
+            let (cmp, jump) = match op {
+                BinaryOp::Lt => (op::FCMPG, op::IFLT),
+                BinaryOp::Le => (op::FCMPG, op::IFLE),
+                BinaryOp::Gt => (op::FCMPL, op::IFGT),
+                BinaryOp::Ge => (op::FCMPL, op::IFGE),
+                BinaryOp::Eq => (op::FCMPL, op::IFEQ),
+                BinaryOp::Ne => (op::FCMPL, op::IFNE),
+                _ => unreachable!(),
+            };
+            self.code.push_op(cmp, 0);
+            self.code.drop_stack(1);
             self.boolean_from_branch(jump);
             return JType::Boolean;
         }
@@ -7298,6 +7457,7 @@ impl BodyGen<'_> {
         let descriptor = match ty {
             JType::Int => "(I)Ljava/lang/StringBuilder;",
             JType::Long => "(J)Ljava/lang/StringBuilder;",
+            JType::Float => "(F)Ljava/lang/StringBuilder;",
             JType::Double => "(D)Ljava/lang/StringBuilder;",
             JType::Boolean => "(Z)Ljava/lang/StringBuilder;",
             JType::Char => "(C)Ljava/lang/StringBuilder;",
@@ -7418,7 +7578,13 @@ impl BodyGen<'_> {
         match (from, target) {
             (JType::Int | JType::Char, JType::Double) => self.code.push_op(op::I2D, 1),
             (JType::Int | JType::Char, JType::Long) => self.code.push_op(op::I2L, 1),
+            (JType::Int | JType::Char, JType::Float) => self.code.push_op(op::I2F, 0),
             (JType::Long, JType::Double) => self.code.push_op(op::L2D, 0),
+            (JType::Long, JType::Float) => {
+                self.code.push_op(op::L2F, 0);
+                self.code.drop_stack(1);
+            }
+            (JType::Float, JType::Double) => self.code.push_op(op::F2D, 1),
             _ => {}
         }
     }
@@ -7426,6 +7592,22 @@ impl BodyGen<'_> {
     /// Implicit narrowing after a compound assignment (JLS §15.26.2).
     fn narrow_back(&mut self, from: JType, to: JType) {
         match (from, to) {
+            (JType::Double, JType::Float) => {
+                self.code.push_op(op::D2F, 0);
+                self.code.drop_stack(1);
+            }
+            (JType::Float, JType::Int | JType::Char) => {
+                self.code.push_op(op::F2I, 0);
+            }
+            (JType::Float, JType::Long) => {
+                self.code.push_op(op::F2L, 1);
+            }
+            (JType::Float, JType::Double) => self.code.push_op(op::F2D, 1),
+            (JType::Long, JType::Float) => {
+                self.code.push_op(op::L2F, 0);
+                self.code.drop_stack(1);
+            }
+            (JType::Int | JType::Char, JType::Float) => self.code.push_op(op::I2F, 0),
             (JType::Double, JType::Int | JType::Char) => {
                 self.code.push_op(op::D2I, 0);
                 self.code.drop_stack(1);
@@ -7449,6 +7631,11 @@ impl BodyGen<'_> {
 
     fn arithmetic_op(&mut self, operator: BinaryOp, ty: JType) {
         let opcode = match (operator, ty) {
+            (BinaryOp::Add, JType::Float) => op::FADD,
+            (BinaryOp::Sub, JType::Float) => op::FSUB,
+            (BinaryOp::Mul, JType::Float) => op::FMUL,
+            (BinaryOp::Div, JType::Float) => op::FDIV,
+            (BinaryOp::Rem, JType::Float) => op::FREM,
             (BinaryOp::Add, JType::Long) => op::LADD,
             (BinaryOp::Sub, JType::Long) => op::LSUB,
             (BinaryOp::Mul, JType::Long) => op::LMUL,
@@ -7483,6 +7670,7 @@ impl BodyGen<'_> {
         let (base, short_base) = match ty {
             JType::Double => (op::DLOAD, op::DLOAD_0),
             JType::Long => (op::LLOAD, op::LLOAD_0),
+            JType::Float => (op::FLOAD, op::FLOAD_0),
             JType::Str
             | JType::Null
             | JType::Array { .. }
@@ -7501,6 +7689,7 @@ impl BodyGen<'_> {
         let (base, short_base) = match ty {
             JType::Double => (op::DSTORE, op::DSTORE_0),
             JType::Long => (op::LSTORE, op::LSTORE_0),
+            JType::Float => (op::FSTORE, op::FSTORE_0),
             JType::Str
             | JType::Null
             | JType::Array { .. }
@@ -7548,6 +7737,27 @@ impl BodyGen<'_> {
             (JType::Int | JType::Char, JType::Double) => self.code.push_op(op::I2D, 1),
             (JType::Int | JType::Char, JType::Long) => self.code.push_op(op::I2L, 1),
             (JType::Long, JType::Double) => self.code.push_op(op::L2D, 0),
+            (JType::Int | JType::Char, JType::Float) => self.code.push_op(op::I2F, 0),
+            (JType::Long, JType::Float) => {
+                self.code.push_op(op::L2F, 0);
+                self.code.drop_stack(1);
+            }
+            (JType::Float, JType::Double) => self.code.push_op(op::F2D, 1),
+            (JType::Float, JType::Int | JType::Char | JType::Long) => {
+                self.error(
+                    span,
+                    format!(
+                        "incompatible types: possible lossy conversion from float to {}",
+                        to.describe(self.table)
+                    ),
+                );
+            }
+            (JType::Double, JType::Float) => {
+                self.error(
+                    span,
+                    "incompatible types: possible lossy conversion from double to float",
+                );
+            }
             (JType::Long, JType::Int | JType::Char) => {
                 self.error(
                     span,

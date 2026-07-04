@@ -1520,6 +1520,83 @@ public class DiffLong {
 );
 
 differential_test!(
+    diff_float_type,
+    "DiffFloat",
+    r#"
+public class DiffFloat {
+    static float half(float value) {
+        return value / 2.0f;
+    }
+
+    public static void main(String[] args) {
+        // Literals and rendering (Float.toString shortest digits).
+        float a = 1.5f;
+        float tenth = 0.1f;
+        System.out.println(a + " " + tenth + " " + 1f + " " + 0.0f + " " + -0.0f);
+        System.out.println(1e10f + " " + 1.23e-5f + " " + 3.4028235e38f);
+
+        // Arithmetic in f32 precision (NOT double).
+        System.out.println(tenth + 0.2f);
+        System.out.println(a * tenth + " " + a / tenth + " " + a % 0.4f + " " + -a);
+        System.out.println(half(7f));
+
+        // Promotion: int op float -> float, long op float -> float,
+        // float op double -> double.
+        int i = 3;
+        long big = 1L << 40;
+        System.out.println(i + a);
+        System.out.println(big + a);
+        System.out.println(a + 0.25);
+
+        // Casts every direction.
+        System.out.println((int) 2.99f + " " + (long) -2.99f + " " + (char) 66.9f);
+        System.out.println((float) 1.0 / 3 + " " + (float) (1.0 / 3.0));
+        System.out.println((float) 16777217 + " " + (float) 16777217L);
+
+        // Comparisons and NaN.
+        float nan = 0.0f / 0.0f;
+        System.out.println((a > tenth) + " " + (nan == nan) + " " + (nan < a) + " " + (nan >= a));
+        System.out.println(1.0f / 0.0f + " " + -1.0f / 0.0f);
+
+        // float[] arrays, ++/--, compound assignment.
+        float[] values = { 0.5f, 1.5f, 2.5f };
+        values[0]++;
+        values[1] -= 0.25f;
+        values[2] *= 2;
+        float total = 0f;
+        for (float value : values) {
+            total += value;
+        }
+        System.out.println(values[0] + " " + values[1] + " " + values[2] + " " + total);
+        float ticker = 1.0f;
+        System.out.println(ticker++ + " " + ticker + " " + --ticker);
+        double widened = a;
+        System.out.println(widened);
+
+        // Float statics and Math overloads.
+        System.out.println(Float.parseFloat("2.5") + " " + Float.toString(0.1f));
+        System.out.println(Float.isNaN(nan) + " " + Float.isInfinite(1f / 0f) + " " + Float.isFinite(a));
+        System.out.println(Float.compare(-0.0f, 0.0f) + " " + Float.max(1f, 2f) + " " + Float.sum(1f, 2f));
+        System.out.println(Float.MAX_VALUE + " " + Float.MIN_VALUE + " " + Float.MIN_NORMAL);
+        System.out.println(Float.floatToIntBits(2.0f) + " " + Float.intBitsToFloat(1073741824));
+        System.out.println(Float.hashCode(2.0f) + " " + Float.NaN + " " + Float.POSITIVE_INFINITY);
+        System.out.println(Math.abs(-2.5f) + " " + Math.max(1.5f, 2.5f) + " " + Math.min(-0.0f, 0.0f) + " " + Math.signum(-7.5f));
+
+        // Formatting: %f widens through doubleValue(), %s uses Float.toString.
+        System.out.println(String.format("%.3f|%s|%e", 0.1f, 0.1f, 1234.5f));
+        System.out.println(String.valueOf(0.1f) + " " + ("" + 2.5f));
+
+        // Ternary joining and lossy-direction rejection is compile-time;
+        // here the valid joins.
+        float chosen = i > 0 ? 1 : a;
+        double mixed = i > 0 ? a : 2.0;
+        System.out.println(chosen + " " + mixed);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

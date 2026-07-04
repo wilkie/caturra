@@ -509,6 +509,9 @@ impl<'run> Interpreter<'run> {
                         op::ACONST_NULL => frame.stack.push(JValue::NULL),
                         op::LCONST_0 => frame.stack.push(JValue::Long(0)),
                         op::LCONST_1 => frame.stack.push(JValue::Long(1)),
+                        op::FCONST_0 => frame.stack.push(JValue::Float(0.0)),
+                        op::FCONST_1 => frame.stack.push(JValue::Float(1.0)),
+                        op::FCONST_2 => frame.stack.push(JValue::Float(2.0)),
                         op::ICONST_M1..=op::ICONST_5 => {
                             let value = i32::from(opcode) - i32::from(op::ICONST_0);
                             frame.stack.push(JValue::Int(value));
@@ -535,7 +538,7 @@ impl<'run> Interpreter<'run> {
                         }
 
                         // ----- locals -----
-                        op::ILOAD | op::DLOAD | op::ALOAD | op::LLOAD => {
+                        op::ILOAD | op::DLOAD | op::ALOAD | op::LLOAD | op::FLOAD => {
                             let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
                             frame.load(slot, &malformed)?;
                         }
@@ -551,7 +554,10 @@ impl<'run> Interpreter<'run> {
                         op::LLOAD_0..=op::LLOAD_3 => {
                             frame.load(usize::from(opcode - op::LLOAD_0), &malformed)?;
                         }
-                        op::ISTORE | op::DSTORE | op::ASTORE | op::LSTORE => {
+                        op::FLOAD_0..=op::FLOAD_3 => {
+                            frame.load(usize::from(opcode - op::FLOAD_0), &malformed)?;
+                        }
+                        op::ISTORE | op::DSTORE | op::ASTORE | op::LSTORE | op::FSTORE => {
                             let slot = usize::from(read_u8(bytes, &mut pc, &malformed)?);
                             frame.store(slot, &malformed)?;
                         }
@@ -566,6 +572,9 @@ impl<'run> Interpreter<'run> {
                         }
                         op::LSTORE_0..=op::LSTORE_3 => {
                             frame.store(usize::from(opcode - op::LSTORE_0), &malformed)?;
+                        }
+                        op::FSTORE_0..=op::FSTORE_3 => {
+                            frame.store(usize::from(opcode - op::FSTORE_0), &malformed)?;
                         }
 
                         // ----- stack manipulation -----
@@ -691,6 +700,29 @@ impl<'run> Interpreter<'run> {
                         op::IUSHR => frame.int_binop(|a, b| {
                             (a.cast_unsigned().wrapping_shr(b.cast_unsigned() & 0x1F)).cast_signed()
                         })?,
+                        op::FADD => frame.float_binop(|a, b| a + b)?,
+                        op::FSUB => frame.float_binop(|a, b| a - b)?,
+                        op::FMUL => frame.float_binop(|a, b| a * b)?,
+                        op::FDIV => frame.float_binop(|a, b| a / b)?,
+                        op::FREM => frame.float_binop(|a, b| a % b)?,
+                        op::FNEG => {
+                            let value = frame.pop_float()?;
+                            frame.stack.push(JValue::Float(-value));
+                        }
+                        op::FCMPL | op::FCMPG => {
+                            let b = frame.pop_float()?;
+                            let a = frame.pop_float()?;
+                            let result = if a.is_nan() || b.is_nan() {
+                                if opcode == op::FCMPG { 1 } else { -1 }
+                            } else if a > b {
+                                1
+                            } else if a < b {
+                                -1
+                            } else {
+                                0
+                            };
+                            frame.stack.push(JValue::Int(result));
+                        }
                         op::LADD => frame.long_binop(i64::wrapping_add)?,
                         op::LSUB => frame.long_binop(i64::wrapping_sub)?,
                         op::LMUL => frame.long_binop(i64::wrapping_mul)?,
@@ -753,6 +785,36 @@ impl<'run> Interpreter<'run> {
                             let value = frame.pop_double()?;
                             // `as` matches JVM d2i: NaN -> 0, saturating bounds.
                             frame.stack.push(JValue::Int(value as i32));
+                        }
+                        op::I2F => {
+                            let value = frame.pop_int()?;
+                            #[allow(clippy::cast_precision_loss)]
+                            frame.stack.push(JValue::Float(value as f32));
+                        }
+                        op::L2F => {
+                            let value = frame.pop_long()?;
+                            #[allow(clippy::cast_precision_loss)]
+                            frame.stack.push(JValue::Float(value as f32));
+                        }
+                        op::F2I => {
+                            let value = frame.pop_float()?;
+                            // `as` matches JVM f2i: NaN -> 0, saturating.
+                            #[allow(clippy::cast_possible_truncation)]
+                            frame.stack.push(JValue::Int(value as i32));
+                        }
+                        op::F2L => {
+                            let value = frame.pop_float()?;
+                            #[allow(clippy::cast_possible_truncation)]
+                            frame.stack.push(JValue::Long(value as i64));
+                        }
+                        op::F2D => {
+                            let value = frame.pop_float()?;
+                            frame.stack.push(JValue::Double(f64::from(value)));
+                        }
+                        op::D2F => {
+                            let value = frame.pop_double()?;
+                            #[allow(clippy::cast_possible_truncation)]
+                            frame.stack.push(JValue::Float(value as f32));
                         }
                         op::I2L => {
                             let value = frame.pop_int()?;
@@ -1044,6 +1106,9 @@ impl<'run> Interpreter<'run> {
                                     crate::value::HeapObject::DoubleArray(vec![0.0; length])
                                 }
                                 op::T_LONG => crate::value::HeapObject::LongArray(vec![0; length]),
+                                op::T_FLOAT => {
+                                    crate::value::HeapObject::FloatArray(vec![0.0; length])
+                                }
                                 other => {
                                     return Err(malformed(format!(
                                         "unsupported newarray type {other}"
@@ -1089,6 +1154,7 @@ impl<'run> Interpreter<'run> {
                                 Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::RefArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::LongArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::FloatArray(v)) => v.len(),
                                 _ => {
                                     return Err(malformed(String::from(
                                         "arraylength on a non-array",
@@ -1110,6 +1176,16 @@ impl<'run> Interpreter<'run> {
                             };
                             let value = *array_get(values, index)?;
                             frame.stack.push(JValue::Int(value));
+                        }
+                        op::FALOAD => {
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::FloatArray(values)) =
+                                self.heap.get(reference)
+                            else {
+                                return Err(malformed(String::from("faload on a non-float-array")));
+                            };
+                            let value = *array_get(values, index)?;
+                            frame.stack.push(JValue::Float(value));
                         }
                         op::LALOAD => {
                             let (reference, index) = frame.pop_array_access()?;
@@ -1164,6 +1240,18 @@ impl<'run> Interpreter<'run> {
                                 _ => value,
                             };
                         }
+                        op::FASTORE => {
+                            let value = frame.pop_float()?;
+                            let (reference, index) = frame.pop_array_access()?;
+                            let Some(crate::value::HeapObject::FloatArray(values)) =
+                                self.heap.get_mut(reference)
+                            else {
+                                return Err(malformed(String::from(
+                                    "fastore on a non-float-array",
+                                )));
+                            };
+                            *array_get_mut(values, index)? = value;
+                        }
                         op::LASTORE => {
                             let value = frame.pop_long()?;
                             let (reference, index) = frame.pop_array_access()?;
@@ -1200,7 +1288,7 @@ impl<'run> Interpreter<'run> {
                         }
 
                         op::RETURN => return Ok(Flow::Return(None)),
-                        op::IRETURN | op::DRETURN | op::ARETURN | op::LRETURN => {
+                        op::IRETURN | op::DRETURN | op::ARETURN | op::LRETURN | op::FRETURN => {
                             let value = frame.pop()?;
                             return Ok(Flow::Return(Some(value)));
                         }
@@ -2192,6 +2280,7 @@ fn source_type_of(descriptor: &str) -> String {
     match descriptor {
         "I" => return String::from("int"),
         "J" => return String::from("long"),
+        "F" => return String::from("float"),
         "D" => return String::from("double"),
         "Z" => return String::from("boolean"),
         "C" => return String::from("char"),
@@ -2346,6 +2435,22 @@ impl Frame<'_> {
                 "java.lang.VerifyError: expected an int on the stack, found {other:?}"
             ))),
         }
+    }
+
+    fn pop_float(&mut self) -> Result<f32, VmError> {
+        match self.pop()? {
+            JValue::Float(value) => Ok(value),
+            other => Err(VmError::UncaughtException(format!(
+                "java.lang.VerifyError: expected a float on the stack, found {other:?}"
+            ))),
+        }
+    }
+
+    fn float_binop(&mut self, apply: impl Fn(f32, f32) -> f32) -> Result<(), VmError> {
+        let b = self.pop_float()?;
+        let a = self.pop_float()?;
+        self.stack.push(JValue::Float(apply(a, b)));
+        Ok(())
     }
 
     fn pop_long(&mut self) -> Result<i64, VmError> {

@@ -83,6 +83,30 @@ pub const DREM: u8 = 0x73;
 pub const INEG: u8 = 0x74;
 pub const DNEG: u8 = 0x77;
 
+// Float constants, loads, stores.
+pub const FCONST_0: u8 = 0x0B;
+pub const FCONST_1: u8 = 0x0C;
+pub const FCONST_2: u8 = 0x0D;
+pub const FLOAD: u8 = 0x17;
+pub const FLOAD_0: u8 = 0x22;
+pub const FLOAD_3: u8 = 0x25;
+pub const FSTORE: u8 = 0x38;
+pub const FSTORE_0: u8 = 0x43;
+pub const FSTORE_3: u8 = 0x46;
+pub const FALOAD: u8 = 0x30;
+pub const FASTORE: u8 = 0x51;
+
+// Float arithmetic and comparison.
+pub const FADD: u8 = 0x62;
+pub const FSUB: u8 = 0x66;
+pub const FMUL: u8 = 0x6A;
+pub const FDIV: u8 = 0x6E;
+pub const FREM: u8 = 0x72;
+pub const FNEG: u8 = 0x76;
+pub const FCMPL: u8 = 0x95;
+pub const FCMPG: u8 = 0x96;
+pub const FRETURN: u8 = 0xAE;
+
 // Long constants, loads, stores.
 pub const LCONST_0: u8 = 0x09;
 pub const LCONST_1: u8 = 0x0A;
@@ -123,6 +147,12 @@ pub const IXOR: u8 = 0x82;
 
 // Numeric conversions.
 pub const I2L: u8 = 0x85;
+pub const I2F: u8 = 0x86;
+pub const L2F: u8 = 0x89;
+pub const F2I: u8 = 0x8B;
+pub const F2L: u8 = 0x8C;
+pub const F2D: u8 = 0x8D;
+pub const D2F: u8 = 0x90;
 pub const I2D: u8 = 0x87;
 pub const L2I: u8 = 0x88;
 pub const L2D: u8 = 0x8A;
@@ -188,3 +218,4 @@ pub const T_CHAR: u8 = 5;
 pub const T_DOUBLE: u8 = 7;
 pub const T_INT: u8 = 10;
 pub const T_LONG: u8 = 11;
+pub const T_FLOAT: u8 = 6;
