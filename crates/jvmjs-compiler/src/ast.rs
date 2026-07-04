@@ -153,9 +153,21 @@ pub enum Stmt {
         span: SourceSpan,
     },
     Break {
+        /// The target label for `break label;`, if any.
+        label: Option<String>,
         span: SourceSpan,
     },
     Continue {
+        /// The target loop label for `continue label;`, if any.
+        label: Option<String>,
+        span: SourceSpan,
+    },
+    /// `label: statement` — a labeled statement (the label is
+    /// meaningful for `break`/`continue` targeting an enclosing loop or
+    /// block).
+    Labeled {
+        label: String,
+        body: Box<Stmt>,
         span: SourceSpan,
     },
     Return {

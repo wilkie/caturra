@@ -191,6 +191,7 @@ fn emit_clinit(
         scopes: vec![Vec::new()],
         next_slot: 0,
         loop_stack: Vec::new(),
+        pending_label: None,
         finally_stack: Vec::new(),
         local_var_debug: Vec::new(),
     };
@@ -1470,14 +1471,15 @@ fn statement_span(stmt: &Stmt) -> Option<SourceSpan> {
         | Stmt::While { span, .. }
         | Stmt::DoWhile { span, .. }
         | Stmt::For { span, .. }
-        | Stmt::Break { span }
-        | Stmt::Continue { span }
+        | Stmt::Break { span, .. }
+        | Stmt::Continue { span, .. }
         | Stmt::Return { span, .. }
         | Stmt::SuperCall { span, .. }
         | Stmt::ThisCall { span, .. }
         | Stmt::Try { span, .. }
         | Stmt::Throw { span, .. }
-        | Stmt::Switch { span, .. } => Some(*span),
+        | Stmt::Switch { span, .. }
+        | Stmt::Labeled { span, .. } => Some(*span),
         Stmt::Expr(expr) => Some(expr.span()),
     }
 }
@@ -1517,6 +1519,7 @@ fn emit_method(
         scopes: vec![Vec::new()],
         next_slot: u16::from(!decl.is_static),
         loop_stack: Vec::new(),
+        pending_label: None,
         finally_stack: Vec::new(),
         local_var_debug: Vec::new(),
     };
@@ -3157,13 +3160,16 @@ fn describe_types(types: &[JType], table: &MethodTable) -> String {
 }
 
 /// Break/continue targets for the innermost enclosing loop.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct LoopLabels {
     break_label: Label,
     continue_label: Label,
     /// `false` for switch entries: `break` binds to them but
     /// `continue` skips past to the nearest real loop.
     is_loop: bool,
+    /// The source label (`outer:`) attached to this loop/switch, if
+    /// any — the target of `break outer;` / `continue outer;`.
+    label: Option<String>,
 }
 
 /// Per-method-body emission state.
@@ -3186,6 +3192,9 @@ struct BodyGen<'a> {
     next_slot: u16,
     /// Innermost-last enclosing loops, for `break`/`continue`.
     loop_stack: Vec<LoopLabels>,
+    /// A source label seen just before a loop/switch, consumed by the
+    /// next loop/switch entry so `break label;` can target it.
+    pending_label: Option<String>,
     /// Enclosing `finally` blocks (innermost last): the statements to
     /// duplicate on abrupt exits, with the loop depth at try entry so
     /// `break`/`continue` only run guards inside the exited loop.
@@ -3247,6 +3256,7 @@ impl BodyGen<'_> {
 
     // ----- statements -----
 
+    #[allow(clippy::too_many_lines)] // one arm per statement kind
     fn statement(&mut self, stmt: &Stmt) {
         if let Some(span) = statement_span(stmt) {
             self.code.mark_line(span.start.line);
@@ -3301,25 +3311,66 @@ impl BodyGen<'_> {
                 body,
                 ..
             } => self.for_statement(init.as_deref(), cond.as_ref(), update, body),
-            Stmt::Break { span } => match self.loop_stack.last() {
-                Some(_labels) => {
-                    self.emit_pending_finallys(Some(self.loop_stack.len() - 1));
-                    let labels = self.loop_stack.last().expect("checked above");
-                    let target = labels.break_label;
-                    self.code.branch(op::GOTO, target, 0);
-                }
-                None => self.error(*span, "'break' can only be used inside a loop or switch"),
-            },
-            Stmt::Continue { span } => {
-                match self.loop_stack.iter().rposition(|labels| labels.is_loop) {
+            Stmt::Break { label, span } => {
+                let target_index = match label {
+                    Some(name) => self
+                        .loop_stack
+                        .iter()
+                        .rposition(|entry| entry.label.as_deref() == Some(name.as_str())),
+                    None => self.loop_stack.last().map(|_| self.loop_stack.len() - 1),
+                };
+                match target_index {
                     Some(index) => {
+                        let target = self.loop_stack[index].break_label;
+                        self.emit_pending_finallys(Some(index));
+                        self.code.branch(op::GOTO, target, 0);
+                    }
+                    None => self.error(
+                        *span,
+                        match label {
+                            Some(name) => format!("undefined label: {name}"),
+                            None => {
+                                String::from("'break' can only be used inside a loop or switch")
+                            }
+                        },
+                    ),
+                }
+            }
+            Stmt::Continue { label, span } => {
+                let target_index = match label {
+                    Some(name) => {
+                        let found = self
+                            .loop_stack
+                            .iter()
+                            .rposition(|entry| entry.label.as_deref() == Some(name.as_str()));
+                        // A labeled continue must name a LOOP.
+                        match found {
+                            Some(index) if self.loop_stack[index].is_loop => Some(index),
+                            Some(_) => {
+                                self.error(*span, format!("not a loop label: {name}"));
+                                None
+                            }
+                            None => {
+                                self.error(*span, format!("undefined label: {name}"));
+                                None
+                            }
+                        }
+                    }
+                    None => self.loop_stack.iter().rposition(|entry| entry.is_loop),
+                };
+                match (target_index, label) {
+                    (Some(index), _) => {
                         let target = self.loop_stack[index].continue_label;
                         self.emit_pending_finallys(Some(index));
                         self.code.branch(op::GOTO, target, 0);
                     }
-                    None => self.error(*span, "'continue' can only be used inside a loop"),
+                    (None, None) => {
+                        self.error(*span, "'continue' can only be used inside a loop");
+                    }
+                    (None, Some(_)) => {} // already reported above
                 }
             }
+            Stmt::Labeled { label, body, .. } => self.labeled_statement(label, body),
             Stmt::Return { value, span } => self.return_statement(value.as_ref(), *span),
             Stmt::SuperCall { span, .. } | Stmt::ThisCall { span, .. } => {
                 self.error(
@@ -3347,6 +3398,41 @@ impl BodyGen<'_> {
     /// binding to the switch end. (Real javac emits tableswitch /
     /// lookupswitch; the chain is semantically identical and the VM
     /// has no performance stake.)
+    #[allow(clippy::too_many_lines)] // one lowering plan
+    /// `label: statement`. A label on a loop/switch is consumed by that
+    /// construct (so `break label`/`continue label` reach it); a label
+    /// on any other statement gets a synthetic break target so
+    /// `break label` can jump past it (`continue label` there is a
+    /// compile error, reported at the continue site).
+    fn labeled_statement(&mut self, label: &str, body: &Stmt) {
+        let attaches_directly = matches!(
+            body,
+            Stmt::While { .. }
+                | Stmt::DoWhile { .. }
+                | Stmt::For { .. }
+                | Stmt::ForEach { .. }
+                | Stmt::Switch { .. }
+        );
+        if attaches_directly {
+            // The loop/switch entry will take this label.
+            self.pending_label = Some(label.to_owned());
+            self.statement(body);
+            // Defensive: if the body somehow didn't consume it, clear.
+            self.pending_label = None;
+            return;
+        }
+        let end = self.code.new_label();
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label: end, // unused: continue can't target a non-loop
+            is_loop: false,
+            label: Some(label.to_owned()),
+        });
+        self.statement(body);
+        self.loop_stack.pop();
+        self.code.bind(end);
+    }
+
     #[allow(clippy::too_many_lines)] // one lowering plan
     fn switch_statement(&mut self, selector: &Expr, arms: &[SwitchArm], span: SourceSpan) {
         let selector_ty = self.expr(selector);
@@ -3445,6 +3531,7 @@ impl BodyGen<'_> {
             break_label: end,
             continue_label: end, // never targeted: continue skips switches
             is_loop: false,
+            label: self.pending_label.take(),
         });
         for (index, arm) in arms.iter().enumerate() {
             self.code.bind(arm_labels[index]);
@@ -3813,6 +3900,7 @@ impl BodyGen<'_> {
             break_label: end,
             continue_label: start,
             is_loop: true,
+            label: self.pending_label.take(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -3830,6 +3918,7 @@ impl BodyGen<'_> {
             break_label: end,
             continue_label,
             is_loop: true,
+            label: self.pending_label.take(),
         });
         // A do-while body always runs once, so its assignments stick.
         self.statement(body);
@@ -3865,6 +3954,7 @@ impl BodyGen<'_> {
             break_label: end,
             continue_label: update_label,
             is_loop: true,
+            label: self.pending_label.take(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -5503,6 +5593,7 @@ impl BodyGen<'_> {
             break_label: end,
             continue_label,
             is_loop: true,
+            label: self.pending_label.take(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -5596,6 +5687,7 @@ impl BodyGen<'_> {
             break_label: end,
             continue_label,
             is_loop: true,
+            label: self.pending_label.take(),
         });
         self.statement(body);
         self.loop_stack.pop();

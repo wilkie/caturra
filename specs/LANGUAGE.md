@@ -291,6 +291,14 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   masks to the argument width (`%x` of `(byte) -1` is `ff`, not
   `ffffffff`).
 
+- **Labeled `break`/`continue`** (2026-07-03): `label: statement`
+  prefixes, with `break label;` jumping past the labeled loop, switch,
+  or block, and `continue label;` continuing the named enclosing loop.
+  The loop-target stack carries the source label; targeting searches
+  it innermost-out. javac's exact diagnostics for the error cases
+  (`undefined label: x`, `not a loop label: x`). Sibling scopes may
+  reuse a label independently.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

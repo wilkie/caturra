@@ -462,6 +462,7 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                 }
             }
             Stmt::Break { .. } | Stmt::Continue { .. } => {}
+            Stmt::Labeled { body, .. } => self.stmt(body),
         }
     }
 

@@ -733,6 +733,28 @@ impl Parser<'_> {
         if self.eat_symbol(";") {
             return Ok(None);
         }
+        // A label: `identifier : statement`. Unambiguous at statement
+        // start — a bare expression there can't have a top-level `:`.
+        if let Some(TokenKind::Identifier(name)) = self.peek()
+            && self.peek_at(1) == Some(&TokenKind::Symbol(":"))
+        {
+            let label = name.clone();
+            let start = self.here();
+            self.pos += 2; // identifier + ':'
+            let Some(body) = self.statement()? else {
+                self.error_here("a label must be followed by a statement");
+                return Err(Abort);
+            };
+            let span = SourceSpan {
+                start: start.start,
+                end: self.here().start,
+            };
+            return Ok(Some(Stmt::Labeled {
+                label,
+                body: Box::new(body),
+                span,
+            }));
+        }
         if self.eat_symbol("{") {
             return Ok(Some(Stmt::Block(self.block_body())));
         }
@@ -1175,15 +1197,18 @@ impl Parser<'_> {
         let span = self.here();
         let is_break = self.at_keyword(Keyword::Break);
         self.pos += 1;
-        if matches!(self.peek(), Some(TokenKind::Identifier(_))) {
-            self.error_here("labeled break/continue is not supported by jvmjs");
-            return Err(Abort);
-        }
+        let label = if let Some(TokenKind::Identifier(name)) = self.peek() {
+            let name = name.clone();
+            self.pos += 1;
+            Some(name)
+        } else {
+            None
+        };
         self.expect_symbol(";", "to end the statement")?;
         Ok(if is_break {
-            Stmt::Break { span }
+            Stmt::Break { label, span }
         } else {
-            Stmt::Continue { span }
+            Stmt::Continue { label, span }
         })
     }
 
@@ -2210,9 +2235,20 @@ mod tests {
     }
 
     #[test]
-    fn labeled_break_is_rejected_kindly() {
-        let errors = parse_errors(r"class M { static void f() { while (true) { break outer; } } }");
-        assert!(errors[0].message.contains("labeled break"));
+    fn labeled_break_and_continue_parse() {
+        let unit = parse_ok(
+            r"class M { static void f() {
+                outer:
+                for (int i = 0; i < 3; i++) {
+                    for (int j = 0; j < 3; j++) {
+                        if (j == 1) continue outer;
+                        if (i == 2) break outer;
+                    }
+                }
+            } }",
+        );
+        let body = &unit.classes[0].methods[0].body;
+        assert!(matches!(body[0], Stmt::Labeled { .. }), "{:?}", body[0]);
     }
 
     #[test]

@@ -3054,6 +3054,39 @@ fn try_catch_compile_errors_match_javac() {
 }
 
 #[test]
+fn labeled_break_continue_errors_match_javac() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "class M { static void f() { while (true) { break nope; } } }",
+            "undefined label: nope",
+        ),
+        (
+            "class M { static void f() { lbl: { continue lbl; } } }",
+            "not a loop label: lbl",
+        ),
+        (
+            "class M { static void f() { continue; } }",
+            "'continue' can only be used inside a loop",
+        ),
+    ];
+    for (source, expected) in cases {
+        let result = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+            path: "T.java".into(),
+            text: (*source).into(),
+        }]);
+        assert!(!result.success(), "case '{source}' compiled unexpectedly");
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains(expected)),
+            "case '{source}': expected '{expected}' in {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
 fn missing_return_accounts_for_try_catch() {
     // Both paths return: no missing-return error.
     let out = run_stdout(

@@ -1684,6 +1684,102 @@ public class DiffSmall {
 );
 
 differential_test!(
+    diff_labeled_break_continue,
+    "DiffLabels",
+    r#"
+public class DiffLabels {
+    public static void main(String[] args) {
+        // Labeled break out of a nested loop.
+        String found = "";
+        search:
+        for (int i = 0; i < 5; i++) {
+            for (int j = 0; j < 5; j++) {
+                if (i * j == 6) {
+                    found = i + "," + j;
+                    break search;
+                }
+            }
+        }
+        System.out.println(found);
+
+        // Labeled continue skips to the outer loop's update.
+        int pairs = 0;
+        outer:
+        for (int i = 1; i <= 4; i++) {
+            for (int j = 1; j <= 4; j++) {
+                if (i == j) continue outer;
+                pairs++;
+            }
+        }
+        System.out.println(pairs);
+
+        // Three-deep with both labeled and unlabeled forms.
+        String trace = "";
+        top:
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; b < 3; b++) {
+                for (int c = 0; c < 3; c++) {
+                    if (c == 2) break;            // inner only
+                    if (b == 2) continue top;     // all the way out
+                    if (a == 2) break top;        // done entirely
+                    trace += "" + a + b + c + " ";
+                }
+            }
+        }
+        System.out.println(trace.trim());
+
+        // Labeled while and do-while.
+        int n = 0;
+        counter:
+        while (true) {
+            n++;
+            if (n % 2 == 0) continue counter;
+            if (n > 7) break counter;
+        }
+        System.out.println(n);
+
+        // Labeled block: break jumps past it.
+        int result = 0;
+        block: {
+            result = 1;
+            if (args.length == 0) break block;
+            result = 2;
+        }
+        System.out.println(result);
+
+        // Labeled loop over a for-each.
+        int[] grid = { 3, 1, 4, 1, 5, 9, 2, 6 };
+        int target = -1;
+        scan:
+        for (int row = 0; row < 2; row++) {
+            for (int value : grid) {
+                if (value == 9) {
+                    target = row * 100 + value;
+                    break scan;
+                }
+            }
+        }
+        System.out.println(target);
+
+        // Label reuse in sibling scopes (each is independent).
+        int hits = 0;
+        loop:
+        for (int i = 0; i < 3; i++) {
+            if (i == 1) continue loop;
+            hits += 10;
+        }
+        loop:
+        for (int i = 0; i < 3; i++) {
+            if (i == 2) break loop;
+            hits += 1;
+        }
+        System.out.println(hits);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"
