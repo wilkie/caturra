@@ -191,9 +191,15 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "java.util" => Some(JAVA_UTIL),
         "java.io" => Some(JAVA_IO),
         "java.lang" => Some(JAVA_LANG),
+        // Bundled clean-room library (auto-injected in `compile`); the
+        // classes resolve like user classes, the import just validates.
+        "org.code.neighborhood" => Some(ORG_CODE_NEIGHBORHOOD),
         _ => None,
     }
 }
+
+/// The public class of the bundled neighborhood library.
+static ORG_CODE_NEIGHBORHOOD: &[&str] = &["Painter"];
 
 fn not_supported(what: &str) -> String {
     format!("{what} is not supported by jvmjs (the class library covers the AP CS A subset)")

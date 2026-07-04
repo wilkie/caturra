@@ -30,6 +30,27 @@ classlib → user classes**. Intrinsic objects (e.g. the `PrintStream` behind
 `System.out`) are ordinary heap objects with intrinsic-backed methods, so user
 code can pass them around like any reference.
 
+## Bundled library sources (Code.org `org.code.neighborhood`)
+
+Some curriculum libraries are provided as **clean-room Java source compiled
+alongside student code**, rather than as native intrinsics. When a source
+imports `org.code.neighborhood`, `compile()` auto-injects
+`compiler/src/stdlib/neighborhood.java` as an extra unit; its classes then
+resolve like any user class. This keeps the library behaviourally faithful to
+the real Code.org implementation and diff-testable, and reuses the whole
+language surface (enums, 2-D arrays, `ArrayList`, exceptions) the compiler
+already supports. Support types are prefixed `__Nbhd`; only `Painter` is public.
+
+The **grid** (`serialized_maze` from a level's `properties.json`) is injected by
+the harness as a `grid.txt` file in the VFS (rows of space-separated
+`tileType,paintCount` cells); the bundled `World` reads it with `Scanner`, so no
+JSON parsing lives in the VM. Missing `grid.txt` falls back to an empty 10×10.
+
+Phase 1 is a **headless simulation**: painter/grid state and console output are
+byte-identical to the real library (601/614 real neighborhood solutions run to
+completion; the rest need interactive stdin or exceed the recursion limit). The
+visual signal-message stream that drives the web animation is Phase 2.
+
 ## Exceptions
 
 Java exceptions are heap objects; the interpreter carries them as the `Err`

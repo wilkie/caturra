@@ -58,6 +58,25 @@ impl Compilation {
     }
 }
 
+/// Bundled clean-room implementation of `org.code.neighborhood`,
+/// injected when a source imports that package.
+const NEIGHBORHOOD_LIB: &str = include_str!("stdlib/neighborhood.java");
+
+/// Whether any unit imports a class from the given package path
+/// (matches both `import pkg.*` and `import pkg.Class`).
+fn imports_package(units: &[(String, ast::CompilationUnit)], package: &[&str]) -> bool {
+    units.iter().any(|(_, unit)| {
+        unit.imports.iter().any(|import| {
+            let prefix = if import.wildcard {
+                import.path.as_slice()
+            } else {
+                &import.path[..import.path.len().saturating_sub(1)]
+            };
+            prefix == package
+        })
+    })
+}
+
 /// Compile a set of Java source files. All files are parsed first so
 /// classes can call each other's static methods regardless of file
 /// order.
@@ -87,6 +106,16 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             }
         }
         units.push((source.path.clone(), unit));
+    }
+
+    // Auto-inject bundled library sources when their package is
+    // imported (e.g. the Code.org neighborhood Painter). Parsed like
+    // any other unit so its classes participate in resolution.
+    if imports_package(&units, &["org", "code", "neighborhood"]) {
+        let (tokens, _) = lexer::lex("<neighborhood>", NEIGHBORHOOD_LIB);
+        let (unit, mut errs) = parser::parse("<neighborhood>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<neighborhood>"), unit));
     }
 
     // Import validation and enforcement (after all units parse, since

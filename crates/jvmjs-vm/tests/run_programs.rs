@@ -227,6 +227,111 @@ fn run_stdout(source: &str, main: &str) -> String {
     console.stdout_text()
 }
 
+/// Compile a neighborhood program (the bundled `org.code.neighborhood`
+/// library is auto-injected), seed the grid file, and return stdout.
+fn run_neighborhood(source: &str, main: &str, grid: &str) -> String {
+    let compilation = jvmjs_compiler::compile(&[jvmjs_compiler::SourceFile {
+        path: format!("{main}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "compile failed: {:?}",
+        compilation.diagnostics
+    );
+    let mut vfs = VirtualFileSystem::new();
+    vfs.write_file("grid.txt", grid.as_bytes().to_vec())
+        .expect("seed grid");
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    let result = vm.run_main(main, &[]);
+    assert!(
+        matches!(result, Ok(ExitStatus::Completed)),
+        "{result:?}; stderr: {}",
+        console.stderr_text()
+    );
+    console.stdout_text()
+}
+
+#[test]
+fn neighborhood_painter_simulation() {
+    // A 4x4 grid: a wall at (2,1) and a one-unit paint bucket at (1,2).
+    let grid = "1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0\n1,0 1,1 1,0 1,0\n1,0 1,0 1,0 1,0\n";
+    let out = run_neighborhood(
+        r#"
+        import org.code.neighborhood.*;
+        public class NbhdMain {
+            public static void main(String[] args) {
+                Painter p = new Painter(0, 0, "east", 5);
+                System.out.println(p.getDirection() + " " + p.getX() + " " + p.getY() + " " + p.hasPaint());
+                p.paint("red");
+                p.move();
+                p.paint("blue");
+                System.out.println("onPaint=" + p.isOnPaint() + " color=" + p.getColor() + " left=" + p.getMyPaint());
+                p.turnLeft();
+                System.out.println("nowFacing=" + p.getDirection() + " canMove=" + p.canMove());
+                Painter q = new Painter(1, 2, "north", 0);
+                System.out.println("q onBucket=" + q.isOnBucket());
+                q.takePaint();
+                q.paint("green");
+                System.out.println("q left=" + q.getMyPaint() + " qcolor=" + q.getColor());
+                p.scrapePaint();
+                System.out.println("after scrape p color=" + p.getColor());
+            }
+        }
+        "#,
+        "NbhdMain",
+        grid,
+    );
+    assert_eq!(
+        out,
+        "east 0 0 true\n\
+         onPaint=true color=blue left=3\n\
+         nowFacing=north canMove=false\n\
+         q onBucket=true\n\
+         q left=0 qcolor=green\n\
+         after scrape p color=null\n"
+    );
+}
+
+#[test]
+fn neighborhood_painter_subclass_and_walls() {
+    // Painter subclass (the canonical PainterPlus level), a wall stops
+    // the run, and the default painter has infinite paint on a 20x20.
+    let mut grid = String::new();
+    for _ in 0..20 {
+        let row: Vec<&str> = std::iter::repeat_n("1,0", 20).collect();
+        grid.push_str(&row.join(" "));
+        grid.push('\n');
+    }
+    let out = run_neighborhood(
+        r#"
+        import org.code.neighborhood.*;
+        class PainterPlus extends Painter {
+            public void turnRight() { turnLeft(); turnLeft(); turnLeft(); }
+            public void moveFast() { while (canMove()) { move(); paint("blue"); } }
+        }
+        public class Runner {
+            public static void main(String[] args) {
+                PainterPlus m = new PainterPlus();
+                System.out.println("infinitePaint=" + m.hasPaint());
+                m.paint("red");
+                m.moveFast();
+                m.turnRight();
+                m.moveFast();
+                System.out.println("x=" + m.getX() + " y=" + m.getY() + " facing=" + m.getDirection());
+            }
+        }
+        "#,
+        "Runner",
+        &grid,
+    );
+    assert_eq!(out, "infinitePaint=true\nx=19 y=19 facing=south\n");
+}
+
 #[test]
 fn codeorg_console_patterns() {
     let out = run_stdout(
