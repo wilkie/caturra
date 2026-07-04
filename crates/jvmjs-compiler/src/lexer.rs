@@ -246,7 +246,9 @@ impl Lexer<'_> {
                 self.block_comment(start);
             } else if c.is_alphabetic() || c == '_' || c == '$' {
                 self.word(start);
-            } else if c.is_ascii_digit() {
+            } else if c.is_ascii_digit()
+                || (c == '.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit()))
+            {
                 self.number(start);
             } else if c == '"' {
                 self.string_literal(start);
@@ -356,6 +358,10 @@ impl Lexer<'_> {
         }
         let mut digits = String::new();
         let mut is_double = false;
+        // A leading `.` (no integer part): `.5` is `0.5`.
+        if self.peek() == Some('.') {
+            digits.push('0');
+        }
         while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
             digits.push(self.bump().expect("peeked"));
         }

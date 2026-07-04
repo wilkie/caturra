@@ -228,6 +228,49 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn codeorg_console_patterns() {
+    let out = run_stdout(
+        r#"
+        class Character {
+            String name;
+            Character(String name) { this.name = name; }
+            public String toString() { return name; }
+        }
+        class Account {
+            protected double balance;
+            Account(double b) { balance = b; }
+            void withdraw(double a) { balance -= a; }
+        }
+        class BasicAccount extends Account {
+            BasicAccount(double b) { super(b); }
+            void withdraw(double a) { super.withdraw(a); }
+        }
+        class Store { public static String tax = "10%"; }
+        public class Co {
+            public static void main(String[] args) {
+                double d = .25;
+                Integer i = new Integer(40);
+                Integer p = new Integer("2");
+                System.out.println(d + " " + (i + p));
+                java.util.ArrayList<Character> c = new java.util.ArrayList<Character>();
+                c.add(new Character("Mario"));
+                System.out.println(c.get(0) + " " + c.size());
+                Store s = new Store();
+                System.out.println(s.tax);
+                s.tax = "0%";
+                System.out.println(Store.tax);
+                BasicAccount a = new BasicAccount(100.0);
+                a.withdraw(30.0);
+                System.out.println(a.balance);
+            }
+        }
+        "#,
+        "Co",
+    );
+    assert_eq!(out, "0.25 42\nMario 1\n10%\n0%\n70.0\n");
+}
+
+#[test]
 fn comparable_interface_and_sorting() {
     let out = run_stdout(
         r#"

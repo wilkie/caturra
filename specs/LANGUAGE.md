@@ -437,6 +437,17 @@ Base<String>`), erased like everywhere else. `Comparable<T>` is
   the erasure bridge (a `compareTo(Object)` interface call dispatching
   to `compareTo(Card)`) are handled. This completes the AP CS A subset.
 
+- **Code.org CSA console patterns** (2026-07-04): fixes surfaced by
+  surveying the Code.org CSA curriculum corpus. Leading-dot double
+  literals (`.5` is `0.5`); wrapper constructors (`new Integer(5)`,
+  `new Double(3.5)`, `new Integer("42")`) that box the argument; a
+  user class shadowing a wrapper name (`ArrayList<Character>` where
+  `Character` is user-defined); reading and assigning a static field
+  through an instance (`obj.staticField`, `obj.staticField = v`,
+  legal if discouraged); and `super.method(...)` as an expression
+  statement. Lifted console-solution compile coverage from 82.6% to
+  85.3% (the remainder is dominated by `java.lang.reflect`).
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

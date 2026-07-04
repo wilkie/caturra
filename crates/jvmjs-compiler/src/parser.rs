@@ -1080,7 +1080,11 @@ impl Parser<'_> {
             }));
         }
 
+        // `super.method(...)` / `this.field` etc. are expression
+        // statements, not the unsupported bare keywords.
+        let member_access = matches!(self.peek_at(1), Some(TokenKind::Symbol(".")));
         if let Some(TokenKind::Keyword(keyword)) = self.peek()
+            && !((matches!(keyword, Keyword::Super | Keyword::This)) && member_access)
             && let Some(message) = unsupported_statement_keyword(*keyword)
         {
             self.error_here(message);
@@ -1181,7 +1185,7 @@ impl Parser<'_> {
             ));
         }
 
-        if !matches!(expr, Expr::Call { .. }) {
+        if !matches!(expr, Expr::Call { .. } | Expr::SuperMethodCall { .. }) {
             self.error_at(expr.span(), "this expression is not a statement in Java");
             return Err(Abort);
         }

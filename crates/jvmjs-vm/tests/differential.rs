@@ -2658,6 +2658,80 @@ public class DiffComparable {
 );
 
 differential_test!(
+    diff_codeorg_console_patterns,
+    "DiffCodeorg",
+    r#"
+// Patterns drawn from the Code.org CSA console curriculum.
+
+// A user class named Character shadows java.lang.Character.
+class Character {
+    String name;
+    boolean hero;
+    Character(String name, boolean hero) { this.name = name; this.hero = hero; }
+    public String toString() { return name + (hero ? "(hero)" : "(villain)"); }
+}
+
+class FoodTruck {
+    public static String businessName = "Project Mercury Pastries";
+    private String owner;
+    FoodTruck(String owner) { this.owner = owner; }
+    public String getOwner() { return owner; }
+}
+
+class Account {
+    protected double balance;
+    Account(double b) { balance = b; }
+    void withdraw(double amount) { balance -= amount; }
+}
+
+class BasicAccount extends Account {
+    BasicAccount(double b) { super(b); }
+    void withdraw(double amount) {
+        // super.method() as a statement.
+        super.withdraw(amount);
+        System.out.println("Withdrew " + amount);
+    }
+}
+
+public class DiffCodeorg {
+    public static void main(String[] args) {
+        // Leading-dot double literals.
+        double tax = .1;
+        double discount = .25;
+        double total = 100 * (1 + tax) - .5;
+        System.out.println(tax + " " + discount + " " + total);
+
+        // Wrapper constructors (deprecated but taught).
+        Integer i = new Integer(42);
+        Double d = new Double(3.14);
+        Integer parsed = new Integer("100");
+        System.out.println(i + " " + d + " " + parsed + " " + (i + parsed));
+
+        // ArrayList of a user-defined Character type.
+        java.util.ArrayList<Character> cast = new java.util.ArrayList<Character>();
+        cast.add(new Character("Mario", true));
+        cast.add(new Character("Bowser", false));
+        for (Character c : cast) System.out.print(c + " ");
+        System.out.println();
+
+        // Static field access and assignment through an instance.
+        FoodTruck rosies = new FoodTruck("Rosie");
+        FoodTruck erins = new FoodTruck("Erin");
+        System.out.println(rosies.getOwner() + ": " + rosies.businessName);
+        rosies.businessName = "The Neighborhood Food Truck";
+        System.out.println(erins.getOwner() + ": " + erins.businessName);
+        System.out.println(FoodTruck.businessName);
+
+        // super.method() as a statement.
+        BasicAccount acct = new BasicAccount(100.0);
+        acct.withdraw(30.0);
+        System.out.println(acct.balance);
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

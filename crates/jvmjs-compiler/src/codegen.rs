@@ -1427,6 +1427,13 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
 fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
     match arg {
         TypeRef::Named(name) => {
+            // A user class shadows the wrapper/library simple names
+            // (a level may define its own `Character`).
+            if !name.contains('.')
+                && let Some(id) = table.class_id(name)
+            {
+                return Some(ElemType::Object(id));
+            }
             match crate::imports::canonical_library_class(name).unwrap_or(name.as_str()) {
                 "Integer" => Some(ElemType::Int),
                 "Double" => Some(ElemType::Double),
@@ -4692,10 +4699,12 @@ impl BodyGen<'_> {
             return;
         };
         if field.is_static {
-            self.error(
-                span,
-                format!("access static field {name} via the class name"),
-            );
+            // `instance.staticField = v`: evaluate the instance for
+            // side effects, discard it, then assign the static field.
+            self.expr(object);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+            self.assign_field(owner, &FieldReceiver::Static, &field, op_kind, value, span);
             return;
         }
         self.assign_field(
@@ -5088,6 +5097,37 @@ impl BodyGen<'_> {
         }
     }
 
+    /// A wrapper constructor (`new Integer(5)`, `new Double(3.5)`) —
+    /// deprecated in Java but taught in some curricula. Boxes the
+    /// argument (a primitive, or a String to parse).
+    fn new_wrapper(&mut self, elem: ElemType, args: &[Expr], span: SourceSpan) -> JType {
+        let [arg] = args else {
+            self.error(span, "a wrapper constructor takes one argument");
+            return JType::Error;
+        };
+        let prim = elem.base_type();
+        let actual = self.expr(arg);
+        if actual == JType::Str {
+            // `new Integer("5")`: parse, then box.
+            let internal = wrapper_internal(elem);
+            let (parse, descriptor): (&str, String) = match elem {
+                ElemType::Double => ("parseDouble", String::from("(Ljava/lang/String;)D")),
+                ElemType::Long => ("parseLong", String::from("(Ljava/lang/String;)J")),
+                ElemType::Float => ("parseFloat", String::from("(Ljava/lang/String;)F")),
+                ElemType::Boolean => ("parseBoolean", String::from("(Ljava/lang/String;)Z")),
+                _ => ("parseInt", String::from("(Ljava/lang/String;)I")),
+            };
+            let method_ref = intern_method_ref(self.pool, internal, parse, &descriptor);
+            self.code
+                .push_op_u16(op::INVOKESTATIC, method_ref, prim.width());
+            self.code.drop_stack(1);
+        } else {
+            self.convert_for_assignment(actual, prim, arg.span());
+        }
+        self.emit_box(elem);
+        JType::Boxed(elem)
+    }
+
     /// `new ClassName(args)` (or an intrinsic: Scanner, `ArrayList`).
     #[allow(clippy::too_many_lines)] // qualified-name + intrinsic dispatch
     fn new_object(
@@ -5121,6 +5161,16 @@ impl BodyGen<'_> {
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
+                "Integer" | "Double" | "Long" | "Float" | "Short" | "Byte" | "Character"
+                | "Boolean"
+                    if wrapper_elem(class_name).is_some() =>
+                {
+                    return self.new_wrapper(
+                        wrapper_elem(class_name).expect("checked"),
+                        args,
+                        span,
+                    );
+                }
                 other => {
                     if let Some(internal) = jvmjs_classfile::exceptions::internal_name_of(other)
                         && let Some(id) = exception_id(internal)
@@ -6274,26 +6324,32 @@ impl BodyGen<'_> {
     }
 
     fn expression_statement(&mut self, expr: &Expr) {
-        let Expr::Call {
-            receiver,
-            method,
-            args,
-            span,
-        } = expr
-        else {
-            self.error(expr.span(), "this expression is not a statement in Java");
-            return;
-        };
-
-        let outcome = match self.call_target(receiver.as_deref(), *span) {
-            None => None,
-            Some(CallTarget::Stream(stream)) => {
-                self.print_call(stream, method, args, *span);
-                None
+        let outcome = match expr {
+            Expr::Call {
+                receiver,
+                method,
+                args,
+                span,
+            } => match self.call_target(receiver.as_deref(), *span) {
+                None => None,
+                Some(CallTarget::Stream(stream)) => {
+                    self.print_call(stream, method, args, *span);
+                    None
+                }
+                Some(CallTarget::Static(class)) => self.static_call(&class, method, args, *span),
+                Some(CallTarget::Own) => self.own_call(method, args, *span),
+                Some(CallTarget::Instance(object)) => {
+                    self.instance_call(object, method, args, *span)
+                }
+            },
+            // `super.method(...);` as a statement.
+            Expr::SuperMethodCall { method, args, span } => {
+                self.super_method_call(method, args, *span)
             }
-            Some(CallTarget::Static(class)) => self.static_call(&class, method, args, *span),
-            Some(CallTarget::Own) => self.own_call(method, args, *span),
-            Some(CallTarget::Instance(object)) => self.instance_call(object, method, args, *span),
+            _ => {
+                self.error(expr.span(), "this expression is not a statement in Java");
+                return;
+            }
         };
         // The result of a call statement (if any) is discarded.
         if let Some(Some(ty)) = outcome {
@@ -7125,11 +7181,11 @@ impl BodyGen<'_> {
                 return JType::Error;
             };
             if field.is_static {
-                self.error(
-                    span,
-                    format!("access static field {name} via the class name"),
-                );
-                return JType::Error;
+                // `instance.staticField` (legal, if discouraged): the
+                // instance is evaluated then discarded.
+                self.code.push_op(op::POP, 0);
+                self.code.drop_stack(1);
+                return self.emit_getfield(owner, &field);
             }
             let field_ty = self.emit_getfield(owner, &field);
             // Substitute the tracked type argument for a type-variable
@@ -7495,12 +7551,11 @@ impl BodyGen<'_> {
                         return JType::Error;
                     };
                     if field.is_static {
-                        // Java allows this with a warning; keep it simple.
-                        self.error(
-                            span,
-                            format!("access static field {} via the class name", field.name),
-                        );
-                        return JType::Error;
+                        // `local.staticField`: discard the loaded
+                        // instance, then read the static field.
+                        self.code.push_op(op::POP, 0);
+                        self.code.drop_stack(1);
+                        return self.emit_getfield(owner, &field);
                     }
                     return self.emit_getfield(owner, &field);
                 }
