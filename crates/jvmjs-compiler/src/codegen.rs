@@ -371,6 +371,9 @@ struct ClassInfo {
     is_abstract: bool,
     is_interface: bool,
     is_enum: bool,
+    /// Number of generic type parameters (`class Box<T>` → 1). Only
+    /// single-parameter classes get type-argument tracking.
+    type_param_count: usize,
     methods: Vec<MethodSig>,
     fields: Vec<FieldSig>,
 }
@@ -411,10 +414,10 @@ impl MethodTable {
         // The synthetic top type: `Object`. It carries the universal
         // methods; user classes are registered as its subtypes.
         let object_id = ClassId(0);
-        table.class_names.push(String::from("Object"));
+        table.class_names.push(String::from("java/lang/Object"));
         let string_ret = Some(JType::Str);
         table.classes.insert(
-            String::from("Object"),
+            String::from("java/lang/Object"),
             ClassInfo {
                 id: object_id,
                 superclass: None,
@@ -423,6 +426,7 @@ impl MethodTable {
                 is_abstract: false,
                 is_interface: false,
                 is_enum: false,
+                type_param_count: 0,
                 methods: vec![
                     MethodSig {
                         name: String::from("toString"),
@@ -473,6 +477,7 @@ impl MethodTable {
                         is_abstract: false,
                         is_interface: false,
                         is_enum: false,
+                        type_param_count: 0,
                         methods: Vec::new(),
                         fields: Vec::new(),
                     },
@@ -619,6 +624,7 @@ impl MethodTable {
                 info.is_abstract = class.is_abstract;
                 info.is_interface = class.is_interface;
                 info.is_enum = class.is_enum;
+                info.type_param_count = class.type_params.len();
             }
         }
         table.check_hierarchy(units, diagnostics);
@@ -903,6 +909,11 @@ impl MethodTable {
                 if name == "Object" || name == "java.lang.Object" {
                     return Some(JType::Object(self.object_id));
                 }
+                // The erased single type variable of the enclosing
+                // generic class.
+                if name == crate::parser::TYPEVAR_SENTINEL {
+                    return Some(JType::TypeVar);
+                }
                 // User classes shadow the intrinsic simple names.
                 if !name.contains('.')
                     && let Some(id) = self.class_id(simple)
@@ -936,8 +947,28 @@ impl MethodTable {
                 let simple = crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
+                } else if let Some(id) = self.class_id(base) {
+                    // A single-type-parameter user class tracks its
+                    // argument (`Box<String>`); otherwise it is raw.
+                    let single = self.info_by_id(id).is_some_and(|i| i.type_param_count == 1);
+                    let arg = if single && args.len() == 1 {
+                        elem_from_type_arg(&args[0], self)
+                    } else {
+                        None
+                    };
+                    match arg {
+                        // Track only reference type arguments (primitive
+                        // args would need boxing, which jvmjs lacks).
+                        Some(elem @ (ElemType::Str | ElemType::Object(_))) => {
+                            Some(JType::Generic {
+                                class: id,
+                                arg: elem,
+                            })
+                        }
+                        _ => Some(JType::Object(id)),
+                    }
                 } else {
-                    self.class_id(base).map(JType::Object)
+                    None
                 }
             }
             TypeRef::Array(_) => {
@@ -1313,6 +1344,12 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         )
         || (from == JType::Null && to.is_reference())
         || (to == JType::Object(table.object_id) && from.is_reference())
+        // A parameterized type and its raw class erase alike, so they
+        // are mutually assignable (`Box<String> b = new Box<>()`).
+        || matches!((from.erased_class(), to.erased_class()), (Some(a), Some(b)) if a == b)
+        // Any reference (including another type var) stores into a T.
+        || (to == JType::TypeVar && from.is_reference())
+        || (from == JType::TypeVar && to == JType::Object(table.object_id))
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -1404,6 +1441,18 @@ enum JType {
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
+    /// A parameterized user class with a single tracked type argument
+    /// (`Box<String>`). Erases to `Object(class)` at the bytecode
+    /// level; the argument enables cast-free reads of type-variable
+    /// members.
+    Generic {
+        class: ClassId,
+        arg: ElemType,
+    },
+    /// The (single) type parameter of a generic class, seen while
+    /// compiling that class's own body. Erases to `Object`; at external
+    /// use it substitutes to the receiver's tracked type argument.
+    TypeVar,
     /// A type jvmjs doesn't handle yet.
     Unsupported,
     /// A diagnostic was already reported for this subtree.
@@ -1413,6 +1462,15 @@ enum JType {
 impl JType {
     fn describe(self, table: &MethodTable) -> String {
         match self {
+            JType::Object(id) if id == table.object_id => String::from("Object"),
+            JType::Generic { class, arg } => {
+                format!(
+                    "{}<{}>",
+                    table.class_name(class),
+                    arg.base_type().describe(table)
+                )
+            }
+            JType::TypeVar => String::from("Object"),
             JType::Int => String::from("int"),
             JType::Double => String::from("double"),
             JType::Boolean => String::from("boolean"),
@@ -1472,7 +1530,18 @@ impl JType {
                 | JType::Writer
                 | JType::List(_)
                 | JType::Exception(_)
+                | JType::Generic { .. }
+                | JType::TypeVar
         )
+    }
+
+    /// The erased class id of a reference to a user class or a
+    /// parameterized type (`Box<String>` and raw `Box` share one).
+    fn erased_class(self) -> Option<ClassId> {
+        match self {
+            JType::Object(id) | JType::Generic { class: id, .. } => Some(id),
+            _ => None,
+        }
     }
 
     /// Width in operand-stack slots (JVMS §2.6.2).
@@ -1499,6 +1568,9 @@ impl JType {
     /// The JVM field descriptor for this type.
     fn descriptor(self, table: &MethodTable) -> String {
         match self {
+            // Erasure: a parameterized type is its raw class; a type
+            // variable is Object.
+            JType::Generic { class, .. } => format!("L{};", table.class_name(class)),
             JType::Int => String::from("I"),
             JType::Double => String::from("D"),
             JType::Boolean => String::from("Z"),
@@ -1521,7 +1593,9 @@ impl JType {
             JType::List(_) => String::from("Ljava/util/ArrayList;"),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
-            JType::Unsupported | JType::Error => String::from("Ljava/lang/Object;"),
+            JType::TypeVar | JType::Unsupported | JType::Error => {
+                String::from("Ljava/lang/Object;")
+            }
         }
     }
 }
@@ -1827,6 +1901,13 @@ fn method_descriptor(
                     out.push_str("Ljava/io/File;");
                 } else if simple == "PrintWriter" && !table.has_class(simple) {
                     out.push_str("Ljava/io/PrintWriter;");
+                } else if name == crate::parser::TYPEVAR_SENTINEL
+                    || name == "Object"
+                    || name == "java.lang.Object"
+                {
+                    // Erasure: a type variable / Object both descriptor
+                    // to java/lang/Object.
+                    out.push_str("Ljava/lang/Object;");
                 } else if !name.contains('.') && table.has_class(simple) {
                     out.push('L');
                     out.push_str(simple);
@@ -5138,6 +5219,26 @@ impl BodyGen<'_> {
         }
     }
 
+    /// Substitute a tracked type argument for a type variable on a
+    /// read: emits a `checkcast` to the argument's class and returns
+    /// its concrete type. Non-type-variable types pass through.
+    fn substitute_type_var(&mut self, ty: JType, arg: ElemType) -> JType {
+        if ty != JType::TypeVar {
+            return ty;
+        }
+        let concrete = arg.base_type();
+        let internal = match concrete {
+            JType::Str => Some(String::from("java/lang/String")),
+            JType::Object(id) => Some(self.table.class_name(id).to_owned()),
+            _ => None,
+        };
+        if let Some(internal) = internal {
+            let class_index = intern_class(self.pool, &internal);
+            self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+        }
+        concrete
+    }
+
     /// Resolve and emit an instance method call with the receiver
     /// expression. `None` means a diagnostic was reported.
     #[allow(clippy::option_option)] // error / void / value are distinct outcomes
@@ -5151,6 +5252,16 @@ impl BodyGen<'_> {
         let receiver_ty = self.expr(receiver);
         let class_id = match receiver_ty {
             JType::Object(id) => id,
+            // A parameterized receiver: dispatch on the erased class,
+            // then substitute the type variable in the return with the
+            // tracked argument (inserting a checkcast on reads).
+            JType::Generic { class, arg } => {
+                let result =
+                    self.emit_virtual_call_on_stacked_receiver(class, method, args, span)?;
+                return Some(result.map(|ret| self.substitute_type_var(ret, arg)));
+            }
+            // A method on a type variable: only Object's methods.
+            JType::TypeVar => self.table.object_id,
             JType::Error => return None,
             JType::Str
             | JType::Scanner
@@ -6161,6 +6272,8 @@ impl BodyGen<'_> {
 
     fn print_descriptor(&mut self, ty: JType, span: SourceSpan) -> Option<String> {
         match ty {
+            // Reached only if not already coerced; treat as Object.
+            JType::Generic { .. } | JType::TypeVar => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
             JType::Long => Some(String::from("(J)V")),
@@ -6717,7 +6830,11 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return JType::Int;
         }
-        if let JType::Object(class_id) = object_ty {
+        if let JType::Object(class_id)
+        | JType::Generic {
+            class: class_id, ..
+        } = object_ty
+        {
             let Some((owner, field)) = self.resolve_field(class_id, name, span) else {
                 return JType::Error;
             };
@@ -6728,7 +6845,13 @@ impl BodyGen<'_> {
                 );
                 return JType::Error;
             }
-            return self.emit_getfield(owner, &field);
+            let field_ty = self.emit_getfield(owner, &field);
+            // Substitute the tracked type argument for a type-variable
+            // field (`cell.value` on a `Cell<String>` reads a String).
+            if let JType::Generic { arg, .. } = object_ty {
+                return self.substitute_type_var(field_ty, arg);
+            }
+            return field_ty;
         }
         if object_ty == JType::Str && name == "length" {
             self.error(
@@ -8036,6 +8159,9 @@ impl BodyGen<'_> {
     fn append_part(&mut self, ty: JType, span: SourceSpan) {
         let ty = self.coerce_to_string_for_output(ty);
         let descriptor = match ty {
+            JType::Generic { .. } | JType::TypeVar => {
+                "(Ljava/lang/Object;)Ljava/lang/StringBuilder;"
+            }
             JType::Int | JType::Short | JType::Byte => "(I)Ljava/lang/StringBuilder;",
             JType::Long => "(J)Ljava/lang/StringBuilder;",
             JType::Float => "(F)Ljava/lang/StringBuilder;",
@@ -8359,6 +8485,12 @@ impl BodyGen<'_> {
             (JType::Object(sub), JType::Object(sup)) if self.table.is_subtype(sub, sup) => {}
             // Any reference type widens to the Object top type.
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
+            // A parameterized type and its raw class erase alike.
+            (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
+            // Any reference stores into a type variable; a type variable
+            // reads out as Object.
+            (from, JType::TypeVar) if from.is_reference() => {}
+            (JType::TypeVar, JType::Object(id)) if id == self.table.object_id => {}
             (f, t) if f == t => {}
             (JType::Int | JType::Char | JType::Short | JType::Byte, JType::Double) => {
                 self.code.push_op(op::I2D, 1);

@@ -241,7 +241,7 @@ fn generic_class_and_object_top_type() {
             public static void main(String[] args) {
                 Holder<String> h = new Holder<>();
                 h.put("cached");
-                String s = (String) h.take();
+                String s = h.take();
                 System.out.println(s + " " + s.length());
                 System.out.println((String) identity("id"));
                 Object o = "top";

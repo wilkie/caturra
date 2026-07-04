@@ -2597,43 +2597,77 @@ fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
 /// keeps the rest of the compiler generics-unaware.
 fn erase_type_vars(class: &mut ClassDecl) {
     use std::collections::HashSet;
-    let class_params: HashSet<String> = class.type_params.iter().cloned().collect();
+    // A class with exactly one type parameter tracks it: that parameter
+    // erases to the `TypeVar` sentinel (enabling cast-free reads);
+    // every other type parameter (extra class params, method params)
+    // erases straight to `Object`.
+    let tracked: Option<String> = if class.type_params.len() == 1 {
+        Some(class.type_params[0].clone())
+    } else {
+        None
+    };
+    let class_object: HashSet<String> = if tracked.is_some() {
+        HashSet::new()
+    } else {
+        class.type_params.iter().cloned().collect()
+    };
+    let scope = |method: &MethodDecl| -> (HashSet<String>, Option<String>) {
+        let mut to_object = class_object.clone();
+        to_object.extend(method.type_params.iter().cloned());
+        // A method type parameter shadowing the class one drops tracking.
+        let tracked = tracked
+            .clone()
+            .filter(|name| !method.type_params.contains(name));
+        (to_object, tracked)
+    };
     for field in &mut class.fields {
-        erase_in_type(&mut field.ty, &class_params);
+        erase_in_type(&mut field.ty, &class_object, tracked.as_deref());
         if let Some(init) = &mut field.init {
-            erase_in_expr(init, &class_params);
+            erase_in_expr(init, &class_object, tracked.as_deref());
         }
     }
     for method in &mut class.methods {
-        let mut scope = class_params.clone();
-        scope.extend(method.type_params.iter().cloned());
-        erase_in_type(&mut method.return_type, &scope);
+        let (to_object, tracked) = scope(method);
+        erase_in_type(&mut method.return_type, &to_object, tracked.as_deref());
         for param in &mut method.params {
-            erase_in_type(&mut param.ty, &scope);
+            erase_in_type(&mut param.ty, &to_object, tracked.as_deref());
         }
         for stmt in &mut method.body {
-            erase_in_stmt(stmt, &scope);
+            erase_in_stmt(stmt, &to_object, tracked.as_deref());
         }
     }
     for block in &mut class.init_blocks {
         for stmt in &mut block.body {
-            erase_in_stmt(stmt, &class_params);
+            erase_in_stmt(stmt, &class_object, tracked.as_deref());
         }
     }
 }
 
-fn erase_in_type(ty: &mut TypeRef, params: &std::collections::HashSet<String>) {
+/// The reserved type name that [`resolve_type`] maps to
+/// [`JType::TypeVar`]; it cannot collide with a source identifier.
+pub(crate) const TYPEVAR_SENTINEL: &str = "\u{0}TypeVar";
+
+fn erase_in_type(
+    ty: &mut TypeRef,
+    to_object: &std::collections::HashSet<String>,
+    tracked: Option<&str>,
+) {
     match ty {
-        TypeRef::Named(name) if params.contains(name) => {
+        TypeRef::Named(name) if Some(name.as_str()) == tracked => {
+            *ty = TypeRef::Named(String::from(TYPEVAR_SENTINEL));
+        }
+        TypeRef::Named(name) if to_object.contains(name) => {
             *ty = TypeRef::Named(String::from("Object"));
         }
-        TypeRef::Array(inner) => erase_in_type(inner, params),
+        TypeRef::Array(inner) => erase_in_type(inner, to_object, tracked),
         TypeRef::Generic { base, args } => {
-            if params.contains(base) {
+            if Some(base.as_str()) == tracked {
+                *ty = TypeRef::Named(String::from(TYPEVAR_SENTINEL));
+            } else if to_object.contains(base) {
                 *ty = TypeRef::Named(String::from("Object"));
             } else {
                 for arg in args {
-                    erase_in_type(arg, params);
+                    erase_in_type(arg, to_object, tracked);
                 }
             }
         }
@@ -2641,40 +2675,44 @@ fn erase_in_type(ty: &mut TypeRef, params: &std::collections::HashSet<String>) {
     }
 }
 
-fn erase_in_stmt(stmt: &mut Stmt, params: &std::collections::HashSet<String>) {
+fn erase_in_stmt(
+    stmt: &mut Stmt,
+    to_object: &std::collections::HashSet<String>,
+    tracked: Option<&str>,
+) {
     match stmt {
         Stmt::Block(stmts) => {
             for s in stmts {
-                erase_in_stmt(s, params);
+                erase_in_stmt(s, to_object, tracked);
             }
         }
         Stmt::LocalDecl {
             ty, declarators, ..
         } => {
-            erase_in_type(ty, params);
+            erase_in_type(ty, to_object, tracked);
             for d in declarators {
                 if let Some(init) = &mut d.init {
-                    erase_in_expr(init, params);
+                    erase_in_expr(init, to_object, tracked);
                 }
             }
         }
         Stmt::Expr(e)
         | Stmt::Throw { value: e, .. }
         | Stmt::Assign { value: e, .. }
-        | Stmt::Return { value: Some(e), .. } => erase_in_expr(e, params),
+        | Stmt::Return { value: Some(e), .. } => erase_in_expr(e, to_object, tracked),
         Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
         Stmt::If {
             cond, then, els, ..
         } => {
-            erase_in_expr(cond, params);
-            erase_in_stmt(then, params);
+            erase_in_expr(cond, to_object, tracked);
+            erase_in_stmt(then, to_object, tracked);
             if let Some(e) = els {
-                erase_in_stmt(e, params);
+                erase_in_stmt(e, to_object, tracked);
             }
         }
         Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
-            erase_in_expr(cond, params);
-            erase_in_stmt(body, params);
+            erase_in_expr(cond, to_object, tracked);
+            erase_in_stmt(body, to_object, tracked);
         }
         Stmt::For {
             init,
@@ -2684,31 +2722,31 @@ fn erase_in_stmt(stmt: &mut Stmt, params: &std::collections::HashSet<String>) {
             ..
         } => {
             if let Some(s) = init {
-                erase_in_stmt(s, params);
+                erase_in_stmt(s, to_object, tracked);
             }
             if let Some(c) = cond {
-                erase_in_expr(c, params);
+                erase_in_expr(c, to_object, tracked);
             }
             for s in update {
-                erase_in_stmt(s, params);
+                erase_in_stmt(s, to_object, tracked);
             }
-            erase_in_stmt(body, params);
+            erase_in_stmt(body, to_object, tracked);
         }
         Stmt::ForEach {
             ty, iterable, body, ..
         } => {
-            erase_in_type(ty, params);
-            erase_in_expr(iterable, params);
-            erase_in_stmt(body, params);
+            erase_in_type(ty, to_object, tracked);
+            erase_in_expr(iterable, to_object, tracked);
+            erase_in_stmt(body, to_object, tracked);
         }
         Stmt::Switch { selector, arms, .. } => {
-            erase_in_expr(selector, params);
+            erase_in_expr(selector, to_object, tracked);
             for arm in arms {
                 for label in arm.labels.iter_mut().flatten() {
-                    erase_in_expr(label, params);
+                    erase_in_expr(label, to_object, tracked);
                 }
                 for s in &mut arm.body {
-                    erase_in_stmt(s, params);
+                    erase_in_stmt(s, to_object, tracked);
                 }
             }
         }
@@ -2719,89 +2757,93 @@ fn erase_in_stmt(stmt: &mut Stmt, params: &std::collections::HashSet<String>) {
             ..
         } => {
             for s in body {
-                erase_in_stmt(s, params);
+                erase_in_stmt(s, to_object, tracked);
             }
             for c in catches {
                 for s in &mut c.body {
-                    erase_in_stmt(s, params);
+                    erase_in_stmt(s, to_object, tracked);
                 }
             }
             if let Some(fin) = finally_body {
                 for s in fin {
-                    erase_in_stmt(s, params);
+                    erase_in_stmt(s, to_object, tracked);
                 }
             }
         }
-        Stmt::Labeled { body, .. } => erase_in_stmt(body, params),
+        Stmt::Labeled { body, .. } => erase_in_stmt(body, to_object, tracked),
         Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
             for a in args {
-                erase_in_expr(a, params);
+                erase_in_expr(a, to_object, tracked);
             }
         }
     }
 }
 
-fn erase_in_expr(expr: &mut Expr, params: &std::collections::HashSet<String>) {
+fn erase_in_expr(
+    expr: &mut Expr,
+    to_object: &std::collections::HashSet<String>,
+    tracked: Option<&str>,
+) {
     match expr {
         Expr::Cast { ty, operand, .. } => {
-            erase_in_type(ty, params);
-            erase_in_expr(operand, params);
+            erase_in_type(ty, to_object, tracked);
+            erase_in_expr(operand, to_object, tracked);
         }
         Expr::InstanceOf { value, ty, .. } => {
-            erase_in_type(ty, params);
-            erase_in_expr(value, params);
+            erase_in_type(ty, to_object, tracked);
+            erase_in_expr(value, to_object, tracked);
         }
         Expr::NewArray {
             elem, dims, init, ..
         } => {
-            erase_in_type(elem, params);
+            erase_in_type(elem, to_object, tracked);
             for d in dims.iter_mut().flatten() {
-                erase_in_expr(d, params);
+                erase_in_expr(d, to_object, tracked);
             }
             if let Some(elements) = init {
                 for e in elements {
-                    erase_in_expr(e, params);
+                    erase_in_expr(e, to_object, tracked);
                 }
             }
         }
         Expr::NewObject { args, .. } | Expr::SuperMethodCall { args, .. } => {
             for a in args {
-                erase_in_expr(a, params);
+                erase_in_expr(a, to_object, tracked);
             }
         }
         Expr::Call { receiver, args, .. } => {
             if let Some(r) = receiver {
-                erase_in_expr(r, params);
+                erase_in_expr(r, to_object, tracked);
             }
             for a in args {
-                erase_in_expr(a, params);
+                erase_in_expr(a, to_object, tracked);
             }
         }
         Expr::Binary { lhs, rhs, .. } => {
-            erase_in_expr(lhs, params);
-            erase_in_expr(rhs, params);
+            erase_in_expr(lhs, to_object, tracked);
+            erase_in_expr(rhs, to_object, tracked);
         }
         Expr::Unary { operand, .. }
         | Expr::Field {
             object: operand, ..
         } => {
-            erase_in_expr(operand, params);
+            erase_in_expr(operand, to_object, tracked);
         }
         Expr::Index { array, index, .. } => {
-            erase_in_expr(array, params);
-            erase_in_expr(index, params);
+            erase_in_expr(array, to_object, tracked);
+            erase_in_expr(index, to_object, tracked);
         }
         Expr::Ternary {
             cond, then, els, ..
         } => {
-            erase_in_expr(cond, params);
-            erase_in_expr(then, params);
-            erase_in_expr(els, params);
+            erase_in_expr(cond, to_object, tracked);
+            erase_in_expr(then, to_object, tracked);
+            erase_in_expr(els, to_object, tracked);
         }
-        Expr::IncDec { target, .. } => erase_in_expr(target, params),
+        Expr::IncDec { target, .. } => erase_in_expr(target, to_object, tracked),
         Expr::ArrayLiteral { elements, .. } => {
             for e in elements {
-                erase_in_expr(e, params);
+                erase_in_expr(e, to_object, tracked);
             }
         }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}

@@ -360,10 +360,12 @@ x)`) with type-parameter erasure — every type variable is rewritten
   erase. This also makes **`Object`** a usable top type: a synthetic
   `Object` class is the supertype of every reference type, with
   `toString`/`equals`/`hashCode`, and any reference widens to it.
-  `Box<String>` uses raw (erased) type arguments: reading a
-  type-variable-typed value yields `Object`, so specializing it needs
-  a cast (`String s = (String) box.get();`) — the compiler inserts the
-  `checkcast`. Not yet: cast-free reads via type-argument tracking,
+  A **single-type-parameter** generic class (`Box<T>`, `Stack<E>`,
+  `Node<T>`) tracks its type argument, so reads of a type-variable
+  member are **cast-free**: `String s = box.get();` and `cell.value`
+  yield `String` directly (the compiler inserts the `checkcast`).
+  Multi-parameter generics (`Pair<A, B>`) and generic-method returns
+  use raw type arguments — reads there still need a cast. Not yet:
   autoboxing of primitives into `Object`, and nested type arguments
   (`Box<Pair<A, B>>`).
 

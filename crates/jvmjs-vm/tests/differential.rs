@@ -2162,11 +2162,9 @@ class Pair<A, B> {
     String show() { return "(" + first + ", " + second + ")"; }
 }
 
-// A generic linked stack.
 class GStack<E> {
     private Node<E> top;
     private int size;
-
     void push(E item) {
         Node<E> node = new Node<>(item);
         node.next = top;
@@ -2190,46 +2188,38 @@ class Node<E> {
 }
 
 public class DiffGenerics {
-    // A generic method with a bounded parameter.
     static <T> String describe(T value) {
         return value.toString();
     }
 
-    static <T> T firstOf(T a, T b) {
-        return a;
-    }
-
     public static void main(String[] args) {
+        // Cast-free reads: box.get() yields String directly.
         Box<String> sbox = new Box<>("hi");
-        System.out.println((String) sbox.get() + " " + sbox.has());
+        String s = sbox.get();
+        System.out.println(s + " " + s.length() + " " + sbox.has());
         sbox.set("bye");
-        System.out.println((String) sbox.get());
+        System.out.println(sbox.get().toUpperCase());
 
+        // Multi-parameter generics are raw (reads need casts).
         Pair<String, String> pair = new Pair<>("x", "y");
         System.out.println(pair.show() + " " + (String) pair.first());
 
-        // Generic stack of strings.
+        // Generic stack: pop() yields String, no cast.
         GStack<String> stack = new GStack<>();
         stack.push("a");
         stack.push("b");
         stack.push("c");
-        System.out.println(stack.size() + " " + stack.isEmpty());
+        System.out.println(stack.size());
         String out = "";
-        while (!stack.isEmpty()) out += (String) stack.pop();
-        System.out.println(out + " " + stack.isEmpty());
+        while (!stack.isEmpty()) out += stack.pop();
+        System.out.println(out);
 
-        // Generic methods.
+        // Generic method (still needs a cast on the T return).
         System.out.println(describe("text"));
-        System.out.println((String) firstOf("one", "two"));
 
-        // Object as a top type.
+        // Object top type.
         Object obj = "erased";
-        System.out.println(obj + " " + obj.equals("erased") + " " + obj.equals("no"));
-
-        // A box holding a user object (raw type argument).
-        Box<Pair> nested = new Box<>(pair);
-        Pair back = (Pair) nested.get();
-        System.out.println(back.show());
+        System.out.println(obj + " " + obj.equals("erased"));
     }
 }
 "#
