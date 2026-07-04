@@ -24,6 +24,8 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
         tokens,
         pos: 0,
         diagnostics: Vec::new(),
+        anon_classes: Vec::new(),
+        anon_counter: 0,
     };
     let unit = parser.compilation_unit();
     (unit, parser.diagnostics)
@@ -137,6 +139,9 @@ struct Parser<'a> {
     tokens: Vec<Token>,
     pos: usize,
     diagnostics: Vec<Diagnostic>,
+    /// Synthesized anonymous-class declarations, hoisted to top level.
+    anon_classes: Vec<ClassDecl>,
+    anon_counter: usize,
 }
 
 impl Parser<'_> {
@@ -296,6 +301,15 @@ impl Parser<'_> {
                         self.eat_symbol("}");
                     }
                 }
+            }
+        }
+        // Hoist synthesized anonymous classes to the top level.
+        let anon = std::mem::take(&mut self.anon_classes);
+        for class in anon {
+            let first = classes.len();
+            flatten_nested(class, &mut classes);
+            for class in &mut classes[first..] {
+                erase_type_vars(class);
             }
         }
         CompilationUnit { imports, classes }
@@ -530,6 +544,7 @@ impl Parser<'_> {
             is_abstract: is_abstract_modifier || is_interface,
             is_interface,
             is_enum: false,
+            is_anonymous: false,
             type_params,
             fields,
             methods,
@@ -1974,6 +1989,88 @@ impl Parser<'_> {
     /// creation. Constructor calls (`new Scanner(...)`) get a friendly
     /// not-yet message.
     #[allow(clippy::too_many_lines)] // one coherent grammar production
+    /// Parse an anonymous class body and desugar it to a synthesized
+    /// top-level class that extends/implements `supertype`. Returns a
+    /// `new Anon$N()` expression. Constructor arguments and captured
+    /// enclosing locals are not yet supported.
+    #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
+    fn anonymous_class(
+        &mut self,
+        supertype: &str,
+        args: Vec<Expr>,
+        start: SourceSpan,
+    ) -> Parsed<Expr> {
+        if !args.is_empty() {
+            self.error_at(
+                start,
+                "anonymous classes with constructor arguments are not yet supported by jvmjs",
+            );
+        }
+        self.pos += 1; // '{'
+        let mut methods = Vec::new();
+        let mut fields = Vec::new();
+        let mut init_blocks = Vec::new();
+        let mut nested = Vec::new();
+        let mut order = 0usize;
+        while !self.at_symbol("}") && self.peek().is_some() {
+            if let Ok(member) = self.member(supertype) {
+                match member {
+                    Member::Method(m) => methods.push(m),
+                    Member::Fields(mut declared) => {
+                        for f in &mut declared {
+                            f.order = order;
+                            order += 1;
+                        }
+                        fields.append(&mut declared);
+                    }
+                    Member::Init(mut b) => {
+                        b.order = order;
+                        order += 1;
+                        init_blocks.push(b);
+                    }
+                    Member::Nested(decl) => nested.push(decl),
+                }
+            } else {
+                self.recover_to_statement_boundary();
+                self.eat_symbol(";");
+            }
+        }
+        self.eat_symbol("}");
+
+        self.anon_counter += 1;
+        let name = format!("Anon${}", self.anon_counter);
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        let mut anon = ClassDecl {
+            name: name.clone(),
+            // The supertype is resolved to extends/implements by the
+            // compiler (it knows which names are interfaces).
+            superclass: Some(String::from(supertype)),
+            interfaces: Vec::new(),
+            is_abstract: false,
+            is_interface: false,
+            is_enum: false,
+            is_anonymous: true,
+            type_params: Vec::new(),
+            fields,
+            methods,
+            init_blocks,
+            nested: Vec::new(),
+            span,
+        };
+        anon.nested = nested;
+        self.anon_classes.push(anon);
+        Ok(Expr::NewObject {
+            class: name,
+            type_args: Vec::new(),
+            args: Vec::new(),
+            span,
+        })
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per constructible form
     fn new_expression(&mut self) -> Parsed<Expr> {
         let start = self.here();
         self.pos += 1; // 'new'
@@ -2053,6 +2150,10 @@ impl Parser<'_> {
                 return Err(Abort);
             };
             let args = self.arguments()?;
+            // Anonymous class: `new Type(args) { members }`.
+            if self.at_symbol("{") {
+                return self.anonymous_class(&class, args, start);
+            }
             let span = SourceSpan {
                 start: start.start,
                 end: self.here().start,
@@ -2570,6 +2671,7 @@ fn desugar_enum(
         is_abstract: false,
         is_interface: false,
         is_enum: true,
+        is_anonymous: false,
         type_params: Vec::new(),
         fields: synth_fields,
         methods,

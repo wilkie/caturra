@@ -57,13 +57,28 @@ fn emit_class(
 ) -> ClassFile {
     let mut class = ClassFile::new_java11();
     class.this_class = intern_class(&mut class.constant_pool, &decl.name);
-    let super_name = decl
-        .superclass
-        .as_deref()
-        .map_or("java/lang/Object", |name| {
-            // `extends Exception` etc: the parent is a library throwable.
-            jvmjs_classfile::exceptions::internal_name_of(name).unwrap_or(name)
-        });
+    // For an anonymous class the extends/implements split was resolved
+    // by the table; use its class name (Object) and interface list.
+    let anon_interfaces: Vec<String> = if decl.is_anonymous {
+        table.anon_supertypes(&decl.name)
+    } else {
+        Vec::new()
+    };
+    let anon_super = if decl.is_anonymous {
+        Some(table.anon_super_name(&decl.name))
+    } else {
+        None
+    };
+    let super_name = if let Some(anon) = &anon_super {
+        anon.as_str()
+    } else {
+        decl.superclass
+            .as_deref()
+            .map_or("java/lang/Object", |name| {
+                // `extends Exception` etc: the parent is a library throwable.
+                jvmjs_classfile::exceptions::internal_name_of(name).unwrap_or(name)
+            })
+    };
     class.super_class = intern_class(&mut class.constant_pool, super_name);
 
     // SourceFile attribute: which compilation unit this class came
@@ -77,7 +92,7 @@ fn emit_class(
         name_index: source_file_name,
         info: jvmjs_classfile::debug::encode_source_file(file_index),
     });
-    for interface in &decl.interfaces {
+    for interface in decl.interfaces.iter().chain(anon_interfaces.iter()) {
         let index = intern_class(&mut class.constant_pool, interface);
         class.interfaces.push(index);
     }
@@ -603,6 +618,17 @@ impl MethodTable {
                     })
                     .collect();
 
+                // An anonymous class's single supertype is an
+                // `implements` if it names an interface, otherwise an
+                // `extends`.
+                let (superclass, interface_ids) = if class.is_anonymous
+                    && let Some(super_id) = superclass
+                    && table.info_by_id(super_id).is_some_and(|i| i.is_interface)
+                {
+                    (None, vec![super_id])
+                } else {
+                    (superclass, interface_ids)
+                };
                 let info = table
                     .classes
                     .get_mut(&class.name)
@@ -796,6 +822,33 @@ impl MethodTable {
     fn info_by_id(&self, id: ClassId) -> Option<&ClassInfo> {
         let name = self.class_names.get(usize::from(id.0))?;
         self.classes.get(name)
+    }
+
+    /// The resolved superclass internal name of an anonymous class:
+    /// `java/lang/Object` when it implements an interface, otherwise
+    /// the class it extends.
+    fn anon_super_name(&self, name: &str) -> String {
+        self.classes
+            .get(name)
+            .and_then(|info| info.superclass)
+            .map_or_else(
+                || String::from("java/lang/Object"),
+                |id| self.class_name(id).to_owned(),
+            )
+    }
+
+    /// The resolved interface names an anonymous class implements
+    /// (its declared supertype, when that is an interface).
+    fn anon_supertypes(&self, name: &str) -> Vec<String> {
+        self.classes
+            .get(name)
+            .map(|info| {
+                info.interfaces
+                    .iter()
+                    .map(|id| self.class_name(*id).to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Whether the class with this id is an `enum`.
@@ -1866,10 +1919,17 @@ fn emit_method(
                 // Delegated constructor already ran the field inits.
             }
         } else {
-            let super_name = class_decl
-                .superclass
-                .as_deref()
-                .unwrap_or("java/lang/Object");
+            // An anonymous class implementing an interface extends
+            // Object; one extending a class extends that class.
+            let anon_super = class_decl
+                .is_anonymous
+                .then(|| table.anon_super_name(&class_decl.name));
+            let super_name = anon_super.as_deref().unwrap_or_else(|| {
+                class_decl
+                    .superclass
+                    .as_deref()
+                    .unwrap_or("java/lang/Object")
+            });
             body.emit_constructor_call_on_this(super_name, &[], decl.span);
             body.emit_instance_field_initializers(class_decl);
         }

@@ -382,6 +382,17 @@ x)`) with type-parameter erasure — every type variable is rewritten
   generics over primitives usable in the collection sense (values box
   on the way in).
 
+- **Anonymous classes** (2026-07-03): `new Interface() { ... }` and
+  `new AbstractClass() { ... }` desugar to a synthesized top-level
+  class (`Anon$N`) that implements the interface or extends the class,
+  hoisted alongside the program. The body may declare its own fields
+  and methods, override abstract methods, and inherit concrete and
+  interface-default methods; the instance is used through its
+  supertype. Not yet: constructor arguments (`new Base(args) {...}`)
+  and capture of enclosing local variables or `Outer.this` — an
+  anonymous class that references an enclosing local reports an
+  unresolved-symbol error.
+
 Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a

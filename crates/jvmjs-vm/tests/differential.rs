@@ -2305,6 +2305,78 @@ public class DiffBox {
 );
 
 differential_test!(
+    diff_anonymous_classes,
+    "DiffAnon",
+    r#"
+interface Transformer {
+    int transform(int value);
+}
+
+interface Describable {
+    String describe();
+    default String shout() { return describe().toUpperCase(); }
+}
+
+abstract class Animal {
+    abstract String sound();
+    String describe() { return "an animal that says " + sound(); }
+}
+
+public class DiffAnon {
+    static int applyAll(Transformer t, int[] values) {
+        int total = 0;
+        for (int v : values) total += t.transform(v);
+        return total;
+    }
+
+    public static void main(String[] args) {
+        // Anonymous class implementing an interface.
+        Transformer doubler = new Transformer() {
+            public int transform(int value) { return value * 2; }
+        };
+        Transformer square = new Transformer() {
+            public int transform(int value) {
+                return value * value;
+            }
+        };
+        System.out.println(doubler.transform(5) + " " + square.transform(5));
+
+        int[] nums = { 1, 2, 3, 4 };
+        System.out.println(applyAll(doubler, nums) + " " + applyAll(square, nums));
+
+        // Anonymous class with its own field and helper method.
+        Transformer counter = new Transformer() {
+            private int calls = 0;
+            public int transform(int value) {
+                calls++;
+                return value + calls;
+            }
+        };
+        System.out.println(counter.transform(10) + " " + counter.transform(10) + " " + counter.transform(10));
+
+        // Inherited default method through an anonymous class.
+        Describable thing = new Describable() {
+            public String describe() { return "a widget"; }
+        };
+        System.out.println(thing.describe() + " / " + thing.shout());
+
+        // Anonymous class extending an abstract class, overriding one
+        // method and inheriting another.
+        Animal cat = new Animal() {
+            String sound() { return "meow"; }
+        };
+        System.out.println(cat.sound() + " -> " + cat.describe());
+
+        // Anonymous class in an expression used immediately.
+        System.out.println(new Transformer() {
+            public int transform(int v) { return -v; }
+        }.transform(42));
+    }
+}
+"#
+);
+
+differential_test!(
     diff_compound_assignment_narrowing,
     "DiffCompound",
     r"

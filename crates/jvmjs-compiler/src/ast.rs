@@ -23,6 +23,7 @@ pub struct ImportDecl {
 }
 
 /// A class or interface declaration.
+#[allow(clippy::struct_excessive_bools)] // mirrors Java's declaration modifiers
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassDecl {
     pub name: String,
@@ -36,6 +37,10 @@ pub struct ClassDecl {
     /// class has synthesized constant fields and `values`/`valueOf`;
     /// switch case labels are unqualified constant names.
     pub is_enum: bool,
+    /// Set for a synthesized anonymous-class body. `superclass` holds
+    /// the named supertype, which the compiler resolves to an
+    /// `extends` (class) or `implements` (interface).
+    pub is_anonymous: bool,
     /// Generic type parameter names (`<T, U>`); erased to `Object`.
     pub type_params: Vec<String>,
     pub fields: Vec<FieldDecl>,

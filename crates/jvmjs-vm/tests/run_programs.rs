@@ -228,6 +228,30 @@ fn run_stdout(source: &str, main: &str) -> String {
 }
 
 #[test]
+fn anonymous_class_implements_interface() {
+    let out = run_stdout(
+        r#"
+        interface Op { int apply(int a, int b); }
+        public class Anon {
+            static int run(Op op, int x, int y) { return op.apply(x, y); }
+            public static void main(String[] args) {
+                Op add = new Op() {
+                    public int apply(int a, int b) { return a + b; }
+                };
+                Op mul = new Op() {
+                    public int apply(int a, int b) { return a * b; }
+                };
+                System.out.println(add.apply(3, 4) + " " + mul.apply(3, 4));
+                System.out.println(run(add, 10, 20) + " " + run(mul, 6, 7));
+            }
+        }
+        "#,
+        "Anon",
+    );
+    assert_eq!(out, "7 12\n30 42\n");
+}
+
+#[test]
 fn autoboxing_wrappers_and_arithmetic() {
     let out = run_stdout(
         r#"
