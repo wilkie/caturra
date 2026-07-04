@@ -18,6 +18,27 @@ import {
   toggleBreakpointAtLine,
   type SourceSquiggle,
 } from './editor.js';
+import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
+
+/** A default 10×10 grid (a wall and a paint bucket) for neighborhood runs. */
+function defaultNeighborhoodGrid(): string {
+  const size = 10;
+  const rows: string[] = [];
+  for (let y = 0; y < size; y++) {
+    const cells: string[] = [];
+    for (let x = 0; x < size; x++) {
+      let cell = '1,0';
+      if (x === 4 && (y === 4 || y === 5)) {
+        cell = '0,0'; // wall
+      } else if (x === 7 && y === 2) {
+        cell = '1,3'; // paint bucket
+      }
+      cells.push(cell);
+    }
+    rows.push(cells.join(' '));
+  }
+  return `${rows.join('\n')}\n`;
+}
 
 const DEFAULT_PROGRAM = `public class Main {
     public static void main(String[] args) {
@@ -52,6 +73,8 @@ const watchExpressions: string[] = [];
 
 const fileTabsEl = mustGet('#file-tabs', HTMLDivElement);
 const addFileEl = mustGet('#add-file', HTMLButtonElement);
+const vizEl = mustGet('#viz', HTMLDivElement);
+const neighborhoodViz = new NeighborhoodViz(mustGet('#neighborhood-canvas', HTMLCanvasElement));
 
 const editor = createEditor(sourceEl, DEFAULT_PROGRAM);
 
@@ -165,6 +188,7 @@ declare global {
       setFile: (name: string, text: string) => void;
       selectFile: (name: string) => void;
       activeFile: () => string;
+      neighborhoodState: () => NeighborhoodState;
     };
   }
 }
@@ -185,6 +209,7 @@ window.playground = {
     switchToFile(name);
   },
   activeFile: () => activeFile,
+  neighborhoodState: () => neighborhoodViz.state(),
 };
 
 function append(text: string, kind: 'normal' | 'error' = 'normal'): void {
@@ -411,11 +436,44 @@ async function debugProgram(): Promise<void> {
   }
 }
 
+/** Whether the program uses the neighborhood library (drives the canvas). */
+function isNeighborhoodProgram(): boolean {
+  return collectSources().some((source) => source.text.includes('org.code.neighborhood'));
+}
+
+/** After a neighborhood run, read the emitted stream and animate it. */
+async function renderNeighborhood(): Promise<void> {
+  const session = await sessionReady;
+  let messagesText = '';
+  try {
+    messagesText = await session.readTextFile('neighborhood.jsonl');
+  } catch {
+    // No painter was created — nothing to animate.
+  }
+  if (messagesText.trim() === '') {
+    vizEl.hidden = true;
+    return;
+  }
+  const gridText = await session.readTextFile('grid.txt');
+  vizEl.hidden = false;
+  const messages = neighborhoodViz.load(gridText, messagesText);
+  neighborhoodViz.play(messages);
+}
+
 async function runProgram(): Promise<void> {
   runEl.disabled = true;
   consoleEl.textContent = '';
+  neighborhoodViz.stop();
   try {
     const session = await sessionReady;
+    const neighborhood = isNeighborhoodProgram();
+    if (neighborhood) {
+      // Seed the grid and clear any prior run's animation stream.
+      await session.writeFile('grid.txt', defaultNeighborhoodGrid());
+      await session.remove('neighborhood.jsonl').catch(() => undefined);
+    } else {
+      vizEl.hidden = true;
+    }
     append(`$ javac ${allFileNames().join(' ')}\n`);
     const compiled = await session.compile(collectSources());
     reportDiagnostics(compiled.diagnostics);
@@ -435,6 +493,9 @@ async function runProgram(): Promise<void> {
         append(`${result.error ?? 'unknown VM error'}\n`, 'error');
       } else if (result.status === 'exited') {
         append(`(exit code ${String(result.exitCode)})\n`);
+      }
+      if (neighborhood && result.status !== 'error') {
+        await renderNeighborhood();
       }
     }
   } catch (error) {

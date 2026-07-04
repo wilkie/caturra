@@ -10,6 +10,10 @@ interface PlaygroundHooks {
   setFile: (name: string, text: string) => void;
   selectFile: (name: string) => void;
   activeFile: () => string;
+  neighborhoodState: () => {
+    colors: (string | null)[][];
+    painters: { id: string; x: number; y: number; dir: string }[];
+  };
 }
 
 /** Replace the CodeMirror document (typing via contenteditable is flaky). */
@@ -101,6 +105,44 @@ test.describe('playground', () => {
     await expect(consoleOutput).toContainText('$ javac Main.java');
     await expect(consoleOutput).toContainText('$ java Main');
     await expect(consoleOutput).toContainText('Hello, World!');
+  });
+
+  test('animates a neighborhood program on the canvas', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'import org.code.neighborhood.*;',
+        'public class Main {',
+        '  public static void main(String[] args) {',
+        '    Painter p = new Painter(0, 0, "east", 5);',
+        '    p.paint("red");',
+        '    p.move();',
+        '    p.paint("blue");',
+        '    p.move();',
+        '    p.move();',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    // The visualization pane appears and the emitted stream animates the
+    // painter to its final cell (3, 0), painting (0,0) and (1,0).
+    await expect(page.getByTestId('viz')).toBeVisible();
+    const handle = await page.waitForFunction(() => {
+      const state = (
+        window as unknown as { playground: PlaygroundHooks }
+      ).playground.neighborhoodState();
+      const painter = state.painters[0];
+      return painter?.x === 3 && painter.y === 0 ? state : null;
+    });
+    const state = (await handle.jsonValue()) as {
+      colors: (string | null)[][];
+      painters: { dir: string }[];
+    };
+    expect(state.colors[0][0]).toBe('red');
+    expect(state.colors[0][1]).toBe('blue');
+    expect(state.painters[0].dir).toBe('east');
   });
 
   test('reports source errors with locations', async ({ page }) => {

@@ -225,3 +225,18 @@ label {
   padding: 0.1rem 0.5rem;
   cursor: pointer;
 }
+
+#viz {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+#neighborhood-canvas {
+  border: 1px solid #c9c9bd;
+  background: #f6f6ef;
+  align-self: start;
+  max-width: 100%;
+  image-rendering: pixelated;
+}

@@ -56,10 +56,13 @@ also emits the exact javabuilder `ClientMessage` — `{"type":"NEIGHBORHOOD",
 `apps/src/miniApps/neighborhood/Neighborhood.ts` renderer consumes. Messages are
 appended write-through to the VFS file `neighborhood.jsonl` via a single
 kept-open `PrintWriter` (append is O(1), so a 1500-action level costs ~0.3s, not
-the O(n²) of rewriting). The frontend replays that stream over the grid; the
-worker/renderer wiring in `apps/playground` is the remaining integration. Theater
-differs — the real system renders it to a GIF server-side (`GifWriter`), so its
-Phase 2 is a browser Canvas port, not a message stream.
+the O(n²) of rewriting). The frontend replays that stream over the grid. `apps/playground` closes this
+loop: on a neighborhood run it seeds `grid.txt`, runs, reads back
+`neighborhood.jsonl` via the worker's `readFile`, and animates the painter on a
+canvas (`apps/playground/src/neighborhood.ts`) — a self-contained renderer that
+consumes the same protocol as the real `Neighborhood.ts`. Theater differs — the
+real system renders it to a GIF server-side (`GifWriter`), so its Phase 2 is a
+browser Canvas port, not a message stream.
 
 The same pattern covers **`org.code.theater` + `org.code.media`**
 (`compiler/src/stdlib/theater.java`, injected on either import). `Scene` records
