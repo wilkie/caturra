@@ -22,3 +22,7 @@ coverage/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Other artifacts used in development
+javabuilder/
+artifacts/
