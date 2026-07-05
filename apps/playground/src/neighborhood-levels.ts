@@ -1,6 +1,6 @@
 // AUTO-GENERATED from Code.org CSA Unit 1 (csa1-2025). Do not edit by hand.
-// Each level's grid comes from its serialized_maze; the runner class is
-// renamed to Main so the playground's entry point resolves.
+// STARTING code only (no solutions). BubbleChoice bubbles expanded to their
+// sublevels via dashboard/config/scripts/*.bubble_choice. Runner class -> Main.
 
 export interface NeighborhoodLevelFile {
   path: string;
@@ -27,40 +27,51 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
     ],
   },
   {
-    name: 'Skill Building: Painter Objects',
-    lesson: 'Lesson 4: Instantiating Objects',
-    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
-    files: [
-      {
-        path: 'Main.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter object.\n     * -----------------------------------------------------------------------------\n     */\n\n    Painter ezra = new Painter();\n\n    ezra.turnLeft();\n    ezra.turnLeft();\n    ezra.turnLeft();\n\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n\n    ezra.turnLeft();\n\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n\n    ezra.turnLeft();\n\n    ezra.move();\n    ezra.move();\n    \n  }\n}',
-      },
-    ],
-  },
-  {
-    name: 'Practice: Painter Objects',
-    lesson: 'Lesson 4: Instantiating Objects',
-    grid: '1,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0\n',
-    files: [
-      {
-        path: 'Main.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter object.\n     * -----------------------------------------------------------------------------\n     */\n\n    Painter blake = new Painter();\n\n    blake.move();\n    blake.move();\n    blake.move();\n\n    blake.turnLeft();\n    blake.turnLeft();\n    blake.turnLeft();\n\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n\n    blake.turnLeft();\n    blake.turnLeft();\n    blake.turnLeft();\n\n    blake.move();\n    blake.move();\n    blake.move();\n    \n  }\n}',
-      },
-    ],
-  },
-  {
-    name: 'Investigate and Modify: Painter Class Methods',
+    name: 'Practice: Painter Class Methods (a)',
     lesson: 'Lesson 5: Methods',
-    grid: '1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
       {
         path: 'Main.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a Painter object\n    Painter silas = new Painter();\n\n    // Moves forward three spaces\n    silas.move();\n    silas.move();\n    silas.move();\n\n    // Turns right by turning left three times\n    silas.turnLeft();\n    silas.turnLeft();\n    silas.turnLeft();\n\n    // Moves forward two spaces\n    silas.move();\n    silas.move();\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n    silas.turnLeft();\n    silas.turnLeft();\n\n    silas.move();\n    silas.move();\n\n    silas.turnLeft();\n\n    silas.move();\n    silas.move();\n    silas.move();\n    \n  }\n}',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate through The Neighborhood to reach the food truck.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}',
       },
     ],
   },
   {
-    name: 'Investigate and Modify: Painting (1)',
+    name: 'Practice: Painter Class Methods (b)',
+    lesson: 'Lesson 5: Methods',
+    grid: '1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate through The Neighborhood to reach the traffic cone.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Painter Class Methods (c)',
+    lesson: 'Lesson 5: Methods',
+    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate through The Neighborhood to reach the house.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Painter Class Methods (d)',
+    lesson: 'Lesson 5: Methods',
+    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate through The Neighborhood to reach the traffic cone.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Investigate and Modify: Painting #1',
     lesson: 'Lesson 6: Methods with Parameters',
     grid: '1,0 1,3 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,3 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,3 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0\n0,0 0,0 0,0 1,3 1,0 1,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
@@ -71,7 +82,7 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
     ],
   },
   {
-    name: 'Investigate and Modify: Painting (2)',
+    name: 'Investigate and Modify: Painting #2',
     lesson: 'Lesson 6: Methods with Parameters',
     grid: '1,0 1,3 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,3 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,3 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0\n0,0 0,0 0,0 1,3 1,0 1,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
@@ -82,13 +93,101 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
     ],
   },
   {
-    name: 'Investigate and Modify: Painting (3)',
+    name: 'Investigate and Modify: Painting #3',
     lesson: 'Lesson 6: Methods with Parameters',
     grid: '1,0 1,3 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,3 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,3 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0\n0,0 0,0 0,0 1,3 1,0 1,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
       {
         path: 'Main.java',
         text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Moving and Painting #1',
+    lesson: 'Lesson 6: Methods with Parameters',
+    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,5 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate and paint the path to the traffic cone.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n\n    \n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Moving and Painting #2',
+    lesson: 'Lesson 6: Methods with Parameters',
+    grid: '1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate and paint the path to the traffic cone.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Moving and Painting #3',
+    lesson: 'Lesson 6: Methods with Parameters',
+    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,3 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,4 1,0 1,0 1,0 1,3 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate and paint the path to the traffic cone.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n\n    \n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Moving and Painting #4',
+    lesson: 'Lesson 6: Methods with Parameters',
+    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,4 0,0 0,0 0,0 1,0 1,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,4 1,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,4\n1,4 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 1,4 1,0 1,0 1,0 1,4 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Painter object, then use the methods in the Painter class\n     * to navigate and paint the path to the traffic cone.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Using Loops and Boolean Methods (a)',
+    lesson: 'Lesson 7: Loops',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,5 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Implement your algorithm to have a Painter object take all of the paint\n     * from a paint bucket.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n\n    \n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Using Loops and Boolean Methods (b)',
+    lesson: 'Lesson 7: Loops',
+    grid: '1,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Implement your algorithm to have a Painter object move forward one\n     * space as long as it can move in the direction it is facing.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n\n\n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Using Loops and Boolean Methods (c)',
+    lesson: 'Lesson 7: Loops',
+    grid: '1,0 1,3 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Implement your algorithm to have a Painter object paint the current\n     * space and move forward one space until it runs out of paint.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Using Loops and Boolean Methods (d)',
+    lesson: 'Lesson 7: Loops',
+    grid: '1,0 1,4 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Implement your algorithm to have a Painter object move forward, turn,\n     * and paint in a square until it runs out of paint.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n\n\n\n    \n    \n  }\n}',
       },
     ],
   },
@@ -112,32 +211,24 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
     ],
   },
   {
-    name: 'Practice: Creating PainterPlus (1)',
+    name: 'Practice: Creating PainterPlus #1',
     lesson: 'Lesson 9: Inheritance',
     grid: '1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
       {
         path: 'Main.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -----------------------------------------------------------------------------\n     */\n\n    // Creates a PainterPlus object\n    PainterPlus amelia = new PainterPlus();\n\n    \n  }\n}',
-      },
-      {
-        path: 'PainterPlus.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n  \n}',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /*\n     * ------------------------------ TO DO ------------------------------\n     * Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -------------------------------------------------------------------\n     */\n\n    \n  }\n}',
       },
     ],
   },
   {
-    name: 'Practice: Creating PainterPlus (2)',
+    name: 'Practice: Creating PainterPlus #2',
     lesson: 'Lesson 9: Inheritance',
     grid: '1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
       {
         path: 'Main.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -----------------------------------------------------------------------------\n     */\n\n    // Creates a PainterPlus object\n    PainterPlus amelia = new PainterPlus();\n\n    // Moves forward until unable to move\n    while (amelia.canMove()) {\n      amelia.move();\n    }\n\n    // Turns right by turning left three times\n    amelia.turnLeft();\n    amelia.turnLeft();\n    amelia.turnLeft();\n\n    // Moves forward until unable to move\n    while (amelia.canMove()) {\n      amelia.move();\n    }\n    \n  }\n}',
-      },
-      {
-        path: 'PainterPlus.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n  \n}',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
       },
     ],
   },
@@ -148,16 +239,56 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
     files: [
       {
         path: 'Main.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -----------------------------------------------------------------------------\n     */\n\n    // Creates a PainterPlus object\n    PainterPlus amelia = new PainterPlus();\n\n    // Moves forward until unable to move\n    while (amelia.canMove()) {\n      amelia.move();\n    }\n\n    // Turns right by turning left three times\n    amelia.turnRight();\n\n    // Moves forward until unable to move\n    while (amelia.canMove()) {\n      amelia.move();\n    }\n    \n  }\n}',
-      },
-      {
-        path: 'PainterPlus.java',
-        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n\n  // Turns the Painter object to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n  \n}',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n\n    \n  }\n}',
       },
     ],
   },
   {
-    name: 'Investigate: Programming Style and Tools (1)',
+    name: 'Practice: PainterPlus Methods (a)',
+    lesson: 'Lesson 10: Writing Methods',
+    grid: '1,0 1,0 1,6 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: PainterPlus Methods (b)',
+    lesson: 'Lesson 10: Writing Methods',
+    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: PainterPlus Methods (c)',
+    lesson: 'Lesson 10: Writing Methods',
+    grid: '1,0 1,4 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: PainterPlus Methods (d)',
+    lesson: 'Lesson 10: Writing Methods',
+    grid: '1,0 1,0 1,0 1,0 1,8 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the PainterPlus class, then instantiate a PainterPlus object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Investigate: Programming Style and Tools #1',
     lesson: 'Lesson 11: Programming Style and Feedback',
     grid: '1,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
@@ -172,7 +303,7 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
     ],
   },
   {
-    name: 'Investigate: Programming Style and Tools (2)',
+    name: 'Investigate: Programming Style and Tools #2',
     lesson: 'Lesson 11: Programming Style and Feedback',
     grid: '1,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
@@ -187,13 +318,117 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
     ],
   },
   {
-    name: 'Investigate: Programming Style and Tools (3)',
+    name: 'Investigate: Programming Style and Tools #3',
     lesson: 'Lesson 11: Programming Style and Feedback',
     grid: '1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
     files: [
       {
         path: 'Main.java',
         text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Conducting a Code Review (a)',
+    lesson: 'Lesson 11: Programming Style and Feedback',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,6 0,0 1,0 1,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus colin = new PainterPlus();\n\n    // Moves forward until PainterPlus reaches obstacle\n    while (colin.canMove()) {\n      colin.move();\n    }\n\n    // Takes all the paint from the paint bucket\n    while (colin.isOnBucket()) {\n      colin.takePaint();\n    }\n\n    // Turns right\n    colin.turnRight();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the move() and paintLongDashes() methods to move forward and paint\n     * dashed lines behind the taxes while the PainterPlus object can move forward.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n    \n    \n  }\n}',
+      },
+      {
+        path: 'PainterPlus.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter object to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Paints and moves two spaces\n  public void paintLongDashes(String color) {\n    paint(color);\n    move();\n    paint(color);\n    move();\n  }\n  \n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Conducting a Code Review (b)',
+    lesson: 'Lesson 11: Programming Style and Feedback',
+    grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus callie = new PainterPlus();\n\n    // Turns right\n    callie.turnRight();\n\n    // Moves forward while PainterPlus can move then turns left\n    callie.moveTurnLeft();\n\n    // Moves forward while PainterPlus can move then turns right\n    callie.moveTurnRight();\n\n    // Moves forward while PainterPlus can move\n    while (callie.canMove()) {\n      callie.move();\n    }\n\n    // Moves forward while PainterPlus can move then turns right\n    callie.moveTurnRight();\n\n    // Moves forward while PainterPlus can move then turns left\n    callie.moveTurnLeft();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the moveTurnLeft() and move() methods to move forward while\n     * PainterPlus can move then turn left then continue moving to reach the end.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n    \n    \n  }\n}',
+      },
+      {
+        path: 'PainterPlus.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter object to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Moves forward while the Painter object can move then turns left\n  public void moveTurnLeft() {\n    while (canMove()) {\n      move();\n    }\n\n    turnLeft();\n  }\n\n  // Moves forward while the Painter object can move then turns right\n  public void moveTurnRight() {\n    while (canMove()) {\n      move();\n    }\n\n    turnRight();\n  }\n  \n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Conducting a Code Review (c)',
+    lesson: 'Lesson 11: Programming Style and Feedback',
+    grid: '1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,12 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,12\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus melissa = new PainterPlus();\n\n    // Turns right\n    melissa.turnRight();\n\n    // Moves forward two spaces\n    melissa.move();\n    melissa.move();\n    melissa.move();\n\n    // Takes all the paint from the paint bucket\n    melissa.takeAllPaint();\n\n    // Turns left\n    melissa.turnLeft();\n\n    // Paints a line while PainterPlus can move\n    while (melissa.canMove()) {\n      melissa.paintThenMove("white");\n    }\n\n    // Paints the last space\n    melissa.paint("white");\n\n    // Turns right\n    melissa.turnRight();\n\n    // Moves forward while PainterPlus can move\n    while (melissa.canMove()) {\n      melissa.move();\n    }\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the takeAllPaint(), turnRight(), and paintThenMove() methods to take all\n     * the paint from the bucket, turn right, then paint a line behind the food trucks.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n\n    \n    \n  }\n}',
+      },
+      {
+        path: 'PainterPlus.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter object to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Takes all the paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n\n  // Paints then moves forward one space\n  public void paintThenMove(String color) {\n    paint(color);\n    move();\n  }\n  \n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Conducting a Code Review (d)',
+    lesson: 'Lesson 11: Programming Style and Feedback',
+    grid: '1,0 1,5 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,5 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,5 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 1,5 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,5 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 1,0 1,0 1,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus brooke = new PainterPlus();\n\n    // Moves forward one space\n    brooke.move();\n\n    // Takes all paint from the paint bucket\n    brooke.takeAllPaint();\n\n    // Moves while PainterPlus can move then turns right\n    brooke.moveTurnRight();\n\n    // Moves while PainterPlus can move\n    while (brooke.canMove()) {\n      brooke.move();\n    }\n\n    // Takes all paint from the paint bucket\n    brooke.takeAllPaint();\n\n    // Turns right\n    brooke.turnRight();\n\n    // Moves while PainterPlus can move then turns left\n    brooke.moveTurnLeft();\n\n    // Moves while PainterPlus can move then turns right\n    brooke.moveTurnRight();\n\n    // Moves while PainterPlus can move\n    while (brooke.canMove()) {\n      brooke.move();\n    }\n\n    // Takes all paint from the paint bucket\n    brooke.takeAllPaint();\n\n    // Turns left\n    brooke.turnLeft();\n\n    // Moves while PainterPlus can move then turns left\n    brooke.moveTurnLeft();\n\n    // Moves while PainterPlus can move\n    while (brooke.canMove()) {\n      brooke.move();\n    }\n\n    // Takes all paint from the paint bucket\n    brooke.takeAllPaint();\n\n    // Turns around\n    brooke.turnLeft();\n    brooke.turnLeft();\n\n    // Moves while PainterPlus can move then turns right\n    brooke.moveTurnRight();\n\n    // Moves while PainterPlus can move then turns right\n    brooke.moveTurnRight();\n\n    // Moves while PainterPlus can move then turns right\n    brooke.moveTurnRight();\n\n    // Moves while PainterPlus can move then turns left\n    brooke.moveTurnLeft();\n\n    // Moves while PainterPlus can move then turns left\n    brooke.moveTurnLeft();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the moveTurnLeft(), move(), and takeAllPaint() methods to navigate to\n     * the last paint bucket and take all of the paint from the paint bucket.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n\n    \n    \n  }\n}',
+      },
+      {
+        path: 'PainterPlus.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter object to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Takes all paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n\n  // Moves while the Painter object can move then turns left\n  public void moveTurnLeft() {\n    while (canMove()) {\n      move();\n    }\n\n    turnLeft();\n  }\n\n  // Moves while the Painter object can move then turns right\n  public void moveTurnRight() {\n    while (canMove()) {\n      move();\n    }\n\n    turnRight();\n  }\n  \n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Writing Algorithms (a)',
+    lesson: 'Lesson 12: Selection Statements',
+    grid: '1,0 1,0 1,0 1,6 0,0 0,0 1,0 1,0 1,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 1,0 1,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,6 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the TrafficPainter class and the method paintLines().\n     * Then, instantiate a TrafficPainter object and use the paintLines() method.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n\n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Writing Algorithms (b)',
+    lesson: 'Lesson 12: Selection Statements',
+    grid: '1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the MarathonPainter class and the methods moveToSouth() and moveToEast().\n     * Then, instantiate a MarathonPainter object and use the methods you wrote.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n\n\n    \n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Writing Algorithms (c)',
+    lesson: 'Lesson 12: Selection Statements',
+    grid: '1,0 1,12 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 1,0\n1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the MuralPainter class and the method paintDiagonal().\n     * Then, instantiate a MuralPainter object and use the paintDiagonal() method.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n\n\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Writing Algorithms (d)',
+    lesson: 'Lesson 12: Selection Statements',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0 0,0\n1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,6 1,0 1,0 0,0\n1,0 1,0 0,0 0,0 1,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0 1,6 0,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the EventPainter class and the methods takePaintThenPaint(), moveToNextRow(),\n     * and paintRow(). Then, instantiate a EventPainter object and use the methods.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n\n\n    \n    \n    \n  }\n}',
       },
     ],
   },
@@ -209,6 +444,109 @@ export const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
       {
         path: 'PainterPlus.java',
         text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Takes all paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n\n  // Paints then moves forward while the Painter can move\n  public void paintThenMove(String color) {\n    while (canMove()) {\n      paint(color);\n      move();\n    }\n  }\n  \n}',
+      },
+    ],
+  },
+  {
+    name: 'Practice: Debugging in The Neighborhood (a)',
+    lesson: 'Lesson 13: Debugging Strategies',
+    grid: '1,0 1,13 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0\n0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0\n0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0\n0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0\n0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus molly = new PainterPlus();\n\n    // Move forward while PainterPlus can move\n    while (molly.canMove()) {\n      // Take all of the paint if PainterPlus is on a paint bucket\n      if (molly.isOnBucket()) {\n        molly.takeAllPaint();\n      }\n\n      // Paint the current space if PainterPlus has paint\n      if (molly.hasPaint()) {\n        molly.paint("red");\n      }\n\n      // Move forward one space\n      molly.move();\n    }\n\n    // Paint while PainterPlus has paint\n    while (molly.hasPaint()) {\n      molly.paint("red");\n\n      // Move forward one space if PainterPlus can move\n      if (molly.canMove()) {\n        molly.move();\n      }\n    }\n    \n  }\n}',
+      },
+      {
+        path: 'PainterPlus.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Takes all of the paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n  \n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #1',
+    lesson: 'Lesson 15a: Asphalt Art Project',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #2',
+    lesson: 'Lesson 15a: Asphalt Art Project',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #3',
+    lesson: 'Lesson 15a: Asphalt Art Project',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #4',
+    lesson: 'Lesson 15a: Asphalt Art Project',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #1',
+    lesson: 'Lesson 15b: Asphalt Art Project [1-Day Version]',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #2',
+    lesson: 'Lesson 15b: Asphalt Art Project [1-Day Version]',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #3',
+    lesson: 'Lesson 15b: Asphalt Art Project [1-Day Version]',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
+      },
+    ],
+  },
+  {
+    name: 'Asphalt Art Project #4',
+    lesson: 'Lesson 15b: Asphalt Art Project [1-Day Version]',
+    grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+    files: [
+      {
+        path: 'Main.java',
+        text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n    \n  }\n}',
       },
     ],
   },
