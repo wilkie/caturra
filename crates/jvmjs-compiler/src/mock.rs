@@ -18,13 +18,21 @@ use std::fmt::Write as _;
 use crate::ast::{CompilationUnit, Expr, Literal, Stmt, TypeRef};
 
 /// A partial mock to generate: a subclass of `target` overriding `methods`.
+/// `ctor_arity` is the number of `withConstructor(...)` arguments (0 = default
+/// constructor).
 pub struct MockSpec {
     target: String,
     methods: Vec<String>,
+    ctor_arity: usize,
 }
 
-fn mock_class_name(target: &str, methods: &[String]) -> String {
-    format!("__EMock_{}_{}", target, methods.join("_"))
+fn mock_class_name(target: &str, methods: &[String], ctor_arity: usize) -> String {
+    let base = format!("__EMock_{}_{}", target, methods.join("_"));
+    if ctor_arity == 0 {
+        base
+    } else {
+        format!("{base}_c{ctor_arity}")
+    }
 }
 
 /// Rewrite mock-builder chains in the non-bundle units and return the source
@@ -56,7 +64,7 @@ pub fn rewrite(units: &mut [(String, CompilationUnit)]) -> Option<String> {
     let mut seen = BTreeSet::new();
     let mut source = String::new();
     for spec in &specs {
-        let name = mock_class_name(&spec.target, &spec.methods);
+        let name = mock_class_name(&spec.target, &spec.methods, spec.ctor_arity);
         if !seen.insert(name.clone()) {
             continue;
         }
@@ -71,6 +79,9 @@ pub fn rewrite(units: &mut [(String, CompilationUnit)]) -> Option<String> {
 struct ClassSigs {
     superclass: Option<String>,
     methods: Vec<Sig>,
+    /// Parameter-type lists for each declared constructor (for
+    /// `withConstructor` forwarding).
+    constructors: Vec<Vec<TypeRef>>,
 }
 
 /// (method, return type, parameter types).
@@ -94,11 +105,18 @@ fn collect_signatures(units: &[(String, CompilationUnit)]) -> Vec<(String, Class
                     params: m.params.iter().map(|p| p.ty.clone()).collect(),
                 })
                 .collect();
+            let constructors = class
+                .methods
+                .iter()
+                .filter(|m| m.is_constructor)
+                .map(|m| m.params.iter().map(|p| p.ty.clone()).collect())
+                .collect();
             classes.push((
                 class.name.clone(),
                 ClassSigs {
                     superclass: class.superclass.clone(),
                     methods,
+                    constructors,
                 },
             ));
         }
@@ -127,6 +145,25 @@ fn find_sig<'a>(classes: &'a [(String, ClassSigs)], target: &str, method: &str) 
     None
 }
 
+/// Find a constructor of `target` (walking superclasses) with `arity`
+/// parameters, returning its parameter types.
+#[allow(clippy::assigning_clones)] // `current` is `None` after `take`
+fn find_ctor<'a>(
+    classes: &'a [(String, ClassSigs)],
+    target: &str,
+    arity: usize,
+) -> Option<&'a Vec<TypeRef>> {
+    let mut current = Some(target.to_owned());
+    while let Some(name) = current.take() {
+        let entry = classes.iter().find(|(n, _)| *n == name)?;
+        if let Some(params) = entry.1.constructors.iter().find(|p| p.len() == arity) {
+            return Some(params);
+        }
+        current = entry.1.superclass.clone();
+    }
+    None
+}
+
 /// Emit `class <name> extends <target> implements __Mockable { … }` overriding
 /// each mocked method to route through the engine.
 fn emit_mock_class(out: &mut String, name: &str, spec: &MockSpec, sigs: &[(String, ClassSigs)]) {
@@ -137,6 +174,24 @@ fn emit_mock_class(out: &mut String, name: &str, spec: &MockSpec, sigs: &[(Strin
     );
     out.push_str("  __EMockEngine __e = new __EMockEngine();\n");
     out.push_str("  public __EMockEngine __engine() { return __e; }\n");
+    // `withConstructor(args)` — forward to the matching super constructor.
+    if spec.ctor_arity > 0 {
+        let types = find_ctor(sigs, &spec.target, spec.ctor_arity).cloned();
+        let params: Vec<String> = (0..spec.ctor_arity)
+            .map(|i| {
+                let ty = types.as_ref().and_then(|t| t.get(i));
+                let src = ty.map_or_else(|| String::from("Object"), type_src);
+                format!("{src} __c{i}")
+            })
+            .collect();
+        let args: Vec<String> = (0..spec.ctor_arity).map(|i| format!("__c{i}")).collect();
+        let _ = writeln!(
+            out,
+            "  public {name}({}) {{ super({}); }}",
+            params.join(", "),
+            args.join(", ")
+        );
+    }
     for method in &spec.methods {
         let (ret, param_types) = match find_sig(sigs, &spec.target, method) {
             Some(s) => (s.ret.clone(), s.params.clone()),
@@ -193,8 +248,8 @@ fn type_src(ty: &TypeRef) -> String {
 // ----- chain extraction + AST rewrite -----
 
 /// If `expr` is a `partialMockBuilder(T.class)….createMock()` chain, return
-/// its `MockSpec`.
-fn extract_spec(expr: &Expr) -> Option<MockSpec> {
+/// its `MockSpec` and the `withConstructor(...)` arguments (empty if none).
+fn extract_spec(expr: &Expr) -> Option<(MockSpec, Vec<Expr>)> {
     let Expr::Call {
         method, receiver, ..
     } = expr
@@ -205,21 +260,41 @@ fn extract_spec(expr: &Expr) -> Option<MockSpec> {
         return None;
     }
     let mut methods = Vec::new();
+    let mut ctor_args: Vec<Expr> = Vec::new();
     let mut current = receiver.as_deref()?;
     loop {
         match current {
+            // `withConstructor(args)` — the mock runs this super constructor.
             Expr::Call {
                 method,
                 receiver: Some(inner),
                 args,
                 ..
-            } if method == "addMockedMethod" => {
-                if let Some(Expr::Literal {
-                    value: Literal::Str(name),
-                    ..
-                }) = args.first()
-                {
-                    methods.push(name.clone());
+            } if method == "withConstructor" => {
+                ctor_args.clone_from(args);
+                current = inner;
+            }
+            // `addMockedMethod("m")` (one name; may be followed by a Class[]
+            // signature) or `addMockedMethods("m1", "m2", …)` (varargs).
+            Expr::Call {
+                method,
+                receiver: Some(inner),
+                args,
+                ..
+            } if method == "addMockedMethod" || method == "addMockedMethods" => {
+                let take = if method == "addMockedMethod" {
+                    1
+                } else {
+                    args.len()
+                };
+                for arg in args.iter().take(take) {
+                    if let Expr::Literal {
+                        value: Literal::Str(name),
+                        ..
+                    } = arg
+                    {
+                        methods.push(name.clone());
+                    }
                 }
                 current = inner;
             }
@@ -232,7 +307,15 @@ fn extract_spec(expr: &Expr) -> Option<MockSpec> {
                 let target = class_literal_name(args.first()?)?;
                 methods.sort();
                 methods.dedup();
-                return Some(MockSpec { target, methods });
+                let ctor_arity = ctor_args.len();
+                return Some((
+                    MockSpec {
+                        target,
+                        methods,
+                        ctor_arity,
+                    },
+                    ctor_args,
+                ));
             }
             _ => return None,
         }
@@ -254,14 +337,14 @@ fn class_literal_name(expr: &Expr) -> Option<String> {
 }
 
 fn rewrite_expr(expr: &mut Expr, specs: &mut Vec<MockSpec>) {
-    if let Some(spec) = extract_spec(expr) {
+    if let Some((spec, ctor_args)) = extract_spec(expr) {
         let span = expr.span();
-        let class = mock_class_name(&spec.target, &spec.methods);
+        let class = mock_class_name(&spec.target, &spec.methods, spec.ctor_arity);
         specs.push(spec);
         *expr = Expr::NewObject {
             class,
             type_args: Vec::new(),
-            args: Vec::new(),
+            args: ctor_args,
             span,
         };
         return;

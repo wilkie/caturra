@@ -2212,6 +2212,7 @@ impl<'run> Interpreter<'run> {
     /// `invokevirtual`: resolve the method ref, pop arguments and
     /// receiver, and dispatch — user methods become a frame to push,
     /// intrinsics run inline.
+    #[allow(clippy::too_many_lines)] // one dispatch path with several fast-paths
     fn invoke_virtual_op(
         &mut self,
         class: &ClassFile,
@@ -2276,6 +2277,31 @@ impl<'run> Interpreter<'run> {
             let reference = self.heap.alloc(crate::value::HeapObject::Class { name });
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
+        }
+        // `Object` methods on an array (arrays don't override them): identity
+        // equals/hashCode and a default toString.
+        if is_array_object(self.heap.get(receiver)) {
+            match method_name.as_str() {
+                "equals" => {
+                    let equal =
+                        matches!(args.first(), Some(JValue::Ref(Some(r))) if *r == receiver);
+                    frame.stack.push(JValue::Int(i32::from(equal)));
+                    return Ok(None);
+                }
+                "hashCode" => {
+                    frame
+                        .stack
+                        .push(JValue::Int(i32::from_ne_bytes(receiver.to_ne_bytes())));
+                    return Ok(None);
+                }
+                "toString" => {
+                    let text = format!("[array@{receiver:x}");
+                    let reference = self.heap.alloc_string(&text);
+                    frame.stack.push(JValue::Ref(Some(reference)));
+                    return Ok(None);
+                }
+                _ => {}
+            }
         }
         let result = if let Some(instance_class) = instance_class {
             match self.user_virtual_dispatch(
@@ -3124,6 +3150,23 @@ impl Frame<'_> {
 /// jvmjs is a flat namespace, so this is usually a no-op.
 fn simple_class_name(name: &str) -> &str {
     name.rsplit(['/', '.']).next().unwrap_or(name)
+}
+
+/// Whether a heap object is an array (all kinds), for `Object`-method dispatch.
+fn is_array_object(object: Option<&crate::value::HeapObject>) -> bool {
+    use crate::value::HeapObject;
+    matches!(
+        object,
+        Some(
+            HeapObject::RefArray(_)
+                | HeapObject::IntArray(_)
+                | HeapObject::DoubleArray(_)
+                | HeapObject::LongArray(_)
+                | HeapObject::FloatArray(_)
+                | HeapObject::ShortArray(_)
+                | HeapObject::ByteArray(_)
+        )
+    )
 }
 
 /// Parse the parameter descriptors from a method descriptor, e.g.

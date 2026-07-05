@@ -64,6 +64,37 @@ class Assertions {
     if (!same)
       throw new RuntimeException(message + " ==> expected: <" + expected + "> but was: <" + actual + ">");
   }
+  public static void assertNotEquals(int unexpected, int actual) {
+    if (unexpected == actual) throw new RuntimeException("expected not equal to " + actual);
+  }
+  public static void assertNotEquals(int unexpected, int actual, String message) {
+    if (unexpected == actual) throw new RuntimeException(message);
+  }
+  public static void assertNotEquals(double unexpected, double actual) {
+    if (unexpected == actual) throw new RuntimeException("expected not equal to " + actual);
+  }
+  public static void assertNotEquals(double unexpected, double actual, String message) {
+    if (unexpected == actual) throw new RuntimeException(message);
+  }
+  public static void assertNotEquals(boolean unexpected, boolean actual, String message) {
+    if (unexpected == actual) throw new RuntimeException(message);
+  }
+  public static void assertNotEquals(String unexpected, String actual) {
+    boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
+    if (same) throw new RuntimeException("expected not equal to " + actual);
+  }
+  public static void assertNotEquals(String unexpected, String actual, String message) {
+    boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
+    if (same) throw new RuntimeException(message);
+  }
+  public static void assertNotEquals(Object unexpected, Object actual) {
+    boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
+    if (same) throw new RuntimeException("expected not equal to " + actual);
+  }
+  public static void assertNotEquals(Object unexpected, Object actual, String message) {
+    boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
+    if (same) throw new RuntimeException(message);
+  }
   public static void assertNull(Object value) {
     if (value != null) throw new RuntimeException("expected null but was " + value);
   }

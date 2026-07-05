@@ -5893,6 +5893,10 @@ impl BodyGen<'_> {
             | JType::Exception(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
             }
+            // Arrays are Objects: `equals`/`hashCode`/`toString`/`getClass`.
+            JType::Array { .. } => {
+                return self.array_object_call(method, args, span);
+            }
             other => {
                 self.error(
                     span,
@@ -5902,6 +5906,35 @@ impl BodyGen<'_> {
             }
         };
         self.emit_virtual_call_on_stacked_receiver(class_id, method, args, span)
+    }
+
+    /// `Object` methods on an array receiver (already on the stack): identity
+    /// `equals`/`hashCode`, and `toString`/`getClass`.
+    #[allow(clippy::option_option)] // matches the call-dispatch return shape
+    fn array_object_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let (ret, descriptor): (JType, &str) = match (method, args.len()) {
+            ("equals", 1) => (JType::Boolean, "(Ljava/lang/Object;)Z"),
+            ("hashCode", 0) => (JType::Int, "()I"),
+            ("toString", 0) => (JType::Str, "()Ljava/lang/String;"),
+            ("getClass", 0) => (JType::Class, "()Ljava/lang/Class;"),
+            _ => {
+                self.error(span, format!("cannot call {method}(...) on an array"));
+                return None;
+            }
+        };
+        for arg in args {
+            self.expr(arg);
+        }
+        let method_ref = intern_method_ref(self.pool, "java/lang/Object", method, descriptor);
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+        self.code
+            .drop_stack(u16::try_from(1 + args.len()).unwrap_or(1)); // receiver + args
+        Some(Some(ret))
     }
 
     /// Resolve and emit an intrinsic instance call (String / Scanner /

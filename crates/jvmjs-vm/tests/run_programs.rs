@@ -410,6 +410,63 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn array_object_methods_reference_semantics() {
+    // Arrays are Objects: equals is reference identity (not element compare).
+    let out = run_stdout(
+        r#"
+        public class Main {
+            public static void main(String[] a) {
+                String[] x = {"a", "b"};
+                String[] alias = x;
+                String[] same = {"a", "b"};
+                System.out.println(x.equals(alias));
+                System.out.println(x.equals(same));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn easymock_with_constructor_and_mocked_methods() {
+    // withConstructor(args) forwards to the super constructor;
+    // addMockedMethods("a","b") mocks several methods at once.
+    let out = run_neighborhood(
+        r#"
+        import org.code.neighborhood.*;
+        import static org.easymock.EasyMock.*;
+        public class Main {
+            public static void main(String[] args) {}
+        }
+        class Robot extends Painter {
+            public Robot(int x, int y, String d, int p) { super(x, y, d, p); }
+            public void go() { move(); paint("red"); move(); }
+        }
+        class Checker {
+            public static void main(String[] args) {
+                Robot r = partialMockBuilder(Robot.class)
+                    .withConstructor(0, 0, "east", 5)
+                    .addMockedMethods("move", "paint")
+                    .createMock();
+                r.move(); r.paint("red"); r.move();
+                replay(r);
+                r.go();
+                verify(r);
+                System.out.println("ok");
+            }
+        }
+        "#,
+        "Checker",
+        "1,0 1,0
+1,0 1,0
+",
+    );
+    assert_eq!(out, "ok\n");
+}
+
+#[test]
 fn easymock_partial_mock_record_replay_verify() {
     // EasyMock partial mocks: the mocked methods are stubbed + counted while
     // the real method under test runs; verify() checks the interaction counts.
