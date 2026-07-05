@@ -520,6 +520,27 @@ fn structural_reflection_prints_field_signatures() {
 }
 
 #[test]
+fn new_string_constructor() {
+    // `new String(...)`: empty, copy-of-String (distinct reference), char[].
+    let out = run_stdout(
+        r#"
+        public class Main {
+            public static void main(String[] args) {
+                char[] cs = {'h', 'i'};
+                System.out.println(new String("Welcome"));
+                System.out.println("[" + new String() + "]");
+                System.out.println(new String(cs));
+                String x = new String("cat");
+                System.out.println(x.equals("cat") + " " + (x == "cat"));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "Welcome\n[]\nhi\ntrue false\n");
+}
+
+#[test]
 fn structural_reflection_prints_constructor_signatures() {
     // Class.getDeclaredConstructors + canonical Constructor.toString,
     // the ConstructorsHelper surface.

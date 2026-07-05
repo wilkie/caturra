@@ -5315,6 +5315,7 @@ impl BodyGen<'_> {
         };
         if self.table.class_id(class_name).is_none() {
             match class_name {
+                "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "File" => return self.new_file(args, span),
@@ -5460,6 +5461,49 @@ impl BodyGen<'_> {
     }
 
     /// `new Scanner(System.in)` or `new Scanner(fileExpr)`.
+    /// `new String()` / `new String(String)` / `new String(char[])` —
+    /// creates a fresh (distinct-reference) `String`. The class library
+    /// String is intrinsic, so this emits `new; dup; args; <init>`.
+    fn new_string(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let string_class = intern_class(self.pool, "java/lang/String");
+        self.code.push_op_u16(op::NEW, string_class, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [] => "()V",
+            [arg] => {
+                let ty = self.expr(arg);
+                match ty {
+                    JType::Str | JType::Null => "(Ljava/lang/String;)V",
+                    JType::Array {
+                        elem: ElemType::Char,
+                        dims: 1,
+                    } => "([C)V",
+                    JType::Error => return JType::Error,
+                    other => {
+                        self.error(
+                            span,
+                            format!("no String constructor takes {}", other.describe(self.table)),
+                        );
+                        return JType::Error;
+                    }
+                }
+            }
+            _ => {
+                self.error(
+                    span,
+                    "jvmjs supports new String(), new String(String), and new String(char[])",
+                );
+                return JType::Error;
+            }
+        };
+        let init_ref = intern_method_ref(self.pool, "java/lang/String", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        // Pop the consumed args plus the duplicated receiver slot.
+        let arg_width = u16::from(descriptor != "()V");
+        self.code.drop_stack(1 + arg_width);
+        JType::Str
+    }
+
     fn new_scanner(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let reads_stdin = matches!(
             args,

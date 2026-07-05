@@ -52,6 +52,7 @@ impl IntrinsicStatics {
 #[must_use]
 pub fn instantiate(class: &str) -> Option<HeapObject> {
     match class {
+        "java/lang/String" => Some(HeapObject::JavaString(Vec::new())),
         "java/lang/StringBuilder" => Some(HeapObject::StringBuilder(Vec::new())),
         "java/util/Scanner" => Some(HeapObject::Scanner {
             buffer: String::new(),
@@ -76,6 +77,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
 }
 
 /// Invoke an intrinsic constructor (`invokespecial <init>`).
+#[allow(clippy::too_many_lines)]
 pub fn invoke_special(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
@@ -120,6 +122,11 @@ pub fn invoke_special(
         ("<init>", "(Ljava/lang/String;)V") => {
             let text = string_arg(heap, &args[0])?;
             match heap.get_mut(receiver) {
+                // `new String(String)`: a fresh copy with the same chars.
+                Some(HeapObject::JavaString(units)) => {
+                    *units = text.encode_utf16().collect();
+                    Ok(())
+                }
                 Some(HeapObject::File(path)) => {
                     *path = text;
                     Ok(())
@@ -186,6 +193,27 @@ pub fn invoke_special(
                 _ => Err(VmError::UnknownIntrinsic(format!(
                     "{class}.{method}{descriptor}"
                 ))),
+            }
+        }
+        // `new String(char[])` — char arrays are stored as int arrays.
+        ("<init>", "([C)V") => {
+            let units: Vec<u16> = match &args[0] {
+                JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                    Some(HeapObject::IntArray(values)) => values
+                        .iter()
+                        .map(|v| u16::try_from(v & 0xFFFF).unwrap_or(0))
+                        .collect(),
+                    _ => return Err(throw("java.lang.ClassCastException: not a char[]")),
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            if let Some(HeapObject::JavaString(target)) = heap.get_mut(receiver) {
+                *target = units;
+                Ok(())
+            } else {
+                Err(VmError::UnknownIntrinsic(format!(
+                    "{class}.{method}{descriptor}"
+                )))
             }
         }
         _ => Err(VmError::UnknownIntrinsic(format!(
