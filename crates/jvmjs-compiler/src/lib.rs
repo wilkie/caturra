@@ -199,6 +199,45 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
     src
 }
 
+/// The student's class names: classes in the original (non-injected) sources
+/// that are not `JUnit` validators. `ValidationHelper.getClassNames` reports
+/// these so a validator can check the student defined a class by name.
+fn student_class_names(units: &[(String, ast::CompilationUnit)]) -> Vec<String> {
+    let mut names = Vec::new();
+    for (path, unit) in units {
+        if path.starts_with('<') {
+            continue; // injected bundle / synthetic unit
+        }
+        let is_validator = unit.imports.iter().any(|import| {
+            import.path.first().map(String::as_str) == Some("org")
+                && import.path.get(1).map(String::as_str) == Some("junit")
+        });
+        if is_validator {
+            continue;
+        }
+        for class in &unit.classes {
+            names.push(class.name.clone());
+        }
+    }
+    names
+}
+
+/// Generate the `__ValidationClasses` companion that backs
+/// `ValidationHelper.getClassNames` with a compile-time class-name list.
+fn user_classes_source(names: &[String]) -> String {
+    let mut src = String::from(
+        "class __ValidationClasses {\n  \
+         static java.util.ArrayList<String> names() {\n    \
+         java.util.ArrayList<String> n = new java.util.ArrayList<String>();\n",
+    );
+    for name in names {
+        // Class names are identifiers, so no escaping is needed.
+        let _ = writeln!(src, "    n.add(\"{name}\");");
+    }
+    src.push_str("    return n;\n  }\n}\n");
+    src
+}
+
 /// Whether any unit imports something under the given prefix path
 /// (`["org","junit"]` matches `import static org.junit.jupiter....`).
 fn imports_prefix(units: &[(String, ast::CompilationUnit)], prefix: &[&str]) -> bool {
@@ -271,6 +310,13 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<validation-lib>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<validation-lib>"), unit));
+        // Bake the student's class names in for `ValidationHelper.getClassNames`
+        // (the student sources are the non-injected, non-JUnit units).
+        let source = user_classes_source(&student_class_names(&units));
+        let (tokens, _) = lexer::lex("<validation-classes>", &source);
+        let (unit, mut errs) = parser::parse("<validation-classes>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<validation-classes>"), unit));
     }
     if imports_package(&units, &["org", "code", "theater"])
         || imports_package(&units, &["org", "code", "media"])

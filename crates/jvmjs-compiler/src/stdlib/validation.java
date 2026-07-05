@@ -108,6 +108,15 @@ class NeighborhoodLog {
   }
 }
 
+class ValidationHelper {
+  // The student's class names, baked in at compile time (see the generated
+  // __ValidationClasses companion). Validators use this to check that the
+  // student defined a class of a given name.
+  public static java.util.ArrayList<String> getClassNames() {
+    return __ValidationClasses.names();
+  }
+}
+
 class NeighborhoodTestRunner {
   public static NeighborhoodLog run() {
     __NbhdWorld.resetLog();

@@ -1794,6 +1794,9 @@ impl JType {
                 | JType::Generic { .. }
                 | JType::TypeVar
                 | JType::Boxed(_)
+                | JType::Class
+                | JType::Field
+                | JType::Constructor
         )
     }
 
@@ -2348,6 +2351,8 @@ enum BParam {
     SelfList,
     /// The list's element type (autoboxed at the boundary).
     Elem,
+    /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
+    Class,
 }
 
 /// The return of an intrinsic method.
@@ -3488,6 +3493,12 @@ const BOOLEAN_METHODS: &[BuiltinMethod] = &[
 const CLASS_METHODS: &[BuiltinMethod] = &[
     bm("getSimpleName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "isAssignableFrom",
+        &[BParam::Class],
+        BRet::Boolean,
+        "(Ljava/lang/Class;)Z",
+    ),
     bm("getSuperclass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "getDeclaredFields",
@@ -3542,9 +3553,17 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
 }
 
 /// The intrinsic static-method table for a class name.
+const CLASS_STATIC_METHODS: &[BuiltinMethod] = &[bm(
+    "forName",
+    &[BParam::Str],
+    BRet::Class,
+    "(Ljava/lang/String;)Ljava/lang/Class;",
+)];
+
 fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
+        "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
         "Character" => Some(("java/lang/Character", CHARACTER_METHODS)),
@@ -3632,6 +3651,7 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
         },
         BParam::SelfList => elem.map_or(JType::Error, JType::List),
         BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
+        BParam::Class => JType::Class,
     }
 }
 

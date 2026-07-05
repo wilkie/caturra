@@ -2135,6 +2135,28 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
         frame: &mut Frame<'run>,
     ) -> Result<Option<Frame<'run>>, VmError> {
+        // `Class.forName(name)` — a reflection handle for a loaded class.
+        // Needs the class table, which the intrinsic layer lacks.
+        if class_name == "java/lang/Class" && method_name == "forName" {
+            let name = match args.first() {
+                Some(JValue::Ref(Some(reference))) => self.heap.string_text(*reference),
+                _ => None,
+            };
+            let value = match name {
+                Some(name) if self.classes.contains_key(&name) => {
+                    let reference = self.heap.alloc(crate::value::HeapObject::Class { name });
+                    JValue::Ref(Some(reference))
+                }
+                other => {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.ClassNotFoundException: {}",
+                        other.unwrap_or_default()
+                    )));
+                }
+            };
+            frame.stack.push(value);
+            return Ok(None);
+        }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         let Some(class) = classes.get(class_name) else {
             // Intrinsic statics: Math.*, Integer.parseInt, ...
@@ -2234,7 +2256,7 @@ impl<'run> Interpreter<'run> {
         } else if is_reflect {
             // Class/Field methods need the class table (superclass,
             // declared fields), which the intrinsic layer lacks.
-            self.reflect_virtual(receiver, &method_name)?
+            self.reflect_virtual(receiver, &method_name, &args)?
         } else {
             intrinsics::invoke_virtual(
                 &mut self.heap,
@@ -2256,11 +2278,33 @@ impl<'run> Interpreter<'run> {
     /// `java.lang.Class` / `java.lang.reflect.Field` methods — the
     /// structural, read-only reflection the curriculum uses. Reads the
     /// loaded [`ClassFile`] metadata; performs no invocation.
+    /// Whether `sub` is `sup` or a (transitive) subclass of it, walking the
+    /// loaded class-file superclass chain (stops at the first library class).
+    fn class_is_subtype(&self, sub: &str, sup: &str) -> bool {
+        let mut current = sub.to_owned();
+        loop {
+            if current == sup {
+                return true;
+            }
+            let Some(class) = self.classes.get(&current) else {
+                return false;
+            };
+            let Some(super_name) = class.constant_pool.get_class_name(class.super_class) else {
+                return false;
+            };
+            if super_name.contains('/') {
+                return super_name == sup; // reached java/lang/Object etc.
+            }
+            current = super_name.to_owned();
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn reflect_virtual(
         &mut self,
         receiver: HeapRef,
         method: &str,
+        args: &[JValue],
     ) -> Result<Option<JValue>, VmError> {
         use crate::value::HeapObject;
         match self.heap.get(receiver) {
@@ -2270,6 +2314,20 @@ impl<'run> Interpreter<'run> {
                     "getSimpleName" | "getName" => {
                         let simple = simple_class_name(&name);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(simple)))))
+                    }
+                    // `this.isAssignableFrom(other)`: `other` is `this` or a
+                    // subclass of `this` (walk `other`'s superclass chain).
+                    "isAssignableFrom" => {
+                        let other = match args.first() {
+                            Some(JValue::Ref(Some(reference))) => match self.heap.get(*reference) {
+                                Some(HeapObject::Class { name }) => Some(name.clone()),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let assignable =
+                            other.is_some_and(|other| self.class_is_subtype(&other, &name));
+                        Ok(Some(JValue::Int(i32::from(assignable))))
                     }
                     "getSuperclass" => {
                         let super_name = self.classes.get(&name).and_then(|cf| {

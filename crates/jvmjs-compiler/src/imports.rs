@@ -213,6 +213,7 @@ static ORG_CODE_VALIDATION: &[&str] = &[
     "PainterEvent",
     "Position",
     "NeighborhoodActionType",
+    "ValidationHelper",
 ];
 
 /// Public classes of the bundled theater/media library.

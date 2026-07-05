@@ -410,6 +410,55 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn class_reflection_forname_and_assignable() {
+    // Class.forName + isAssignableFrom (the reflection the neighborhood
+    // subclass validators use).
+    let out = run_stdout(
+        r#"
+        public class Main {
+            public static void main(String[] a) throws Exception {
+                Class animal = Class.forName("Animal");
+                Class dog = new Dog().getClass();
+                System.out.println(animal.isAssignableFrom(dog));
+                System.out.println(dog.isAssignableFrom(animal));
+                System.out.println(Class.forName("Dog").getSimpleName());
+            }
+        }
+        class Animal {}
+        class Dog extends Animal {}
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "true\nfalse\nDog\n");
+}
+
+#[test]
+fn validation_helper_lists_student_classes() {
+    // ValidationHelper.getClassNames() reports the student's classes (not the
+    // injected library classes like Painter).
+    let out = run_neighborhood(
+        r#"
+        import org.code.neighborhood.*;
+        import org.code.validation.*;
+        import java.util.*;
+        public class Main {
+            public static void main(String[] a) {}
+        }
+        class Rabbit {}
+        class Checker {
+            public static void main(String[] a) {
+                List<String> names = ValidationHelper.getClassNames();
+                System.out.println(names.contains("Rabbit") + " " + names.contains("Painter"));
+            }
+        }
+        "#,
+        "Checker",
+        "1,0\n",
+    );
+    assert_eq!(out, "true false\n");
+}
+
+#[test]
 fn neighborhood_validation_counts_painter_actions() {
     // org.code.validation: NeighborhoodTestRunner.run() invokes the student's
     // Main, then reports the recorded action log — including query methods
