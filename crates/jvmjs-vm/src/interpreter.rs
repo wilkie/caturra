@@ -3537,6 +3537,8 @@ fn class_matches_descriptor(class_name: &str, desc: &str) -> bool {
         "char" => desc == "C",
         "short" => desc == "S",
         "byte" => desc == "B",
+        // Array class literals carry the JVM descriptor as their name (`[I`).
+        name if name.starts_with('[') => desc == name,
         _ => desc == format!("L{class_name};"),
     }
 }

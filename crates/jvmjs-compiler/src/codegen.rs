@@ -7691,20 +7691,45 @@ impl BodyGen<'_> {
     /// Emit a `Type.class` literal: push the type's canonical name and turn it
     /// into a `Class` handle via the `Class.__forType` intrinsic.
     fn class_literal(&mut self, type_name: &str) -> JType {
-        let canonical = match type_name {
+        // Array class literals (`int[].class`, `String[][].class`) carry a
+        // trailing `[]` per dimension; their `Class` name is the JVM array
+        // descriptor (`[I`, `[[Ljava/lang/String;`).
+        let mut base = type_name;
+        let mut dims = 0usize;
+        while let Some(stripped) = base.strip_suffix("[]") {
+            base = stripped;
+            dims += 1;
+        }
+        let base_name = match base {
             "int" | "double" | "boolean" | "char" | "long" | "float" | "short" | "byte" => {
-                type_name.to_owned()
+                base.to_owned()
             }
             "String" => String::from("java/lang/String"),
             "Object" => String::from("java/lang/Object"),
             "Integer" | "Double" | "Boolean" | "Character" | "Long" | "Float" | "Short"
             | "Byte" => {
-                format!("java/lang/{type_name}")
+                format!("java/lang/{base}")
             }
             other => self.table.class_id(other).map_or_else(
                 || other.to_owned(),
                 |id| self.table.class_name(id).to_owned(),
             ),
+        };
+        let canonical = if dims == 0 {
+            base_name
+        } else {
+            let element = match base {
+                "int" => String::from("I"),
+                "long" => String::from("J"),
+                "double" => String::from("D"),
+                "float" => String::from("F"),
+                "boolean" => String::from("Z"),
+                "char" => String::from("C"),
+                "short" => String::from("S"),
+                "byte" => String::from("B"),
+                _ => format!("L{base_name};"),
+            };
+            format!("{}{element}", "[".repeat(dims))
         };
         let utf8 = self.pool.intern_utf8(&canonical);
         let index = self.pool.intern(Constant::String { string_index: utf8 });

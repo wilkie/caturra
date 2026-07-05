@@ -2587,10 +2587,21 @@ impl Parser<'_> {
                 })
             }
             Some(TokenKind::Keyword(kw)) if primitive_type_name(*kw).is_some() => {
-                // `int.class` / `double.class` — a primitive class literal.
+                // `int.class` / `int[].class` — a (possibly array) primitive
+                // class literal.
                 let name = primitive_type_name(*kw).expect("checked");
                 let start = self.here();
                 self.pos += 1;
+                // Trailing `[]` pairs: `int[].class`, `int[][].class`.
+                let mut dims = 0usize;
+                while self.at_symbol("[") {
+                    self.pos += 1;
+                    if !self.eat_symbol("]") {
+                        self.error_here("expected ']' in array class literal");
+                        return Err(Abort);
+                    }
+                    dims += 1;
+                }
                 if self.eat_symbol(".")
                     && matches!(self.peek(), Some(TokenKind::Keyword(Keyword::Class)))
                 {
@@ -2600,9 +2611,10 @@ impl Parser<'_> {
                         start: start.start,
                         end,
                     };
+                    let full = format!("{name}{}", "[]".repeat(dims));
                     Ok(Expr::Field {
                         object: Box::new(Expr::Name {
-                            path: vec![String::from(name)],
+                            path: vec![full],
                             span,
                         }),
                         name: String::from("class"),

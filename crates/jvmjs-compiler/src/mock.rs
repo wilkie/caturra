@@ -124,25 +124,37 @@ fn collect_signatures(units: &[(String, CompilationUnit)]) -> Vec<(String, Class
     classes
 }
 
-/// Find `method`'s signature walking `target` and its superclasses. Prefers
-/// the no-arg overload (what the validators mock).
+/// All overloads of `method` in `target`'s hierarchy, deduplicated by
+/// parameter signature (a subclass override shadows the superclass one). Used
+/// so mocking a name covers every overload — `canMove()` and `canMove(String)`
+/// are mocked separately, matching per-signature `addMockedMethod` calls.
 #[allow(clippy::assigning_clones)] // `current` is `None` after `take`
-fn find_sig<'a>(classes: &'a [(String, ClassSigs)], target: &str, method: &str) -> Option<&'a Sig> {
+fn find_all_sigs<'a>(
+    classes: &'a [(String, ClassSigs)],
+    target: &str,
+    method: &str,
+) -> Vec<&'a Sig> {
+    let mut result: Vec<&Sig> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut current = Some(target.to_owned());
     while let Some(name) = current.take() {
-        let entry = classes.iter().find(|(n, _)| *n == name)?;
-        if let Some(sig) = entry
-            .1
-            .methods
-            .iter()
-            .filter(|s| s.method == method)
-            .min_by_key(|s| s.params.len())
-        {
-            return Some(sig);
+        let Some(entry) = classes.iter().find(|(n, _)| *n == name) else {
+            break;
+        };
+        for sig in entry.1.methods.iter().filter(|s| s.method == method) {
+            let key: String = sig
+                .params
+                .iter()
+                .map(type_src)
+                .collect::<Vec<_>>()
+                .join(",");
+            if seen.insert(key) {
+                result.push(sig);
+            }
         }
         current = entry.1.superclass.clone();
     }
-    None
+    result
 }
 
 /// Find a constructor of `target` (walking superclasses) with `arity`
@@ -193,38 +205,63 @@ fn emit_mock_class(out: &mut String, name: &str, spec: &MockSpec, sigs: &[(Strin
         );
     }
     for method in &spec.methods {
-        let (ret, param_types) = match find_sig(sigs, &spec.target, method) {
-            Some(s) => (s.ret.clone(), s.params.clone()),
-            None => (TypeRef::Void, Vec::new()),
+        // Mock every overload of the name (a library method not in `sigs`
+        // falls back to a single no-arg override).
+        let overloads = find_all_sigs(sigs, &spec.target, method);
+        let signatures: Vec<(TypeRef, Vec<TypeRef>)> = if overloads.is_empty() {
+            vec![(TypeRef::Void, Vec::new())]
+        } else {
+            overloads
+                .iter()
+                .map(|s| (s.ret.clone(), s.params.clone()))
+                .collect()
         };
-        let params: Vec<String> = param_types
-            .iter()
-            .enumerate()
-            .map(|(i, ty)| format!("{} __a{i}", type_src(ty)))
-            .collect();
-        let ret_src = type_src(&ret);
-        let body = mock_body(method, &ret);
-        let _ = writeln!(
-            out,
-            "  public {ret_src} {method}({}) {{ {body} }}",
-            params.join(", ")
-        );
+        // Overloaded names need a per-signature engine key so each overload
+        // keeps its own record/replay queue; a lone overload uses the plain
+        // name (unchanged behavior for the single-overload common case).
+        let multi = signatures.len() > 1;
+        for (ret, param_types) in signatures {
+            let params: Vec<String> = param_types
+                .iter()
+                .enumerate()
+                .map(|(i, ty)| format!("{} __a{i}", type_src(ty)))
+                .collect();
+            let key = if multi {
+                format!(
+                    "{method}({})",
+                    param_types
+                        .iter()
+                        .map(type_src)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            } else {
+                method.clone()
+            };
+            let ret_src = type_src(&ret);
+            let body = mock_body(&key, &ret);
+            let _ = writeln!(
+                out,
+                "  public {ret_src} {method}({}) {{ {body} }}",
+                params.join(", ")
+            );
+        }
     }
     out.push_str("}\n");
 }
 
-fn mock_body(method: &str, ret: &TypeRef) -> String {
+fn mock_body(key: &str, ret: &TypeRef) -> String {
     match ret {
-        TypeRef::Void => format!("__e.consume(\"{method}\");"),
-        TypeRef::Boolean => format!("return __e.consume(\"{method}\") != 0;"),
+        TypeRef::Void => format!("__e.consume(\"{key}\");"),
+        TypeRef::Boolean => format!("return __e.consume(\"{key}\") != 0;"),
         TypeRef::Int | TypeRef::Short | TypeRef::Byte => {
-            format!("return __e.consume(\"{method}\");")
+            format!("return __e.consume(\"{key}\");")
         }
-        TypeRef::Char => format!("return (char) __e.consume(\"{method}\");"),
-        TypeRef::Long => format!("return (long) __e.consume(\"{method}\");"),
-        TypeRef::Double | TypeRef::Float => format!("__e.consume(\"{method}\"); return 0;"),
+        TypeRef::Char => format!("return (char) __e.consume(\"{key}\");"),
+        TypeRef::Long => format!("return (long) __e.consume(\"{key}\");"),
+        TypeRef::Double | TypeRef::Float => format!("__e.consume(\"{key}\"); return 0;"),
         // Reference return: count the call, return null.
-        _ => format!("__e.consume(\"{method}\"); return null;"),
+        _ => format!("__e.consume(\"{key}\"); return null;"),
     }
 }
 

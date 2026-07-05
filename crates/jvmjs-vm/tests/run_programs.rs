@@ -410,6 +410,27 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn reflection_array_class_literal() {
+    // int[].class carries the JVM array descriptor, so getMethod matches a
+    // method declared with an int[] parameter.
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.Method;
+        public class Main {
+            public int total(int[] xs) { int s = 0; for (int x : xs) s += x; return s; }
+            public static void main(String[] a) throws Exception {
+                System.out.println(int[].class.getName());
+                Method m = Main.class.getMethod("total", new Class[]{int[].class});
+                System.out.println(m.getName());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "[I\ntotal\n");
+}
+
+#[test]
 fn reflection_method_get_and_invoke() {
     // getMethod(name, Class[]) -> Method.getName/getModifiers; invoke with
     // varargs, returning a boxed primitive cast back to its wrapper.
