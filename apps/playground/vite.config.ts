@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 // SharedArrayBuffer (blocking stdin — see specs/EXECUTION.md) requires
 // cross-origin isolation in both dev and preview.
@@ -8,6 +9,7 @@ const isolationHeaders = {
 };
 
 export default defineConfig({
+  plugins: [react()],
   server: {
     port: 5173,
     strictPort: true,
