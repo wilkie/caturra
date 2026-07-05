@@ -410,6 +410,65 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn easymock_partial_mock_record_replay_verify() {
+    // EasyMock partial mocks: the mocked methods are stubbed + counted while
+    // the real method under test runs; verify() checks the interaction counts.
+    let out = run_neighborhood(
+        r#"
+        import org.code.neighborhood.*;
+        import static org.easymock.EasyMock.*;
+        public class Main {
+            public static void main(String[] args) {}
+        }
+        class Robot extends Painter {
+            public void moveThrice() { for (int i = 0; i < 3; i++) move(); }
+            public void paintWhile() { while (hasPaint()) { paint("red"); move(); } }
+        }
+        class Checker {
+            public static void main(String[] args) {
+                // void call-counting
+                Robot r = partialMockBuilder(Robot.class).addMockedMethod("move").createMock();
+                r.move(); r.move(); r.move();
+                replay(r);
+                r.moveThrice();
+                verify(r);
+                System.out.println("counted");
+
+                // expect(...).andReturn(...).times(...) with a real loop
+                Robot r2 = partialMockBuilder(Robot.class)
+                    .addMockedMethod("hasPaint")
+                    .addMockedMethod("paint")
+                    .addMockedMethod("move")
+                    .createMock();
+                expect(r2.hasPaint()).andReturn(true).times(2);
+                r2.paint("red"); r2.move();
+                r2.paint("red"); r2.move();
+                expect(r2.hasPaint()).andReturn(false).times(1);
+                replay(r2);
+                r2.paintWhile();
+                verify(r2);
+                System.out.println("returned");
+
+                // an unexpected extra call is caught
+                Robot r3 = partialMockBuilder(Robot.class).addMockedMethod("move").createMock();
+                r3.move(); r3.move();
+                replay(r3);
+                try {
+                    r3.moveThrice();
+                    System.out.println("no-catch");
+                } catch (Throwable e) {
+                    System.out.println("caught");
+                }
+            }
+        }
+        "#,
+        "Checker",
+        "1,0 1,0\n1,0 1,0\n",
+    );
+    assert_eq!(out, "counted\nreturned\ncaught\n");
+}
+
+#[test]
 fn class_reflection_forname_and_assignable() {
     // Class.forName + isAssignableFrom (the reflection the neighborhood
     // subclass validators use).

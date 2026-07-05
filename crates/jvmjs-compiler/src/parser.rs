@@ -2071,6 +2071,22 @@ impl Parser<'_> {
                 continue;
             }
             if self.eat_symbol(".") {
+                // `Type.class` class literal — modeled as a field access named
+                // "class" (used by the EasyMock partial-mock rewrite).
+                if matches!(self.peek(), Some(TokenKind::Keyword(Keyword::Class))) {
+                    let end = self.here().end;
+                    self.pos += 1;
+                    let span = SourceSpan {
+                        start: expr.span().start,
+                        end,
+                    };
+                    expr = Expr::Field {
+                        object: Box::new(expr),
+                        name: String::from("class"),
+                        span,
+                    };
+                    continue;
+                }
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
                     let args = self.arguments()?;

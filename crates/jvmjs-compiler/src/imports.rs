@@ -270,6 +270,14 @@ fn validate_import(
     {
         return;
     }
+    // EasyMock (`import static org.easymock.EasyMock.*`) — partial-mock builder
+    // chains are rewritten away; `expect`/`replay`/`verify` resolve to the
+    // bundled `EasyMock` like a static import.
+    if import.path.first().map(String::as_str) == Some("org")
+        && import.path.get(1).map(String::as_str) == Some("easymock")
+    {
+        return;
+    }
     // `java.lang.reflect.*` — the structural reflection subset used by
     // student helpers like `AttributesHelper` (Class/Field intrinsics).
     if import.path.first().map(String::as_str) == Some("java")
