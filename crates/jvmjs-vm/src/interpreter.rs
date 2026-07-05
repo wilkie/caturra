@@ -452,6 +452,7 @@ impl<'run> Interpreter<'run> {
             current_line: None,
             locals,
             stack: Vec::new(),
+            box_return_as: None,
         })
     }
 
@@ -1388,16 +1389,22 @@ impl<'run> Interpreter<'run> {
                         }
                         continue 'frames;
                     }
-                    Ok(Flow::Return(value)) => match self.frames.pop() {
-                        None => return Ok(value),
-                        Some(caller) => {
-                            frame = caller;
-                            if let Some(value) = value {
-                                frame.stack.push(value);
+                    Ok(Flow::Return(value)) => {
+                        let box_return_as = frame.box_return_as.take();
+                        match self.frames.pop() {
+                            None => return Ok(value),
+                            Some(caller) => {
+                                frame = caller;
+                                if let Some(mut value) = value {
+                                    if let Some(wrapper) = box_return_as {
+                                        value = self.box_if_primitive(value, &wrapper);
+                                    }
+                                    frame.stack.push(value);
+                                }
+                                continue 'frames;
                             }
-                            continue 'frames;
                         }
-                    },
+                    }
                     Err(error) => {
                         // Capture the trace at the throw point — the
                         // handler search below unwinds (consumes)
@@ -2258,6 +2265,7 @@ impl<'run> Interpreter<'run> {
                 crate::value::HeapObject::Class { .. }
                     | crate::value::HeapObject::Field { .. }
                     | crate::value::HeapObject::Constructor { .. }
+                    | crate::value::HeapObject::Method { .. }
             )
         );
         // `Constructor.newInstance` runs a constructor (a frame), so it can't
@@ -2269,6 +2277,15 @@ impl<'run> Interpreter<'run> {
             )
         {
             return self.reflect_new_instance(receiver, &args, frame);
+        }
+        // `Method.invoke` runs a frame too, so it can't use the value path.
+        if method_name == "invoke"
+            && matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::Method { .. })
+            )
+        {
+            return self.reflect_invoke(receiver, &args);
         }
         // `getClass()` on any object (library intrinsics included, e.g. a
         // String or a boxed Integer from a reflective `Object[]`).
@@ -2432,6 +2449,73 @@ impl<'run> Interpreter<'run> {
         // returns nothing, so this becomes newInstance's result.
         frame.stack.push(JValue::Ref(Some(instance)));
         Ok(Some(self.make_frame(target, ctor, locals)?))
+    }
+
+    /// `Method.invoke(Object obj, Object... args)`: run the reflected method
+    /// as a frame. For a static method `obj` is ignored; the (unboxed)
+    /// arguments arrive as the `Object[]`. A primitive return is boxed on the
+    /// way out so `invoke` hands back a wrapper (real Java semantics).
+    fn reflect_invoke(
+        &mut self,
+        receiver: HeapRef,
+        args: &[JValue],
+    ) -> Result<Option<Frame<'run>>, VmError> {
+        use crate::value::HeapObject;
+        let (declaring, name, descriptor, access) = match self.heap.get(receiver) {
+            Some(HeapObject::Method {
+                declaring,
+                name,
+                descriptor,
+                access,
+            }) => (declaring.clone(), name.clone(), descriptor.clone(), *access),
+            _ => return Ok(None),
+        };
+        let is_static = access & 0x0008 != 0;
+        let call_args: Vec<JValue> = match args.get(1) {
+            Some(JValue::Ref(Some(r))) => match self.heap.get(*r) {
+                Some(HeapObject::RefArray(elems)) => elems.clone(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        let param_descs = parse_descriptor_params(&descriptor);
+        let ret_desc = descriptor.rsplit(')').next().unwrap_or("V").to_owned();
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let target = classes.get(&declaring).ok_or_else(|| {
+            VmError::UncaughtException(format!("java.lang.NoSuchMethodException: {declaring}"))
+        })?;
+        let target_method = target
+            .methods
+            .iter()
+            .find(|m| {
+                target.constant_pool.get_utf8(m.name_index) == Some(name.as_str())
+                    && target.constant_pool.get_utf8(m.descriptor_index)
+                        == Some(descriptor.as_str())
+            })
+            .ok_or_else(|| {
+                VmError::UncaughtException(format!(
+                    "java.lang.NoSuchMethodException: {declaring}.{name}"
+                ))
+            })?;
+        let mut locals = Vec::new();
+        if !is_static {
+            locals.push(args.first().copied().unwrap_or(JValue::NULL));
+        }
+        for (arg, desc) in call_args.iter().zip(&param_descs) {
+            locals.push(self.unbox_for(*arg, desc));
+            if desc == "J" || desc == "D" {
+                locals.push(JValue::Int(0)); // wide slot padding
+            }
+        }
+        let mut new_frame = self.make_frame(target, target_method, locals)?;
+        // Box a primitive return so `invoke` yields an Integer/Double/…
+        if matches!(
+            ret_desc.as_str(),
+            "I" | "J" | "D" | "F" | "Z" | "S" | "B" | "C"
+        ) {
+            new_frame.box_return_as = Some(ret_desc);
+        }
+        Ok(Some(new_frame))
     }
 
     /// Unbox `value` when the target parameter descriptor is a primitive.
@@ -2669,6 +2753,49 @@ impl<'run> Interpreter<'run> {
                             ))),
                         }
                     }
+                    "getMethod" | "getDeclaredMethod" => {
+                        let method_name = match args.first() {
+                            Some(JValue::Ref(Some(r))) => {
+                                self.heap.string_text(*r).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        };
+                        // Optional Class[] of parameter types (getMethod is
+                        // varargs; a bare `getMethod(name)` means no params).
+                        let param_class_names = self.class_array_names(args.get(1));
+                        let found = self.classes.get(&name).and_then(|cf| {
+                            cf.methods.iter().find_map(|m| {
+                                let mname =
+                                    cf.constant_pool.get_utf8(m.name_index).unwrap_or_default();
+                                if mname != method_name {
+                                    return None;
+                                }
+                                let desc = cf
+                                    .constant_pool
+                                    .get_utf8(m.descriptor_index)
+                                    .unwrap_or_default();
+                                constructor_params_match(desc, &param_class_names)
+                                    .then(|| (desc.to_owned(), m.access_flags.0))
+                            })
+                        });
+                        match found {
+                            Some((descriptor, access)) => {
+                                let declaring = simple_class_name(&name).to_owned();
+                                Ok(Some(JValue::Ref(Some(self.heap.alloc(
+                                    HeapObject::Method {
+                                        declaring,
+                                        name: method_name,
+                                        descriptor,
+                                        access,
+                                    },
+                                )))))
+                            }
+                            None => Err(VmError::UncaughtException(format!(
+                                "java.lang.NoSuchMethodException: {}.{method_name}",
+                                simple_class_name(&name)
+                            ))),
+                        }
+                    }
                     other => Err(VmError::UnknownIntrinsic(format!("Class.{other}"))),
                 }
             }
@@ -2707,7 +2834,9 @@ impl<'run> Interpreter<'run> {
                             self.read_reflected_field(&declaring, &name, access, args.first())?;
                         Ok(Some(self.box_if_primitive(raw, &descriptor)))
                     }
-                    "set" => {
+                    "set" | "setInt" | "setLong" | "setDouble" | "setBoolean" => {
+                        // The primitive setters unbox nothing (the raw value
+                        // arrives directly); `set` stores whatever it is given.
                         self.write_reflected_field(
                             &declaring,
                             &name,
@@ -2736,6 +2865,31 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
                     other => Err(VmError::UnknownIntrinsic(format!("Constructor.{other}"))),
+                }
+            }
+            Some(HeapObject::Method {
+                declaring,
+                name,
+                descriptor,
+                access,
+            }) => {
+                let (declaring, name, descriptor, access) =
+                    (declaring.clone(), name.clone(), descriptor.clone(), *access);
+                match method {
+                    "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&name))))),
+                    "getModifiers" => Ok(Some(JValue::Int(i32::from(access)))),
+                    "getReturnType" => {
+                        let ret = descriptor.rsplit(')').next().unwrap_or("V");
+                        let type_name = intrinsics::type_name_of_descriptor(ret);
+                        let reference = self.heap.alloc(HeapObject::Class { name: type_name });
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    "toString" => {
+                        let text = format!("{declaring}.{name}{descriptor}");
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
+                    }
+                    // `invoke` runs a frame and is handled before this value path.
+                    other => Err(VmError::UnknownIntrinsic(format!("Method.{other}"))),
                 }
             }
             _ => Err(VmError::UnknownIntrinsic(format!("reflect.{method}"))),
@@ -2993,6 +3147,10 @@ struct Frame<'run> {
     current_line: Option<u16>,
     locals: Vec<JValue>,
     stack: Vec<JValue>,
+    /// When set, this frame's return value is boxed into the named wrapper
+    /// before delivery (a reflective `Method.invoke` of a primitive-returning
+    /// method must hand back an `Integer`/`Double`/… like real Java).
+    box_return_as: Option<String>,
 }
 
 /// A parsed `Code` attribute plus its debug tables, cached per method.

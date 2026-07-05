@@ -113,6 +113,15 @@ pub enum HeapObject {
         /// Raw `MethodAccessFlags` bits.
         access: u16,
     },
+    /// A `java.lang.reflect.Method` from `Class.getMethod(name, Class[])`.
+    Method {
+        declaring: String,
+        name: String,
+        /// The method descriptor, e.g. `(DI)D`.
+        descriptor: String,
+        /// Raw `MethodAccessFlags` bits.
+        access: u16,
+    },
 }
 
 /// The per-run object heap.

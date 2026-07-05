@@ -1079,6 +1079,7 @@ impl MethodTable {
                     "PrintWriter" => Some(JType::Writer),
                     "Class" => Some(JType::Class),
                     "Field" => Some(JType::Field),
+                    "Method" => Some(JType::Method),
                     "Constructor" => Some(JType::Constructor),
                     other => {
                         let internal = if name.contains('.') {
@@ -1106,6 +1107,7 @@ impl MethodTable {
                     Some(match simple {
                         "Constructor" => JType::Constructor,
                         "Field" => JType::Field,
+                        "Method" => JType::Method,
                         _ => JType::Class,
                     })
                 } else if let Some(id) = self.class_id(base) {
@@ -1711,6 +1713,8 @@ enum JType {
     Class,
     /// `java.lang.reflect.Field` (reflection intrinsic).
     Field,
+    /// `java.lang.reflect.Method` (reflection intrinsic).
+    Method,
     /// `java.lang.reflect.Constructor` (reflection intrinsic).
     Constructor,
     /// A library throwable; the id indexes the shared exception table
@@ -1779,6 +1783,7 @@ impl JType {
             JType::Scanner => String::from("Scanner"),
             JType::Class => String::from("Class"),
             JType::Field => String::from("Field"),
+            JType::Method => String::from("Method"),
             JType::Constructor => String::from("Constructor"),
             JType::Exception(id) => exception_internal(id)
                 .rsplit('/')
@@ -1884,6 +1889,7 @@ impl JType {
             JType::Scanner => String::from("Ljava/util/Scanner;"),
             JType::Class => String::from("Ljava/lang/Class;"),
             JType::Field => String::from("Ljava/lang/reflect/Field;"),
+            JType::Method => String::from("Ljava/lang/reflect/Method;"),
             JType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
@@ -1924,6 +1930,7 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
         TypeRef::Named(name) if name == "String" => Some(JType::Str),
         TypeRef::Named(name) if name == "Class" => Some(JType::Class),
         TypeRef::Named(name) if name == "Field" => Some(JType::Field),
+        TypeRef::Named(name) if name == "Method" => Some(JType::Method),
         TypeRef::Named(name) if name == "Constructor" => Some(JType::Constructor),
         TypeRef::Array(inner) => {
             let mut dims: u8 = 1;
@@ -2423,6 +2430,8 @@ enum BRet {
     Constructor,
     /// A single `java.lang.reflect.Field` (`Class.getDeclaredField`).
     Field,
+    /// A single `java.lang.reflect.Method` (`Class.getMethod`).
+    Method,
     /// `java.lang.Object` (`Constructor.newInstance`).
     Object,
 }
@@ -3603,6 +3612,30 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         BRet::Field,
         "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
     ),
+    bm(
+        "getMethod",
+        &[BParam::Str, BParam::RefArray],
+        BRet::Method,
+        "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+    ),
+    bm(
+        "getMethod",
+        &[BParam::Str],
+        BRet::Method,
+        "(Ljava/lang/String;)Ljava/lang/reflect/Method;",
+    ),
+    bm(
+        "getDeclaredMethod",
+        &[BParam::Str, BParam::RefArray],
+        BRet::Method,
+        "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+    ),
+    bm(
+        "getDeclaredMethod",
+        &[BParam::Str],
+        BRet::Method,
+        "(Ljava/lang/String;)Ljava/lang/reflect/Method;",
+    ),
 ];
 
 /// `java.lang.reflect.Constructor` methods.
@@ -3661,6 +3694,46 @@ const FIELD_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/lang/Object;Ljava/lang/Object;)V",
     ),
+    bm(
+        "setInt",
+        &[BParam::Object, I],
+        BRet::Void,
+        "(Ljava/lang/Object;I)V",
+    ),
+    bm(
+        "setLong",
+        &[BParam::Object, L],
+        BRet::Void,
+        "(Ljava/lang/Object;J)V",
+    ),
+    bm(
+        "setDouble",
+        &[BParam::Object, D],
+        BRet::Void,
+        "(Ljava/lang/Object;D)V",
+    ),
+    bm(
+        "setBoolean",
+        &[BParam::Object, Z],
+        BRet::Void,
+        "(Ljava/lang/Object;Z)V",
+    ),
+];
+
+/// `java.lang.reflect.Method` methods.
+const METHOD_METHODS: &[BuiltinMethod] = &[
+    bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getModifiers", &[], BRet::Int, "()I"),
+    bm("getReturnType", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    // invoke(Object receiver, Object... args); the varargs are packed into an
+    // Object[] at the call site.
+    bm(
+        "invoke",
+        &[BParam::Object, BParam::RefArray],
+        BRet::Object,
+        "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
 ];
 
 /// `java.util.Arrays` static methods.
@@ -3670,6 +3743,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Str => Some(("java/lang/String", STRING_METHODS)),
         JType::Class => Some(("java/lang/Class", CLASS_METHODS)),
         JType::Field => Some(("java/lang/reflect/Field", FIELD_METHODS)),
+        JType::Method => Some(("java/lang/reflect/Method", METHOD_METHODS)),
         JType::Constructor => Some(("java/lang/reflect/Constructor", CONSTRUCTOR_METHODS)),
         JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
         JType::File => Some(("java/io/File", FILE_METHODS)),
@@ -3858,6 +3932,7 @@ fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<J
         }),
         BRet::Constructor => Some(JType::Constructor),
         BRet::Field => Some(JType::Field),
+        BRet::Method => Some(JType::Method),
         BRet::Object => Some(JType::Object(table.object_id)),
     }
 }
@@ -5947,6 +6022,7 @@ impl BodyGen<'_> {
             | JType::List(_)
             | JType::Class
             | JType::Field
+            | JType::Method
             | JType::Constructor
             | JType::Exception(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
@@ -6013,6 +6089,11 @@ impl BodyGen<'_> {
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
             self.code.drop_stack(1 + width);
             return Some(None);
+        }
+        // Method.invoke(Object receiver, Object... args): pack the trailing
+        // varargs into an Object[] (autoboxing primitives).
+        if receiver_ty == JType::Method && method == "invoke" {
+            return self.emit_method_invoke(args, span);
         }
         let (class, methods) =
             builtin_instance_table(receiver_ty).expect("caller checked receiver kind");
@@ -7025,6 +7106,7 @@ impl BodyGen<'_> {
             | JType::Boxed(_)
             | JType::Class
             | JType::Field
+            | JType::Method
             | JType::Constructor => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
@@ -7846,6 +7928,36 @@ impl BodyGen<'_> {
         fixed_width + 1
     }
 
+    /// `Method.invoke(Object receiver, Object... args)`: the Method is already
+    /// on the stack; push the receiver object, pack the remaining arguments
+    /// into an `Object[]`, and call `invoke`.
+    #[allow(clippy::option_option, clippy::unnecessary_wraps)] // call-dispatch return shape
+    fn emit_method_invoke(&mut self, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
+        let object_ty = JType::Object(self.table.object_id);
+        match args.first() {
+            Some(obj) => {
+                let obj_ty = self.expr(obj);
+                self.convert_for_assignment(obj_ty, object_ty, obj.span());
+            }
+            None => self.code.push_op(op::ACONST_NULL, 1),
+        }
+        let rest = if args.len() > 1 { &args[1..] } else { &[] };
+        let array_ty = JType::Array {
+            elem: ElemType::Object(self.table.object_id),
+            dims: 1,
+        };
+        self.emit_array_literal(rest, array_ty, span);
+        let method_ref = intern_method_ref(
+            self.pool,
+            "java/lang/reflect/Method",
+            "invoke",
+            "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
+        );
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+        self.code.drop_stack(3); // Method receiver + object + array
+        Some(Some(object_ty))
+    }
+
     fn emit_array_literal(&mut self, elements: &[Expr], array_ty: JType, span: SourceSpan) {
         let Some(element) = array_ty.element_type() else {
             self.error(
@@ -8290,11 +8402,16 @@ impl BodyGen<'_> {
         // `checkcast Wrapper` + `Wrapper.xxxValue()` — jvmjs's boxed values
         // answer the unboxing accessor directly.
         let erased_object = matches!(source, JType::Object(id) if id == self.table.object_id);
-        if (erased_object || matches!(source, JType::Boxed(_)))
-            && let Some(elem) = elem_type_of(target)
-        {
-            self.emit_unbox(elem);
-            return target;
+        if erased_object || matches!(source, JType::Boxed(_)) {
+            // `(Double) obj` — cast to a wrapper: the runtime value is already
+            // the boxed wrapper, so retag without emitting a conversion.
+            if matches!(target, JType::Boxed(_)) {
+                return target;
+            }
+            if let Some(elem) = elem_type_of(target) {
+                self.emit_unbox(elem);
+                return target;
+            }
         }
         match (source, target) {
             (s, t) if s == t => t,
@@ -9017,6 +9134,7 @@ impl BodyGen<'_> {
             | JType::Boxed(_)
             | JType::Class
             | JType::Field
+            | JType::Method
             | JType::Constructor => "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
             JType::Int | JType::Short | JType::Byte => "(I)Ljava/lang/StringBuilder;",
             JType::Long => "(J)Ljava/lang/StringBuilder;",

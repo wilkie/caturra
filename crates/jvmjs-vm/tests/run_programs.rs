@@ -410,6 +410,32 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn reflection_method_get_and_invoke() {
+    // getMethod(name, Class[]) -> Method.getName/getModifiers; invoke with
+    // varargs, returning a boxed primitive cast back to its wrapper.
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.Method;
+        public class Main {
+            public int add(int a, int b) { return a + b; }
+            public static String hi() { return "hi"; }
+            public static void main(String[] a) throws Exception {
+                Method add = Main.class.getMethod("add", new Class[]{int.class, int.class});
+                System.out.println(add.getName());
+                Main m = new Main();
+                int r = (int) add.invoke(m, 3, 4);
+                System.out.println(r);
+                Method hi = Main.class.getMethod("hi");
+                System.out.println((String) hi.invoke(null));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "add\n7\nhi\n");
+}
+
+#[test]
 fn reflection_field_access_and_modifiers() {
     // getDeclaredField -> Field.get (boxing) -> (int) unbox cast; getModifiers
     // + Modifier.isStatic/isFinal on a static final field.
