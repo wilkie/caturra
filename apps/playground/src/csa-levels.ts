@@ -3350,6 +3350,2506 @@ export const CSA_UNITS: CsaUnit[] = [
     ],
   },
   {
+    name: 'CSA 2025 Unit 3',
+    levels: [
+      {
+        name: 'Predict and Run: Storing Multiple Values',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayManager.java',
+            text: '/*\n * Manages a one-dimensional (1D) array of integers\n */\npublic class ArrayManager {\n\n  private int[] arrayValues;   // The 1D array of integers\n\n  /*\n   * Initializes arrayValues to contain a specified number of integers\n   */\n  public ArrayManager(int numValues) {\n    arrayValues = new int[numValues];\n  }\n\n  /*\n   * Initializes arrayValues to reference an existing 1D array of integers\n   */\n  public ArrayManager(int[] arrayValues) {\n    this.arrayValues = arrayValues;\n  }\n\n  /*\n   * Returns the number of integers stored in the 1D array arrayValues\n   */\n  public int getNumValues() {\n    return arrayValues.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: 1D Arrays #1',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayManager.java',
+            text: '/*\n * Manages a one-dimensional (1D) array of integers\n */\npublic class ArrayManager {\n\n  private int[] arrayValues;   // The 1D array of integers\n\n  /*\n   * Initializes arrayValues to contain a specified number of integers\n   */\n  public ArrayManager(int numValues) {\n    arrayValues = new int[numValues];\n  }\n\n  /*\n   * Initializes arrayValues to reference an existing 1D array of integers\n   */\n  public ArrayManager(int[] arrayValues) {\n    this.arrayValues = arrayValues;\n  }\n\n  /*\n   * Returns the number of integers stored in the 1D array arrayValues\n   */\n  public int getNumValues() {\n    return arrayValues.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: 1D Arrays #2',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayManager.java',
+            text: '/*\n * Manages a one-dimensional (1D) array of integers\n */\npublic class ArrayManager {\n\n  private int[] arrayValues;   // The 1D array of integers\n\n  /*\n   * Initializes arrayValues to contain a specified number of integers\n   */\n  public ArrayManager(int numValues) {\n    arrayValues = new int[numValues];\n  }\n\n  /*\n   * Initializes arrayValues to reference an existing 1D array of integers\n   */\n  public ArrayManager(int[] arrayValues) {\n    this.arrayValues = arrayValues;\n  }\n\n  /*\n   * Returns the number of integers stored in the 1D array arrayValues\n   */\n  public int getNumValues() {\n    return arrayValues.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: 1D Arrays #3',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayManager.java',
+            text: '/*\n * Manages a one-dimensional (1D) array of integers\n */\npublic class ArrayManager {\n\n  private int[] arrayValues;   // The 1D array of integers\n\n  /*\n   * Initializes arrayValues to contain a specified number of integers\n   */\n  public ArrayManager(int numValues) {\n    arrayValues = new int[numValues];\n  }\n\n  /*\n   * Initializes arrayValues to reference an existing 1D array of integers\n   */\n  public ArrayManager(int[] arrayValues) {\n    this.arrayValues = arrayValues;\n  }\n\n  /*\n   * Returns the number of integers stored in the 1D array arrayValues\n   */\n  public int getNumValues() {\n    return arrayValues.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Getting the Length of a 1D Array (a)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    SocialMedia twitter = new SocialMedia("Twitter", 23);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the SocialMedia object.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'SocialMedia.java',
+            text: '/*\n * Manages data about followers on a social media platform\n */\npublic class SocialMedia {\n\n  private String name;        // The name of the social media platform\n  private int[] followers;    // The number of followers multiple users have\n\n  /*\n   * Sets name to the specified name and initializes\n   * followers to store the specified number of integers\n   */\n  public SocialMedia(String name, int numUsers) {\n    this.name = name;\n    followers = new int[numUsers];\n  }\n\n  /*\n   * Returns a String containing the number of users in the 1D array followers\n   */\n  public String toString() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return a String containing the text "Number of Users: " followed\n     * by the length of the 1D array followers.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return "";\n  }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Getting the Length of a 1D Array (b)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    PetStore neighborhoodStore = new PetStore("Neighborhood Pet Store", 16);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the PetStore object.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'PetStore.java',
+            text: '/*\n * Manages data about pet breeds available for adoption\n */\npublic class PetStore {\n\n  private String name;      // The name of a pet store\n  private String[] breeds;  // The breeds of pets available\n\n  /*\n   * Sets name to the specified name and initializes\n   * breeds to store the number of specified values\n   */\n  public PetStore(String name, int numBreeds) {\n    this.name = name;\n    breeds = new String[numBreeds];\n  }\n\n  /*\n   * Returns a String containing the number of breeds in the 1D array breeds\n   */\n  public String toString() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return a String containing the text "Number of Breeds: " followed\n     * by the length of the 1D array breeds.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return "";\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Getting the Length of a 1D Array (c)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    SolarSystem theSolarSystem = new SolarSystem("Our Solar System", 9);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the SolarSystem object.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'SolarSystem.java',
+            text: '/*\n * Manages data about planets in a solar system\n */\npublic class SolarSystem {\n\n  private String name;        // The name of a solar system\n  private String[] planets;   // The names of planets in a solar system\n\n  /*\n   * Sets name to the specified name and initializes\n   * planets to store the specified number of values\n   */\n  public SolarSystem(String name, int numPlanets) {\n    this.name = name;\n    planets = new String[numPlanets];\n  }\n\n  /*\n   * Returns a String containing the number of planets in the 1D array planets\n   */\n  public String toString() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return a String containing the text "Number of Planets: " followed\n     * by the length of the 1D array planets.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return "";\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Getting the Length of a 1D Array (d)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    ArrayPainter bruce = new ArrayPainter(2, 4, "south", 20, 10);\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the ArrayPainter object.\n     * -----------------------------------------------------------------------------\n     */   \n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that has a 1D array of paint colors\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] paintColors;    // The 1D array of paint colors\n\n  /*\n   * Sets the x, y, direction, and paint to default values and\n   * initializes paintColors to store two paint colors\n   */\n  public ArrayPainter() {\n    paintColors = new String[2];\n  }\n\n  /*\n   * Sets x, y, direction, and paint to the specified values and initializes\n   * paintColors to store the specified number of paint colors\n   */\n  public ArrayPainter(int x, int y, String direction, int paint, int numPaintColors) {\n    super(x, y, direction, paint);\n    paintColors = new String[numPaintColors];\n  }\n\n  /*\n   * Returns a String containing the number of paint colors in the 1D array paintColors\n   */\n  public String toString() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return a String containing the text "Number of Paint Colors: " followed\n     * by the length of the 1D array paintColors.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return "";\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (a)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store 5 double values and use it to\n     * instantiate a Customer object. Then, print the Customer object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Customer.java',
+            text: '/*\n * Manages data about a customer\'s purchases\n */\npublic class Customer {\n\n  private double[] purchases;   // The amount spent on purchases\n\n  /*\n   * Initializes purchases to the parameter purchases\n   */\n  public Customer(double[] purchases) {\n    this.purchases = purchases;\n  }\n\n  /*\n   * Returns a String containing the number of purchases in the 1D array purchases\n   */\n  public String toString() {\n    return "Number of Purchases: " + purchases.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (b)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store 10 int values and use it to\n     * instantiate a MusicSurvey object. Then, print the MusicSurvey object.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about the ages of survey respondents\n */\npublic class MusicSurvey {\n\n  private int[] ages;    // The ages of respondents to the survey\n\n  /*\n   * Initializes ages to the parameter ages\n   */\n  public MusicSurvey(int[] ages) {\n    this.ages = ages;\n  }\n\n  /*\n   * Returns a String containing the number of respondents in the 1D array ages\n   */\n  public String toString() {\n    return "Number of Respondents: " + ages.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (c)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store 20 String values\n     * and a 1D array to store 20 double values use them to instantiate a\n     * Netflix object. Then, print the Netflix object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Netflix.java',
+            text: '/*\n * Manages data about Netflix subscription fees\n * in different countries\n */\npublic class Netflix {\n\n  private String[] countries;    // The names of countries\n  private double[] fees;         // The subscription fee in each country\n\n  /*\n   * Initializes countries to the parameter countries\n   * and fees to the parameter fees\n   */\n  public Netflix(String[] countries, double[] fees) {\n    this.countries = countries;\n    this.fees = fees;\n  }\n\n  /*\n   * Returns a String containing the number of countries in the 1D array\n   * countries and number of subscription fees in the 1D array fees\n   */\n  public String toString() {\n    return "Number of Countries: " + countries.length + "\\nNumber of Fees: " + fees.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (d)',
+        lesson: 'Lesson 2: One-Dimensional (1D) Arrays',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store 12 String values\n     * and a 1D array to store 12 int values use them to instantiate an\n     * ArrayPainter object. Then, print the ArrayPainter object.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that has a 1D array of paint colors\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] paintColors;    // The 1D array of paint colors\n  private int[] paintUnits;        // The 1D array of paint units\n\n  /*\n   * Sets x, y, direction, and paint to the specified values \n   * and initializes paintColors to the parameter paintColors\n   * and paintUnits to the parameter paintUnits\n   */\n  public ArrayPainter(int x, int y, String direction, int paint, String[] paintColors, int[] paintUnits) {\n    super(x, y, direction, paint);\n    this.paintColors = paintColors;\n    this.paintUnits = paintUnits;\n  }\n\n  /*\n   * Returns a String containing the number of paint colors in the 1D array \n   * paintColors and the number of paint units in the 1D array paintUnits\n   */\n  public String toString() {\n    return "Number of Paint Colors: " + paintColors.length + "\\nNumber of Paint Units: " + paintUnits.length;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: Initializer Lists',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'neighborhood',
+        grid: '0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'DashPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that paints dashes\n */\npublic class DashPainter extends Painter {\n\n  private String[] colors;    // The 1D array of paint colors a DashPainter can use to paint with\n\n  /*\n   * Sets the starting x, y location, direction, and amount of paint\n   * and initializes colors to the 1D array of colors\n   */\n  public DashPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Returns the color at the specified index from the 1D array colors\n   */\n  public String getColor(int index) {\n    return colors[index];\n  }\n\n  /*\n   * Sets the 1D array colors to newColors\n   */\n  public void setColors(String[] newColors) {\n    colors = newColors;\n  }\n\n  /*\n   * Moves then paints using a color from colors, then moves\n   * again if able to move in the direction it is facing\n   */\n  public void movePaintMove(int index) {\n    move();\n    paint(colors[index]);\n\n    if (canMove()) {\n      move();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Assigning and Accessing Elements #1',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'neighborhood',
+        grid: '0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'DashPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that paints dashes\n */\npublic class DashPainter extends Painter {\n\n  private String[] colors;    // The 1D array of paint colors a DashPainter can use to paint with\n\n  /*\n   * Sets the starting x, y location, direction, and amount of paint\n   * and initializes colors to the 1D array of colors\n   */\n  public DashPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Returns the color at the specified index from the 1D array colors\n   */\n  public String getColor(int index) {\n    return colors[index];\n  }\n\n  /*\n   * Sets the 1D array colors to newColors\n   */\n  public void setColors(String[] newColors) {\n    colors = newColors;\n  }\n\n  /*\n   * Moves then paints using a color from colors, then moves\n   * again if able to move in the direction it is facing\n   */\n  public void movePaintMove(int index) {\n    move();\n    paint(colors[index]);\n\n    if (canMove()) {\n      move();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Assigning and Accessing Elements #2',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'neighborhood',
+        grid: '0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'DashPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that paints dashes\n */\npublic class DashPainter extends Painter {\n\n  private String[] colors;    // The 1D array of paint colors a DashPainter can use to paint with\n\n  /*\n   * Sets the starting x, y location, direction, and amount of paint\n   * and initializes colors to the 1D array of colors\n   */\n  public DashPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Returns the color at the specified index from the 1D array colors\n   */\n  public String getColor(int index) {\n    return colors[index];\n  }\n\n  /*\n   * Sets the 1D array colors to newColors\n   */\n  public void setColors(String[] newColors) {\n    colors = newColors;\n  }\n\n  /*\n   * Moves then paints using a color from colors, then moves\n   * again if able to move in the direction it is facing\n   */\n  public void movePaintMove(int index) {\n    move();\n    paint(colors[index]);\n\n    if (canMove()) {\n      move();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Assigning and Accessing Elements #3',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'neighborhood',
+        grid: '0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'DashPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that paints dashes\n */\npublic class DashPainter extends Painter {\n\n  private String[] colors;    // The 1D array of paint colors a DashPainter can use to paint with\n\n  /*\n   * Sets the starting x, y location, direction, and amount of paint\n   * and initializes colors to the 1D array of colors\n   */\n  public DashPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Returns the color at the specified index from the 1D array colors\n   */\n  public String getColor(int index) {\n    return colors[index];\n  }\n\n  /*\n   * Sets the 1D array colors to newColors\n   */\n  public void setColors(String[] newColors) {\n    colors = newColors;\n  }\n\n  /*\n   * Moves then paints using a color from colors, then moves\n   * again if able to move in the direction it is facing\n   */\n  public void movePaintMove(int index) {\n    move();\n    paint(colors[index]);\n\n    if (canMove()) {\n      move();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (a) #1',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store the specified values and use\n     * it to instantiate a Cake object. Then, print the Cake object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Cake.java',
+            text: '/*\n * Represents a cake that can be sold at a food truck\n */\npublic class Cake {\n\n  private String[] flavors;    // The 1D array of available flavors for a cake\n\n  /*\n   * Initializes flavors to the specified 1D array of flavors\n   */\n  public Cake(String[] flavors) {\n    this.flavors = flavors;\n  }\n\n  /*\n   * Returns a String containing each available flavor\n   */\n  public String toString() {\n    String result = "Number of Available Flavors: " + flavors.length + "\\n";\n\n    int index = 0;\n\n    while (index < flavors.length) {\n      result += "\\nFlavor #" + (index + 1) + ": " + flavors[index];\n      index++;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (b) #1',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store the specified values and use\n     * it to instantiate a Billboard object. Then, print the Billboard object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Billboard.java',
+            text: '/*\n * Manages the top songs of all time\n */\npublic class Billboard {\n\n  private String[] songTitles;     // The 1D array of the titles of top songs\n\n  /*\n   * Initializes songTitles to the 1D array of song titles\n   */\n  public Billboard(String[] songTitles) {\n    this.songTitles = songTitles;\n  }\n\n  /*\n   * Returns a String containing each song title\n   */\n  public String toString() {\n    String result = "Number of Songs: " + songTitles.length + "\\n";\n\n    int index = 0;\n\n    while (index < songTitles.length) {\n      result += "\\nSong #" + (index + 1) + ": " + songTitles[index];\n      index++;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (c) #1',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store the specified values and use\n     * it to instantiate a PetStore object. Then, print the PetStore object.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n    \n        \n  }\n}',
+          },
+          {
+            path: 'PetStore.java',
+            text: '/*\n * Manages the types of pets availale at a pet store\n */\npublic class PetStore {\n\n  private String[] petTypes;      // The 1D array with the types of pets\n\n  /*\n   * Initializes petTypes to the specified 1D array of pet types\n   */\n  public PetStore(String[] petTypes) {\n    this.petTypes = petTypes;\n  }\n\n  /*\n   * Returns a String containing each type of pet\n   */\n  public String toString() {\n    String result = "Number of Types of Pets: " + petTypes.length + "\\n";\n\n    int index = 0;\n\n    while (index < petTypes.length) {\n      result += "\\nPet Type #" + (index + 1) + ": " + petTypes[index];\n      index++;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (d) #1',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D array to store the specified values and use\n     * it to instantiate an ArrayPainter object. Then, print the ArrayPainter object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter with a 1D array of paint colors\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] colors;      // The 1D array of paint colors\n\n  /*\n   * Sets the starting x and y location, direction, and amount of paint\n   * and initializes colors to the specified 1D array of paint colors\n   */\n  public ArrayPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Returns a String containing each paint color\n   */\n  public String toString() {\n    String result = "Number of Paint Colors: " + colors.length + "\\n";\n\n    int index = 0;\n\n    while (index < colors.length) {\n      result += "\\nPaint Color #" + (index + 1) + ": " + colors[index];\n      index++;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (a) #2',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the updateGrade() method to change one or more values in the\n     * 1D array weeklyScores, then print the updates made to the Student object.\n     * -----------------------------------------------------------------------------\n     */\n\n    int[] weekScores = {86, 77, 98, 81, 97};\n    Student tessa = new Student("Tessa", weekScores);\n    \n    System.out.println(tessa);\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Student.java',
+            text: '/*\n * Represents a student in a teacher\'s class\n */\npublic class Student {\n\n  private String name;          // The name of a student\n  private int[] quizGrades;     // The 1D array of daily quiz scores a student received\n\n  /*\n   * Sets name to the specified name and initializes quizGrades\n   * to the specified 1D array of daily quiz scores\n   */\n  public Student(String name, int[] quizGrades) {\n    this.name = name;\n    this.quizGrades = quizGrades;\n  }\n\n  /*\n   * Returns the name of the student\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the 1D array of daily quiz scores\n   */\n  public int[] getQuizGrades() {\n    return quizGrades;\n  }\n\n  /*\n   * Adds 5 to the score at the specified position in quizGrades\n   */\n  public void updateGrade(int position) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Add 5 to the value in quizGrades located at the parameter position.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n  }\n\n  /*\n   * Returns a String containing the student\'s name and scores\n   */\n  public String toString() {\n    String result = "Name: " + name + "\\nScores: ";\n\n    int index = 0;\n\n    while (index < quizGrades.length) {\n      result += quizGrades[index] + " ";\n      index += 1;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (b) #2',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the updateProfits() method to change one or more values in the 1D\n     * array truckProfits, then print the updates made to the FoodTruck object.\n     * -----------------------------------------------------------------------------\n     */\n\n    double[] truckProfits = {115.74, 197.37, 136.80, 174.45, 113.63};\n    FoodTruck tacoTruck = new FoodTruck("Tycho\'s Tacos", truckProfits);\n    \n    System.out.println(tacoTruck);\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FoodTruck.java',
+            text: '/*\n * Represents a food truck\n */\npublic class FoodTruck {\n\n  private String name;              // The name of a food truck\n  private double[] dailyProfits;    // The 1D array of profits made each day\n\n  /*\n   * Sets name to the specified name and initializes dailyProfits\n   * to the specified 1D array of daily profits\n   */\n  public FoodTruck(String name, double[] dailyProfits) {\n    this.name = name;\n    this.dailyProfits = dailyProfits;\n  }\n\n  /*\n   * Returns the name of the food truck\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the 1D array of daily profits\n   */\n  public double[] getDailyProfits() {\n    return dailyProfits;\n  }\n\n  /*\n   * Subtracts 100 from the value at the specified position in dailyProfits\n   */\n  public void updateProfits(int position) {\n    /* --------------------------------------- TO DO ---------------------------------------\n     * \u2705 Subtracts 100 from the value in dailyProfits located at the parameter position.\n     * -------------------------------------------------------------------------------------\n     */\n\n       \n  }\n\n  /*\n   * Returns a String containing the food truck\'s name and daily profits\n   */\n  public String toString() {\n    String result = "Name: " + name + "\\nDaily Profits: ";\n\n    int index = 0;\n\n    while (index < dailyProfits.length) {\n      result += dailyProfits[index] + " ";\n      index += 1;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (c) #2',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getBeatsPerSecond() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    String[] genres = {"Latin", "Rock", "Video game music", "Jazz", "R&B"};\n    int[] bpm = {156, 119, 132, 84, 107};\n    MusicSurvey results = new MusicSurvey(genres, bpm);\n    \n    System.out.println(results);\n\n\n    \n\n    \n  }\n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages the data from a music survey\n */\npublic class MusicSurvey {\n\n  private String[] favGenres;      // The 1D array of respondents\' favorite genres\n  private int[] beatsPerMinute;    // The 1D array of the BPM of each genre\n\n  /*\n   * Initializes favGenres to the specified 1D array of favorite genres and initializes\n   * beatsPerMinute to the specified 1D array of the BPM of each genre\n   */\n  public MusicSurvey(String[] favGenres, int[] beatsPerMinute) {\n    this.favGenres = favGenres;\n    this.beatsPerMinute = beatsPerMinute;\n  }\n\n  /*\n   * Returns the 1D array of favorite genres\n   */\n  public String[] getFavGenres() {\n    return favGenres;\n  }\n\n  /*\n   * Returns the 1D array of the BPM of each genre\n   */\n  public int[] getBeatsPerMinute() {\n    return beatsPerMinute;\n  }\n\n  /*\n   * Returns the beats per second for the value at the parameter position\n   * from the 1D array beatsPerMinute\n   */\n  public int getBeatsPerSecond(int position) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Divide the value at parameter position in the 1D array beatsPerMinute by\n     * 60 to get the beats per second and return the result.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return -1;\n  }\n\n  /*\n   * Returns a String containing each favorite genre and its beats per minute\n   */\n  public String toString() {\n    String result = "";\n    int index = 0;\n\n    while (index < favGenres.length) {\n      result += favGenres[index] + " BPM: " + beatsPerMinute[index] + "\\n";\n      index += 1;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Creating 1D Arrays (d) #2',
+        lesson: 'Lesson 3: Modifying Elements',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the updatePaintAmount() method to change one or more values in the\n     * 1D array paintUnits, then print the updates made to the ArrayPainter object.\n     * -----------------------------------------------------------------------------\n     */\n\n    String[] paintColors = {"Khaki", "Magenta", "LightCoral", "Beige", "Silver"};\n    int[] paintAmounts = {5, 10, 8, 7, 6};\n    ArrayPainter chase = new ArrayPainter(4, 3, "east", 20, paintColors, paintAmounts);\n\n    System.out.println(chase);\n\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter with a 1D array of paint colors and units\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] colors;     // The 1D array of paint colors\n  private int[] paintUnits;    // The 1D array of the amount of paint for each color\n\n  /*\n   * Sets the starting x and y location, direction, and amount of paint and initializes colors to\n   * the specified 1D array of paint colors and paintUnits to the specified 1D array of paint units\n   */\n  public ArrayPainter(int x, int y, String direction, int numPaint, String[] colors, int[] paintUnits) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n    this.paintUnits = paintUnits;\n  }\n\n  /*\n   * Returns the 1D array of paint colors\n   */\n  public String[] getColors() {\n    return colors;\n  }\n\n  /*\n   * Returns the 1D array of paint units\n   */\n  public int[] getPaintUnits() {\n    return paintUnits;\n  }\n\n  /*\n   * Multiplies the value at the specified position in paintUnits by 2\n   */\n  public void updatePaintAmount(int position) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Multiply the value in paintUnits located at the parameter position by 2.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n  }\n\n  /*\n   * Returns a String containing each paint color\n   */\n  public String toString() {\n    String result = "";\n    int index = 0;\n\n    while (index < colors.length) {\n      result += colors[index] + ": " + paintUnits[index] + "\\n";\n      index += 1;\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: Traversing 1D Arrays',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that has a 1D array of paint colors\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] colors;      // The 1D array of paint colors\n\n  /*\n   * Sets the x and y location, direction, and amount of paint to the specified\n   * values and initializes colors to the specified 1D array of paint colors\n   */\n  public ArrayPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Turns the ArrayPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the ArrayPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the ArrayPainter has paint\n   */\n  public void paintIfHasPaint(int index) {\n    if (hasPaint()) {\n      paint(colors[index]);\n    }\n  }\n\n  /*\n   * Moves and paints one space if the ArrayPainter can move and has paint\n   */\n  public void moveAndPaint(int index) {\n    moveIfCanMove();\n    paintIfHasPaint(index);\n  }\n\n  /*\n   * Paints with each color in the 1D array colors\n   */\n  public void paintColors() {\n    int index = 0;\n\n    while (index < colors.length) {\n      moveAndPaint(index);\n      index += 2;\n    }\n  }\n\n  /*\n   * Returns a String containing the paint colors the ArrayPainter has\n   */\n  public String toString() {\n    String result = "ArrayPainter Colors: ";\n    int index = 0;\n\n    while (index < colors.length) {\n      result += colors[index] + " ";\n      index += 1;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Traversing 1D Arrays #1',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that has a 1D array of paint colors\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] colors;      // The 1D array of paint colors\n\n  /*\n   * Sets the x and y location, direction, and amount of paint to the specified\n   * values and initializes colors to the specified 1D array of paint colors\n   */\n  public ArrayPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Turns the ArrayPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the ArrayPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the ArrayPainter has paint\n   */\n  public void paintIfHasPaint(int index) {\n    if (hasPaint()) {\n      paint(colors[index]);\n    }\n  }\n\n  /*\n   * Moves and paints one space if the ArrayPainter can move and has paint\n   */\n  public void moveAndPaint(int index) {\n    moveIfCanMove();\n    paintIfHasPaint(index);\n  }\n\n  /*\n   * Paints with each color in the 1D array colors\n   */\n  public void paintColors() {\n    int index = 0;\n\n    while (index < colors.length) {\n      moveAndPaint(index);\n      index += 2;\n    }\n  }\n\n  /*\n   * Returns a String containing the paint colors the ArrayPainter has\n   */\n  public String toString() {\n    String result = "ArrayPainter Colors: ";\n    int index = 0;\n\n    while (index < colors.length) {\n      result += colors[index] + " ";\n      index += 1;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Traversing 1D Arrays #2',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that has a 1D array of paint colors\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] colors;      // The 1D array of paint colors\n\n  /*\n   * Sets the x and y location, direction, and amount of paint to the specified\n   * values and initializes colors to the specified 1D array of paint colors\n   */\n  public ArrayPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Turns the ArrayPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the ArrayPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the ArrayPainter has paint\n   */\n  public void paintIfHasPaint(int index) {\n    if (hasPaint()) {\n      paint(colors[index]);\n    }\n  }\n\n  /*\n   * Moves and paints one space if the ArrayPainter can move and has paint\n   */\n  public void moveAndPaint(int index) {\n    moveIfCanMove();\n    paintIfHasPaint(index);\n  }\n\n  /*\n   * Paints with each color in the 1D array colors\n   */\n  public void paintColors() {\n    int index = 0;\n\n    while (index < colors.length) {\n      moveAndPaint(index);\n      index += 2;\n    }\n  }\n\n  /*\n   * Returns a String containing the paint colors the ArrayPainter has\n   */\n  public String toString() {\n    String result = "ArrayPainter Colors: ";\n    int index = 0;\n\n    while (index < colors.length) {\n      result += colors[index] + " ";\n      index += 1;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Traversing 1D Arrays #3',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'ArrayPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that has a 1D array of paint colors\n */\npublic class ArrayPainter extends Painter {\n\n  private String[] colors;      // The 1D array of paint colors\n\n  /*\n   * Sets the x and y location, direction, and amount of paint to the specified\n   * values and initializes colors to the specified 1D array of paint colors\n   */\n  public ArrayPainter(int x, int y, String direction, int numPaint, String[] colors) {\n    super(x, y, direction, numPaint);\n    this.colors = colors;\n  }\n\n  /*\n   * Turns the ArrayPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the ArrayPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the ArrayPainter has paint\n   */\n  public void paintIfHasPaint(int index) {\n    if (hasPaint()) {\n      paint(colors[index]);\n    }\n  }\n\n  /*\n   * Moves and paints one space if the ArrayPainter can move and has paint\n   */\n  public void moveAndPaint(int index) {\n    moveIfCanMove();\n    paintIfHasPaint(index);\n  }\n\n  /*\n   * Paints with each color in the 1D array colors\n   */\n  public void paintColors() {\n    int index = 0;\n\n    while (index < colors.length) {\n      moveAndPaint(index);\n      index += 2;\n    }\n  }\n\n  /*\n   * Returns a String containing the paint colors the ArrayPainter has\n   */\n  public String toString() {\n    String result = "ArrayPainter Colors: ";\n    int index = 0;\n\n    while (index < colors.length) {\n      result += colors[index] + " ";\n      index += 1;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse a 1D Array (a)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] usRetailerNames = {"Wal-Mart Stores, Inc", "Costco Wholesale Corporation", "The Kroger Co.", "Amazon.com, Inc",\n                          "The Home Depot", "Walgreens Boots Alliance, Inc.", "CVS Health Corporation", "Target Corporation",\n                          "Lowe\'s Companies, Inc.", "Albertsons Companies, Inc.", "Best Buy Co., Inc."};\n    \n    Retailers usRetailers = new Retailers(usRetailerNames);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getAllRetailers() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Retailers.java',
+            text: '/*\n * Manages data about top US retailers\n */\npublic class Retailers {\n\n  private String[] storeNames;     // The 1D array of the names of top US retailers\n\n  /*\n   * Initializes storeNames to the specified 1D array of top US retailers\n   */\n  public Retailers(String[] storeNames) {\n    this.storeNames = storeNames;\n  }\n\n  /*\n   * Returns a String containing the names in the 1D array storeNames\n   */\n  public String getAllRetailers() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array storeNames and concatenate each value to result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse a 1D Array (b)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] sets = {"Arc de Triomphe", "Architecture Studio", "Berlin", "Big Ben", "Buckingham Palace",\n                     "Burj Khalifa", "Chicago", "Dubai", "Empire State Building", "Fallingwater", "Farnsworth House",\n                     "Flatiron Building", "Great Pyramid of Giza", "Imperial Hotel", "John Hancock Center"};\n\n    Lego legoSets = new Lego(sets);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getAllSets() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Lego.java',
+            text: '/*\n * Manages data about Lego sets\n */\npublic class Lego {\n\n  private String[] setNames;      // The 1D array of Lego set names\n\n  /*\n   * Initializes setNames to the specified 1D array of Lego set names\n   */\n  public Lego(String[] setNames) {\n    this.setNames = setNames;\n  }\n\n  /*\n   * Returns a String containing the names in the 1D array setNames\n   */\n  public String getAllSets() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array setNames and concatenate each value to result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse a 1D Array (c)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] libraries = {"Walker", "Whitney M. Young, Jr.", "Scottsdale", "West Lawn", "Rogers Park",\n                          "Popular Library at Water Works", "Albany Park", "Avalon", "Brainerd", "Oriole Park"};\n\n    Library chicagoLibraries = new Library(libraries);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getAllLibraries() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n  \n\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Library.java',
+            text: '/*\n * Manages data about public libraries in a city\n */\npublic class Library {\n\n  private String[] libraryNames;     // The 1D array of libraries in a city\n\n  /*\n   * Initializes libraryNames to the specified 1D array of library names\n   */\n  public Library(String[] libraryNames) {\n    this.libraryNames = libraryNames;\n  }\n\n  /*\n   * Returns a String containing the names in the 1D array libraryNames\n   */\n  public String getAllLibraries() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array libraryNames and concatenate each value to result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse a 1D Array (d)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] ships = {"Black Pearl", "Queen Anne\'s Revenge", "The Flying Dutchman", "Red Lady", "The Sea Devil",\n                      "The Bloodhound", "The Vicious Viper", "The Raging Rhino", "The Savage Shark", "The Fearsome Falcon"};\n\n    PirateShip pirates = new PirateShip(ships);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getAllShips() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'PirateShip.java',
+            text: '/*\n * Manages data about pirate ships\n */\npublic class PirateShip {\n\n  private String[] shipNames;       // The 1D array of pirate ship names\n\n  /*\n   * Initializes shipNames to the specified 1D array of pirate ship names\n   */\n  public PirateShip(String[] shipNames) {\n    this.shipNames = shipNames;\n  }\n\n  /*\n   * Returns a String containing the names in the 1D array shipNames\n   */\n  public String getAllShips() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array shipNames and concatenate each value to result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse Multiple 1D Arrays (a)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] gameConsoles = {"Playstation 2 (PS2)", "Nintendo DS (DS)", "Nintendo Switch (NS)", "Game Boy (GB)", "Playstation 4 (PS4)",\n                             "Playstation (PS)", "Nintendo Wii (Wii)", "Playstation 3 (PS3)", "Xbox 360 (X360)", "Game Boy Advance (GBA)"};\n\n    double[] sales = {53.65, 57.92, 42.95, 43.18, 38.20, 40.78, 45.51, 29.92, 47.09, 40.39};\n\n    VideoGame naConsoles = new VideoGame(gameConsoles, sales);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getConsolesInfo() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'VideoGame.java',
+            text: '/*\n * Manages data about gaming consoles\n */\npublic class VideoGame {\n\n  private String[] consoles;        // The 1D array of the names of gaming consoles\n  private double[] americaSales;    // The 1D array of the total sales for each gaming console\n\n  /*\n   * Initializes consoles to the specified 1D array of gaming console names and\n   * americaSales to the specified 1D array of total sales for each gaming console\n   */\n  public VideoGame(String[] consoles, double[] americaSales) {\n    this.consoles = consoles;\n    this.americaSales = americaSales;\n  }\n\n  /*\n   * Returns a String containing each gaming console\'s name and its total sales\n   */\n  public String getConsolesInfo() {\n    String result = "";\n\n    /* ----------------------------------------- TO DO -----------------------------------------\n     * \u2705 Traverse the 1D arrays consoles and americaSales and concatenate each value to result.\n     * -----------------------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse Multiple 1D Arrays (b)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] names = {"Carl Larsen Park", "Junipero Serra Playground", "Rolph Nicol Playground", "Alamo Square",\n                      "Jose Coronado Playground", "Little Hollywood Park", "Lake Merced Park", "Golden Gate Park"};\n\n    double[] scores = {0.795, 0.957, 0.864, 0.857, 0.859, 0.846, 0.73, 0.588};\n\n    Park sanFrancisco = new Park(names, scores);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getParksInfo() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Park.java',
+            text: '/*\n * Manages data about parks in a city\n */\npublic class Park {\n\n  private String[] parkNames;      // The 1D array of park names\n  private double[] conditions;     // The 1D array of the condition scores for each park\n\n  /*\n   * Initializes parkNames to the specified 1D array of park names and\n   * conditions to the 1D array of condition scores for each park\n   */\n  public Park(String[] parkNames, double[] conditions) {\n    this.parkNames = parkNames;\n    this.conditions = conditions;\n  }\n\n  /*\n   * Returns a String containing each park\'s name and its condition score\n   */\n  public String getParksInfo() {\n    String result = "";\n\n    /* ----------------------------------------- TO DO -----------------------------------------\n     * \u2705 Traverse the 1D arrays parkNames and conditions and concatenate each value to result.\n     * -----------------------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse Multiple 1D Arrays (c)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] countries = {"Finland", "Ireland", "Norway", "France", "Netherlands", "Japan", "Sweden",\n                          "Canada", "United Kingdom", "Portugal", "Switzerland", "Austria", "United States"};\n    \n    double[] food = {83.7, 81.7, 80.5, 80.2, 80.1, 79.5, 79.1, 79.1, 78.8, 78.7, 78.2, 78.1, 78.0};\n\n    FoodSecurity countryData = new FoodSecurity(countries, food);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getCountriesInfo() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FoodSecurity.java',
+            text: '/*\n * Manages data about food security in different countries\n */\npublic class FoodSecurity {\n\n  private String[] countries;        // The 1D array of country names\n  private double[] overallScores;    // The 1D array of overall food security index scores for each country\n\n  /*\n   * Initializes countries to the specified 1D array of country names and overallScores\n   * to the specified 1D array of overall food security index scores\n   */\n  public FoodSecurity(String[] countries, double[] overallScores) {\n    this.countries = countries;\n    this.overallScores = overallScores;\n  }\n\n  /*\n   * Returns a String containing each country\'s name and its food security index\n   */\n  public String getCountriesInfo() {\n    String result = "";\n\n    /* ----------------------------------------- TO DO -----------------------------------------\n     * \u2705 Traverse the 1D arrays countries and overallScores and concatenate each value to result.\n     * -----------------------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traverse Multiple 1D Arrays (d)',
+        lesson: 'Lesson 4: Traversing 1D Arrays',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] players = {"LeBron James", "Michael Jordan", "Kareem Abdul-Jabbar", "Kobe Bryant", "Shaquille O\'Neal",\n                        "Tim Duncan", "Karl Malone", "Kevin Durant", "Jerry West", "Tony Parker"};\n\n    int[] points = {7631, 5987, 5762, 5640, 5250, 5172, 4761, 4559, 4457, 4045};\n\n    Basketball topTen = new Basketball(players, points);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getPlayersInfo() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Basketball.java',
+            text: '/*\n * Manages data about basketball players\n */\npublic class Basketball {\n\n  private String[] playerNames;    // The 1D array of basketball player names\n  private int[] playerPoints;      // The 1D array of the total points scored by each player\n\n  /*\n   * Initializes playerNames to the specified 1D array of player names and\n   * playerPoints to the 1D array of total points scored by each player\n   */\n  public Basketball(String[] playerNames, int[] playerPoints) {\n    this.playerNames = playerNames;\n    this.playerPoints = playerPoints;\n  }\n\n  /*\n   * Returns a String containing each player\'s name and their total points scored\n   */\n  public String getPlayersInfo() {\n    String result = "";\n\n    /* ----------------------------------------- TO DO -----------------------------------------\n     * \u2705 Traverse the 1D arrays playerNames and playerPoints and concatenate each value to result.\n     * -----------------------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: For Loops',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'LoopPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that can paint in The Neighborhood\n */\npublic class LoopPainter extends Painter {\n\n  /*\n   * Sets the x and y location, starting direction, and amount\n   * of paint to the specified values\n   */\n  public LoopPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Turns the LoopPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the LoopPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the LoopPainter has paint\n   */\n  public void paintIfHasPaint(String color) {\n    if (hasPaint()) {\n      paint(color);\n    }\n  }\n\n  /*\n   * Moves the LoopPainter a specified number of steps\n   */\n  public void moveTimes(int numSteps) {\n    for (int steps = 0; steps < numSteps; steps++) {\n      if (canMove()) {\n        move();\n      }\n    }\n  }\n\n  /*\n   * Paints and moves using the colors in paintColors\n   */\n  public void paintAndMove(String[] paintColors) {\n    for (int index = 0; index < paintColors.length; index++) {\n      paintIfHasPaint(paintColors[index]);\n      moveIfCanMove();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: For Loops #1',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'LoopPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that can paint in The Neighborhood\n */\npublic class LoopPainter extends Painter {\n\n  /*\n   * Sets the x and y location, starting direction, and amount\n   * of paint to the specified values\n   */\n  public LoopPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Turns the LoopPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the LoopPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the LoopPainter has paint\n   */\n  public void paintIfHasPaint(String color) {\n    if (hasPaint()) {\n      paint(color);\n    }\n  }\n\n  /*\n   * Moves the LoopPainter a specified number of steps\n   */\n  public void moveTimes(int numSteps) {\n    for (int steps = 0; steps < numSteps; steps++) {\n      if (canMove()) {\n        move();\n      }\n    }\n  }\n\n  /*\n   * Paints and moves using the colors in paintColors\n   */\n  public void paintAndMove(String[] paintColors) {\n    for (int index = 0; index < paintColors.length; index++) {\n      paintIfHasPaint(paintColors[index]);\n      moveIfCanMove();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: For Loops #2',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'LoopPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that can paint in The Neighborhood\n */\npublic class LoopPainter extends Painter {\n\n  /*\n   * Sets the x and y location, starting direction, and amount\n   * of paint to the specified values\n   */\n  public LoopPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Turns the LoopPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the LoopPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the LoopPainter has paint\n   */\n  public void paintIfHasPaint(String color) {\n    if (hasPaint()) {\n      paint(color);\n    }\n  }\n\n  /*\n   * Moves the LoopPainter a specified number of steps\n   */\n  public void moveTimes(int numSteps) {\n    for (int steps = 0; steps < numSteps; steps++) {\n      if (canMove()) {\n        move();\n      }\n    }\n  }\n\n  /*\n   * Paints and moves using the colors in paintColors\n   */\n  public void paintAndMove(String[] paintColors) {\n    for (int index = 0; index < paintColors.length; index++) {\n      paintIfHasPaint(paintColors[index]);\n      moveIfCanMove();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: For Loops #3',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'LoopPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that can paint in The Neighborhood\n */\npublic class LoopPainter extends Painter {\n\n  /*\n   * Sets the x and y location, starting direction, and amount\n   * of paint to the specified values\n   */\n  public LoopPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Turns the LoopPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves forward one space if the LoopPainter can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints the current space if the LoopPainter has paint\n   */\n  public void paintIfHasPaint(String color) {\n    if (hasPaint()) {\n      paint(color);\n    }\n  }\n\n  /*\n   * Moves the LoopPainter a specified number of steps\n   */\n  public void moveTimes(int numSteps) {\n    for (int steps = 0; steps < numSteps; steps++) {\n      if (canMove()) {\n        move();\n      }\n    }\n  }\n\n  /*\n   * Paints and moves using the colors in paintColors\n   */\n  public void paintAndMove(String[] paintColors) {\n    for (int index = 0; index < paintColors.length; index++) {\n      paintIfHasPaint(paintColors[index]);\n      moveIfCanMove();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (a)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] jamaicaNames = {"Jayden", "Aiden", "Joshua", "Daniel", "Nathaniel", "Nathan", "Malachi",\n                             "Amelia", "Arianna", "Ariana", "Kaira", "Gabrielle", "Gabriella", "Brianna"};\n\n    Names jamaica = new Names("Jamaica", jamaicaNames);\n\n    System.out.println("Popular Names in " + jamaica.getCountryName() + ":");\n    System.out.println(jamaica);\n    \n  }\n}',
+          },
+          {
+            path: 'Names.java',
+            text: '/*\n * Manages data about popular names\n */\npublic class Names {\n\n  private String countryName;       // The name of a country\n  private String[] popularNames;    // The 1D array of the most popular names in a country\n\n  /*\n   * Sets countryName to the specified country name and initializes popularNames\n   * to the specified 1D array of the most popular names in a country\n   */\n  public Names(String countryName, String[] popularNames) {\n    this.countryName = countryName;\n    this.popularNames = popularNames;\n  }\n\n  /*\n   * Returns the name of the country\n   */\n  public String getCountryName() {\n    return countryName;\n  }\n\n  /*\n   * Returns a String containing each name in popularNames\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this while loop to use a for loop.\n     * -----------------------------------------------------------------------------\n     */\n\n    int index = 0;\n\n    while (index < popularNames.length) {\n      result += popularNames[index] + "\\n";\n      index++;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (b)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] states = {"California", "Florida", "Kentucky", "Maryland", "New York", "Oklahoma", "Texas", "Washington"};\n    int[] rates = {4871, 4743, 4113, 4057, 3745, 4714, 4917, 3594};\n\n    UVIndex stateRates = new UVIndex(states, rates);\n    \n    System.out.println(stateRates);\n    \n  }\n}',
+          },
+          {
+            path: 'UVIndex.java',
+            text: '/*\n * Manages data about the UV rates for multiple states\n */\npublic class UVIndex {\n\n  private String[] stateNames;    // The 1D array of state names\n  private int[] rates;            // The 1D array of UV rates for each state\n\n  /*\n   * Initializes stateNames to the specified 1D array of state names\n   * and rates to the specified 1D array of UV rates for each state\n   */\n  public UVIndex(String[] stateNames, int[] rates) {\n    this.stateNames = stateNames;\n    this.rates = rates;\n  }\n\n  /*\n   * Returns a String containing the names of each state and their UV rates\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this while loop to use a for loop.\n     * -----------------------------------------------------------------------------\n     */\n\n    int index = 0;\n\n    while (index < stateNames.length) {\n      result += stateNames[index] + ": " + rates[index] + "\\n";\n      index++;\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (c)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a StreetPainter object\n    StreetPainter painter = new StreetPainter(8, 2, "south", 50);\n\n    // Creates a 1D array of paint colors\n    String[] colors = {"red", "blue", "orange", "purple", "green"};\n\n    // Calls the paintLines method with the 1D array of colors\n    painter.paintLines(colors, 4);\n    \n  }\n}',
+          },
+          {
+            path: 'StreetPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * A Painter that paints the street in The Neighborhood\n */\npublic class StreetPainter extends Painter {\n  /* \n   * Instance variable to store a 1D array of paint colors \n   */\n  private String[] paintColors;\n\n  /*\n   * Sets the x and y location, direction, and amount\n   * of paint to the specified values\n   */\n  public StreetPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Paints the specified number of lines using the colors in paintColors\n   */\n  public void paintLines(String[] paintColors, int numSides) {\n    // Store colors in the instance variable\n    this.paintColors = paintColors;\n\n    for (int count = 0; count < numSides; count++) {\n      paintMultiLine(paintColors);\n      turnRight();\n    }\n  }\n\n  /*\n   * Turns the SquarePainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Paints a multicolored line using the colors in paintColors\n   */\n  public void paintMultiLine(String[] paintColors) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this while loop to use a for loop.\n     * -----------------------------------------------------------------------------\n     */\n    int index = 0;\n    while (index < paintColors.length) {\n      paint(paintColors[index]);\n      move();\n      index++;\n    }\n  }\n}\n',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (d)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a BackgroundPainter object\n    BackgroundPainter painter = new BackgroundPainter(0, 0, "east", 100);\n\n    // Creates a 1D array of paint colors\n    String[] colors = {"pink", "lightpink", "hotpink", "deeppink", "firebrick", "red",\n                       "crimson", "salmon", "lightsalmon", "mediumvioletred"};\n\n    // Calls the paintMultiBackground() method with the 1D array of colors\n    painter.paintMultiBackground(colors);\n\n  }\n}',
+          },
+          {
+            path: 'BackgroundPainter.java',
+            text: 'import org.code.neighborhood.*;\n\n/*\n * A Painter that paints the street in The Neighborhood\n */\npublic class BackgroundPainter extends Painter {\n\n  /*\n   * Sets the x and y location, direction, and amount\n   * of paint to the specified values\n   */\n  public BackgroundPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Turns the BackgroundPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Paints a multicolored background using the colors in paintColors\n   */\n  public void paintMultiBackground(String[] paintColors) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this while loop to use a for loop.\n     * -----------------------------------------------------------------------------\n     */\n    \n    int index = 0;\n\n    while (index < paintColors.length) {\n      paintLine(paintColors[index]);\n      paint(paintColors[index]);\n      turnToNextRow();\n      index++;\n    }\n  }\n\n  /*\n   * Paints a line while the BackgroundPainter can move\n   */\n  public void paintLine(String color) {\n    while (canMove()) {\n      paint(color);\n      move();\n    }\n  }\n\n  /*\n   * Turns to the next row based on the direction the BackgroundPainter is facing\n   */\n  public void turnToNextRow() {\n    if (facingEast()) {\n      turnRight();\n\n      if (canMove()) {\n        move();\n      }\n      \n      turnRight();\n    }\n    else {\n      turnLeft();\n\n      if (canMove()) {\n        move();\n      }\n      \n      turnLeft();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Using for Loops (a)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] names = {"rose", "tulip", "daisy", "sunflower", "orchid", "jasmine", "lavender", "marigold"};\n    \n    String[] colors = {"red, pink, white", "red, pink, white", "white, yellow", "yellow, orange", "purple, pink, white",\n                       "white, yellow", "purple", "orange, yellow"};\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Flowers object with the 1D arrays names and colors\n     * then print the Flowers object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Flowers.java',
+            text: '/*\n * Manages data about flowers\n */\npublic class Flowers {\n\n  private String[] flowerNames;    // The 1D array of flower names\n  private String[] flowerColors;   // The 1D array of typical colors for each flower\n\n  /*\n   * Initializes flowerNames to the specified 1D array of flower names and\n   * flowerColors to the specified 1D array of typical colors for each flower\n   */\n  public Flowers(String[] flowerNames, String[] flowerColors) {\n    this.flowerNames = flowerNames;\n    this.flowerColors = flowerColors;\n  }\n\n  /*\n   * Returns a String containing the name and typical colors for each flower\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Concatenate each flower name from flowerNames and its typical colors from\n     * flowerColors to result\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Using for Loops (b)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    String[] buses = {"2621", "1260", "418", "4522", "3124", "HT1502", "142"};\n    String[] routes = {"J711", "M351", "3", "M271", "M373", "W796", "W633"};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a SchoolBus object with the 1D arrays buses and routes\n     * then print the SchoolBus object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'SchoolBus.java',
+            text: '/*\n * Manages data about school buses and their routes\n */\npublic class SchoolBus {\n\n  private String[] busNumbers;      // The 1D array of bus numbers\n  private String[] routeNumbers;    // The 1D array of route numbers for each school bus\n\n  /*\n   * Initializes busNumbers to the specified 1D array of bus numbers and\n   * routeNumbers to the 1D array of route numbers for each school bus\n   */\n  public SchoolBus(String[] busNumbers, String[] routeNumbers) {\n    this.busNumbers = busNumbers;\n    this.routeNumbers = routeNumbers;\n  }\n\n  /*\n   * Returns a String containing each bus number and its route number\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Concatenate each bus number from busNumbers and its route number from\n     * routeNumbers to result\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Using for Loops (c)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a ParkPainter object, and create a 1D array of paint colors.\n     * Then call the paintPark() method with the 1D array of colors.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'ParkPainter.java',
+            text: 'import org.code.neighborhood.*;\nimport java.util.Scanner;\n\n/*\n * Represents a Painter that paints in a park\n */\npublic class ParkPainter extends Painter {\n\n  /*\n   * Sets the starting x and y location, direction\n   * amount of paint to the specified values\n   */\n  public ParkPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Paints a line while ParkPainter can move forward\n   */\n  public void paintLine(String color) {\n    while (canMove()) {\n      paint(color);\n      move();\n    }\n  }\n\n  /*\n   * Paints lines around the park using the colors in paintColors\n   */\n  public void paintPark(String[] paintColors) {\n    /* --------------------------------------- TO DO ---------------------------------------\n     * \u2705 Traverse the 1D array paintColors to paint a line with each color then turn left.\n     * -------------------------------------------------------------------------------------\n     */\n    \n    \n  }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Using for Loops (d)',
+        lesson: 'Lesson 5: For Loops',
+        view: 'neighborhood',
+        grid: '0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 1,0 1,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 1,0 1,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n0,0 0,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a TrafficPainter object and create a 1D array of paint colors.\n     * \u2705 Call the shiftColors() method with the paint colors and shift amount.\n     * \u2705 Call the navigateTraffic() method with the modified paint colors.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'TrafficPainter.java',
+            text: 'import org.code.neighborhood.*;\nimport java.util.Scanner;\n\n/*\n * Represents a Painter that navigates and paints in The Neighborhood\n */\npublic class TrafficPainter extends Painter {\n\n  /*\n   * Sets the x and y location, direction, and amount\n   * of paint to the specified values\n   */\n  public TrafficPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Turns the TrafficPainter to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Shifts the colors in the 1D array paintColors to the left\n   */\n  public void shiftColors(String[] paintColors, int shiftAmount) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Shift the colors in paintColors to the left by shiftAmount positions.\n     * \u2705 Loop shiftAmount times, moving each element one position to the left.\n     * \u2705 Store the first color before shifting, then move each color forward.\n     * \u2705 Place the stored first color at the end of the array after shifting.\n     * -----------------------------------------------------------------------------\n     */\n    \n  \n  \n  }\n  \n  /*\n   * Paints a line while the TrafficPainter can move forward\n   */\n  public void paintLine(String color) {\n    while (canMove()) {\n      paint(color);\n      move();\n    }\n  }\n\n  /*\n   * Navigates and paints a path using the colors in paintColors\n   */\n  public void navigateTraffic(String[] paintColors) {\n    for (int index = 0; index < paintColors.length; index++) {\n      paintLine(paintColors[index]);\n      turnRight();\n      paintLine(paintColors[index]);\n      turnLeft();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: Reading Text Files',
+        lesson: 'Lesson 6: Text Files',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main {\n  public static void main(String[] args) throws IOException{\n    \n    Student myStudent = new Student();\n    System.out.println(myStudent);\n\n    myStudent = myStudent.createStudentFromFile("student_data.txt");\n    System.out.println(myStudent);\n    \n  }\n}',
+          },
+          {
+            path: 'Student.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class Student {\n    private String name;\n\n    public Student() {\n        name = "unknown";\n    }\n\n    public Student(String name) {\n        this.name = name;\n    }\n\n    public Student createStudentFromFile(String filename) throws IOException {\n        File file = new File(filename);\n        Scanner scanner = new Scanner(file);\n        String name = scanner.nextLine();\n        scanner.close();\n        return new Student(name);\n    }\n\n    public String getName() {\n        return name;\n    }\n\n    public String toString() {\n        return name;\n    }\n}\n',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Reading Text Files',
+        lesson: 'Lesson 6: Text Files',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main {\n  public static void main(String[] args) throws IOException{\n    \n    Student myStudent = new Student();\n    System.out.println(myStudent);\n\n    myStudent = myStudent.createStudentFromFile("student_data.txt");\n    System.out.println(myStudent);\n    \n  }\n}\n  ',
+          },
+          {
+            path: 'Student.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class Student {\n    private String name;\n\n    public Student() {\n        name = "unknown";\n    }\n\n    public Student(String name) {\n        this.name = name;\n    }\n\n    public Student createStudentFromFile(String filename) throws IOException {\n        File file = new File(filename);\n        Scanner scanner = new Scanner(file);\n        String name = scanner.nextLine();\n        scanner.close();\n        return new Student(name);\n    }\n\n    public String getName() {\n        return name;\n    }\n\n    public String toString() {\n        return name;\n    }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Processing File Data',
+        lesson: 'Lesson 6: Text Files',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main {\n  public static void main(String[] args) throws IOException{\n    \n    Student myStudent = new Student();\n    System.out.println(myStudent);\n\n    myStudent = myStudent.createStudentFromFile("student_data.txt");\n    System.out.println(myStudent);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n    \n    \n  }\n}\n  ',
+          },
+          {
+            path: 'Student.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class Student {\n    private String name;\n    private double gpa;\n\n    public Student() {\n      name = "unknown";\n      gpa = 0.0;\n    }\n\n    public Student(String name) {\n      this.name = name;\n      gpa = 0.0;\n    }\n\n    public Student(String name, double gpa){\n      this.name = name;\n      this.gpa = gpa;\n    }\n\n    public Student createStudentFromFile(String filename) throws IOException {\n      File file = new File(filename);\n      Scanner scanner = new Scanner(file);\n      String name = scanner.nextLine();\n      scanner.close();\n      return new Student(name);\n    }\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n\n\n  \n  \n    public String getName() {\n        return name;\n    }\n\n    public String toString() {\n        return name;\n    }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Reading and Processing Files (a)',
+        lesson: 'Lesson 6: Text Files',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main {\n\n   /* ----------------------------------- TO DO -----------------------------------\n    * \u2705 Complete the missing portion of the main method in order to read from\n    * a file using the countTemperatureValues(String filename) method\n    * -----------------------------------------------------------------------------\n    */\n  public static void main(String[] args) /* ---- \ud83d\udd0e REPLACE THIS COMMENT WITH YOUR CODE ---- */ {\n\n    Temperature myTemperature = new Temperature();\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the countTemperatureValues(String filename) and print the results\n     * -----------------------------------------------------------------------------\n     */    \n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Temperature.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner; \n\npublic class Temperature {\n    private double value;\n\n    public Temperature() {\n        this.value = 0.0;\n    }\n\n    public Temperature(double value) {\n        this.value = value;\n    }\n    \n    /*\n     * Counts the number of temperature values in the associated .txt file\n     */\n    public int countTemperatureValues(String filename) throws IOException {    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use the File and Scanner classes to read from "filename" return \n     * the total number of temperatures that appear in the file.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n      \n      return -1;\n    }\n  \n    public double getValue() {\n        return value;\n    }\n\n    public void setValue(double value) {\n        this.value = value;\n    }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Reading and Processing Files (b)',
+        lesson: 'Lesson 6: Text Files',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main {\n\n   /* ----------------------------------- TO DO -----------------------------------\n    * \u2705 Complete the missing portion of the main method in order to read from\n    * a file using the findTotalInventoryValue(String filename) method\n    * -----------------------------------------------------------------------------\n    */\n  public static void main(String[] args) throws IOException {\n\n    Inventory myInventory = new Inventory();\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findTotalInventoryValue(String filename) and print the results\n     * -----------------------------------------------------------------------------\n     */    \n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Inventory.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner; \n\npublic class Inventory {\n    private String name;\n    private double price;\n\n    public Inventory() {\n        this.name = "unknown";\n        this.price = 0.0;\n    }\n\n    public Inventory(String name, double price) {\n        this.name = name;\n        this.price = price;\n    }\n\n    /*\n     * Calculates the total inventory value from the associated .txt file\n     */\n    public double findTotalInventoryValue(String filename) throws IOException {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use the File and Scanner classes to read from "filename" and return \n     * the sum of all of the inventory prices that appear in the file.\n     * -----------------------------------------------------------------------------\n     */\n      double totalValue = -1.0;\n      \n      \n      \n      return totalValue;\n    }\n\n    public String getName() {\n        return name;\n    }\n\n    public void setName(String name) {\n        this.name = name;\n    }\n\n    public double getPrice() {\n        return price;\n    }\n\n    public void setPrice(double price) {\n        this.price = price;\n    }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Reading and Processing Files (c)',
+        lesson: 'Lesson 6: Text Files',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main {\n\n   /* ----------------------------------- TO DO -----------------------------------\n    * \u2705 Complete the missing portion of the main method in order to read from\n    * a file using the countFalseResponses(String filename) method\n    * -----------------------------------------------------------------------------\n    */\n  public static void main(String[] args) /* ---- \ud83d\udd0e REPLACE THIS COMMENT WITH YOUR CODE ---- */ {\n\n    Survey mySurvey = new Survey();\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the countFalseResponses(String filename) and print the results\n     * -----------------------------------------------------------------------------\n     */    \n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Survey.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class Survey {\n    private boolean response;\n\n    public Survey() {\n        this.response = false;\n    }\n\n    public Survey(boolean response) {\n        this.response = response;\n    }\n\n    /*\n     * Counts the number of false responses in the associated .txt file\n     */\n    public int countFalseResponses(String filename) throws IOException {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use the File and Scanner classes to read from "filename" and return \n     * the total number of false responses that appear in the file.\n     * -----------------------------------------------------------------------------\n     */\n      int falseResponses = -1;\n\n\n\n      \n      return falseRespones;\n    }\n\n    public boolean getResponse() {\n        return response;\n    }\n\n    public void setResponse(boolean response) {\n        this.response = response;\n    }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Reading and Processing Files (d)',
+        lesson: 'Lesson 6: Text Files',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main {\n\n   /* ----------------------------------- TO DO -----------------------------------\n    * \u2705 Complete the missing portion of the main method in order to read from\n    * a file using the combinedInfo(String stateFilename, String populationFilename) method\n    * -----------------------------------------------------------------------------\n    */\n  public static void main(String[] args) /* ---- \ud83d\udd0e REPLACE THIS COMMENT WITH YOUR CODE ---- */ {\n\n    State myState = new State();\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the combinedInfo(String stateFilename, String populationFilename)\n     * -----------------------------------------------------------------------------\n     */    \n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'State.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class State {\n    private String name;\n    private int population;\n\n    public State(){\n      name = "unkown";\n      population = 0;\n    }\n  \n    public State(String name, int population) {\n        this.name = name;\n        this.population = population;\n    }\n\n  /*\n   * Reads parallel text files and prints the combined information\n   */\n    public void combinedInfo(String stateFilename, String populationFilename) throws IOException {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use the File and Scanner classes to read from "stateFilename"\n     * "populationFilename" and print the parallel values. Printed values should  \n     * be in the format "State - Population: [value]" like the example below:\n     *    California - Population: 39512223\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n      \n      \n    }\n\n    public String getName() {\n        return name;\n    }\n\n    public void setName(String name) {\n        this.name = name;\n    }\n\n    public int getPopulation() {\n        return population;\n    }\n\n    public void setPopulation(int population) {\n        this.population = population;\n    }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Reading a File',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Channel tedTalks = new Channel("TED", "titles.txt", "durations.txt", "views.txt");\n\n    tedTalks.run();\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Channel.java',
+            text: 'import java.util.Scanner;\n\n/*\n * Represents a channel on YouTube\n */\npublic class Channel {\n\n  private String name;             // The name of a channel\n  private String[] videoTitles;    // The 1D array of video titles on a channel\n  private int[] durations;         // The 1D array of the duration of each video\n  private int[] numViews;          // The 1D array of the number of views for each video\n\n  /*\n   * Sets name to the specified channel name and reads the data from titlesFile, durationsFile,\n   * and numViewsFile to initialize the 1D arrays videoTitles, durations, and numViews\n   */\n  public Channel(String name, String titlesFile, String durationsFile, String numViewsFile) {\n    this.name = name;\n    \n    videoTitles = FileReader.toStringArray(titlesFile);\n    durations = FileReader.toIntArray(durationsFile);\n    numViews = FileReader.toIntArray(numViewsFile);\n  }\n\n  /*\n   * Repeatedly prompts the user and shows the\n   * results until they quit the program\n   */\n  public void run() {\n    int selection = 0;\n    \n    while (selection != 3) {\n      selection = promptUser();\n      System.out.println(showData(selection) + "\\n");\n    }\n\n    System.out.println("Goodbye!");\n  }\n\n  /*\n   * Prompts the user to choose from provided options\n   */\n  public int promptUser() {\n    Scanner input = new Scanner(System.in);\n    \n    System.out.println("What would you like to know about the " + name + " channel? ");\n    System.out.println("1: The shortest video");\n    System.out.println("2: The video with the most views");\n    System.out.println("3: Quit");\n    System.out.print("Enter your choice (1, 2, or 3): ");\n    \n    int choice = input.nextInt();\n    input.close();\n    return choice;\n  }\n\n  /*\n   * Returns a String containing the results based on the user\'s choice\n   */\n  public String showData(int choice) {\n    int index = 0;\n    String result = "";\n    \n    if (choice == 1) {\n      index = getShortestVideo();\n      result = "\\nResult Found:\\n----------\\n" + getVideoInfo(index);\n    }\n      \n    if (choice == 2) {\n      index = getMaxNumViews();\n      result = "\\nResult Found:\\n----------\\n" + getVideoInfo(index);\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns the location of the shortest video in durations\n   */\n  public int getShortestVideo() {\n    int minValue = durations[0];\n    int minLocation = 0;\n\n    for (int index = 0; index < durations.length; index++) {\n      if (durations[index] < minValue) {\n        minValue = durations[index];\n        minLocation = index;\n      }\n    }\n\n    return minLocation;\n  }\n\n  /*\n   * Returns the location of the maximum number of views in numViews\n   */\n  public int getMaxNumViews() {\n    int maxValue = numViews[0];\n    int maxLocation = 0;\n    \n    for (int index = 0; index < numViews.length; index++) {\n      if (numViews[index] > maxValue) {\n        maxValue = numViews[index];\n        maxLocation = index;\n      }\n    }\n\n    return maxLocation;\n  }\n\n  /*\n   * Returns the information for the video at the specified index\n   */\n  public String getVideoInfo(int index) {\n    return videoTitles[index] + "\\nDuration: " + durations[index] + "\\nNumber of Views: " + numViews[index];\n  }\n\n  /*\n   * Returns a String containing each video title and its duration and number of views\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < videoTitles.length; index++) {\n      result += videoTitles[index] + " (" + durations[index] + " mins, " + numViews[index] + " views)\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (a) #1',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toIntArray() to read the exams.txt file and store\n     * the result in a 1D array. Instantiate an APExams object with the 1D array,\n     * then call the calcTotalExams() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageExams() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'APExams.java',
+            text: '/*\n * Manages data about AP CS exams taken in each state\n */\npublic class APExams {\n\n  private String[] states;   // The 1D array of state names\n  private int[] csExams;     // The 1D array of the number of AP CS exams taken in each state\n\n  /*\n   * Reads the data from states to initialize states and initializes csExams\n   * to the specified 1D array of the number of AP CS exams taken in each state\n   */\n  public APExams(int[] csExams) {\n    states = FileReader.toStringArray("states.txt");\n    this.csExams = csExams;\n  }\n\n  /*\n   * Returns the information for the state at the specified index\n   */\n  public String getStateInfo(int index) {\n    return states[index] + "\\nNumber of Exams: " + csExams[index];\n  }\n\n  /*\n   * Returns the total number of AP CS exams taken in all states\n   */\n  public int calcTotalExams() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse csExams to calculate and return the total number of AP CS exams\n     * taken in all states.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return -1;\n  }\n\n  /*\n   * Returns the average number of AP CS exams taken in each state\n   */\n  public int calcAverageExams() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average number of AP CS exams taken in each state.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return -1;\n  }\n\n  /*\n   * Returns a String containing each state name and the number of AP CS exams taken\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < states.length; index++) {\n      result += states[index] + ": " + csExams[index] + " AP CS exams taken\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (b) #1',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toIntArray() to read the dailyPlays.txt file and\n     * store the result in a 1D array. Instantiate a Song object with the 1D\n     * array, then call the calcTotalPlays() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAveragePlays() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Song.java',
+            text: '/*\n * Manages data about a song\n */\npublic class Song {\n\n  private String title;       // The title of the song\n  private int[] songPlays;    // The 1D array of the number of times a song was played\n\n  /*\n   * Sets title to the specified title of the song and initializes songPlays\n   * to the specified 1D array of the number of times a song was played\n   */\n  public Song(String title, int[] songPlays) {\n    this.title = title;\n    this.songPlays = songPlays;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the number of plays for the day at the specified index\n   */\n  public String getSongInfo(int index) {\n    return songPlays[index] + " plays";\n  }\n\n  /*\n   * Returns the total number of times the song was played\n   */\n  public int calcTotalPlays() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse songPlays to calculate and return the total number of times the\n     * song was played on the streaming music service.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns the average number of times the song was played each day\n   */\n  public int calcAveragePlays() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average number of times the song was played.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing the number of plays the song had each day\n   */\n  public String toString() {\n    String result = title + " Daily Plays\\n----------\\n";\n\n    for (int index = 0; index < songPlays.length; index++) {\n      result += "Day " + (index + 1) + ": " + songPlays[index] + "\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (c) #1',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toDoubleArray() to read the storeProfits.txt file and\n     * store the result in a 1D array. Instantiate a Store object with the 1D array,\n     * then call the calcTotalProfits() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageProfits() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Store.java',
+            text: '/*\n * Manages data about store profits\n */\npublic class Store {\n\n  private String name;              // The name of the store\n  private double[] storeProfits;    // The 1D array of the profits a store made each day\n\n  /*\n   * Sets name to the specified name of the store and initializes storeProfits\n   * to the specified 1D array of the profits a store made each day\n   */\n  public Store(String name, double[] storeProfits) {\n    this.name = name;\n    this.storeProfits = storeProfits;\n  }\n\n  /*\n   * Returns the name of the store\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the profits for the day at the specified index\n   */\n  public String getProfitsInfo(int index) {\n    return "Profits made: " + storeProfits[index];\n  }\n\n  /*\n   * Returns the total profits made by the store\n   */\n  public double calcTotalProfits() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse storeProfits to calculate and return the total profits made.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns the average profits made by the store each day \n   */\n  public double calcAverageProfits() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average profits made by the store each day.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing the profits the store made each day\n   */\n  public String toString() {\n    String result = name + "\'s Daily Profits\\n----------\\n";\n\n    for (int index = 0; index < storeProfits.length; index++) {\n      result += "Day " + (index + 1) + ": " + storeProfits[index] + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (d) #1',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toIntArray() to read the episodes.txt file and\n     * store the result in a 1D array. Instantiate a TVEpisodes object with the 1D\n     * array, then call the calcTotalLength() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageLength() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'TVEpisodes.java',
+            text: '/*\n * Manages data about episodes in a TV series\n */\npublic class TVEpisodes {\n\n  private String title;              // The title of a TV show\n  private String[] episodeTitles;    // The 1D array of episode titles\n  private int[] episodeLengths;      // The 1D array of the number of minutes in each episode\n\n  /*\n   * Sets title to the specified title of the TV show and initializes episodeTitles\n   * to the specified 1D array of the episode titles and episodeLengths to the 1D\n   * array of the number of minutes in each episode\n   */\n  public TVEpisodes(String title, int[] episodeLengths) {\n    this.title = title;\n    episodeTitles = FileReader.toStringArray("titles.txt");\n    this.episodeLengths = episodeLengths;\n  }\n\n  /*\n   * Returns the name of the TV show\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the episode title and its number of minutes at the specified index\n   */\n  public String getEpisodeInfo(int index) {\n    return episodeTitles[index] + ": " + episodeLengths[index] + " minutes\\n";\n  }\n\n  /*\n   * Returns the total number of minutes for all episodes\n   */\n  public int calcTotalLength() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse episodeLengths to calculate and return the total number of\n     * minutes for all TV episodes.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    return -1;\n  }\n\n  /*\n   * Returns the average number of minutes for each episode\n   */\n  public int calcAverageLength() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average number of minutes for each TV episode.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing the name and length of each episode\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < episodeTitles.length; index++) {\n      result += episodeTitles[index] + ": " + episodeLengths[index] + " minutes\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (a) #2',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toIntArray() to read the exams.txt file and store\n     * the result in a 1D array. Instantiate an APExams object with the 1D array,\n     * then call the calcTotalExams() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageExams() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'APExams.java',
+            text: '/*\n * Manages data about AP CS exams taken in each state\n */\npublic class APExams {\n\n  private String[] states;   // The 1D array of state names\n  private int[] csExams;     // The 1D array of the number of AP CS exams taken in each state\n\n  /*\n   * Reads the data from states to initialize states and initializes csExams\n   * to the specified 1D array of the number of AP CS exams taken in each state\n   */\n  public APExams(int[] csExams) {\n    states = FileReader.toStringArray("states.txt");\n    this.csExams = csExams;\n  }\n\n  /*\n   * Returns the information for the state at the specified index\n   */\n  public String getStateInfo(int index) {\n    return states[index] + "\\nNumber of Exams: " + csExams[index];\n  }\n\n  /*\n   * Returns the total number of AP CS exams taken in all states\n   */\n  public int calcTotalExams() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse csExams to calculate and return the total number of AP CS exams\n     * taken in all states.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return -1;\n  }\n\n  /*\n   * Returns the average number of AP CS exams taken in each state\n   */\n  public int calcAverageExams() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average number of AP CS exams taken in each state.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return -1;\n  }\n\n  /*\n   * Returns a String containing each state name and the number of AP CS exams taken\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < states.length; index++) {\n      result += states[index] + ": " + csExams[index] + " AP CS exams taken\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (b) #2',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toIntArray() to read the dailyPlays.txt file and\n     * store the result in a 1D array. Instantiate a Song object with the 1D\n     * array, then call the calcTotalPlays() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAveragePlays() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Song.java',
+            text: '/*\n * Manages data about a song\n */\npublic class Song {\n\n  private String title;       // The title of the song\n  private int[] songPlays;    // The 1D array of the number of times a song was played\n\n  /*\n   * Sets title to the specified title of the song and initializes songPlays\n   * to the specified 1D array of the number of times a song was played\n   */\n  public Song(String title, int[] songPlays) {\n    this.title = title;\n    this.songPlays = songPlays;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the number of plays for the day at the specified index\n   */\n  public String getSongInfo(int index) {\n    return songPlays[index] + " plays";\n  }\n\n  /*\n   * Returns the total number of times the song was played\n   */\n  public int calcTotalPlays() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse songPlays to calculate and return the total number of times the\n     * song was played on the streaming music service.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns the average number of times the song was played each day\n   */\n  public int calcAveragePlays() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average number of times the song was played.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing the number of plays the song had each day\n   */\n  public String toString() {\n    String result = title + " Daily Plays\\n----------\\n";\n\n    for (int index = 0; index < songPlays.length; index++) {\n      result += "Day " + (index + 1) + ": " + songPlays[index] + "\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (c) #2',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toDoubleArray() to read the storeProfits.txt file and\n     * store the result in a 1D array. Instantiate a Store object with the 1D array,\n     * then call the calcTotalProfits() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageProfits() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Store.java',
+            text: '/*\n * Manages data about store profits\n */\npublic class Store {\n\n  private String name;              // The name of the store\n  private double[] storeProfits;    // The 1D array of the profits a store made each day\n\n  /*\n   * Sets name to the specified name of the store and initializes storeProfits\n   * to the specified 1D array of the profits a store made each day\n   */\n  public Store(String name, double[] storeProfits) {\n    this.name = name;\n    this.storeProfits = storeProfits;\n  }\n\n  /*\n   * Returns the name of the store\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the profits for the day at the specified index\n   */\n  public String getProfitsInfo(int index) {\n    return "Profits made: " + storeProfits[index];\n  }\n\n  /*\n   * Returns the total profits made by the store\n   */\n  public double calcTotalProfits() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse storeProfits to calculate and return the total profits made.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns the average profits made by the store each day \n   */\n  public double calcAverageProfits() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average profits made by the store each day.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing the profits the store made each day\n   */\n  public String toString() {\n    String result = name + "\'s Daily Profits\\n----------\\n";\n\n    for (int index = 0; index < storeProfits.length; index++) {\n      result += "Day " + (index + 1) + ": " + storeProfits[index] + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with Arrays (d) #2',
+        lesson: 'Lesson 7: Preconditions and Postconditions',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the FileReader.toIntArray() to read the episodes.txt file and\n     * store the result in a 1D array. Instantiate a TVEpisodes object with the 1D\n     * array, then call the calcTotalLength() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageLength() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'TVEpisodes.java',
+            text: '/*\n * Manages data about episodes in a TV series\n */\npublic class TVEpisodes {\n\n  private String title;              // The title of a TV show\n  private String[] episodeTitles;    // The 1D array of episode titles\n  private int[] episodeLengths;      // The 1D array of the number of minutes in each episode\n\n  /*\n   * Sets title to the specified title of the TV show and initializes episodeTitles\n   * to the specified 1D array of the episode titles and episodeLengths to the 1D\n   * array of the number of minutes in each episode\n   */\n  public TVEpisodes(String title, int[] episodeLengths) {\n    this.title = title;\n    episodeTitles = FileReader.toStringArray("titles.txt");\n    this.episodeLengths = episodeLengths;\n  }\n\n  /*\n   * Returns the name of the TV show\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the episode title and its number of minutes at the specified index\n   */\n  public String getEpisodeInfo(int index) {\n    return episodeTitles[index] + ": " + episodeLengths[index] + " minutes\\n";\n  }\n\n  /*\n   * Returns the total number of minutes for all episodes\n   */\n  public int calcTotalLength() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse episodeLengths to calculate and return the total number of\n     * minutes for all TV episodes.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    return -1;\n  }\n\n  /*\n   * Returns the average number of minutes for each episode\n   */\n  public int calcAverageLength() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the average number of minutes for each TV episode.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing the name and length of each episode\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < episodeTitles.length; index++) {\n      result += episodeTitles[index] + ": " + episodeLengths[index] + " minutes\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Analyzing Data Sets #1',
+        lesson: 'Lesson 8: Ethics in Data',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main{\n  public static void main(String[] args) throws IOException{\n    \n    \n    MusicData playsStudy = new MusicData();\n    String mostPopularSong = \n            playsStudy.findMostPopularSong(\n            "plays.txt","titles.txt");\n\n    System.out.println(mostPopularSong);\n\n    \n  }\n}',
+          },
+          {
+            path: 'MusicData.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class MusicData {\n  \n    /**\n     * Calculates the most popular song in a data set based on total plays\n     */\n    public String findMostPopularSong(String playsData, String titlesData) throws IOException {\n        File playsFile = new File(playsData);\n        File titlesFile = new File(titlesData);\n      \n        Scanner playsScanner = new Scanner(playsFile);\n        Scanner titlesScanner = new Scanner(titlesFile);\n\n        int maxPlays = 0;\n        String maxSong = "";\n      \n        while (playsScanner.hasNext()) {\n            int currentPlays = playsScanner.nextInt();\n            String currentTitle = titlesScanner.nextLine();\n            \n            if (currentPlays > maxPlays) {\n                maxPlays = currentPlays;\n                maxSong = currentTitle;       \n            }\n        }\n        playsScanner.close();\n        titlesScanner.close();\n\n        return maxSong + " has the most plays with " + maxPlays + " total plays.";\n    }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Analyzing Data Sets #2',
+        lesson: 'Lesson 8: Ethics in Data',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main{\n  public static void main(String[] args) throws IOException{\n    \n    \n    HealthData cholesterolStudy = new HealthData();\n    double averageCholesterol = \n            cholesterolStudy.calculateAverageCholesterolWithHeartDisease(\n            "cholesterol.txt","heart_disease.txt");\n\n    System.out.println("Average Cholesterol: " + averageCholesterol);\n\n    \n  }\n}',
+          },
+          {
+            path: 'HealthData.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class HealthData {\n  \n    /**\n     * Calculates the average cholesterol level for people with heart disease\n     */\n    public double calculateAverageCholesterolWithHeartDisease(String cholesterolData, String heartDiseaseData) throws IOException {\n        File cholesterolFile = new File(cholesterolData);\n        File heartDiseaseFile = new File(heartDiseaseData);\n      \n        Scanner cholesterolScanner = new Scanner(cholesterolFile);\n        Scanner heartDiseaseScanner = new Scanner(heartDiseaseFile);\n\n        int totalCholesterol = 0;\n        int count = 0;\n\n        while (cholesterolScanner.hasNext()) {\n            int currentCholesterol = cholesterolScanner.nextInt();\n            boolean heartDiseasePresent = heartDiseaseScanner.nextBoolean();\n            \n            if (heartDiseasePresent) {\n                totalCholesterol += currentCholesterol;\n                count++;\n            }\n        }\n        cholesterolScanner.close();\n        heartDiseaseScanner.close();\n\n        if (count == 0) {\n            return 0.0;\n        }\n\n        return (double) totalCholesterol / count;\n    }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Analyzing Data Sets #3',
+        lesson: 'Lesson 8: Ethics in Data',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main{\n  public static void main(String[] args) throws IOException{\n    \n    \n    TestData scoresStudy = new TestData();\n    double averageScore = scoresStudy.findAverageScore("scores.txt");\n\n    System.out.println("Average score: " + averageScore);\n\n    \n  }\n}',
+          },
+          {
+            path: 'TestData.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class TestData {\n  \n    /**\n     * Calculates average test score\n     */\n    public double findAverageScore(String scoresData) throws IOException {\n        File scoresFile = new File(scoresData);\n      \n        Scanner scoresScanner = new Scanner(scoresFile);\n\n        int total = 0;\n        int count = 0;\n      \n        while (scoresScanner.hasNext()) {\n            total += scoresScanner.nextInt();\n            count++;\n        }\n        scoresScanner.close();\n\n        double average = 0.0;\n        if(count > 0){\n          average = (double) total / count;\n        }\n        return average;\n    }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Analyzing Data Sets #4',
+        lesson: 'Lesson 8: Ethics in Data',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.io.IOException;\n\npublic class Main{\n  public static void main(String[] args) throws IOException{\n    \n    \n    SalaryData salaryStudy = new SalaryData();\n    double averageSalary = salaryStudy.findAverageSalary("annual_salary.txt");\n\n    System.out.println("The average salary is: $" + averageSalary);\n\n    \n  }\n}',
+          },
+          {
+            path: 'SalaryData.java',
+            text: 'import java.io.File;\nimport java.io.IOException;\nimport java.util.Scanner;\n\npublic class SalaryData {\n  \n    /**\n     * Calculates average salary\n     */\n    public double findAverageSalary(String salaryData) throws IOException {\n        File salaryFile = new File(salaryData);\n      \n        Scanner salaryScanner = new Scanner(salaryFile);\n\n        int total = 0;\n        int count = 0;\n      \n        while (salaryScanner.hasNext()) {\n            total += salaryScanner.nextInt();\n            count++;\n        }\n        salaryScanner.close();\n\n        double average = 0.0;\n        if(count > 0){\n          average = (double) total / count;\n        }\n        return average;\n    }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: Polymorphism',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Circle.java',
+            text: '/*\n * Represents a circle that is a type of shape\n */\npublic class Circle extends Shape {\n\n  /*\n   * Sets type and width to the specified values\n   */\n  public Circle(String type, double width) {\n    super(type, width);\n  }\n\n  /*\n   * Calculates and returns the area of the circle\n   */\n  public double calculateArea() {\n    double radius = getWidth() / 2;\n    return 3.14 * (radius * radius);\n  }\n  \n}',
+          },
+          {
+            path: 'Rectangle.java',
+            text: '/*\n * Represents a rectangle that is a type of shape\n */\npublic class Rectangle extends Shape {\n\n  private double height;     // The height of a rectangle\n\n  /*\n   * Sets the type, width, and height to the specified values\n   */\n  public Rectangle(String type, double width, double height) {\n    super(type, width);\n    this.height = height;\n  }\n\n  /*\n   * Returns the height of the rectangle\n   */\n  public double getHeight() {\n    return height;\n  }\n\n  /*\n   * Sets height to the new height\n   */\n  public void setHeight(double height) {\n    this.height = height;\n  }\n\n  /*\n   * Calculates and returns the area of the rectangle\n   */\n  public double calculateArea() {\n    return getWidth() * height;\n  }\n  \n}',
+          },
+          {
+            path: 'Shape.java',
+            text: '/*\n * Represents a shape\n */\npublic class Shape {\n\n  private String type;      // The type of shape\n  private double width;     // The width of a shape\n\n  /*\n   * Sets type to the specified type\n   * and width to the specified width\n   */\n  public Shape(String type, double width) {\n    this.type = type;\n    this.width = width;\n  }\n\n  /*\n   * Returns the type of the shape\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Sets type to the new type\n   */\n  public void setType(String type) {\n    this.type = type;\n  }\n\n  /*\n   * Returns the width of the shape\n   */\n  public double getWidth() {\n    return width;\n  }\n\n  /*\n   * Sets width to the new width\n   */\n  public void setWidth(double width) {\n    this.width = width;\n  }\n\n  /*\n   * Calculates and returns the area of the shape\n   */\n  public double calculateArea() {\n    return width * width;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its width\n   */\n  public String toString() {\n    return type + "\\nWidth: " + width;\n  }\n  \n}',
+          },
+          {
+            path: 'ShapeManager.java',
+            text: '/*\n * Manages data about shapes\n */\npublic class ShapeManager {\n\n  private Shape[] allShapes;     // The 1D array of Shape objects\n\n  /*\n   * Initializes allShapes to the specified 1D array of Shape objects\n   */\n  public ShapeManager(Shape[] allShapes) {\n    this.allShapes = allShapes;\n  }\n\n  /*\n   * Sets allShapes to the specified 1D array of new shapes\n   */\n  public void setAllShapes(Shape[] newShapes) {\n    allShapes = newShapes;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its area for\n   * all shapes in the 1D array allShapes\n   */\n  public String calculateAllAreas() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += "Area of " + theShape.getType() + ": " + theShape.calculateArea() + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing the information about each shape\n   */\n  public String toString() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += theShape + "\\n\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Polymorphism #1',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Circle.java',
+            text: '/*\n * Represents a circle that is a type of shape\n */\npublic class Circle extends Shape {\n\n  /*\n   * Sets type and width to the specified values\n   */\n  public Circle(String type, double width) {\n    super(type, width);\n  }\n\n  /*\n   * Calculates and returns the area of the circle\n   */\n  public double calculateArea() {\n    double radius = getWidth() / 2;\n    return 3.14 * (radius * radius);\n  }\n  \n}',
+          },
+          {
+            path: 'Rectangle.java',
+            text: '/*\n * Represents a rectangle that is a type of shape\n */\npublic class Rectangle extends Shape {\n\n  private double height;     // The height of a rectangle\n\n  /*\n   * Sets the type, width, and height to the specified values\n   */\n  public Rectangle(String type, double width, double height) {\n    super(type, width);\n    this.height = height;\n  }\n\n  /*\n   * Returns the height of the rectangle\n   */\n  public double getHeight() {\n    return height;\n  }\n\n  /*\n   * Sets height to the new height\n   */\n  public void setHeight(double height) {\n    this.height = height;\n  }\n\n  /*\n   * Calculates and returns the area of the rectangle\n   */\n  public double calculateArea() {\n    return getWidth() * height;\n  }\n  \n}',
+          },
+          {
+            path: 'Shape.java',
+            text: '/*\n * Represents a shape\n */\npublic class Shape {\n\n  private String type;      // The type of shape\n  private double width;     // The width of a shape\n\n  /*\n   * Sets type to the specified type\n   * and width to the specified width\n   */\n  public Shape(String type, double width) {\n    this.type = type;\n    this.width = width;\n  }\n\n  /*\n   * Returns the type of the shape\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Sets type to the new type\n   */\n  public void setType(String type) {\n    this.type = type;\n  }\n\n  /*\n   * Returns the width of the shape\n   */\n  public double getWidth() {\n    return width;\n  }\n\n  /*\n   * Sets width to the new width\n   */\n  public void setWidth(double width) {\n    this.width = width;\n  }\n\n  /*\n   * Calculates and returns the area of the shape\n   */\n  public double calculateArea() {\n    return width * width;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its width\n   */\n  public String toString() {\n    return type + "\\nWidth: " + width;\n  }\n  \n}',
+          },
+          {
+            path: 'ShapeManager.java',
+            text: '/*\n * Manages data about shapes\n */\npublic class ShapeManager {\n\n  private Shape[] allShapes;     // The 1D array of Shape objects\n\n  /*\n   * Initializes allShapes to the specified 1D array of Shape objects\n   */\n  public ShapeManager(Shape[] allShapes) {\n    this.allShapes = allShapes;\n  }\n\n  /*\n   * Sets allShapes to the specified 1D array of new shapes\n   */\n  public void setAllShapes(Shape[] newShapes) {\n    allShapes = newShapes;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its area for\n   * all shapes in the 1D array allShapes\n   */\n  public String calculateAllAreas() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += "Area of " + theShape.getType() + ": " + theShape.calculateArea() + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing the information about each shape\n   */\n  public String toString() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += theShape + "\\n\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Polymorphism #2',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Circle.java',
+            text: '/*\n * Represents a circle that is a type of shape\n */\npublic class Circle extends Shape {\n\n  /*\n   * Sets type and width to the specified values\n   */\n  public Circle(String type, double width) {\n    super(type, width);\n  }\n\n  /*\n   * Calculates and returns the area of the circle\n   */\n  public double calculateArea() {\n    double radius = getWidth() / 2;\n    return 3.14 * (radius * radius);\n  }\n  \n}',
+          },
+          {
+            path: 'Rectangle.java',
+            text: '/*\n * Represents a rectangle that is a type of shape\n */\npublic class Rectangle extends Shape {\n\n  private double height;     // The height of a rectangle\n\n  /*\n   * Sets the type, width, and height to the specified values\n   */\n  public Rectangle(String type, double width, double height) {\n    super(type, width);\n    this.height = height;\n  }\n\n  /*\n   * Returns the height of the rectangle\n   */\n  public double getHeight() {\n    return height;\n  }\n\n  /*\n   * Sets height to the new height\n   */\n  public void setHeight(double height) {\n    this.height = height;\n  }\n\n  /*\n   * Calculates and returns the area of the rectangle\n   */\n  public double calculateArea() {\n    return getWidth() * height;\n  }\n  \n}',
+          },
+          {
+            path: 'Shape.java',
+            text: '/*\n * Represents a shape\n */\npublic class Shape {\n\n  private String type;      // The type of shape\n  private double width;     // The width of a shape\n\n  /*\n   * Sets type to the specified type\n   * and width to the specified width\n   */\n  public Shape(String type, double width) {\n    this.type = type;\n    this.width = width;\n  }\n\n  /*\n   * Returns the type of the shape\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Sets type to the new type\n   */\n  public void setType(String type) {\n    this.type = type;\n  }\n\n  /*\n   * Returns the width of the shape\n   */\n  public double getWidth() {\n    return width;\n  }\n\n  /*\n   * Sets width to the new width\n   */\n  public void setWidth(double width) {\n    this.width = width;\n  }\n\n  /*\n   * Calculates and returns the area of the shape\n   */\n  public double calculateArea() {\n    return width * width;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its width\n   */\n  public String toString() {\n    return type + "\\nWidth: " + width;\n  }\n  \n}',
+          },
+          {
+            path: 'ShapeManager.java',
+            text: '/*\n * Manages data about shapes\n */\npublic class ShapeManager {\n\n  private Shape[] allShapes;     // The 1D array of Shape objects\n\n  /*\n   * Initializes allShapes to the specified 1D array of Shape objects\n   */\n  public ShapeManager(Shape[] allShapes) {\n    this.allShapes = allShapes;\n  }\n\n  /*\n   * Sets allShapes to the specified 1D array of new shapes\n   */\n  public void setAllShapes(Shape[] newShapes) {\n    allShapes = newShapes;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its area for\n   * all shapes in the 1D array allShapes\n   */\n  public String calculateAllAreas() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += "Area of " + theShape.getType() + ": " + theShape.calculateArea() + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing the information about each shape\n   */\n  public String toString() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += theShape + "\\n\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Polymorphism #3',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Circle.java',
+            text: '/*\n * Represents a circle that is a type of shape\n */\npublic class Circle extends Shape {\n\n  /*\n   * Sets type and width to the specified values\n   */\n  public Circle(String type, double width) {\n    super(type, width);\n  }\n\n  /*\n   * Calculates and returns the area of the circle\n   */\n  public double calculateArea() {\n    double radius = getWidth() / 2;\n    return 3.14 * (radius * radius);\n  }\n  \n}',
+          },
+          {
+            path: 'Rectangle.java',
+            text: '/*\n * Represents a rectangle that is a type of shape\n */\npublic class Rectangle extends Shape {\n\n  private double height;     // The height of a rectangle\n\n  /*\n   * Sets the type, width, and height to the specified values\n   */\n  public Rectangle(String type, double width, double height) {\n    super(type, width);\n    this.height = height;\n  }\n\n  /*\n   * Returns the height of the rectangle\n   */\n  public double getHeight() {\n    return height;\n  }\n\n  /*\n   * Sets height to the new height\n   */\n  public void setHeight(double height) {\n    this.height = height;\n  }\n\n  /*\n   * Calculates and returns the area of the rectangle\n   */\n  public double calculateArea() {\n    return getWidth() * height;\n  }\n  \n}',
+          },
+          {
+            path: 'Shape.java',
+            text: '/*\n * Represents a shape\n */\npublic class Shape {\n\n  private String type;      // The type of shape\n  private double width;     // The width of a shape\n\n  /*\n   * Sets type to the specified type\n   * and width to the specified width\n   */\n  public Shape(String type, double width) {\n    this.type = type;\n    this.width = width;\n  }\n\n  /*\n   * Returns the type of the shape\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Sets type to the new type\n   */\n  public void setType(String type) {\n    this.type = type;\n  }\n\n  /*\n   * Returns the width of the shape\n   */\n  public double getWidth() {\n    return width;\n  }\n\n  /*\n   * Sets width to the new width\n   */\n  public void setWidth(double width) {\n    this.width = width;\n  }\n\n  /*\n   * Calculates and returns the area of the shape\n   */\n  public double calculateArea() {\n    return width * width;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its width\n   */\n  public String toString() {\n    return type + "\\nWidth: " + width;\n  }\n  \n}',
+          },
+          {
+            path: 'ShapeManager.java',
+            text: '/*\n * Manages data about shapes\n */\npublic class ShapeManager {\n\n  private Shape[] allShapes;     // The 1D array of Shape objects\n\n  /*\n   * Initializes allShapes to the specified 1D array of Shape objects\n   */\n  public ShapeManager(Shape[] allShapes) {\n    this.allShapes = allShapes;\n  }\n\n  /*\n   * Sets allShapes to the specified 1D array of new shapes\n   */\n  public void setAllShapes(Shape[] newShapes) {\n    allShapes = newShapes;\n  }\n\n  /*\n   * Returns a String containing the type of shape and its area for\n   * all shapes in the 1D array allShapes\n   */\n  public String calculateAllAreas() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += "Area of " + theShape.getType() + ": " + theShape.calculateArea() + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing the information about each shape\n   */\n  public String toString() {\n    String result = "";\n\n    for (Shape theShape : allShapes) {\n      result += theShape + "\\n\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Arrays of Objects (a)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 1D array of Pet objects. Instantiate a PetStore object with\n     * the 1D array, then print the PetStore object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Cat.java',
+            text: '/*\n * Represents a cat that is a type of pet\n */\npublic class Cat extends Pet {\n\n  /*\n   * Sets type to "Cat"\n   */\n  public Cat() {\n    super("Cat");\n  }\n  \n}',
+          },
+          {
+            path: 'Dog.java',
+            text: '/*\n * Represents a dog that is a type of pet\n */\npublic class Dog extends Pet {\n\n  /*\n   * Sets type to "Dog"\n   */\n  public Dog() {\n    super("Dog");\n  }\n  \n}',
+          },
+          {
+            path: 'Pet.java',
+            text: '/*\n * Represents a pet at a pet store\n */\npublic class Pet {\n\n  private String type;    // The type of pet\n\n  /*\n   * Sets type to "Pet"\n   */\n  public Pet() {\n    this("Pet");\n  }\n\n  /*\n   * Sets type to the specified type\n   */\n  public Pet(String type) {\n    this.type = type;\n  }\n\n  /*\n   * Returns the type of pet\n   */\n  public String getType() {\n    return type;\n  }\n\n}',
+          },
+          {
+            path: 'PetStore.java',
+            text: '/*\n * Represents a pet store\n */\npublic class PetStore {\n\n  private Pet[] availablePets;    // The 1D array of Pet objects\n\n  /*\n   * Initializes availablePets to the 1D array of Pet objects\n   */\n  public PetStore(Pet[] availablePets) {\n    this.availablePets = availablePets;\n  }\n\n  /*\n   * Returns a String containing the type of each pet in availablePets\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array availablePets and use the getType() method in the\n     * Pet class to concatenate the type of each pet to result on separate lines.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Arrays of Objects (b)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 1D array of Family objects. Instantiate a Household object with\n     * the 1D array, then print the Household object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Brother.java',
+            text: '/*\n * Represents a brother that is a type of family member\n */\npublic class Brother extends Family {\n\n  /*\n   * Sets title to "Brother"\n   */\n  public Brother() {\n    super("Brother");\n  }\n  \n}',
+          },
+          {
+            path: 'Family.java',
+            text: '/*\n * Represents a family member\n */\npublic class Family {\n\n  private String title;    // The title of a family member\n\n  /*\n   * Sets title to "Relative"\n   */\n  public Family() {\n    this("Relative");\n  }\n\n  /*\n   * Sets title to the specified title\n   */\n  public Family(String title) {\n    this.title = title;\n  }\n\n  /*\n   * Returns the title of the family member\n   */\n  public String getTitle() {\n    return title;\n  }\n  \n}',
+          },
+          {
+            path: 'Father.java',
+            text: '/*\n * Represents a father that is a type of family member\n */\npublic class Father extends Family {\n\n  /*\n   * Sets title to "Father"\n   */\n  public Father() {\n    super("Father");\n  }\n  \n}',
+          },
+          {
+            path: 'Household.java',
+            text: '/*\n * Represents a family household\n */\npublic class Household {\n\n  private Family[] familyMembers;    // The 1D array of Family objects\n\n  /*\n   * Initializes familyMembers to the 1D array of Family objects\n   */\n  public Household(Family[] familyMembers) {\n    this.familyMembers = familyMembers;\n  }\n\n  /*\n   * Returns a String containing each type of family member\n   */\n  public String toString() {\n    String result = "";\n\n    /* -------------------------------------- TO DO -------------------------------------\n     * \u2705 Traverse the 1D array familyMembers and use the getTitle() method in the Family\n     * class to concatenate the title of each family member to result on separate lines.\n     * -----------------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Mother.java',
+            text: '/*\n * Represents a mother that is a type of family member\n */\npublic class Mother extends Family {\n\n  /*\n   * Sets title to "Mother"\n   */\n  public Mother() {\n    super("Mother");\n  }\n  \n}',
+          },
+          {
+            path: 'Sister.java',
+            text: '/*\n * Represents a sister that is a type of family member\n */\npublic class Sister extends Family {\n\n  /*\n   * Sets title to "Sister"\n   */\n  public Sister() {\n    super("Sister");\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Arrays of Objects (c)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 1D array of Planet objects. Instantiate a Universe object with\n     * the 1D array, then print the Universe object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Neptunian.java',
+            text: '/*\n * Represents a Neptune-like planet\n */\npublic class Neptunian extends Planet {\n\n  /*\n   * Sets name to the specified name and type to "Neptunian"\n   */\n  public Neptunian(String name) {\n    super(name, "Neptunian");\n  }\n  \n}',
+          },
+          {
+            path: 'Planet.java',
+            text: '/*\n * Represents a planet\n */\npublic class Planet {\n\n  private String name;    // The name of a planet\n  private String type;    // The type of a planet\n\n  /*\n   * Sets name to "Unknown" and type to "Unknown"\n   */\n  public Planet() {\n    this("Unknown", "Unknown");\n  }\n\n  /*\n   * Sets name and type to the specified values\n   */\n  public Planet(String name, String type) {\n    this.name = name;\n    this.type = type;\n  }\n\n  /*\n   * Returns the name of the planet\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the type of the planet\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Returns a String containing the name and type of the planet\n   */\n  public String toString() {\n    return name + ": " + type;\n  }\n}',
+          },
+          {
+            path: 'Terrestrial.java',
+            text: '/*\n * Represents a terrestrial planet\n */\npublic class Terrestrial extends Planet {\n\n  /*\n   * Sets name to the specified name and type to "Terrestrial"\n   */\n  public Terrestrial(String name) {\n    super(name, "Terrestrial");\n  }\n  \n}',
+          },
+          {
+            path: 'Universe.java',
+            text: '/*\n * Represents the universe\n */\npublic class Universe {\n\n  private Planet[] worlds;    // The 1D array of Planet objects\n\n  /*\n   * Initializes worlds to the 1D array of Planet objects\n   */\n  public Universe(Planet[] worlds) {\n    this.worlds = worlds;\n  }\n\n  /*\n   * Returns a String containing each planet\'s name and type\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array worlds and concatenate each Planet object to\n     * result on separate lines.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Arrays of Objects (d)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 1D array of MenuItem objects. Instantiate a Restaurant object\n     * with the 1D array, then print the Restaurant object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Burger.java',
+            text: '/*\n * Represents a burger that is a type of menu item\n */\npublic class Burger extends MenuItem {\n\n  /*\n   * Sets type to "Burger" and price to the specified price\n   */\n  public Burger(double price) {\n    super("Burger", price);\n  }\n  \n}',
+          },
+          {
+            path: 'MenuItem.java',
+            text: '/*\n * Represents a menu item\n */\npublic class MenuItem {\n\n  private String type;    // The type of a menu item\n  private double price;   // The price of a menu item\n\n  /*\n   * Sets type to "Unknown" and price to 1.50\n   */\n  public MenuItem() {\n    this("Unknown", 1.50);\n  }\n  \n  /*\n   * Sets type to the specified type and\n   * price to the specified price\n   */\n  public MenuItem(String type, double price) {\n    this.type = type;\n    this.price = price;\n  }\n\n  /*\n   * Returns the type of the menu item\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Returns the price of the menu item\n   */\n  public double getPrice() {\n    return price;\n  }\n\n  /*\n   * Returns a String containing the type and price of the menu item\n   */\n  public String toString() {\n    return type + ": " + price;\n  }\n  \n}',
+          },
+          {
+            path: 'Pasta.java',
+            text: '/*\n * Represents a pasta that is a type of menu item\n */\npublic class Pasta extends MenuItem {\n\n  /*\n   * Sets type to "Pasta" and price to the specified price\n   */\n  public Pasta(double price) {\n    super("Pasta", price);\n  }\n  \n}',
+          },
+          {
+            path: 'Pizza.java',
+            text: '/*\n * Represents a pizza that is a type of menu item\n */\npublic class Pizza extends MenuItem {\n\n  /*\n   * Sets type to "Pizza" and price to the specified price\n   */\n  public Pizza(double price) {\n    super("Pizza", price);\n  }\n  \n}',
+          },
+          {
+            path: 'Restaurant.java',
+            text: '/*\n * Represents a restaurant\n */\npublic class Restaurant {\n\n  private MenuItem[] menu;    // The 1D array of MenuItem objects\n\n  /*\n   * Initializes menu to the 1D array of MenuItem objects\n   */\n  public Restaurant(MenuItem[] menu) {\n    this.menu = menu;\n  }\n\n  /*\n   * Returns a String containing the type and price of each menu item\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array menu and concatenate each MenuItem object to\n     * result on separate lines.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing Arrays of Objects (a)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Employee[] businessEmployees = { new Employee("Ellis", 40000),\n                                     new Manager("Kristina", 45000, 2000),\n                                     new Employee("Daphne", 50000),\n                                     new Manager("David", 50000, 5000) };\n\n    Business techCompany = new Business(businessEmployees);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the Business object.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n  }\n}',
+          },
+          {
+            path: 'Business.java',
+            text: '/*\n * Represents a business\n */\npublic class Business {\n\n  private Employee[] employees;    // The 1D array of Employee objects\n\n  /*\n   * Initializes employees to the 1D array of Employee objects\n   */\n  public Business(Employee[] employees) {\n    this.employees = employees;\n  }\n\n  /*\n   * Returns a String containing the information about each employee\n   */\n  public String toString() {\n    String result = "";\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array employees and concatenate each employee\'s name\n     * and salary to result on separate lines.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Employee.java',
+            text: "/*\n * Represents an employee\n */\npublic class Employee {\n\n  private String name;         // The name of a employee\n  private double baseSalary;   // The base salary of an employee\n\n  /*\n   * Sets name to the specified name and baseSalary to the specified salary\n   */\n  public Employee(String name, double baseSalary) {\n    this.name = name;\n    this.baseSalary = baseSalary;\n  }\n\n  /*\n   * Returns the name of the employee\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the employee's base salary\n   */\n  public double getSalary() {\n    return baseSalary;\n  }\n  \n}",
+          },
+          {
+            path: 'Manager.java',
+            text: '/*\n * Represents a manager that is a type of employee\n */\npublic class Manager extends Employee {\n\n  private double bonus;  // The bonus a manager receives\n\n  /*\n   * Sets name, salary, and bonus to the specified values\n   */\n  public Manager(String name, double salary, double bonus) {\n    super(name, salary);\n    this.bonus = bonus;\n  }\n\n  /*\n   * Returns the name of the manager\n   */\n  public String getName() {\n    return "*" + super.getName();\n  }\n\n  /*\n   * Returns the manager\'s salary with bonus\n   */\n  public double getSalary() {\n    return super.getSalary() + bonus;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing Arrays of Objects (b)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    BankAccount[] accounts = { new BankAccount("Shakila", 500),\n                               new BasicAccount("Ali", 200),\n                               new BankAccount("Valentina", 100),\n                               new BasicAccount("Maria", 800) };\n\n    Bank localBank = new Bank(accounts);\n\n    /* ----------------------------------- TO DO #2 --------------------------------\n     * \u2705 Call the makeWithdrawals() method and print the Bank object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Bank.java',
+            text: '/*\n * Represents a bank\n */\npublic class Bank {\n\n  private BankAccount[] accounts;    // The 1D array of BankAccount objects\n\n  /*\n   * Initializes accounts to the 1D array of BankAccount objects\n   */\n  public Bank(BankAccount[] accounts) {\n    this.accounts = accounts;\n  }\n\n  /*\n   * Returns the 1D array accounts\n   */\n  public BankAccount[] getAccounts() {\n    return accounts;\n  }\n\n  /*\n   * Withdraws the specified amount from each BankAccount in accounts\n   */\n  public void makeWithdrawals(double amount) {\n    /* ----------------------------------- TO DO #1---------------------------------\n     * \u2705 Traverse the 1D array accounts and call the withdraw() method on each\n     * BankAccount object to withdraw the specified amount.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n  }\n\n  /*\n   * Returns a String containing information about each bank account\n   */\n  public String toString() {\n    String result = "";\n\n    for (BankAccount acct : accounts) {\n      result += acct + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'BankAccount.java',
+            text: '/*\n * Represents a bank account\n */\npublic class BankAccount {\n\n  private String customerName;  // The name of an account holder\n  private double balance;       // The starting balance of an account\n\n  /*\n   * Sets customerName and balance to the specified values\n   */\n  public BankAccount(String customerName, double balance) {\n    this.customerName = customerName;\n    this.balance = balance;\n  }\n\n  /*\n   * Adds the specified amount to the balance\n   */\n  public void deposit(double amount) {\n    balance += amount;\n  }\n\n  /*\n   * Subtracts the specified amount from the balance\n   */\n  public void withdraw(double amount) {\n    balance -= amount;\n  }\n\n  /*\n   * Returns the customer\'s name\n   */\n  public String getName() {\n    return customerName;\n  }\n\n  /*\n   * Returns the current balance\n   */\n  public double getBalance() {\n    return balance;\n  }\n\n  /*\n   * Returns a String containing the customer\'s name and balance\n   */\n  public String toString() {\n    return customerName + ": $" + balance;\n  }\n  \n}',
+          },
+          {
+            path: 'BasicAccount.java',
+            text: '/*\n * Represents a basic bank account\n */\npublic class BasicAccount extends BankAccount {\n\n  /*\n   * Sets customerName and balance to the specified values\n   */\n  public BasicAccount(String customerName, double balance) {\n    super(customerName, balance);\n  }\n\n  /*\n   * Subtracts the specified amount from the balance and\n   * charges a fee if the withdrawal overdraws the account\n   */\n  public void withdraw(double amount) {\n    super.withdraw(amount);\n\n    if (getBalance() < 0) {\n      super.withdraw(30);\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing Arrays of Objects (c)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Dessert[] availableDesserts = { new Dessert("vanilla", 2.99, 4),\n                                    new Cookie("oatmeal", 1.50, 12, 6),\n                                    new Pie("cherry", 4.75, 4, "cherry") };\n\n    FoodTruck dessertTruck = new FoodTruck(availableDesserts);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the FoodTruck object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Cookie.java',
+            text: '/*\n * Represents a cookie that is sold at a food truck\n */\npublic class Cookie extends Dessert {\n\n  private int diameter;     // The diameter of a cookie\n\n  /*\n   * Sets diameter to 3\n   */\n  public Cookie() {\n    diameter = 3;\n  }\n\n  /*\n   * Sets flavor, price, quantity, and diameter to the specified values\n   */\n  public Cookie(String flavor, double price, int quantity, int diameter) {\n    super(flavor, price, quantity);\n    this.diameter = diameter;\n  }\n\n  /*\n   * Gets the total price of the cookie order\n   */\n  public double getTotalPrice() {\n    double total = super.getTotalPrice();\n\n    if (getQuantity() > 6) {\n      total *= 0.75;\n    }\n\n    return total;\n  }\n\n  /*\n   * Returns a String containing the flavor, price, and diameter of the cookie\n   */\n  public String toString() {\n    return getFlavor() + " (" + diameter + "): " + getPrice();\n  }\n  \n}',
+          },
+          {
+            path: 'Dessert.java',
+            text: '/*\n * Represents a dessert that a food truck sells\n */\npublic class Dessert {\n\n  private String flavor;  // The flavor of the dessert\n  private double price;   // The price of the dessert\n  private int quantity;   // The number of desserts\n\n  /*\n   * Sets flavor to "plain", price to 0.99, and quantity to 1\n   */\n  public Dessert() {\n    flavor = "plain";\n    price = 0.99;\n    quantity = 1;\n  }\n\n  /*\n   * Sets flavor, price, and quantity to the specified values\n   */\n  public Dessert(String flavor, double price, int quantity) {\n    this.flavor = flavor;\n    this.price = price;\n    this.quantity = quantity;\n  }\n\n  /*\n   * Returns the flavor of the dessert\n   */\n  public String getFlavor() {\n    return flavor;\n  }\n\n  /*\n   * Returns the quantity\n   */\n  public int getQuantity() {\n    return quantity;\n  }\n\n  /*\n   * Returns the price of the dessert\n   */\n  public double getPrice() {\n    return price;\n  }\n\n  /*\n   * Gets the total price of the dessert order\n   */\n  public double getTotalPrice() {\n    return price * quantity;\n  }\n\n  /*\n   * Returns a String containing the flavor and price of the dessert\n   */\n  public String toString() {\n    return flavor + ": " + price;\n  }\n  \n}',
+          },
+          {
+            path: 'FoodTruck.java',
+            text: '/*\n * Represents a food truck\n */\npublic class FoodTruck {\n\n  private Dessert[] availableDesserts;    // The 1D array of Dessert objects\n\n  /*\n   * Initializes availableDesserts to the specified 1D array of Dessert objects\n   */\n  public FoodTruck(Dessert[] availableDesserts) {\n    this.availableDesserts = availableDesserts;\n  }\n\n  /*\n   * Returns a String containing each dessert flavor and total price of the order\n   */\n  public String toString() {\n    String result = "";\n    \n    /* ------------------------------------------- TO DO -------------------------------------------\n     * \u2705 Traverse the 1D array availableDesserts and use the getFlavor() and getTotalPrice() methods\n     * to concatenate the flavor and price of each Dessert object to result on separate lines.\n     * ---------------------------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Pie.java',
+            text: '/*\n * Represents a pie that is sold at a food truck\n */\npublic class Pie extends Dessert {\n\n  private String filling;    // The filling flavor of a pie\n\n  /*\n   * Sets filling to "none"\n   */\n  public Pie() {\n    filling = "none";\n  }\n\n  /*\n   * Sets flavor, price, quantity, and filling to the specified values\n   */\n  public Pie(String flavor, double price, int quantity, String filling) {\n    super(flavor, price, quantity);\n    this.filling = filling;\n  }\n\n  /*\n   * Gets the total price of the pie order\n   */\n  public double getTotalPrice() {\n    double total = super.getTotalPrice();\n\n    if (getQuantity() > 2) {\n      total *= 0.8;\n    }\n\n    return total;\n  }\n\n  /*\n   * Returns a String containing the flavor, filling, and price of the pie\n   */\n  public String toString() {\n    return getFlavor() + " with " + filling + " filling: " + getPrice();\n  }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing Arrays of Objects (d)',
+        lesson: 'Lesson 9: Polymorphism',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Ticket[] eventTickets = { new Ticket(1), new Walkup(2), new Advance(3, 11), new Student(4, 7) };\n\n    Event schoolEvent = new Event(eventTickets);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the Event object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Advance.java',
+            text: '/*\n * Represents a ticket for an event that\n * is purchased in advance\n */\npublic class Advance extends Ticket {\n\n  private int numDays;  // The number of days in advance the ticket is being purchased\n\n  /*\n   * Sets ticketNumber and numDays to the specified values\n   */\n  public Advance(int ticketNumber, int numDays) {\n    super(ticketNumber);\n    this.numDays = numDays;\n  }\n\n  /*\n   * Gets the price of the ticket based on the\n   * number of days in advance it is being purchased\n   */\n  public double getTicketPrice() {\n    if (numDays >= 10) {\n      return 30;\n    }\n    else {\n      return 40;\n    }\n  }\n  \n}',
+          },
+          {
+            path: 'Event.java',
+            text: '/*\n * Represents an event\n */\npublic class Event {\n\n  private Ticket[] eventTickets;     // The 1D array of Ticket objects\n\n  /*\n   * Initializes eventTickets to the 1D array of Ticket objects\n   */\n  public Event(Ticket[] eventTickets) {\n    this.eventTickets = eventTickets;\n  }\n\n  /*\n   * Returns a String containing each ticket\'s information and price\n   */\n  public String toString() {\n    String result = "";\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 1D array eventTickets and concatenate each ticket\'s\n     * information and price to result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Student.java',
+            text: '/*\n * Represents a student ticket for an event that\n * is purchased in advance\n */\npublic class Student extends Advance {\n\n  /*\n   * Sets ticketNumber and numDays to the specified values\n   */\n  public Student(int ticketNumber, int numDays) {\n    super(ticketNumber, numDays);\n  }\n\n  /*\n   * Gets the price of the ticket based on the number of days\n   * in advance it is being purchased and discounts it in half\n   */\n  public double getTicketPrice() {\n    return super.getTicketPrice() / 2;\n  }\n\n  /*\n   * Returns a String with the ticket number and reminder\n   * to show their student ID\n   */\n  public String toString() {\n    return super.toString() + " (must show their student ID)";\n  }\n  \n}',
+          },
+          {
+            path: 'Ticket.java',
+            text: '/*\n * Represents a ticket for an event\n */\npublic class Ticket {\n\n  private int ticketNumber;   // The ticket number\n\n  /*\n   * Sets ticketNumber to the specified ticket number\n   */\n  public Ticket(int ticketNumber) {\n    this.ticketNumber = ticketNumber;\n  }\n\n  /*\n   * Returns the price of the ticket\n   */\n  public double getTicketPrice() {\n    return 0.00;\n  }\n\n  /*\n   * Returns a String with the ticket number\n   */\n  public String toString() {\n    return "Ticket No " + ticketNumber;\n  }\n  \n}',
+          },
+          {
+            path: 'Walkup.java',
+            text: '/*\n * Represents a ticket for an event\n * that is purchased on the day of the event\n */\npublic class Walkup extends Ticket {\n\n  /*\n   * Sets ticketNumber to the specified ticket number\n   */\n  public Walkup(int ticketNumber) {\n    super(ticketNumber);\n  }\n\n  /*\n   * Returns the price of the ticket\n   */\n  public double getTicketPrice() {\n    return 50.00;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: Enhanced For Loops',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Forbes topCompanies = new Forbes("companies.txt", "profits.txt");\n    \n    System.out.println(topCompanies);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n  }\n}',
+          },
+          {
+            path: 'Company.java',
+            text: '/*\n * Represents a company\n */\npublic class Company {\n\n  private String name;      // The name of a company\n  private double profits;   // The annual profits in billions made by a company\n\n  /*\n   * Sets name and profits to the specified values\n   */\n  public Company(String name, double profits) {\n    this.name = name;\n    this.profits = profits;\n  }\n\n  /*\n   * Returns the name of the company\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the profits made by the company\n   */\n  public double getProfits() {\n    return profits;\n  }\n\n  /*\n   * Returns a String containing the name of\n   * the company and its annual profits\n   */\n  public String toString() {\n    return name + " - $" + profits + " billion annual profit";\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Forbes.java',
+            text: '/*\n * Manages data about Forbes top companies\n */\npublic class Forbes {\n\n  private String[] organizations;   // The 1D array containing the company names\n  private double[] annualProfits;   // The 1D array containing the annual profits of each company\n  private Company[] companies;      // The 1D array of Company objects\n\n  /*\n   * \n   */\n  public Forbes(String companiesFile, String profitsFile) {\n    organizations = FileReader.toStringArray(companiesFile);\n    annualProfits = FileReader.toDoubleArray(profitsFile);\n    companies = createCompanies();\n  }\n\n  /*\n   * \n   */\n  public Company[] createCompanies() {\n    Company[] tempCompanies = new Company[organizations.length];\n\n    for (int index = 0; index < tempCompanies.length; index++) {\n      tempCompanies[index] = new Company(organizations[index], annualProfits[index]);\n    }\n\n    return tempCompanies;\n  }\n\n  /*\n   *\n   */\n  public String getAllProfits() {\n    String result = "";\n\n    for (int index = 0; index < annualProfits.length; index++) {\n      result += annualProfits[index] + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing each company\'s information\n   */\n  public String toString() {\n    String result = "Top Companies and Profits\\n----------\\n";\n\n    for (Company org : companies) {\n      result += org + "\\n";\n    }\n\n    return result;\n  }\n\n  /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n\n\n\n  \n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Enhanced For Loops #1',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Company.java',
+            text: '/*\n * Represents a company\n */\npublic class Company {\n\n  private String name;      // The name of a company\n  private double profits;   // The annual profits in billions made by a company\n\n  /*\n   * Sets name and profits to the specified values\n   */\n  public Company(String name, double profits) {\n    this.name = name;\n    this.profits = profits;\n  }\n\n  /*\n   * Returns the name of the company\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the profits made by the company\n   */\n  public double getProfits() {\n    return profits;\n  }\n\n  /*\n   * Returns a String containing the name of\n   * the company and its annual profits\n   */\n  public String toString() {\n    return name + " - $" + profits + " billion annual profit";\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Forbes.java',
+            text: '/*\n * Manages data about Forbes top companies\n */\npublic class Forbes {\n\n  private String[] organizations;   // The 1D array containing the company names\n  private double[] annualProfits;   // The 1D array containing the annual profits of each company\n  private Company[] companies;      // The 1D array of Company objects\n\n  /*\n   * \n   */\n  public Forbes(String companiesFile, String profitsFile) {\n    organizations = FileReader.toStringArray(companiesFile);\n    annualProfits = FileReader.toDoubleArray(profitsFile);\n    companies = createCompanies();\n  }\n\n  /*\n   * \n   */\n  public Company[] createCompanies() {\n    Company[] tempCompanies = new Company[organizations.length];\n\n    for (int index = 0; index < tempCompanies.length; index++) {\n      tempCompanies[index] = new Company(organizations[index], annualProfits[index]);\n    }\n\n    return tempCompanies;\n  }\n\n  /*\n   *\n   */\n  public String getAllProfits() {\n    String result = "";\n\n    for (int index = 0; index < annualProfits.length; index++) {\n      result += annualProfits[index] + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing each company\'s information\n   */\n  public String toString() {\n    String result = "Top Companies and Profits\\n----------\\n";\n\n    for (Company org : companies) {\n      result += org + "\\n";\n    }\n\n    return result;\n  }\n\n  /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n\n\n\n  \n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Enhanced For Loops #2',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Company.java',
+            text: '/*\n * Represents a company\n */\npublic class Company {\n\n  private String name;      // The name of a company\n  private double profits;   // The annual profits in billions made by a company\n\n  /*\n   * Sets name and profits to the specified values\n   */\n  public Company(String name, double profits) {\n    this.name = name;\n    this.profits = profits;\n  }\n\n  /*\n   * Returns the name of the company\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the profits made by the company\n   */\n  public double getProfits() {\n    return profits;\n  }\n\n  /*\n   * Returns a String containing the name of\n   * the company and its annual profits\n   */\n  public String toString() {\n    return name + " - $" + profits + " billion annual profit";\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Forbes.java',
+            text: '/*\n * Manages data about Forbes top companies\n */\npublic class Forbes {\n\n  private String[] organizations;   // The 1D array containing the company names\n  private double[] annualProfits;   // The 1D array containing the annual profits of each company\n  private Company[] companies;      // The 1D array of Company objects\n\n  /*\n   * \n   */\n  public Forbes(String companiesFile, String profitsFile) {\n    organizations = FileReader.toStringArray(companiesFile);\n    annualProfits = FileReader.toDoubleArray(profitsFile);\n    companies = createCompanies();\n  }\n\n  /*\n   * \n   */\n  public Company[] createCompanies() {\n    Company[] tempCompanies = new Company[organizations.length];\n\n    for (int index = 0; index < tempCompanies.length; index++) {\n      tempCompanies[index] = new Company(organizations[index], annualProfits[index]);\n    }\n\n    return tempCompanies;\n  }\n\n  /*\n   *\n   */\n  public String getAllProfits() {\n    String result = "";\n\n    for (int index = 0; index < annualProfits.length; index++) {\n      result += annualProfits[index] + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing each company\'s information\n   */\n  public String toString() {\n    String result = "Top Companies and Profits\\n----------\\n";\n\n    for (Company org : companies) {\n      result += org + "\\n";\n    }\n\n    return result;\n  }\n\n  /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n\n\n\n  \n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Enhanced For Loops #3',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Forbes topCompanies = new Forbes("companies.txt", "profits.txt");\n    \n    System.out.println(topCompanies);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n  }\n}',
+          },
+          {
+            path: 'Company.java',
+            text: '/*\n * Represents a company\n */\npublic class Company {\n\n  private String name;      // The name of a company\n  private double profits;   // The annual profits in billions made by a company\n\n  /*\n   * Sets name and profits to the specified values\n   */\n  public Company(String name, double profits) {\n    this.name = name;\n    this.profits = profits;\n  }\n\n  /*\n   * Returns the name of the company\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the profits made by the company\n   */\n  public double getProfits() {\n    return profits;\n  }\n\n  /*\n   * Returns a String containing the name of\n   * the company and its annual profits\n   */\n  public String toString() {\n    return name + " - $" + profits + " billion annual profit";\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Forbes.java',
+            text: '/*\n * Manages data about Forbes top companies\n */\npublic class Forbes {\n\n  private String[] organizations;   // The 1D array containing the company names\n  private double[] annualProfits;   // The 1D array containing the annual profits of each company\n  private Company[] companies;      // The 1D array of Company objects\n\n  /*\n   * \n   */\n  public Forbes(String companiesFile, String profitsFile) {\n    organizations = FileReader.toStringArray(companiesFile);\n    annualProfits = FileReader.toDoubleArray(profitsFile);\n    companies = createCompanies();\n  }\n\n  /*\n   * \n   */\n  public Company[] createCompanies() {\n    Company[] tempCompanies = new Company[organizations.length];\n\n    for (int index = 0; index < tempCompanies.length; index++) {\n      tempCompanies[index] = new Company(organizations[index], annualProfits[index]);\n    }\n\n    return tempCompanies;\n  }\n\n  /*\n   *\n   */\n  public String getAllProfits() {\n    String result = "";\n\n    for (int index = 0; index < annualProfits.length; index++) {\n      result += annualProfits[index] + "\\n";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing each company\'s information\n   */\n  public String toString() {\n    String result = "Top Companies and Profits\\n----------\\n";\n\n    for (Company org : companies) {\n      result += org + "\\n";\n    }\n\n    return result;\n  }\n\n  /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n\n\n\n  \n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (a)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Bicycle object\n    Bicycle fremontBridge = new Bicycle("counts.txt");\n\n    // Calls the calcTotalBicycles() method and prints the result\n    System.out.println("Total Bicycles: " + fremontBridge.calcTotalBicycles());\n    \n  }\n}',
+          },
+          {
+            path: 'Bicycle.java',
+            text: '/*\n * Manages data about bicycles that cross the Seattle Fremont Bridge\n */\npublic class Bicycle {\n\n  // The 1D array of the number of bicycles that crossed the bridge each hour\n  private int[] bicycleCounts;\n\n  /*\n   * Reads the data from the specified filename to initialize bicycleCounts\n   */\n  public Bicycle(String filename) {\n    this.bicycleCounts = FileReader.toIntArray(filename);\n  }\n\n  /*\n   * Calculates and returns the total bicycles that crossed the bridge\n   */\n  public int calcTotalBicycles() {\n    int total = 0;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this for loop to use an enhanced for loop.\n     * -----------------------------------------------------------------------------\n     */\n\n    for (int index = 0; index < bicycleCounts.length; index++) {\n      total += bicycleCounts[index];\n    }\n\n    return total;\n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (b)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Nintendo object\n    Nintendo topGames = new Nintendo("titles.txt", "copies.txt");\n\n    // Prints the Nintendo object\n    System.out.println(topGames);\n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Game.java',
+            text: '/*\n * Represents a video game\n */\npublic class Game {\n\n  private String title;    // The title of a game\n  private int copies;      // The number of copies sold\n\n  /*\n   * Sets title and copies to the specified values\n   */\n  public Game(String title, int copies) {\n    this.title = title;\n    this.copies = copies;\n  }\n\n  /*\n   * Returns the title of the game\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the number of copies sold\n   */\n  public int getCopies() {\n    return copies;\n  }\n\n  /*\n   * Returns a String containing the title and number of copies sold\n   */\n  public String toString() {\n    return title + ": " + copies + " copies sold";\n  }\n  \n}',
+          },
+          {
+            path: 'Nintendo.java',
+            text: '/*\n * Manages data about best selling video games\n */\npublic class Nintendo {\n\n  private Game[] bestSellingGames;   // The 1D array of best selling video games\n\n  /*\n   * Reads the data from titlesFile and copiesFile to initialize bestSellingGames\n   */\n  public Nintendo(String titlesFile, String copiesFile) {\n    bestSellingGames = createGames(titlesFile, copiesFile);\n  }\n\n  /*\n   * Returns a 1D array of Game objects using the data from titlesFile and copiesFile\n   */\n  public Game[] createGames(String titlesFile, String copiesFile) {\n    String[] titlesData = FileReader.toStringArray(titlesFile);\n    int[] copiesData = FileReader.toIntArray(copiesFile);\n    Game[] tempGames = new Game[titlesData.length];\n\n    for (int index = 0; index < tempGames.length; index++) {\n      tempGames[index] = new Game(titlesData[index], copiesData[index]);\n    }\n\n    return tempGames;\n  }\n\n  /*\n   * Returns the 1D array of Game objects\n   */\n  public Game[] getBestSellingGames() {\n    return bestSellingGames;\n  }\n\n  /*\n   * Returns a String containing the information about each Game object\n   */\n  public String toString() {\n    String result = "";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this for loop to an enhanced for loop.\n     * -----------------------------------------------------------------------------\n     */\n\n    for (int index = 0; index < bestSellingGames.length; index++) {\n      result += bestSellingGames[index] + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (c)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    // Creates a WorldCup object\n    WorldCup fifa = new WorldCup("hosts.txt", "years.txt", "attend.txt");\n\n    // Calls the calcAverageAttendance() method and prints the result\n    System.out.println("Average Attendance at the FIFA World Cup: " + fifa.calcAverageAttendance());\n\n    // Prints the WorldCup object\n    System.out.println("\\n" + fifa);\n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Tournament.java',
+            text: '/*\n * Represents a FIFA World Cup tournament\n */\npublic class Tournament {\n\n  private String host;      // The host of a tournament\n  private String year;      // The year of a tournament\n  private int attendance;   // The total attendance of a tournament\n\n  /*\n   * Sets host, year, and attendance to the specified values\n   */\n  public Tournament(String host, String year, int attendance) {\n    this.host = host;\n    this.year = year;\n    this.attendance = attendance;\n  }\n\n  /*\n   * Returns the host of the tournament\n   */\n  public String getHost() {\n    return host;\n  }\n\n  /*\n   * Returns the year of the tournament\n   */\n  public String getYear() {\n    return year;\n  }\n\n  /*\n   * Returns the total attendance of the tournament\n   */\n  public int getAttendance() {\n    return attendance;\n  }\n\n  /*\n   * Returns a String containing the host, year, and attendance\n   */\n  public String toString() {\n    return year + " hosted by " + host + " - " + attendance + " total attendance";\n  }\n  \n}',
+          },
+          {
+            path: 'WorldCup.java',
+            text: '/*\n * Manages data the FIFA World Cup\n */\npublic class WorldCup {\n\n  private Tournament[] worldCups;   // The 1D array of Tournament objects\n\n  /*\n   * Reads the data from hostsFile, yearsFile,\n   * and attendanceFile to initialize worldCups\n   */\n  public WorldCup(String hostsFile, String yearsFile, String attendanceFile) {\n    worldCups = createWorldCups(hostsFile, yearsFile, attendanceFile);\n  }\n\n  /*\n   * Returns a 1D array of Tournament objects using the\n   * data from hostsFile, yearsFile, and attendanceFile\n   */\n  public Tournament[] createWorldCups(String hostsFile, String yearsFile, String attendanceFile) {\n    String[] hostsData = FileReader.toStringArray(hostsFile);\n    String[] yearsData = FileReader.toStringArray(yearsFile);\n    int[] attendanceData = FileReader.toIntArray(attendanceFile);\n    Tournament[] tempTournaments = new Tournament[hostsData.length];\n\n    for (int index = 0; index < tempTournaments.length; index++) {\n      tempTournaments[index] = new Tournament(hostsData[index], yearsData[index], attendanceData[index]);\n    }\n\n    return tempTournaments;\n  }\n\n  /*\n   * Calculates and returns the average attendance of all World Cup games\n   */\n  public int calcAverageAttendance() {\n    int total = 0;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this while loop to an enhanced for loop.\n     * -----------------------------------------------------------------------------\n     */\n    int index = 0;\n    \n    while (index < worldCups.length) {\n      total += worldCups[index].getAttendance();\n      index++;\n    }\n\n    return total / worldCups.length;\n  }\n\n  /*\n   * Returns a String containing the information about each Tournament object\n   */\n  public String toString() {\n    String result = "";\n\n    for (Tournament event : worldCups) {\n      result += event + "\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Converting Loops (d)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    // Creates a MusicSurvey object\n    MusicSurvey surveyResults = new MusicSurvey("ages.txt", "hours.txt");\n\n    // Calls the calcAverageHours() method and prints the result\n    System.out.print("Average Number of Hours Respondents Listen to Music: ");\n    System.out.println(surveyResults.calcAverageHours());\n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about music survey responses\n */\npublic class MusicSurvey {\n\n  private Respondent[] answers;   // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from agesFile and hoursFile to initialize answers\n   */\n  public MusicSurvey(String agesFile, String hoursFile) {\n    answers = createResponses(agesFile, hoursFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the data from agesFile and hoursFile\n   */\n  public Respondent[] createResponses(String agesFile, String hoursFile) {\n    int[] agesData = FileReader.toIntArray(agesFile);\n    double[] hoursData = FileReader.toDoubleArray(hoursFile);\n    Respondent[] tempResponses = new Respondent[agesData.length];\n\n    for (int index = 0; index < tempResponses.length; index++) {\n      tempResponses[index] = new Respondent(agesData[index], hoursData[index]);\n    }\n\n    return tempResponses;\n  }\n\n  /*\n   * Calculates and returns the average number of hours respondents listen to music\n   */\n  public double calcAverageHours() {\n    double total = 0.0;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Convert this while loop to use an enhanced for loop.\n     * -----------------------------------------------------------------------------\n     */\n\n    int index = 0;\n    \n    while (index < answers.length) {\n      total += answers[index].getHours();\n      index++;\n    }\n\n    return total / answers.length;\n  }\n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a respondent on a survey\n */\npublic class Respondent {\n\n  private int age;        // The age of a respondent\n  private double hours;   // The number of hours per day a respondent listens to music\n\n  /*\n   * Sets age and hours to the specific values\n   */\n  public Respondent(int age, double hours) {\n    this.age = age;\n    this.hours = hours;\n  }\n\n  /*\n   * Returns the age of the respondent\n   */\n  public int getAge() {\n    return age;\n  }\n\n  /*\n   * Returns the number of hours per day the respondent listens to music\n   */\n  public double getHours() {\n    return hours;\n  }\n\n  /*\n   * Returns a String containing the age and hours for the respondent\n   */\n  public String toString() {\n    return age + " year old respondent - " + hours + " hours per day";\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing 1D Arrays (a)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a ScreenTime object with the "times.txt" file, then call\n     * the calcAverageTime() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'ScreenTime.java',
+            text: '/*\n * Manages data about screen time\n */\npublic class ScreenTime {\n\n  private int[] socialNetworkTimes;    // The 1D array of the time spent on social media apps\n\n  /*\n   * Reads the data from the specified filename\n   * to initialize socialNetworkTimes\n   */\n  public ScreenTime(String filename) {\n    socialNetworkTimes = FileReader.toIntArray(filename);\n  }\n\n  /*\n   * Calculates and returns the average amount of\n   * time spent on social networking apps\n   */\n  public int calcAverageTime() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use an enhanced for loop to calculate the average of the values\n     * stored in the 1D array socialNetworkTimes.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing 1D Arrays (b)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Countries object with the "names.txt" and "populations.txt"\n     * files, then call the calcAveragePopulation() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Countries.java',
+            text: '/*\n * Manages data about populations in countries\n */\npublic class Countries {\n\n  private String[] countries;     // The 1D array of country names\n  private int[] populations;      // The 1D array of the population of each country\n\n  /*\n   * Reads the data from countriesFile and popFile to\n   * initialize countries and populations\n   */\n  public Countries(String countriesFile, String popFile) {\n    countries = FileReader.toStringArray(countriesFile);\n    populations = FileReader.toIntArray(popFile);\n  }\n\n  /*\n   * Calculates and returns the average population of each country\n   */\n  public int calcAveragePopulation() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use an enhanced for loop to calculate the average of the values\n     * stored in the 1D array populations.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing the name of each country and its population\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < countries.length; index++) {\n      result += countries[index] + " population: " + populations[index] + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing 1D Arrays (c)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Basketball object with the "names.txt" and "points.txt"\n     * files, then call the calcAveragePoints() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Basketball.java',
+            text: '/*\n * Manages data about basketball players\n */\npublic class Basketball {\n\n  private Player[] players;    // The 1D array of Player objects\n\n  /*\n   * Reads the data from namesFile and pointsFile to\n   * initialize the 1D array players\n   */\n  public Basketball(String namesFile, String pointsFile) {\n    players = createPlayers(namesFile, pointsFile);\n  }\n\n  /*\n   * Returns a 1D array of Player objects using the data\n   * from namesFile and pointsFile\n   */\n  public Player[] createPlayers(String namesFile, String pointsFile) {\n    String[] namesData = FileReader.toStringArray(namesFile);\n    int[] pointsData = FileReader.toIntArray(pointsFile);\n    Player[] tempPlayers = new Player[namesData.length];\n\n    for (int index = 0; index < tempPlayers.length; index++) {\n      tempPlayers[index] = new Player(namesData[index], pointsData[index]);\n    }\n\n    return tempPlayers;\n  }\n\n  /*\n   * Calculates and returns the average points scored by each player\n   */\n  public int calcAveragePoints() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use an enhanced for loop to calculate the average points scored by\n     * each player in the 1D array players.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing each player\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < players.length; index++) {\n      result += players[index] + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Player.java',
+            text: '/*\n * Represents a basketball player\n */\npublic class Player {\n\n  private String name;       // The name of a player\n  private int totalPoints;   // The total points a player scored\n\n  /*\n   * Sets name and totalPoints to the specified values\n   */\n  public Player(String name, int totalPoints) {\n    this.name = name;\n    this.totalPoints = totalPoints;\n  }\n\n  /*\n   * Returns the name of the player\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the total points the player scored\n   */\n  public int getTotalPoints() {\n    return totalPoints;\n  }\n\n  /*\n   * Returns a String containing the name of the player\n   * and the total points the player scored\n   */\n  public String toString() {\n    return name + ": " + totalPoints + " total points scored";\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Traversing 1D Arrays (d)',
+        lesson: 'Lesson 10: Enhanced For Loops',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Congress object with the "names.txt" and "funds.txt" files,\n     * then call the calcAverageFundsRaised() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Congress.java',
+            text: '/*\n * Manages data about members of congress\n */\npublic class Congress {\n\n  private Member[] members;    // The 1D array of Member objects\n\n  /*\n   * Reads the data from namesFile and fundsFile to\n   * to initialize the 1D array members\n   */\n  public Congress(String namesFile, String fundsFile) {\n    members = createMembers(namesFile, fundsFile);\n  }\n\n  /*\n   * Returns a 1D array of Member objects using the data\n   * from namesFile and fundsFile\n   */\n  public Member[] createMembers(String namesFile, String fundsFile) {\n    String[] namesData = FileReader.toStringArray(namesFile);\n    double[] fundsData = FileReader.toDoubleArray(fundsFile);\n    Member[] tempMembers = new Member[namesData.length];\n\n    for (int index = 0; index < tempMembers.length; index++) {\n      tempMembers[index] = new Member(namesData[index], fundsData[index]);\n    }\n\n    return tempMembers;\n  }\n\n  /*\n   * Calculates and returns the average funds raised by each member\n   */\n  public double calcAverageFundsRaised() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use an enhanced for loop to calculate the average funds raised by each\n     * member in the 1D array members.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing each member\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (int index = 0; index < members.length; index++) {\n      result += members[index] + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Member.java',
+            text: '/*\n * Represents a member of Congress\n */\npublic class Member {\n\n  private String name;      // The name of the member\n  private double raised;    // The amount raised by the member\n\n  /*\n   * Sets name and raised to the specified values\n   */\n  public Member(String name, double raised) {\n    this.name = name;\n    this.raised = raised;\n  }\n\n  /*\n   * Returns the name of the member\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the amount raised by the member\n   */\n  public double getRaised() {\n    return raised;\n  }\n\n  /*\n   * Returns a String containing the name of the member\n   * and the amount they raised\n   */\n  public String toString() {\n    return name + ": $" + raised + " raised";\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: Comparing String Objects',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  public static boolean[] toBooleanArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    boolean[] data = new boolean[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Boolean.parseBoolean(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about responses to Music & Mental Health Survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] answers;     // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from hoursFile, genreFile, and\n   * effectFile to initialize the 1D array answers\n   */\n  public MusicSurvey(String hoursFile, String genreFile, String effectFile) {\n    answers = createRespondents(hoursFile, genreFile, effectFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the\n   * data from hoursFile, genreFile, and effectFile\n   */\n  public Respondent[] createRespondents(String hoursFile, String genreFile, String effectFile) {\n    double[] hoursData = FileReader.toDoubleArray(hoursFile);\n    String[] genreData = FileReader.toStringArray(genreFile);\n    String[] effectData = FileReader.toStringArray(effectFile);\n    Respondent[] tempAnswers = new Respondent[hoursData.length];\n\n    for (int index = 0; index < tempAnswers.length; index++) {\n      boolean effectResponse = convertToBoolean(effectData[index]);\n      tempAnswers[index] = new Respondent(hoursData[index], genreData[index], effectResponse);\n    }\n\n    return tempAnswers;\n  }\n\n  /*\n   * Converts response to a true or false value\n   */\n  public boolean convertToBoolean(String response) {\n    boolean result = false;\n\n    if (response.equals("Improve")) {\n      result = true;\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns the Respondent at the specified position from the 1D array answers\n   */\n  public Respondent getAnswer(int position) {\n    return answers[position];\n  }\n\n  /*\n   * Returns the Respondent that answered targetEffect\n   */\n  public Respondent getEffectResponse(boolean targetEffect) {\n    Respondent result = null;\n    \n    for (Respondent response : answers) {\n      if (response.getEffect() == targetEffect) {\n        result = response;\n      }\n    }\n\n    return result;\n  }\n\n  /*\n   * Counts the number of times a respondent selected targetGenre\n   */\n  public int countGenre(String targetGenre) {\n    int count = 0;\n\n    for (Respondent response : answers) {\n      if (response.getGenre() == targetGenre) {\n        count++;\n      }\n    }\n\n    return count;\n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent response : answers) {\n      result += response + "\\n----------\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a survey respondent\n */\npublic class Respondent {\n\n  private double hours;         // The number of hours per day a respondent listens to music\n  private String genre;         // The favorite genre of a respondent\n  private boolean effect;       // Whether or not music improves or worsens a respondent\'s mental health\n\n  /*\n   * Sets hours, genre, and effect to the specified values\n   */\n  public Respondent(double hours, String genre, boolean effect) {\n    this.hours = hours;\n    this.genre = genre;\n    this.effect = effect;\n  }\n\n  /*\n   * Returns the number of hours per day the respondent listens to music\n   */\n  public double getHours() {\n    return hours;\n  }\n\n  /*\n   * Returns the favorite genre of the respondent\n   */\n  public String getGenre() {\n    return genre;\n  }\n\n  /*\n   * Returns whether or not music improves or worsens the respondent\'s mental health\n   */\n  public boolean getEffect() {\n    return effect;\n  }\n\n  /*\n   * Returns a String containing the respondent\'s answers\n   */\n  public String toString() {\n    return "Hours Per Day: " + hours + "\\nFavorite Genre: " + genre + "\\nImproves Mental Health: " + effect;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Comparing and Returning #1',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  public static boolean[] toBooleanArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    boolean[] data = new boolean[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Boolean.parseBoolean(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about responses to Music & Mental Health Survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] answers;     // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from hoursFile, genreFile, and\n   * effectFile to initialize the 1D array answers\n   */\n  public MusicSurvey(String hoursFile, String genreFile, String effectFile) {\n    answers = createRespondents(hoursFile, genreFile, effectFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the\n   * data from hoursFile, genreFile, and effectFile\n   */\n  public Respondent[] createRespondents(String hoursFile, String genreFile, String effectFile) {\n    double[] hoursData = FileReader.toDoubleArray(hoursFile);\n    String[] genreData = FileReader.toStringArray(genreFile);\n    String[] effectData = FileReader.toStringArray(effectFile);\n    Respondent[] tempAnswers = new Respondent[hoursData.length];\n\n    for (int index = 0; index < tempAnswers.length; index++) {\n      boolean effectResponse = convertToBoolean(effectData[index]);\n      tempAnswers[index] = new Respondent(hoursData[index], genreData[index], effectResponse);\n    }\n\n    return tempAnswers;\n  }\n\n  /*\n   * Converts response to a true or false value\n   */\n  public boolean convertToBoolean(String response) {\n    boolean result = false;\n\n    if (response.equals("Improve")) {\n      result = true;\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns the Respondent at the specified position from the 1D array answers\n   */\n  public Respondent getAnswer(int position) {\n    return answers[position];\n  }\n\n  /*\n   * Returns the Respondent that answered targetEffect\n   */\n  public Respondent getEffectResponse(boolean targetEffect) {\n    Respondent result = null;\n    \n    for (Respondent response : answers) {\n      if (response.getEffect() == targetEffect) {\n        result = response;\n      }\n    }\n\n    return result;\n  }\n\n  /*\n   * Counts the number of times a respondent selected targetGenre\n   */\n  public int countGenre(String targetGenre) {\n    int count = 0;\n\n    for (Respondent response : answers) {\n      if (response.getGenre() == targetGenre) {\n        count++;\n      }\n    }\n\n    return count;\n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent response : answers) {\n      result += response + "\\n----------\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a survey respondent\n */\npublic class Respondent {\n\n  private double hours;         // The number of hours per day a respondent listens to music\n  private String genre;         // The favorite genre of a respondent\n  private boolean effect;       // Whether or not music improves or worsens a respondent\'s mental health\n\n  /*\n   * Sets hours, genre, and effect to the specified values\n   */\n  public Respondent(double hours, String genre, boolean effect) {\n    this.hours = hours;\n    this.genre = genre;\n    this.effect = effect;\n  }\n\n  /*\n   * Returns the number of hours per day the respondent listens to music\n   */\n  public double getHours() {\n    return hours;\n  }\n\n  /*\n   * Returns the favorite genre of the respondent\n   */\n  public String getGenre() {\n    return genre;\n  }\n\n  /*\n   * Returns whether or not music improves or worsens the respondent\'s mental health\n   */\n  public boolean getEffect() {\n    return effect;\n  }\n\n  /*\n   * Returns a String containing the respondent\'s answers\n   */\n  public String toString() {\n    return "Hours Per Day: " + hours + "\\nFavorite Genre: " + genre + "\\nImproves Mental Health: " + effect;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Comparing and Returning #2',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  public static boolean[] toBooleanArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    boolean[] data = new boolean[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Boolean.parseBoolean(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about responses to Music & Mental Health Survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] answers;     // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from hoursFile, genreFile, and\n   * effectFile to initialize the 1D array answers\n   */\n  public MusicSurvey(String hoursFile, String genreFile, String effectFile) {\n    answers = createRespondents(hoursFile, genreFile, effectFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the\n   * data from hoursFile, genreFile, and effectFile\n   */\n  public Respondent[] createRespondents(String hoursFile, String genreFile, String effectFile) {\n    double[] hoursData = FileReader.toDoubleArray(hoursFile);\n    String[] genreData = FileReader.toStringArray(genreFile);\n    String[] effectData = FileReader.toStringArray(effectFile);\n    Respondent[] tempAnswers = new Respondent[hoursData.length];\n\n    for (int index = 0; index < tempAnswers.length; index++) {\n      boolean effectResponse = convertToBoolean(effectData[index]);\n      tempAnswers[index] = new Respondent(hoursData[index], genreData[index], effectResponse);\n    }\n\n    return tempAnswers;\n  }\n\n  /*\n   * Converts response to a true or false value\n   */\n  public boolean convertToBoolean(String response) {\n    boolean result = false;\n\n    if (response.equals("Improve")) {\n      result = true;\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns the Respondent at the specified position from the 1D array answers\n   */\n  public Respondent getAnswer(int position) {\n    return answers[position];\n  }\n\n  /*\n   * Returns the Respondent that answered targetEffect\n   */\n  public Respondent getEffectResponse(boolean targetEffect) {\n    Respondent result = null;\n    \n    for (Respondent response : answers) {\n      if (response.getEffect() == targetEffect) {\n        result = response;\n      }\n    }\n\n    return result;\n  }\n\n  /*\n   * Counts the number of times a respondent selected targetGenre\n   */\n  public int countGenre(String targetGenre) {\n    int count = 0;\n\n    for (Respondent response : answers) {\n      if (response.getGenre() == targetGenre) {\n        count++;\n      }\n    }\n\n    return count;\n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent response : answers) {\n      result += response + "\\n----------\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a survey respondent\n */\npublic class Respondent {\n\n  private double hours;         // The number of hours per day a respondent listens to music\n  private String genre;         // The favorite genre of a respondent\n  private boolean effect;       // Whether or not music improves or worsens a respondent\'s mental health\n\n  /*\n   * Sets hours, genre, and effect to the specified values\n   */\n  public Respondent(double hours, String genre, boolean effect) {\n    this.hours = hours;\n    this.genre = genre;\n    this.effect = effect;\n  }\n\n  /*\n   * Returns the number of hours per day the respondent listens to music\n   */\n  public double getHours() {\n    return hours;\n  }\n\n  /*\n   * Returns the favorite genre of the respondent\n   */\n  public String getGenre() {\n    return genre;\n  }\n\n  /*\n   * Returns whether or not music improves or worsens the respondent\'s mental health\n   */\n  public boolean getEffect() {\n    return effect;\n  }\n\n  /*\n   * Returns a String containing the respondent\'s answers\n   */\n  public String toString() {\n    return "Hours Per Day: " + hours + "\\nFavorite Genre: " + genre + "\\nImproves Mental Health: " + effect;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Comparing and Returning #3',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  public static boolean[] toBooleanArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    boolean[] data = new boolean[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Boolean.parseBoolean(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about responses to Music & Mental Health Survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] answers;     // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from hoursFile, genreFile, and\n   * effectFile to initialize the 1D array answers\n   */\n  public MusicSurvey(String hoursFile, String genreFile, String effectFile) {\n    answers = createRespondents(hoursFile, genreFile, effectFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the\n   * data from hoursFile, genreFile, and effectFile\n   */\n  public Respondent[] createRespondents(String hoursFile, String genreFile, String effectFile) {\n    double[] hoursData = FileReader.toDoubleArray(hoursFile);\n    String[] genreData = FileReader.toStringArray(genreFile);\n    String[] effectData = FileReader.toStringArray(effectFile);\n    Respondent[] tempAnswers = new Respondent[hoursData.length];\n\n    for (int index = 0; index < tempAnswers.length; index++) {\n      boolean effectResponse = convertToBoolean(effectData[index]);\n      tempAnswers[index] = new Respondent(hoursData[index], genreData[index], effectResponse);\n    }\n\n    return tempAnswers;\n  }\n\n  /*\n   * Converts response to a true or false value\n   */\n  public boolean convertToBoolean(String response) {\n    boolean result = false;\n\n    if (response.equals("Improve")) {\n      result = true;\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns the Respondent at the specified position from the 1D array answers\n   */\n  public Respondent getAnswer(int position) {\n    return answers[position];\n  }\n\n  /*\n   * Returns the Respondent that answered targetEffect\n   */\n  public Respondent getEffectResponse(boolean targetEffect) {\n    Respondent result = null;\n    \n    for (Respondent response : answers) {\n      if (response.getEffect() == targetEffect) {\n        result = response;\n      }\n    }\n\n    return result;\n  }\n\n  /*\n   * Counts the number of times a respondent selected targetGenre\n   */\n  public int countGenre(String targetGenre) {\n    int count = 0;\n\n    for (Respondent response : answers) {\n      if (response.getGenre() == targetGenre) {\n        count++;\n      }\n    }\n\n    return count;\n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent response : answers) {\n      result += response + "\\n----------\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a survey respondent\n */\npublic class Respondent {\n\n  private double hours;         // The number of hours per day a respondent listens to music\n  private String genre;         // The favorite genre of a respondent\n  private boolean effect;       // Whether or not music improves or worsens a respondent\'s mental health\n\n  /*\n   * Sets hours, genre, and effect to the specified values\n   */\n  public Respondent(double hours, String genre, boolean effect) {\n    this.hours = hours;\n    this.genre = genre;\n    this.effect = effect;\n  }\n\n  /*\n   * Returns the number of hours per day the respondent listens to music\n   */\n  public double getHours() {\n    return hours;\n  }\n\n  /*\n   * Returns the favorite genre of the respondent\n   */\n  public String getGenre() {\n    return genre;\n  }\n\n  /*\n   * Returns whether or not music improves or worsens the respondent\'s mental health\n   */\n  public boolean getEffect() {\n    return effect;\n  }\n\n  /*\n   * Returns a String containing the respondent\'s answers\n   */\n  public String toString() {\n    return "Hours Per Day: " + hours + "\\nFavorite Genre: " + genre + "\\nImproves Mental Health: " + effect;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with 1D Arrays (a)',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    MusicSurvey responses = new MusicSurvey("ages.txt", "streaming.txt");\n    System.out.println(responses);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the promptUser() and countStreaming() methods and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: 'import java.util.Scanner;\n\n/*\n * Manages data about responses to a survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] responses;    // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from agesFile and streamingFile to initialize responses\n   */\n  public MusicSurvey(String agesFile, String streamingFile) {\n    responses = createResponses(agesFile, streamingFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the data from agesFile and streamingFile\n   */\n  public Respondent[] createResponses(String agesFile, String streamingFile) {\n    int[] agesData = FileReader.toIntArray(agesFile);\n    String[] streamingData = FileReader.toStringArray(streamingFile);\n    \n    Respondent[] tempResponses = new Respondent[streamingData.length];\n\n    for (int index = 0; index < tempResponses.length; index++) {\n      tempResponses[index] = new Respondent(agesData[index], streamingData[index]);\n    }\n\n    return tempResponses;\n  }\n\n  /*\n   * Counts the number of times a streaming service appears in the responses\n   */\n  public int countStreaming(String streamingService) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Count the number of times the parameter streamingService appears in the\n     * 1D array responses and return the count.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return -1;\n  }\n\n  /*\n   * Prompts the user to enter a streaming service and returns their response\n   */\n  public String promptUser() {\n    /* -------------------------------------- TO DO --------------------------------------\n     * \u2705 Prompt the user to enter a streaming service to find and return their response.\n     * -----------------------------------------------------------------------------------\n     */\n\n    \n    return "";\n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent answer : responses) {\n      result += answer + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a respondent to a survey\n */\npublic class Respondent {\n\n  private int age;              // The age of a respondent\n  private String streaming;     // The streaming service a respondent uses\n\n  /*\n   * Sets age and streaming to the specified values\n   */\n  public Respondent(int age, String streaming) {\n    this.age = age;\n    this.streaming = streaming;\n  }\n\n  /*\n   * Returns the age of the respondent\n   */\n  public int getAge() {\n    return age;\n  }\n\n  /*\n   * Returns the streaming service the respondent uses\n   */\n  public String getStreaming() {\n    return streaming;\n  }\n\n  /*\n   * Returns a String containing the age and streaming service of the respondent\n   */\n  public String toString() {\n    return age + " years old: " + streaming;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with 1D Arrays (b)',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    MusicSurvey responses = new MusicSurvey("hours.txt", "effects.txt");\n    System.out.println(responses);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findMinHours() and findMaxHours() methods and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about responses to a survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] responses;    // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from hoursFile and effectsFile to initialize responses\n   */\n  public MusicSurvey(String hoursFile, String effectsFile) {\n    responses = createResponses(hoursFile, effectsFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the data from hoursFile and effectsFile\n   */\n  public Respondent[] createResponses(String hoursFile, String effectsFile) {\n    double[] hoursData = FileReader.toDoubleArray(hoursFile);\n    String[] effectsData = FileReader.toStringArray(effectsFile);\n    \n    Respondent[] tempResponses = new Respondent[hoursData.length];\n\n    for (int index = 0; index < tempResponses.length; index++) {\n      tempResponses[index] = new Respondent(hoursData[index], effectsData[index]);\n    }\n\n    return tempResponses;\n  }\n\n  /*\n   * Returns the minimum number of hours a respondent listens to music per day\n   */\n  public double findMinHours() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Find and return the smallest number of hours a respondent listens\n     * to music each day.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return -1;\n  }\n\n  /*\n   * Returns the maximum number of hours a respondent listens to music per day\n   */\n  public double findMaxHours() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Find and return the largest number of hours a respondent listens\n     * to music each day.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent answer : responses) {\n      result += answer + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a respondent to a survey\n */\npublic class Respondent {\n\n  private double hours;      // The number of hours a respondent listens to music per day\n  private String effect;     // The effect music has on a respondent\'s mental health\n\n  /*\n   * Sets hours and effect to the specified values\n   */\n  public Respondent(double hours, String effect) {\n    this.hours = hours;\n    this.effect = effect;\n  }\n\n  /*\n   * Returns the number of hours a respondent listens to music per day\n   */\n  public double getHours() {\n    return hours;\n  }\n\n  /*\n   * Returns the effect music has on the respondent\'s mental health\n   */\n  public String getEffect() {\n    return effect;\n  }\n\n  /*\n   * Returns a String containing the hours and effect\n   */\n  public String toString() {\n    return hours + " hours - " + effect;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with 1D Arrays (c)',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    MusicSurvey responses = new MusicSurvey("genres.txt", "effects.txt");\n    System.out.println(responses);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the promptUser() and findGenreEffect() methods and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n\n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: 'import java.util.Scanner;\n\n/*\n * Manages data about responses to a survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] responses;    // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from genreFile and effectFile to initialize responses\n   */\n  public MusicSurvey(String genreFile, String effectFile) {\n    responses = createResponses(genreFile, effectFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the data from genreFile and effectFile\n   */\n  public Respondent[] createResponses(String genreFile, String effectFile) {\n    String[] genreData = FileReader.toStringArray(genreFile);\n    String[] effectData = FileReader.toStringArray(effectFile);\n\n    Respondent[] tempResponses = new Respondent[genreData.length];\n\n    for (int index = 0; index < tempResponses.length; index++) {\n      tempResponses[index] = new Respondent(genreData[index], effectData[index]);\n    }\n\n    return tempResponses;\n  }\n\n  /*\n   * Finds the genre that matches target and returns true if music\n   * improved the respondent\'s mental health, otherwise false\n   */\n  public boolean findGenreEffect(String target) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Find the genre that matches target and use the getEffectAsBoolean()\n     * method to return true if effect is "Improve", otherwise false\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return false;\n  }\n\n  /*\n   * Prompts the user for a genre and returns their response\n   */\n  public String promptUser() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Prompt the user to enter a genre and return their response.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    return "";\n  }\n\n  /*\n   * Returns true if effect is "Improve", otherwise false\n   */\n  public boolean getEffectAsBoolean(String effect) {\n    boolean result = false;\n\n    if (effect.equals("Improve")) {\n      result = true;\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent answer : responses) {\n      result += answer + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a respondent to a survey\n */\npublic class Respondent {\n\n  private String genre;      // The favorite genre of a respondent\n  private String effect;     // The effect music had on a respondent\'s mental health\n\n  /*\n   * Sets genre and effect to the specified values\n   */\n  public Respondent(String genre, String effect) {\n    this.genre = genre;\n    this.effect = effect;\n  }\n\n  /*\n   * Returns the favorite genre of the respondent\n   */\n  public String getGenre() {\n    return genre;\n  }\n\n  /*\n   * Returns the effect music had on the respondent\'s mental health\n   */\n  public String getEffect() {\n    return effect;\n  }\n\n  /*\n   * Returns a String containing the genre and effect\n   */\n  public String toString() {\n    return genre + " - " + effect;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms with 1D Arrays (d)',
+        lesson: 'Lesson 11: Array Algorithms',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    MusicSurvey responses = new MusicSurvey("times.txt", "ages.txt", "hours.txt");\n    System.out.println("Original Order\\n--------------------");\n    System.out.println(responses);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the reverseResponses() method, then print the MusicSurvey object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n\n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'MusicSurvey.java',
+            text: '/*\n * Manages data about responses to a survey\n */\npublic class MusicSurvey {\n\n  private Respondent[] responses;    // The 1D array of Respondent objects\n\n  /*\n   * Reads the data from timesFile, agesFile, and\n   * hoursFile to initialize responses\n   */\n  public MusicSurvey(String timesFile, String agesFile, String hoursFile) {\n    responses = createResponses(timesFile, agesFile, hoursFile);\n  }\n\n  /*\n   * Returns a 1D array of Respondent objects using the\n   * data from timesFile, agesFile, and hoursFile\n   */\n  public Respondent[] createResponses(String timesFile, String agesFile, String hoursFile) {\n    String[] timesData = FileReader.toStringArray(timesFile);\n    int[] agesData = FileReader.toIntArray(agesFile);\n    double[] hoursData = FileReader.toDoubleArray(hoursFile);\n\n    Respondent[] tempResponses = new Respondent[timesData.length];\n\n    for (int index = 0; index < tempResponses.length; index++) {\n      tempResponses[index] = new Respondent(timesData[index], agesData[index], hoursData[index]);\n    }\n\n    return tempResponses;\n  }\n\n  /*\n   * Returns the 1D array of Respondent objects\n   */\n  public Respondent[] getResponses() {\n    return responses;\n  }\n\n  /*\n   * Reverses the elements in the 1D array responses\n   */\n  public void reverseResponses() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Reverse the elements in the 1D array responses so that the newest\n     * response is first and the oldest response is last.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n  }\n\n  /*\n   * Returns a String containing each respondent\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Respondent answer : responses) {\n      result += answer + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Respondent.java',
+            text: '/*\n * Represents a respondent to a survey\n */\npublic class Respondent {\n\n  private String time;      // The date and time a respondent answered the survey\n  private int age;          // The age of a respondent\n  private double hours;     // The number of hours a respondent listens to music each day\n\n  /*\n   * Sets time, age, and hours to the specified values\n   */\n  public Respondent(String time, int age, double hours) {\n    this.time = time;\n    this.age = age;\n    this.hours = hours;\n  }\n\n  /*\n   * Returns the date and time the respondent answered the survey\n   */\n  public String getTime() {\n    return time;\n  }\n\n  /*\n   * Returns the age of the respondent\n   */\n  public int getAge() {\n    return age;\n  }\n\n  /*\n   * Returns the number of hours the respondent listens to music each day\n   */\n  public double getHours() {\n    return hours;\n  }\n\n  /*\n   * Returns a String containing the date and time, age, and hours\n   */\n  public String toString() {\n    return "[" + time + "] " + age + " years old - " + hours + " hours per day";\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Predict and Run: Nested Loops',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Patterns.java',
+            text: 'public class Patterns {\n\n  public void printMessage() {\n    for (int outer = 1; outer <= 3; outer++) {\n      System.out.println("Countdown " + outer);\n      \n      for (int inner = 10; inner > 0; inner--) {\n        System.out.println(inner);\n      }\n\n      System.out.println("I love CS!\\n");\n    }\n  }\n\n  public void printSquare(int size) {\n    System.out.println("---------- " + size + "x" + size + " Square ----------\\n");\n    \n    for (int outer = 1; outer <= size; outer++) {\n      for (int inner = 1; inner <= size; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printTriangle(int height) {\n    System.out.println("---------- " + height + " Tall Triangle ----------\\n");\n    \n    for (int outer = 1; outer <= height; outer++) {\n      for (int inner = 1; inner <= outer; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printArray(int[] numbers) {\n    for (int index = 0; index < numbers.length; index++) {\n      for (int next = index + 1; next < numbers.length; next++) {\n        System.out.println("Outer: " + numbers[index] + ", Inner: " + numbers[next]);\n      }\n\n      System.out.println();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Nested Loops #1',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Patterns.java',
+            text: 'public class Patterns {\n\n  public void printMessage() {\n    for (int outer = 1; outer <= 3; outer++) {\n      System.out.println("Countdown " + outer);\n      \n      for (int inner = 10; inner > 0; inner--) {\n        System.out.println(inner);\n      }\n\n      System.out.println("I love CS!\\n");\n    }\n  }\n\n  public void printSquare(int size) {\n    System.out.println("---------- " + size + "x" + size + " Square ----------\\n");\n    \n    for (int outer = 1; outer <= size; outer++) {\n      for (int inner = 1; inner <= size; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printTriangle(int height) {\n    System.out.println("---------- " + height + " Tall Triangle ----------\\n");\n    \n    for (int outer = 1; outer <= height; outer++) {\n      for (int inner = 1; inner <= outer; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printArray(int[] numbers) {\n    for (int index = 0; index < numbers.length; index++) {\n      for (int next = index + 1; next < numbers.length; next++) {\n        System.out.println("Outer: " + numbers[index] + ", Inner: " + numbers[next]);\n      }\n\n      System.out.println();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Nested Loops #2',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Patterns.java',
+            text: 'public class Patterns {\n\n  public void printMessage() {\n    for (int outer = 1; outer <= 3; outer++) {\n      System.out.println("Countdown " + outer);\n      \n      for (int inner = 10; inner > 0; inner--) {\n        System.out.println(inner);\n      }\n\n      System.out.println("I love CS!\\n");\n    }\n  }\n\n  public void printSquare(int size) {\n    System.out.println("---------- " + size + "x" + size + " Square ----------\\n");\n    \n    for (int outer = 1; outer <= size; outer++) {\n      for (int inner = 1; inner <= size; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printTriangle(int height) {\n    System.out.println("---------- " + height + " Tall Triangle ----------\\n");\n    \n    for (int outer = 1; outer <= height; outer++) {\n      for (int inner = 1; inner <= outer; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printArray(int[] numbers) {\n    for (int index = 0; index < numbers.length; index++) {\n      for (int next = index + 1; next < numbers.length; next++) {\n        System.out.println("Outer: " + numbers[index] + ", Inner: " + numbers[next]);\n      }\n\n      System.out.println();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Nested Loops #3',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Patterns.java',
+            text: 'public class Patterns {\n\n  public void printMessage() {\n    for (int outer = 1; outer <= 3; outer++) {\n      System.out.println("Countdown " + outer);\n      \n      for (int inner = 10; inner > 0; inner--) {\n        System.out.println(inner);\n      }\n\n      System.out.println("I love CS!\\n");\n    }\n  }\n\n  public void printSquare(int size) {\n    System.out.println("---------- " + size + "x" + size + " Square ----------\\n");\n    \n    for (int outer = 1; outer <= size; outer++) {\n      for (int inner = 1; inner <= size; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printTriangle(int height) {\n    System.out.println("---------- " + height + " Tall Triangle ----------\\n");\n    \n    for (int outer = 1; outer <= height; outer++) {\n      for (int inner = 1; inner <= outer; inner++) {\n        System.out.print("* ");\n      }\n\n      System.out.println();\n    }\n  }\n\n  public void printArray(int[] numbers) {\n    for (int index = 0; index < numbers.length; index++) {\n      for (int next = index + 1; next < numbers.length; next++) {\n        System.out.println("Outer: " + numbers[index] + ", Inner: " + numbers[next]);\n      }\n\n      System.out.println();\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Finding Duplicates (a)',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Forbes companies = new Forbes("names.txt", "years.txt");\n    System.out.println(companies);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the checkForDuplicates() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n   \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Company.java',
+            text: '/*\n * Represents a company\n */\npublic class Company {\n\n  private String name;        // The name of a company\n  private int yearFounded;    // The year a company was founded\n\n  /*\n   * Sets name and yearFounded to the specified values\n   */\n  public Company(String name, int yearFounded) {\n    this.name = name;\n    this.yearFounded = yearFounded;\n  }\n\n  /*\n   * Returns the name of the company\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the year the company was founded\n   */\n  public int getYearFounded() {\n    return yearFounded;\n  }\n\n  /*\n   * Returns a String containing the name of the\n   * company and the year it was founded\n   */\n  public String toString() {\n    return name + " - Founded in " + yearFounded;\n  }\n  \n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Forbes.java',
+            text: '/*\n * Manages data about Forbes 2000 Global Companies\n */\npublic class Forbes {\n\n  private Company[] companyData;    // The 1D array of Company objects\n\n  /*\n   * Reads the data from namesFile and\n   * yearsFile to initialize companyData\n   */\n  public Forbes(String namesFile, String yearsFile) {\n    companyData = createCompanies(namesFile, yearsFile);\n  }\n\n  /*\n   * Returns a 1D array of Company objects using\n   * the data from namesFile and yearsFile\n   */\n  public Company[] createCompanies(String namesFile, String yearsFile) {\n    String[] namesData = FileReader.toStringArray(namesFile);\n    int[] yearsData = FileReader.toIntArray(yearsFile);\n\n    Company[] tempCompanies = new Company[namesData.length];\n\n    for (int index = 0; index < tempCompanies.length; index++) {\n      tempCompanies[index] = new Company(namesData[index], yearsData[index]);\n    }\n\n    return tempCompanies;\n  }\n\n  /*\n   * Returns true if any companies in companyData were\n   * founded the same year, otherwise returns false\n   */\n  public boolean checkForDuplicates() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use nested loops to traverse the 1D array companyData and the getYearFounded()\n     * method in the Company class to check if there are duplicate years.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return false;\n  }\n\n  /*\n   * Returns a String containing each company\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Company org : companyData) {\n      result += org + "\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Finding Duplicates (b)',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    MovieDatabase movies = new MovieDatabase("names.txt", "runtimes.txt", "ratings.txt");\n    System.out.println(movies);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the checkForDuplicates() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Movie.java',
+            text: '/*\n * Represents a movie\n */\npublic class Movie {\n\n  private String name;     // The name of a movie\n  private int runtime;     // The length of a movie in minutes\n  private double rating;   // The rating of a movie\n\n  /*\n   * Sets name, runtime, and rating to the specified values\n   */\n  public Movie(String name, int runtime, double rating) {\n    this.name = name;\n    this.runtime = runtime;\n    this.rating = rating;\n  }\n\n  /*\n   * Returns the name of the movie\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the runtime of the movie\n   */\n  public int getRuntime() {\n    return runtime;\n  }\n\n  /*\n   * Returns the rating of the movie\n   */\n  public double getRating() {\n    return rating;\n  }\n\n  /*\n   * Returns a String containing the name, runtime, and rating of the movie\n   */\n  public String toString() {\n    return name + " (" + runtime + " minutes) - " + rating;\n  }\n}',
+          },
+          {
+            path: 'MovieDatabase.java',
+            text: '/*\n * Manages data about movies from The Movie Database\n */\npublic class MovieDatabase {\n\n  private Movie[] movieData;    // The 1D array of Movie objects\n\n  /*\n   * Reads the data from nameFile, runtimeFile, and\n   * ratingFile to initialize movieData\n   */\n  public MovieDatabase(String nameFile, String runtimeFile, String ratingFile) {\n    movieData = createMovies(nameFile, runtimeFile, ratingFile);\n  }\n\n  /*\n   * Returns a 1D array of Movie objects using the\n   * data from nameFile, runtimeFile, and ratingFile\n   */\n  public Movie[] createMovies(String nameFile, String runtimeFile, String ratingFile) {\n    String[] namesData = FileReader.toStringArray(nameFile);\n    int[] runtimeData = FileReader.toIntArray(runtimeFile);\n    double[] ratingsData = FileReader.toDoubleArray(ratingFile);\n\n    Movie[] tempMovies = new Movie[namesData.length];\n\n    for (int index = 0; index < tempMovies.length; index++) {\n      tempMovies[index] = new Movie(namesData[index], runtimeData[index], ratingsData[index]);\n    }\n\n    return tempMovies;\n  }\n\n  /*\n   * Returns true if any movie in movieData have the same runtime, otherwise returns false\n   */\n  public boolean checkForDuplicates() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use nested loops to traverse the 1D array movieData and the getRuntime()\n     * method in the Movie class to check if there are duplicate runtimes.\n     * -----------------------------------------------------------------------------\n     */\n\n       \n\n    return false;\n  }\n\n  /*\n   * Returns a String containing each movie\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Movie theMovie : movieData) {\n      result += theMovie + "\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Finding Duplicates (c)',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Pokedex pokemon = new Pokedex("names.txt", "attacks.txt");\n    System.out.println(pokemon);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the checkForDuplicates() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'Pokedex.java',
+            text: '/*\n * Manages data about Pokemon\n */\npublic class Pokedex {\n\n  private Pokemon[] pokemonData;   // The 1D array of Pokemon objects\n\n  /*\n   * Reads the data from namesFile and attackFile\n   * to initialize pokemonData\n   */\n  public Pokedex(String namesFile, String attackFile) {\n    pokemonData = createPokemon(namesFile, attackFile);\n  }\n\n  /*\n   * Returns a 1D array of Pokemon objects using\n   * the data from namesFile and attackFile\n   */\n  public Pokemon[] createPokemon(String namesFile, String attackFile) {\n    String[] namesData = FileReader.toStringArray(namesFile);\n    int[] attackData = FileReader.toIntArray(attackFile);\n\n    Pokemon[] tempPokemon = new Pokemon[namesData.length];\n\n    for (int index = 0; index < tempPokemon.length; index++) {\n      tempPokemon[index] = new Pokemon(namesData[index], attackData[index]);\n    }\n\n    return tempPokemon;\n  }\n\n  /*\n   * Returns true if more than one Pokemon have the same attack points, otherwise returns false\n   */\n  public boolean checkForDuplicates() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use nested loops to traverse the 1D array pokemonData and the getAttack()\n     * method in the Pokemon class to check if there are duplicate attack points.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return false;\n  }\n\n  /*\n   * Returns a String containing each Pokemon\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Pokemon thePokemon : pokemonData) {\n      result += thePokemon + "\\n";\n    }\n\n    return result;\n  }\n  \n}',
+          },
+          {
+            path: 'Pokemon.java',
+            text: '/*\n * Represents a Pokemon\n */\npublic class Pokemon {\n\n  private String name;    // The name of a Pokemon\n  private int attack;     // The attack of a Pokemon\n\n  /*\n   * Sets name and attack to the specified values\n   */\n  public Pokemon(String name, int attack) {\n    this.name = name;\n    this.attack = attack;\n  }\n\n  /*\n   * Returns the name of the Pokemon\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the attack of the Pokemon\n   */\n  public int getAttack() {\n    return attack;\n  }\n\n  /*\n   * Returns a String containing the name and attack of the Pokemon\n   */\n  public String toString() {\n    return name + ": " + attack;\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Finding Duplicates (d)',
+        lesson: 'Lesson 12: Finding Duplicates',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    HeroManager heroes = new HeroManager("names.txt", "publishers.txt");\n    System.out.println(heroes);\n\n    /* ----------------------------------- TO DO #2---------------------------------\n     * \u2705 Call the checkForDuplicates() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n        \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'HeroManager.java',
+            text: '/*\n * Manages data about superheros\n */\npublic class HeroManager {\n\n  private Superhero[] heroData;    // The 1D array of Superhero objects\n\n  /*\n   * Reads the data from namesFile and\n   * publisherFile to initialize heroData\n   */\n  public HeroManager(String namesFile, String publisherFile) {\n    heroData = createSuperheroes(namesFile, publisherFile);\n  }\n\n  /*\n   * Returns a 1D array of Superhero objects using\n   * the data from namesFile and publisherFile\n   */\n  public Superhero[] createSuperheroes(String namesFile, String publisherFile) {\n    String[] namesData = FileReader.toStringArray(namesFile);\n    String[] publisherData = FileReader.toStringArray(publisherFile);\n\n    Superhero[] tempHeroes = new Superhero[namesData.length];\n\n    for (int index = 0; index < tempHeroes.length; index++) {\n      tempHeroes[index] = new Superhero(namesData[index], publisherData[index]);\n    }\n\n    return tempHeroes;\n  }\n\n  /*\n   * Returns true if more than one superhero has the same publisher, otherwise returns false\n   */\n  public boolean checkForDuplicates() {\n    /* ----------------------------------- TO DO #1 --------------------------------\n     * \u2705 Use nested loops to traverse the 1D array heroData and the getPublisher()\n     * method in the Superhero class to check if there are duplicate publishers.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    return false;\n  }\n\n  /*\n   * Returns a String containing each hero\'s information\n   */\n  public String toString() {\n    String result = "";\n\n    for (Superhero hero : heroData) {\n      result += hero + "\\n";\n    }\n\n    return result;\n  }\n}',
+          },
+          {
+            path: 'Superhero.java',
+            text: '/*\n * Represents a superhero\n */\npublic class Superhero {\n\n  private String name;        // The name of a superhero\n  private String publisher;   // The name of the publisher of a superhero\n\n  /*\n   * Sets name and publisher to the specified values\n   */\n  public Superhero(String name, String publisher) {\n    this.name = name;\n    this.publisher = publisher;\n  }\n\n  /*\n   * Returns the name of the superhero\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the publisher of the superhero\n   */\n  public String getPublisher() {\n    return publisher;\n  }\n\n  /*\n   * Returns a String containing the name and publisher\n   */\n  public String toString() {\n    return name + " (" + publisher + ")";\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #1',
+        lesson: 'Lesson 13a: Data for Social Good Project',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #2',
+        lesson: 'Lesson 13a: Data for Social Good Project',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    \n\n\n\n\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #3',
+        lesson: 'Lesson 13a: Data for Social Good Project',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    \n\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #4',
+        lesson: 'Lesson 13a: Data for Social Good Project',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    \n\n\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #5',
+        lesson: 'Lesson 13a: Data for Social Good Project',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #6',
+        lesson: 'Lesson 13a: Data for Social Good Project',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #1',
+        lesson: 'Lesson 13b: Data for Social Good Project [1-Day Version]',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #2',
+        lesson: 'Lesson 13b: Data for Social Good Project [1-Day Version]',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    \n\n\n\n\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #3',
+        lesson: 'Lesson 13b: Data for Social Good Project [1-Day Version]',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    \n\n\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #4',
+        lesson: 'Lesson 13b: Data for Social Good Project [1-Day Version]',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    \n\n\n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #5',
+        lesson: 'Lesson 13b: Data for Social Good Project [1-Day Version]',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Data for Social Good Project #6',
+        lesson: 'Lesson 13b: Data for Social Good Project [1-Day Version]',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n\n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'FileReader.java',
+            text: 'import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println("File not found.");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}',
+          },
+          {
+            path: 'UserStory.java',
+            text: 'import java.util.Scanner;\n\npublic class UserStory {\n\n\n\n\n\n\n\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'CSA 2023 Console Sandbox_pilot_oo2025',
+        lesson: 'Sandbox: Console',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'With Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: '1,0 1,10 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'No Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+    ],
+  },
+  {
     name: 'AP FRQ Practice',
     levels: [
       {

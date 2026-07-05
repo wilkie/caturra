@@ -194,6 +194,18 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('alive');
   });
 
+  test('loads and runs a Unit 3 (arrays) level', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });
+    await page
+      .getByTestId('level-select')
+      .selectOption({ label: 'Predict and Run: Storing Multiple Values' });
+    await page.getByTestId('run').click();
+    // Reaching "$ java Main" means the array program compiled cleanly.
+    await expect(page.getByTestId('console')).toContainText('$ java Main');
+    await expect(page.getByTestId('console')).not.toContainText('error:');
+  });
+
   test('runs a Constructors level using reflection (ConstructorsHelper)', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });
