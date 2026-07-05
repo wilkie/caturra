@@ -52,6 +52,12 @@ impl IntrinsicStatics {
 #[must_use]
 pub fn instantiate(class: &str) -> Option<HeapObject> {
     match class {
+        // A bare `new Object()` — an identity-only object (used e.g. to test
+        // that `equals` distinguishes an unrelated instance).
+        "java/lang/Object" => Some(HeapObject::Instance {
+            class_name: String::from("java/lang/Object"),
+            fields: std::collections::HashMap::new(),
+        }),
         "java/lang/String" => Some(HeapObject::JavaString(Vec::new())),
         "java/lang/StringBuilder" => Some(HeapObject::StringBuilder(Vec::new())),
         "java/util/Scanner" => Some(HeapObject::Scanner {

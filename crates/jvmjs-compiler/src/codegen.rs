@@ -5480,6 +5480,7 @@ impl BodyGen<'_> {
             return JType::Exception(id);
         }
         match class {
+            "Object" => JType::Object(self.table.object_id),
             "Scanner" => JType::Scanner,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
@@ -5551,6 +5552,7 @@ impl BodyGen<'_> {
         };
         if self.table.class_id(class_name).is_none() {
             match class_name {
+                "Object" if args.is_empty() => return self.new_bare_object(),
                 "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
                 "ArrayList" => return self.new_array_list(type_args, args, span),
@@ -5738,6 +5740,17 @@ impl BodyGen<'_> {
         let arg_width = u16::from(descriptor != "()V");
         self.code.drop_stack(1 + arg_width);
         JType::Str
+    }
+
+    /// `new Object()` — an identity-only object (NEW + the no-op `<init>`).
+    fn new_bare_object(&mut self) -> JType {
+        let class_index = intern_class(self.pool, "java/lang/Object");
+        self.code.push_op_u16(op::NEW, class_index, 1);
+        self.code.push_op(op::DUP, 1);
+        let init_ref = intern_method_ref(self.pool, "java/lang/Object", "<init>", "()V");
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code.drop_stack(1);
+        JType::Object(self.table.object_id)
     }
 
     fn new_scanner(&mut self, args: &[Expr], span: SourceSpan) -> JType {
