@@ -994,6 +994,23 @@ export const CSA_UNITS: CsaUnit[] = [
         validationFiles: [],
       },
       {
+        name: 'Practice: Debugging in The Neighborhood (b)',
+        lesson: 'Lesson 13: Debugging Strategies',
+        view: 'neighborhood',
+        grid: '1,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 1,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0 1,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0 0,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus evan = new PainterPlus();\n\n    // Turns right\n    evan.turnRight();\n\n    // Moves south then turns east\n    evan.moveSouthTurnEast();\n\n    // Moves east then turns north\n    evan.moveEastTurnNorth();\n\n    // Moves north then turns east\n    evan.moveNorthTurnEast();\n\n    // Moves east then turns south\n    evan.moveEastTurnSouth();\n\n    // Moves south then turns east\n    evan.moveSouthTurnEast();\n\n    // Moves east then turns north\n    evan.moveEastTurnNorth();\n\n    // Moves north then turns east\n    evan.moveNorthTurnEast();\n\n    // Moves east then turns south\n    evan.moveEastTurnSouth();\n\n    // Moves forward while PainterPlus can move\n    while (evan.canMove()) {\n      evan.move();\n    }\n    \n  }\n}',
+          },
+          {
+            path: 'PainterPlus.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves north while facing north and can move\n   * forward and turns right if can move east\n   */\n  public void moveNorthTurnEast() {\n    while (isFacingNorth()) {\n      if (canMove()) {\n        move();\n      }\n\n      if (canMove("east")) {\n        turnRight();\n      }\n    }\n  }\n\n  /*\n   * Moves south while facing south and can move\n   * forward and turns left if can move east\n   */\n  public void moveSouthTurnEast() {\n    while (isFacingSouth()) {\n      if (canMove()) {\n        move();\n      }\n\n      if (canMove("east")) {\n        turnLeft();\n      }\n    }\n  }\n\n  /*\n   * Moves east while facing east and can move\n   * forward and turns left if can move north\n   */\n  public void moveEastTurnNorth() {\n    while (isFacingEast()) {\n      if (canMove("north")) {\n        turnLeft();\n      }\n    }\n  }\n\n  /*\n   * Moves east while facing east and can move\n   * forward and turns right if can move south\n   */\n  public void moveEastTurnSouth() {\n    while (isFacingEast()) {\n      if (canMove()) {\n        move();\n      }\n\n      if (canMove("south")) {\n        turnRight();\n      }\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
         name: 'Practice: Debugging in The Neighborhood (c)',
         lesson: 'Lesson 13: Debugging Strategies',
         view: 'neighborhood',
