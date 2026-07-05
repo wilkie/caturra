@@ -52,6 +52,58 @@ export const CSA_UNITS: CsaUnit[] = [
         validationFiles: [],
       },
       {
+        name: 'Practice: Syntax Errors (a)',
+        lesson: 'Lesson 2: Java Lab',
+        view: 'neighborhood',
+        grid: '1,0 1,3 1,0 1,0 1,0 1,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a Painter called amelia\n    Painter amelia = new Painter();\n\n    // Moves forward one space\n    amelia.move();\n\n    // Takes paint three times to get all the paint from the bucket\n    amelia.takePaint();\n    amelia.takepaint();\n    amelia.takePaint();\n\n    // Turns right by turning left three times\n    amelia.turnLeft();\n    amelia.turnLeft();\n    amelia.turnLeft();\n\n    // Moves and paints three times\n    amelia.move();\n    amelia.paint("LawnGreen");\n    amelia.move();\n    amelia.paint("LawnGreen");\n    amelia.move();\n    amelia.paint("LawnGreen");\n\n    // Moves forward one space to get off the paint\n    amelia.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Syntax Errors (b)',
+        lesson: 'Lesson 2: Java Lab',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,3 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a Painter called mason\n    Painter mason = new Painter();\n\n    // Moves forward one space\n    mason.move();\n\n    // Turns right by turning left three times\n    mason.turnLeft();\n    mason.turnLeft();\n    mason.turnLeft();\n\n    // Moves forward one space\n    mason.move();\n\n    // Takes paint three times to get all the paint from the bucket\n    mason.takePaint();\n    mason.takePaint();\n    mason.takepaint();\n\n    // Moves and paints three times\n    mason.move();\n    mason.paint("SkyBlue");\n    mason.move();\n    mason.paint("SkyBlue");\n    mason.move()\n    mason.paint("SkyBlue");\n\n    // Moves forward one space to get off the paint\n    mason.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Syntax Errors (c)',
+        lesson: 'Lesson 2: Java Lab',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,4 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a Painter called aria\n    Painter aria = new Painter();\n\n    // Moves forward four spaces\n    aria.move();\n    aria.move();\n    aria.move();\n    aria.move();\n\n    // Turns right by turning left three times\n    aria.turnLeft();\n    aria.turnLeft()\n    aria.turnLeft();\n\n    // Moves forward one space\n    aria.move();\n\n    // Takes paint four times to get all the paint from the bucket\n    aria.takePaint();\n    aRia.takePaint();\n    aria.takePaint();\n    aria.takePaint();\n\n    // Moves and paints four times\n    aria.move();\n    aria.paint("plum");\n    aria.move();\n    aria.paint("plum");\n    aria.move;\n    aria.paint("plum");\n    aria.move();\n    aria.paint("plum");\n\n    // Moves forward one space to get off the paint\n    aria.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Syntax Errors (d)',
+        lesson: 'Lesson 2: Java Lab',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,4 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,4 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,4 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a Painter called madison\n    Painter madison = new Painter();\n\n    // Moves forward one space\n    madison.move();\n\n    // Turns right by turning left three times\n    madison.turnLeft;\n    madison.turnLeft();\n    madison.turnLeft();\n\n    // Moves forward four spaces\n    madison.move();\n    madison.move();\n    madison.move();\n    madison.move();\n\n    // Takes paint four times to get all the paint from the bucket\n    madison.takePaint();\n    madison.takepaint();\n    madison.takePaint();\n    madison.takePaint();\n\n    // Paints the first half of the smile\n    madison.paint("gold");\n    madison.move();\n    madison.turnLeft();\n    madison.move();\n    madison.paint("gold");\n    madison.move();\n    madison.turnLeft();\n    madison.turnLeft()\n    madison.turnleft();\n    madison.move();\n    madison.paint("gold");\n    madison.turnLeft();\n    madison.move();\n    madison.paint("gold");\n    madison.move();\n\n    // Takes paint four times to get all the paint from the bucket\n    madison.takePaint();\n    madison.takePaint();\n    madison.takePaint();\n    madison.takePaint();\n\n    // Paints the second half of the smile\n    madison.paint("gold");\n    madison.move();\n    madison.paint("gold");\n    madison.move();\n    madison.turnLeft();\n    madison.move();\n    madison.paint("gold");\n    madison.turnLeft();\n    madison.turnLeft();\n    madison.turnLeft();\n    madison.move();\n    madison.turnLeft();\n    madison.move();\n    Madison.paint("gold");\n\n    // Moves forward two spaces\n    madison.move();\n    madison.move();\n\n    // Takes paint four times to get all the paint from the bucket\n    madison.takePaint();\n    madison.takePaint();\n    madison.takePaint();\n    madison.takePaint();\n\n    // Turns left then moves forward two spaces\n    madison.turnLeft();\n    madison.move();\n    madison.move();\n\n    // Paints the right eye\n    madison.paint("gold");\n\n    // Moves forward three spaces\n    madison.move();\n    madison.move();\n    madison.move();\n\n    // Paints the left eye\n    madison.paint("gold");\n\n    // Moves forward one space to get off the paint\n    madison.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
         name: 'Predict and Run: Classes and Objects',
         lesson: 'Lesson 3: Classes and Objects',
         view: 'console',
@@ -81,6 +133,84 @@ export const CSA_UNITS: CsaUnit[] = [
           {
             path: 'Painter.java',
             text: '/*\n * Represents a painter in The Neighborhood\n */\npublic class Painter {\n\n  private int xLocation;\n  private int yLocation;\n  private String direction;\n  private int remainingPaint;\n\n  public Painter() {\n    /* code not shown */\n    System.out.println("> Created Painter object");\n  }\n\n  public void move() {\n     /* code not shown */\n    System.out.println("> Moved Painter one square forward");\n  }\n\n  public void turnLeft() {\n    /* code not shown */\n  }\n\n  public void paint(String color) {\n    /* code not shown */\n  }\n\n  public void takePaint() {\n    /* code not shown */\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Skill Building: Painter Objects',
+        lesson: 'Lesson 4: Instantiating Objects',
+        view: 'neighborhood',
+        grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter object.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    ezra.turnLeft();\n    ezra.turnLeft();\n    ezra.turnLeft();\n\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n\n    ezra.turnLeft();\n\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n    ezra.move();\n\n    ezra.turnLeft();\n\n    ezra.move();\n    ezra.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Painter Objects',
+        lesson: 'Lesson 4: Instantiating Objects',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 0,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter object.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    blake.move();\n    blake.move();\n    blake.move();\n\n    blake.turnLeft();\n    blake.turnLeft();\n    blake.turnLeft();\n\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n    blake.move();\n\n    blake.turnLeft();\n    blake.turnLeft();\n    blake.turnLeft();\n\n    blake.move();\n    blake.move();\n    blake.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Painter Objects (a)',
+        lesson: 'Lesson 4: Instantiating Objects',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter objects.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n    emma.move();\n    emma.move();\n\n    emma.turnLeft();\n    emma.turnLeft();\n    emma.turnLeft();\n\n    emma.move();\n    emma.move();\n    emma.move();\n    emma.move();\n\n    ashley.move();\n    ashley.move();\n    ashley.move();\n    ashley.move();\n    ashley.move();\n\n    ashley.turnLeft();\n    ashley.turnLeft();\n    ashley.turnLeft();\n\n    ashley.move();\n    ashley.move();\n    ashley.move();\n    ashley.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Painter Objects (b)',
+        lesson: 'Lesson 4: Instantiating Objects',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter objects.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n\n    alex.turnLeft();\n    alex.turnLeft();\n    alex.turnLeft();\n\n    alex.move();\n    alex.move();\n    alex.move();\n    alex.move();\n    alex.move();\n    alex.move();\n    alex.move();\n\n    alex.turnLeft();\n\n    alex.move();\n    alex.move();\n    alex.move();\n    alex.move();\n    alex.move();\n\n    elias.move();\n    elias.move();\n    elias.move();\n    elias.move();\n    elias.move();\n    elias.move();\n    elias.move();\n\n    elias.turnLeft();\n    elias.turnLeft();\n    elias.turnLeft();\n\n    elias.move();\n    elias.move();\n    elias.move();\n    elias.move();\n    elias.move();\n    elias.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Painter Objects (c)',
+        lesson: 'Lesson 4: Instantiating Objects',
+        view: 'neighborhood',
+        grid: '1,0 1,0 0,0 1,0 1,0 1,0 1,0 1,0\n0,0 1,0 0,0 1,0 0,0 0,0 0,0 1,0\n0,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0\n0,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter objects.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n\n    jude.move();\n\n    jude.turnLeft();\n    jude.turnLeft();\n    jude.turnLeft();\n\n    jude.move();\n    jude.move();\n\n    jude.turnLeft();\n\n    jude.move();\n    jude.move();\n\n    jude.turnLeft();\n\n    jude.move();\n    jude.move();\n\n    jude.turnLeft();\n    jude.turnLeft();\n    jude.turnLeft();\n\n    jude.move();\n    jude.move();\n    jude.move();\n    jude.move();\n\n    jude.turnLeft();\n    jude.turnLeft();\n    jude.turnLeft();\n\n    jude.move();\n    jude.move();\n    jude.move();\n    jude.move();\n    jude.move();\n    jude.move();\n\n    jude.turnLeft();\n    jude.turnLeft();\n    jude.turnLeft();\n\n    jude.move();\n    jude.move();\n\n    jude.turnLeft();\n    jude.turnLeft();\n    jude.turnLeft();\n\n    jude.move();\n    jude.move();\n    jude.move();\n\n    evan.move();\n\n    evan.turnLeft();\n    evan.turnLeft();\n    evan.turnLeft();\n\n    evan.move();\n    evan.move();\n\n    evan.turnLeft();\n\n    evan.move();\n    evan.move();\n\n    evan.turnLeft();\n\n    evan.move();\n    evan.move();\n\n    evan.turnLeft();\n    evan.turnLeft();\n    evan.turnLeft();\n\n    evan.move();\n    evan.move();\n    evan.move();\n    evan.move();\n\n    evan.turnLeft();\n    evan.turnLeft();\n    evan.turnLeft();\n\n    evan.move();\n    evan.move();\n    evan.move();\n    evan.move();\n    evan.move();\n    evan.move();\n\n    evan.turnLeft();\n    evan.turnLeft();\n    evan.turnLeft();\n\n    evan.move();\n    evan.move();\n\n    evan.turnLeft();\n\n    evan.move();\n\n    evan.turnLeft();\n    evan.turnLeft();\n    evan.turnLeft();\n\n    evan.move();\n    evan.move();\n    evan.move();\n    evan.move();\n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Painter Objects (d)',
+        lesson: 'Lesson 4: Instantiating Objects',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0\n1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate the missing Painter objects.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n\n    leo.move();\n    leo.move();\n    leo.move();\n    leo.move();\n\n    leo.turnLeft();\n    leo.turnLeft();\n    leo.turnLeft();\n\n    leo.move();\n    leo.move();\n    leo.move();\n\n    leo.turnLeft();\n\n    leo.move();\n    leo.move();\n\n    akira.turnLeft();\n    akira.turnLeft();\n    akira.turnLeft();\n\n    akira.move();\n    akira.move();\n    akira.move();\n    akira.move();\n\n    akira.turnLeft();\n\n    akira.move();\n    akira.move();\n    akira.move();\n\n    akira.turnLeft();\n    akira.turnLeft();\n    akira.turnLeft();\n\n    akira.move();\n    akira.move();\n    \n  }\n}',
           },
         ],
         validationFiles: [],
@@ -398,7 +528,7 @@ export const CSA_UNITS: CsaUnit[] = [
         validationFiles: [],
       },
       {
-        name: 'Investigating AI-Generated Code',
+        name: 'Investigating AI-Generated Code #1',
         lesson: 'Lesson 8: AI-Generated Code',
         view: 'neighborhood',
         grid: '1,100 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
@@ -410,6 +540,27 @@ export const CSA_UNITS: CsaUnit[] = [
           {
             path: 'FlagPainter.java',
             text: 'import org.code.neighborhood.*;\n\npublic class FlagPainter extends PainterPlus {\n  \n  /*\n   * Paints the entire flag of Belgium\n   */\n  public void paintFlagOfBelgium() {\n    paintStripe("black");\n    moveToNextStripe();\n    paintStripe("yellow");\n    moveToNextStripe();\n    paintStripe("red");\n    resetPosition();\n  }\n\n  /*\n   * Paints a vertical stripe of the flag\n   */\n  public void paintStripe(String color) {\n    for (int i = 0; i < 8; i++) {\n      paint(color);\n      if (canMove()) {\n        move();\n      }\n    }\n    turnAround();\n    for (int i = 0; i < 7; i++) {\n      move();\n    }\n    turnLeft();\n  }\n\n  /*\n   * Moves to the starting position for the next stripe\n   */\n  public void moveToNextStripe() {\n    move();\n    turnRight();\n  }\n\n  /*\n   * Resets the Painter to the starting position\n   */\n  public void resetPosition() {\n    turnLeft();\n    while (canMove()) {\n      move();\n    }\n    turnLeft();\n    while (canMove()) {\n      move();\n    }\n    turnAround();\n  }\n}',
+          },
+          {
+            path: 'PainterPlus.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Takes all of the paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n\n  // Turns around\n  public void turnAround() {\n    turnLeft();\n    turnLeft();\n  }\n\n  // Paints a line based on how much paint the Painter has\n  public void paintLine(int paintAmount, String color) {\n    setPaint(paintAmount);\n\n    while (hasPaint()) {\n      paint(color);\n      \n      if (canMove()) {\n        move();\n      }\n    }\n  }\n\n  // Moves to the next row\n  public void moveToNextRow() {\n    if (canMove("south")) {\n      if (isFacingEast()) {\n        turnRight();\n        move();\n        turnRight();\n      }\n      else {\n        turnLeft();\n        move();\n        turnLeft();\n      }\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigating AI-Generated Code #2',
+        lesson: 'Lesson 8: AI-Generated Code',
+        view: 'neighborhood',
+        grid: '1,100 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    FlagPainter flag = new FlagPainter();\n    flag.takeAllPaint();\n    flag.paintFlagOfBelgium();\n  }\n}',
+          },
+          {
+            path: 'FlagPainter.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class FlagPainter extends PainterPlus {\n\n  /*\n   * Paints the entire flag of Belgium\n   */\n  public void paintFlagOfBelgium() {\n    /* ---- \ud83d\udd0e This is where the student implemented AI Tutor\'s suggestion ---- */\n    turnRight();\n    \n    paintStripe("black");\n    moveToNextStripe();\n    paintStripe("yellow");\n    moveToNextStripe();\n    paintStripe("red");\n    resetPosition();\n  }\n\n  /*\n   * Paints a vertical stripe of the flag\n   */\n  public void paintStripe(String color) {\n    for (int i = 0; i < 8; i++) {\n      paint(color);\n      if (canMove()) {\n        move();\n      }\n    }\n    turnAround();\n    for (int i = 0; i < 7; i++) {\n      move();\n    }\n    turnLeft();\n  }\n\n  /*\n   * Moves to the starting position for the next stripe\n   */\n  public void moveToNextStripe() {\n    move();\n    turnRight();\n  }\n\n  /*\n   * Resets the Painter to the starting position\n   */\n  public void resetPosition() {\n    turnLeft();\n    while (canMove()) {\n      move();\n    }\n    turnLeft();\n    while (canMove()) {\n      move();\n    }\n    turnAround();\n  }\n}',
           },
           {
             path: 'PainterPlus.java',
@@ -843,6 +994,40 @@ export const CSA_UNITS: CsaUnit[] = [
         validationFiles: [],
       },
       {
+        name: 'Practice: Debugging in The Neighborhood (c)',
+        lesson: 'Lesson 13: Debugging Strategies',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,2 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n1,2 1,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,2 1,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0\n1,0 0,0 0,0 0,0 0,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,6 0,0 0,0 0,0 1,0 1,0\n1,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus brooke = new PainterPlus();\n\n    // Moves east while facing east\n    while (brooke.isFacingEast()) {\n      // Takes all of the paint from the paint bucket if on one\n      brooke.takePaintIfOnBucket();\n\n      // Turns right if can move south\n      if (brooke.canMove("south")) {\n        brooke.turnRight();\n      }\n\n      // Moves forward one space\n      brooke.move();\n    }\n\n    // Paints the first area\n    brooke.paintTwice("coral");\n    brooke.turnAround();\n\n    // Moves north while can move north\n    while (brooke.canMove("north")) {\n      brooke.move();\n\n      // Turns right if can move east\n      if (brooke.canMove("east")) {\n        brooke.turnRight();\n      }\n    }\n\n    // Moves east while facing east\n    while (brooke.isFacingEast()) {\n      brooke.move();\n\n      // Turns right if can move south\n      if (brooke.canMove("south")) {\n        brooke.turnRight();\n      }\n    }\n\n    // Moves south while facing south\n    while (brooke.isFacingSouth()) {\n      brooke.move();\n\n      // Turns right and moves one space if can move west\n      if (brooke.canMove("west")) {\n        brooke.turnRight();\n        brooke.move();\n      }\n    }\n\n    // Gets the paint and paints the second area\n    brooke.takePaintIfOnBucket();\n    brooke.move();\n    brooke.paintTwice("coral");\n    brooke.turnAround();\n\n    // Moves east while facing east\n    while (brooke.isFacingEast()) {\n      // Turns right if can move south\n      if (brooke.canMove("south")) {\n        brooke.turnRight();\n      }\n\n      brooke.move();\n    }\n\n    // Moves while can move then turns right\n    brooke.moveTurnRight();\n\n    // Moves while can move then turns right\n    brooke.moveTurnRight();\n\n    // Gets the paint and paints one side of the third area\n    while (brooke.canMove()) {\n      brooke.takePaintIfOnBucket();\n      brooke.move();\n      brooke.paintThree("coral"); \n    }\n\n    // Moves to the other side of the third area\n    brooke.turnLeft();\n    brooke.move();\n    brooke.turnLeft();\n\n    // // Paints the other side of the third area\n    brooke.paintTwice("coral");\n    brooke.move();\n\n    // Turns right\n    brooke.turnRight();\n\n    // Moves while can move then turns right\n    brooke.moveTurnRight();\n\n    // Moves forward while can move\n    while (brooke.canMove()) {\n      brooke.move();\n    }\n\n    // Gets the paint and paints the last area\n    brooke.takePaintIfOnBucket();\n    brooke.turnRight();\n    brooke.move();\n    brooke.paintTwice("coral");\n    \n  }\n}',
+          },
+          {
+            path: 'PainterPlus.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Turns around to face the opposite direction\n  public void turnAround() {\n    turnLeft();\n    turnLeft();\n  }\n\n  // Moves forward while can move then turns right\n  public void moveTurnRight() {\n    while (canMove()) {\n      move();\n    }\n\n    turnRight();\n  }\n\n  // Takes all of the paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n\n  // Takes all of the paint from a paint bucket if on a paint bucket\n  public void takePaintIfOnBucket() {\n    if (isOnBucket()) {\n      takeAllPaint();\n    }\n  }\n\n  // Paints two spaces\n  public void paintTwice(String color) {\n    if (hasPaint()) {\n      paint(color);\n      move();\n      paint(color);\n    }\n  }\n\n  // Paints three spaces\n  public void paintThree(String color) {\n    if (hasPaint()) {\n      paint(color);\n      move();\n      paint(color);\n      paint(color);\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Debugging in The Neighborhood (d)',
+        lesson: 'Lesson 13: Debugging Strategies',
+        view: 'neighborhood',
+        grid: '1,0 1,15 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,9 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,15 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,7\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates a PainterPlus object\n    PainterPlus amos = new PainterPlus();\n\n    // Moves, takes paint from the paint bucket, and paints the first row\n    amos.moveAndPaint("purple");\n\n    // Turns around\n    amos.turnAround();\n\n    // Moves back to the starting point then turns south\n    while (amos.isFacingWest()) {\n      amos.move();\n\n      if (amos.canMove("south")) {\n        amos.turnLeft();\n      }\n    }\n\n    // Moves forward and paints second row while PainterPlus can move\n    while (amos.canMove()) {\n      amos.move();\n\n      // Takes all of the paint from the paint bucket then paints previous space\n      if (amos.isOnBucket()) {\n        amos.takeAllPaint();\n        amos.turnAround();\n        amos.move();\n        amos.turnAround();\n      }\n    }\n\n    // Turns left\n    amos.turnLeft();\n\n    // Moves, takes paint from the paint bucket, and paints the third row\n    amos.moveAndPaint("purple");\n\n    // Turns right\n    amos.turnRight();\n\n    // Moves, takes paint from the paint bucket, and paints the last row\n    amos.moveAndPaint("purple");\n    \n  }\n}',
+          },
+          {
+            path: 'PainterPlus.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  // Turns the Painter to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Turns around to face the opposite direction\n  public void turnAround() {\n    turnLeft();\n    turnLeft();\n  }\n\n  // Takes all of the paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n\n  // Moves and paints while the Painter can move forward\n  public void moveAndPaint(String color) {\n    while (canMove()) {\n      move();\n\n      if (hasPaint()) {\n        paint("purple");\n      }\n\n      if (isOnBucket()) {\n        takeAllPaint();\n      }\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
         name: 'Predict and Run: Selection and Logic',
         lesson: 'Lesson 14: Two-Way Selection Statements',
         view: 'neighborhood',
@@ -872,6 +1057,74 @@ export const CSA_UNITS: CsaUnit[] = [
           {
             path: 'PainterPlus.java',
             text: 'import org.code.neighborhood.*;\n\npublic class PainterPlus extends Painter {\n\n  public void paintToAndAroundTruck(String color) {\n    while (canMove()) {\n      paintPath(color);\n    }\n    \n    makeTurn();\n\n    while (canMove()) {\n      paintTruckBorder(color);\n      returnToStart();\n    }\n  }\n\n  public void paintPath(String color) {\n    moveOrTakePaint();\n    paintIfHasPaint(color);\n    turnSouth();\n  }\n\n  public void paintTruckBorder(String color) {\n    moveOrTakePaint();\n    paintIfHasPaint(color);\n    makeTurn();\n  }\n\n  // Turns the Painter to the right\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  // Takes all of the paint from a paint bucket\n  public void takeAllPaint() {\n    while (isOnBucket()) {\n      takePaint();\n    }\n  }\n\n  public void moveOrTakePaint() {\n    if (!isOnBucket()) {\n      move();\n    }\n\n    takeAllPaint();\n  }\n\n  public void paintIfHasPaint(String color) {\n    if (hasPaint()) {\n      paint(color);\n    }\n  }\n\n  public void turnSouth() {\n    if (canMove("south")) {\n      turnRight();\n    }\n  }\n\n  public void makeTurn() {\n    if (!canMove()) {\n      turnLeft();\n    }\n  }\n\n  public void returnToStart() {\n    if (isFacingWest()) {\n      if (canMove("north")) {\n        turnRight();\n      }\n    }\n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms (a)',
+        lesson: 'Lesson 14: Two-Way Selection Statements',
+        view: 'neighborhood',
+        grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,6 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,6 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,6 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a TrafficPainter object and call the navigateTraffic() method.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'TrafficPainter.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class TrafficPainter {\n\n  /*\n   * Navigates and paints the path by moving forward if TrafficPainter can\n   * move, taking all of the paint from a paint bucket if the TrafficPainter\n   * is standing on one, and turning in the appropriate direction\n   */\n  public void navigateTraffic(String color) {\n    turnRight();\n\n    while (canMove()) {\n      paintIfHasPaint(color);\n      move();\n      checkForBucket();\n      makeTurn();\n    }\n  }\n\n  /*\n   * Checks if TrafficPainter is on a paint bucket and takes\n   * all of the paint from the bucket if so\n   */\n  public void checkForBucket() {\n    if (isOnBucket()) {\n      takeAllPaint();\n    }\n  }\n\n  /*\n   * Paints the current space if TrafficPainter has paint\n   */\n  public void paintIfHasPaint(String color) {\n    if (hasPaint()) {\n      paint(color);\n    }\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the makeTurn() method to choose the correct direction to turn.\n   * -----------------------------------------------------------------------------\n   *\n   * Chooses the direction to turn based on whether TrafficPainter can move south\n   */\n  public void makeTurn() {\n    \n    \n\n\n    \n  }\n\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms (b)',
+        lesson: 'Lesson 14: Two-Way Selection Statements',
+        view: 'neighborhood',
+        grid: '1,0 1,5 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,5 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 0,0 1,0 1,0 1,5 1,0 1,0 1,0 1,0 1,5 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,5 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0\n0,0 1,0 1,0 1,0 1,0 1,5 1,0 1,0 1,0 1,0 1,5 1,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a DecorPainter object and call the paintStreets() method.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'DecorPainter.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class DecorPainter {\n\n  /*\n   * Navigates and paints the path by moving forward if DecorPainter can\n   * move, taking all of the paint from a paint bucket if the DecorPainter\n   * is standing on one, and turning in the appropriate direction\n   */\n  public void paintStreets(String color) {\n    while (canMove()) {\n      paintIfHasPaint(color);\n      move();\n      checkForBucket();\n      makeTurn();\n    }\n\n    finishStreet(color);\n  }\n\n  /*\n   * Checks if DecorPainter is on a paint bucket and takes\n   * all of the paint from the bucket if so\n   */\n  public void checkForBucket() {\n    if (isOnBucket()) {\n      takeAllPaint();\n    }\n  }\n\n  /*\n   * Paints the current space if DecorPainter has paint\n   */\n  public void paintIfHasPaint(String color) {\n    if (hasPaint()) {\n      paint(color);\n    }\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the makeTurn() method to choose the correct direction to turn.\n   * -----------------------------------------------------------------------------\n   *\n   * Chooses the direction to turn based on whether DecorPainter can move south\n   */\n  public void makeTurn() {\n    \n    \n\n\n    \n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the makeTurn() method to choose the correct direction to turn.\n   * -----------------------------------------------------------------------------\n   *\n   * Turns DecorPainter to the west to finish the last street\n   */\n  public void finishStreet(String color) {\n    \n    \n    \n\n    \n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms (c)',
+        lesson: 'Lesson 14: Two-Way Selection Statements',
+        view: 'neighborhood',
+        grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,28 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a FishPainter object and call the paintMural() method.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'FishPainter.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class FishPainter {\n\n  /*\n   * Navigates to the position and gets the paint from the paint bucket\n   * then paints a mural of a fish in The Neighborhood\n   */\n  public void paintMural(String firstColor, String secondColor) {\n    getToPosition();\n    paintFish(firstColor, secondColor);\n  }\n\n  /*\n   * Paints a fish\n   */\n  public void paintFish(String firstColor, String secondColor) {\n    paintTop(firstColor, secondColor);\n    turnRight();\n    paintMiddle(firstColor, secondColor);\n    turnLeft();\n    paintMiddle(firstColor, secondColor);\n    turnRight();\n    paintBottom(firstColor, secondColor);\n  }\n\n  /*\n   * Navigates to the starting position and retrieves paint\n   */\n  public void getToPosition() {\n    turnRight();\n\n    while (isFacingSouth()) {\n      move();\n      checkForBucket();\n\n      if (canMove("east")) {\n        move();\n        turnLeft();\n      }\n    }\n  }\n\n  /*\n   * Checks if FishPainter is on a paint bucket and takes\n   * all of the paint from the bucket if so\n   */\n  public void checkForBucket() {\n    if (isOnBucket()) {\n      takeAllPaint();\n    }\n  }\n\n  /*\n   * Moves and paints once with the color\n   */\n  public void paintOnce(String color) {\n    move();\n    paint(color);\n  }\n\n  /*\n   * Moves and paints twice with the color\n   */\n  public void paintTwice(String color) {\n    move();\n    paint(color);\n    move();\n    paint(color);\n  }\n\n  /*\n   * Paints the top of the fish\n   */\n  public void paintTop(String firstColor, String secondColor) {\n    paintOnce(firstColor);\n    paintTwice(secondColor);\n    paintOnce(firstColor);\n    paintOnce(secondColor);\n    move();\n    paintOnce(secondColor);\n  }\n\n  /*\n   * Paints the bottom of the fish\n   */\n  public void paintBottom(String firstColor, String secondColor) {\n    paintOnce(secondColor);\n    turnRight();\n    move();\n    paintOnce(secondColor);\n    paintOnce(firstColor);\n    paintTwice(secondColor);\n    paintOnce(firstColor);\n  }\n\n  /*\n   * Paints the middle portion of the fish. If the FishPainter is\n   * facing west, it paints "black" for the fish\'s eye.\n   */\n  public void paintMiddle(String firstColor, String secondColor) {\n    // paint two spaces with secondColor\n    move();\n    paint(secondColor);\n\n    makeTurn();\n    \n    move();\n    paint(secondColor);\n    paintOnce(firstColor);\n    paintTwice(secondColor);\n    paintOnce(firstColor);\n\n    // paint two spaces with secondColor\n    move();\n\n    paintEyeOrBody(secondColor);\n    \n    move();\n    paint(secondColor);\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the makeTurn() method to paint the middle section of the fish.\n   * -----------------------------------------------------------------------------\n   *\n   * Turns the FishPainter based on the direction it is currently facing\n   */\n  public void makeTurn() {\n    \n    \n    \n\n    \n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the paintEyeOrBody() method to paint the middle section of the fish.\n   * -----------------------------------------------------------------------------\n   *\n   * Paints either the eye or part of the body\n   */\n  public void paintEyeOrBody(String color) {\n    \n    \n\n\n    \n  }\n  \n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Practice: Writing Algorithms (d)',
+        lesson: 'Lesson 14: Two-Way Selection Statements',
+        view: 'neighborhood',
+        grid: '1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 0,0 1,4 1,0 1,0 1,0 1,0 1,5 0,0 0,0 0,0 0,0 0,0\n1,5 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,5 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,5 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,5 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,5 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,5 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 0,0 0,0\n1,5 1,0 1,0 1,0 1,0 1,4 1,0 1,0 1,0 1,0 1,5 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a SunPainter object and call the paintSunMural() method.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'SunPainter.java',
+            text: 'import org.code.neighborhood.*;\n\npublic class SunPainter {\n\n  /*\n   * Navigates to the position and gets the paint from the paint buckets\n   * then paints a mural of a sun in The Neighborhood\n   */\n  public void paintSunMural(String color) {\n    getToPosition();\n    paintSun(color);\n  }\n\n  /*\n   * Navigates to the starting position\n   */\n  public void getToPosition() {\n    turnRight();\n    \n    while (isFacingSouth()) {\n      move();\n\n      if (canMove("east")) {\n        turnLeft();\n      }\n    }\n\n    moveFast();\n    turnRight();\n  }\n\n  /*\n   * Paints a sun\n   */\n  public void paintSun(String color) {\n    paintSunCenter(color);\n    paintSoutheast(color);\n    paintBottomMiddle(color);\n    paintSouthwest(color);\n    paintNorthwest(color);\n    paintTopMiddle(color);\n    paintNortheast(color);\n  }\n\n  /*\n   * Paints the center part of the sun\n   */\n  public void paintSunCenter(String color) {\n    moveNoBucket();\n    turnLeft();\n    paintLineAndTurn(color);\n    moveNoBucket();\n    paintLineAndTurn(color);\n    moveNoBucket();\n    paintLineAndTurn(color);\n    moveNoBucket();\n    paintLineAndTurn(color);\n    paintLine(color);\n    moveNoBucket();\n    paintLine(color);\n  }\n\n  /*\n   * Paints the southeast diagonal line\n   */\n  public void paintSoutheast(String color) {\n    // Moves to bottom right corner\n    moveFast();\n    turnRight();\n    moveFast();\n\n    // Gets all of the paint from the paint bucket\n    takeAllPaint();\n\n    // Turns around to face north\n    turnAround();\n\n    while (!isOnPaint()) {\n      paintDiagonalNW(color);\n    }\n  }\n\n  /*\n   * Paints the bottom middle line\n   */\n  public void paintBottomMiddle(String color) {\n    // Turns to face south\n    turnLeft();\n    move();\n    turnLeft();\n\n    // Moves to bottom middle\n    moveFast();\n\n    // Gets all of the paint from the paint bucket\n    takeAllPaint();\n\n    // Turns around to face north\n    turnAround();\n\n    // Paints bottom center line\n    paintLine(color);\n  }\n\n  /*\n   * Paints the southwest diagonal line\n   */\n  public void paintSouthwest(String color) {\n    // Moves to bottom left corner\n    turnLeft();\n    moveFast();\n    turnLeft();\n    moveFast();\n\n    // Gets all of the paint from the paint bucket\n    takeAllPaint();\n\n    // Turns around\n    turnAround();\n\n    // Paints a diagonal line while not on paint\n    while (!isOnPaint()) {\n      paintDiagonalNE(color);\n    }\n  }\n\n  /*\n   * Paints the northwest diagonal line\n   */\n  public void paintNorthwest(String color) {\n    // Moves to top left corner\n    moveFast();\n    turnLeft();\n    moveFast();\n\n    // Gets all of the paint from the paint bucket\n    takeAllPaint();\n\n    // Moves up a space\n    turnRight();\n    move();\n\n    // Turns around to face south\n    turnAround();\n\n    // Paints a diagonal line while not on paint\n    while (!isOnPaint()) {\n      paintDiagonalSE(color);\n    }\n  }\n\n  /*\n   * Paints the top middle line\n   */\n  public void paintTopMiddle(String color) {\n    // Moves to top middle\n    turnLeft();\n    move();\n    turnLeft();\n    moveFast();\n\n    // Gets all of the paint from the paint bucket\n    takeAllPaint();\n\n    // Turns around\n    turnAround();\n\n    // Paints top center line\n    paintLine(color);\n  }\n\n  /*\n   * Paints the northeast diagonal line\n   */\n  public void paintNortheast(String color) {\n    // Moves to top right corner\n    turnLeft();\n    moveFast();\n    turnLeft();\n    moveFast();\n\n    // Gets all of the paint from the paint bucket\n    takeAllPaint();\n\n    // Turns around\n    turnAround();\n\n    // Paints a diagonal line while not on paint\n    while (!isOnPaint()) {\n      paintDiagonalSW(color);\n    }\n  }\n\n  /*\n   * Moves forward while SunPainter can move\n   */\n  public void moveFast() {\n    while (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Turns the SunPainter around to face the opposite direction\n   */\n  public void turnAround() {\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Paints a straight line while SunPainter has paint\n   */\n  public void paintLine(String color) {\n    while (hasPaint()) {\n      paint(color);\n      move();\n    }\n  }\n\n  /*\n   * Paints a diagonal line in the northwest direction\n   */\n  public void paintDiagonalNW(String color) {\n    if (isFacingNorth()) {\n      paint(color);\n      move();\n      turnLeft();\n      move();\n    }\n\n    if (isFacingWest()) {\n      paint(color);\n      move();\n      turnRight();\n      move();\n    }\n  }\n\n  /*\n   * Paints a diagonal line in the northeast direction\n   */\n  public void paintDiagonalNE(String color) {\n    if (isFacingNorth()) {\n      paint(color);\n      move();\n      turnRight();\n      move();\n    }\n\n    if (isFacingEast()) {\n      paint(color);\n      move();\n      turnLeft();\n      move();\n    }\n  }\n\n  /*\n   * Paints a diagonal line in the southeast direction\n   */\n  public void paintDiagonalSE(String color) {\n    if (isFacingSouth()) {\n      paint(color);\n      move();\n      turnLeft();\n      move();\n    }\n\n    if (isFacingEast()) {\n      paint(color);\n      move();\n      turnRight();\n      move();\n    }\n  }\n\n  /*\n   * Paints a diagonal line in the southwest direction\n   */\n  public void paintDiagonalSW(String color) {\n    if (isFacingSouth()) {\n      paint(color);\n      move();\n      turnRight();\n      move();\n    }\n\n    if (isFacingWest()) {\n      paint(color);\n      move();\n      turnLeft();\n      move();\n    }\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the moveNoBucket() method to move while the SunPainter is not on a paint\n   * bucket. Once the SunPainter is on a paint bucket, it should take all paint.\n   * -----------------------------------------------------------------------------\n   *\n   * Moves forward while the SunPainter is not on a paint bucket,\n   * then takes all of the paint from the paint bucket.\n   */\n  public void moveNoBucket() {\n    \n    \n\n\n    \n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the paintLineAndTurn() method to paint a line then turn and move\n   * based on the direction the SunPainter is currently facing.\n   * -----------------------------------------------------------------------------\n   *\n   * Paints a line then turns based on the direction the SunPainter is facing\n   */\n  public void paintLineAndTurn(String color) {\n    \n    \n\n\n    \n  }\n  \n}',
           },
         ],
         validationFiles: [],
@@ -1926,6 +2179,23 @@ export const CSA_UNITS: CsaUnit[] = [
           {
             path: 'StudentCreator.java',
             text: "import java.util.Scanner;\n\n/*\n * Gets user input to instantiate a Student object\n */\npublic class StudentCreator {\n\n  public void createStudent(Scanner input) {\n    // TO DO #2: Get the student's name with the Scanner input.\n    \n\n    // TO DO #3: Get the student's GPA.\n    \n\n    // TO DO #4: Create a Student object with the user's values.\n    \n\n    // TO DO #5: Print a confirmation that the Student was created.\n    \n\n    // TO DO #6: Close the Scanner.\n    \n    \n  }\n  \n}",
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Getting User Input (d)',
+        lesson: 'Lesson 5: User Input',
+        view: 'neighborhood',
+        grid: '1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import org.code.neighborhood.Painter;\nimport java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    PainterCreator myCreator = new PainterCreator();\n\n    // TO DO #1: Create a Scanner object called input.\n\n    \n    myCreator.createPainter(input);\n    \n  }\n}',
+          },
+          {
+            path: 'PainterCreator.java',
+            text: 'import org.code.neighborhood.Painter;\nimport java.util.Scanner;\n\n/*\n * Gets user input to instantiate a Painter object\n */\npublic class PainterCreator {\n\n  public void createPainter(Scanner input) {\n    // TO DO #2: Get the starting x location with the Scanner input.\n    \n\n    // TO DO #3: Get the starting y location with the Scanner input.\n    \n\n    // TO DO #4: Get the direction to face with the Scanner input.\n    \n\n    // TO DO #5: Get the amount of paint with the Scanner input.\n    \n\n    // TO DO #6: Create a Painter object using the user input.\n    \n\n    // TO DO #7: Close the Scanner.\n    \n    \n  }\n  \n}',
           },
         ],
         validationFiles: [],
