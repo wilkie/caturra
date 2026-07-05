@@ -28,4 +28,4 @@ javabuilder/
 artifacts/
 
 # Teacher-authored validators generated locally; never committed.
-apps/playground/src/csa-validators.local.ts
+apps/playground/src/csa-overlay.local.ts

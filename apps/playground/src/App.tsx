@@ -14,6 +14,7 @@ import ScienceIcon from '@mui/icons-material/Science';
 import StopIcon from '@mui/icons-material/Stop';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
+import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import {
   JvmWorkerSession,
   type DebugCommandName,
@@ -184,6 +185,7 @@ export function App(): React.JSX.Element {
   const [levels, setLevels] = useState<CsaLevel[]>([]);
   const [view, setView] = useState<'none' | 'neighborhood' | 'theater'>('none');
   const [testResults, setTestResults] = useState<TestResult[]>([]);
+  const [hasSolution, setHasSolution] = useState(false);
   const [debugBar, setDebugBar] = useState(false);
   const [paused, setPaused] = useState<DebugPauseSnapshot | null>(null);
   const [stdin, setStdin] = useState('');
@@ -202,6 +204,8 @@ export function App(): React.JSX.Element {
   const activeFileRef = useRef('Main.java');
   const currentGridRef = useRef('');
   const validationFilesRef = useRef<CsaLevelFile[]>([]);
+  const solutionFilesRef = useRef<CsaLevelFile[]>([]);
+  const dataFilesRef = useRef<CsaLevelFile[]>([]);
   const watchesRef = useRef<string[]>([]);
   const stopRequestedRef = useRef(false);
   const wasStopped = (): boolean => stopRequestedRef.current;
@@ -364,6 +368,9 @@ export function App(): React.JSX.Element {
     }
     loadLevelFiles(level.files, level.dataFiles);
     validationFilesRef.current = level.validationFiles;
+    solutionFilesRef.current = level.solutionFiles;
+    dataFilesRef.current = level.dataFiles;
+    setHasSolution(level.solutionFiles.length > 0);
     setTestResults([]);
     if (level.view === 'neighborhood') {
       currentGridRef.current = level.grid;
@@ -382,6 +389,8 @@ export function App(): React.JSX.Element {
     }
     setSource(editor(), level.starter);
     validationFilesRef.current = [];
+    solutionFilesRef.current = [];
+    setHasSolution(false);
     setTestResults([]);
     setView('theater');
     theaterVizRef.current?.reset();
@@ -543,6 +552,13 @@ export function App(): React.JSX.Element {
     } finally {
       setPhase('idle');
     }
+  };
+
+  /** Load the level's complete solution into the editor (dev-only overlay). */
+  const solveProgram = (): void => {
+    clearConsole();
+    setTestResults([]);
+    loadLevelFiles(solutionFilesRef.current, dataFilesRef.current);
   };
 
   // ----- Debugger -----
@@ -822,6 +838,19 @@ export function App(): React.JSX.Element {
             >
               Test
             </Button>
+            {hasSolution && (
+              <Button
+                id="solve"
+                data-testid="solve"
+                variant="outlined"
+                startIcon={<LightbulbIcon />}
+                disabled={!ready || phase !== 'idle'}
+                title="Load the complete solution"
+                onClick={solveProgram}
+              >
+                Solve
+              </Button>
+            )}
             {phase === 'running' && (
               <Button
                 id="stop-run"

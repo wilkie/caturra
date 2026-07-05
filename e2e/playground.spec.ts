@@ -217,6 +217,28 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).not.toContainText('error:');
   });
 
+  test('the Solve button loads the level solution (when the overlay is present)', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });
+    await page
+      .getByTestId('level-select')
+      .selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    // The Solve button only appears when the (dev-only) solution overlay is present.
+    const solve = page.getByTestId('solve');
+    if ((await solve.count()) === 0) {
+      test.skip(true, 'no local solution overlay');
+    }
+    await solve.click();
+    // The solution's completed reverseResponses replaces the start stub.
+    await selectFile(page, 'MusicSurvey.java');
+    const source = await page.evaluate(() =>
+      (window as unknown as { playground: PlaygroundHooks }).playground.getSource(),
+    );
+    expect(source).toContain('responses[index] = responses[');
+  });
+
   test('a level reads its .txt data files from the VFS (and shows them as tabs)', async ({
     page,
   }) => {
