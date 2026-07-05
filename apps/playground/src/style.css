@@ -260,3 +260,22 @@ label {
 #theater-viz[hidden] {
   display: none;
 }
+
+#test-results {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  font-family: monospace;
+}
+
+#test-results[hidden] {
+  display: none;
+}
+
+#test-results .test-pass {
+  color: #1a7f37;
+}
+
+#test-results .test-fail {
+  color: #b3261e;
+}

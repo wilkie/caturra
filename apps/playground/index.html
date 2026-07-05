@@ -23,6 +23,7 @@
         <div class="run-row">
           <button id="run" data-testid="run" disabled>Compile &amp; Run</button>
           <button id="debug" data-testid="debug" disabled>Debug</button>
+          <button id="test" data-testid="test" disabled title="Run the level's tests">Test</button>
           <select
             id="unit-select"
             data-testid="unit-select"
@@ -75,6 +76,7 @@
           <label>Theater</label>
           <canvas id="theater-canvas" data-testid="theater-canvas"></canvas>
         </div>
+        <ul id="test-results" data-testid="test-results" hidden></ul>
         <label for="console">Console</label>
         <pre id="console" data-testid="console"></pre>
       </section>

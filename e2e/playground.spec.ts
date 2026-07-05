@@ -170,6 +170,40 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('runs a JUnit validator via the Test button', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      'public class Counter { private int count = 0; ' +
+        'public void increment() { count++; } ' +
+        'public int getCount() { return count; } }',
+    );
+    // A validator: one passing test, one deliberately failing.
+    await page.evaluate(() => {
+      (window as unknown as { playground: PlaygroundHooks }).playground.setFile(
+        'CounterTest.java',
+        [
+          'import static org.junit.jupiter.api.Assertions.*;',
+          'import org.junit.jupiter.api.Test;',
+          'import org.junit.jupiter.api.Order;',
+          'import org.junit.jupiter.api.DisplayName;',
+          'public class CounterTest {',
+          '  @Test @Order(1) @DisplayName("starts at zero")',
+          '  public void a() { assertEquals(0, new Counter().getCount()); }',
+          '  @Test @Order(2) @DisplayName("wrong on purpose")',
+          '  public void b() { assertEquals(99, new Counter().getCount()); }',
+          '}',
+        ].join('\n'),
+      );
+    });
+    await page.getByTestId('test').click();
+    const results = page.getByTestId('test-results');
+    await expect(results).toBeVisible();
+    await expect(results.locator('.test-pass')).toContainText('starts at zero');
+    await expect(results.locator('.test-fail')).toContainText('wrong on purpose');
+    await expect(page.getByTestId('console')).toContainText('1 / 2 tests passed');
+  });
+
   test('reports source errors with locations', async ({ page }) => {
     await page.goto('/');
     await setSource(page, 'class Main { String s = "oops; }');

@@ -38,6 +38,8 @@ export interface CompileResult {
   /** Binary names of the produced classes, e.g. `['Main']`. */
   classNames: string[];
   diagnostics: Diagnostic[];
+  /** Entry class for a validation ("Test") run, if JUnit @Test methods were found. */
+  validationEntry?: string;
 }
 
 /** The result of a `java` call. */

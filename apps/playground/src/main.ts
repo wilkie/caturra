@@ -117,6 +117,8 @@ const consoleEl = mustGet('#console', HTMLPreElement);
 const runEl = mustGet('#run', HTMLButtonElement);
 const versionEl = mustGet('#engine-version', HTMLSpanElement);
 const debugEl = mustGet('#debug', HTMLButtonElement);
+const testEl = mustGet('#test', HTMLButtonElement);
+const testResultsEl = mustGet('#test-results', HTMLUListElement);
 const debugBarEl = mustGet('#debug-bar', HTMLDivElement);
 const pausedViewEl = mustGet('#paused-view', HTMLDivElement);
 const framesEl = mustGet('#frames', HTMLPreElement);
@@ -423,12 +425,93 @@ async function main(): Promise<void> {
   runEl.disabled = false;
 
   debugEl.disabled = false;
+  testEl.disabled = false;
   runEl.addEventListener('click', () => {
     void runProgram();
   });
   debugEl.addEventListener('click', () => {
     void debugProgram();
   });
+  testEl.addEventListener('click', () => {
+    void testProgram();
+  });
+}
+
+interface TestResult {
+  passed: boolean;
+  name: string;
+  message: string;
+}
+
+/** Parse the runner's `__VTEST\t<PASS|FAIL>\t<name>\t<message>` lines. */
+function parseTestResults(output: string): TestResult[] {
+  const results: TestResult[] = [];
+  for (const line of output.split('\n')) {
+    if (!line.startsWith('__VTEST\t')) {
+      continue;
+    }
+    const [, status, name, message] = line.split('\t');
+    results.push({
+      passed: status === 'PASS',
+      name: name ?? '',
+      message: message ?? '',
+    });
+  }
+  return results;
+}
+
+function renderTestResults(results: TestResult[]): void {
+  testResultsEl.textContent = '';
+  testResultsEl.hidden = results.length === 0;
+  for (const result of results) {
+    const item = document.createElement('li');
+    item.className = result.passed ? 'test-pass' : 'test-fail';
+    const mark = result.passed ? '✓' : '✗';
+    const detail = !result.passed && result.message ? ` — ${result.message}` : '';
+    item.textContent = `${mark} ${result.name}${detail}`;
+    testResultsEl.appendChild(item);
+  }
+}
+
+/** Compile and run the level's JUnit validator, showing per-test results. */
+async function testProgram(): Promise<void> {
+  testEl.disabled = true;
+  consoleEl.textContent = '';
+  renderTestResults([]);
+  try {
+    const session = await sessionReady;
+    append(`$ javac ${allFileNames().join(' ')}\n`);
+    const compiled = await session.compile(collectSources());
+    reportDiagnostics(compiled.diagnostics);
+    if (!compiled.success) {
+      return;
+    }
+    if (compiled.validationEntry === undefined) {
+      append('(this level has no tests)\n');
+      return;
+    }
+    let output = '';
+    const result = await session.run(compiled.validationEntry, {
+      onStdout: (text) => {
+        output += text;
+      },
+      onStderr: (text) => {
+        append(text, 'error');
+      },
+    });
+    if (result.status === 'error') {
+      append(`${result.error ?? 'unknown VM error'}\n`, 'error');
+      return;
+    }
+    const results = parseTestResults(output);
+    renderTestResults(results);
+    const passed = results.filter((r) => r.passed).length;
+    append(`${String(passed)} / ${String(results.length)} tests passed\n`);
+  } catch (error) {
+    append(`${String(error)}\n`, 'error');
+  } finally {
+    testEl.disabled = false;
+  }
 }
 
 function currentBreakpoints(): { file: string; line: number }[] {

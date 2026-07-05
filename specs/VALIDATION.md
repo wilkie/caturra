@@ -1,6 +1,6 @@
 # VALIDATION — reflection, a class loader, and the "Test" run mode
 
-- **Status:** proposed (future phase; not yet implemented)
+- **Status:** partially implemented (JUnit-over-public-API done; reflection future)
 - **Date:** 2026-07-04
 - **Refines:** [RUNTIME.md](RUNTIME.md), [EXECUTION.md](EXECUTION.md)
 
@@ -13,17 +13,28 @@ invokes the student's `main`, captures its output (console text and/or the
 neighborhood action stream), and asserts correctness — the automated "Did I get
 it right?" check behind each level.
 
-jvmjs cannot run these today. In the curriculum picker we currently **strip the
-reflection-based validator file** (any source importing `java.lang.reflect`
-whose class nothing else references) so the student program compiles; the check
-itself is dropped. This spec describes what it would take to actually run
-validation. It is a self-contained phase, orthogonal to the language/VM work.
+**Implemented (2026-07-04):** the JUnit-over-public-API case — the AP FRQ
+validators (`BoxOfCandyTest`, etc.) that instantiate the student's class, call
+its methods, and assert. The compiler retains `@Test`/`@Order`/`@DisplayName`/
+`@BeforeEach`, parses `import static`, accepts `org.junit`, bundles a clean-room
+`Assertions`, resolves statically-imported `assertX(...)`, and relaxes
+private-access when `org.junit` is imported (so a validator can reach student
+internals). When `@Test` methods are found, `compile()` injects a synthetic
+`__ValidationRunner` and returns its name as `validation_entry`; running it
+prints `__VTEST\t<PASS|FAIL>\t<name>\t<message>` per test. The playground's
+**Test** button runs it and renders per-test results.
+
+**Still future:** the reflection-based structural validators (Attributes lesson,
+`AttributesHelper`) need actual `java.lang.reflect` — items 1-3 below. Those
+validators are also not available as plaintext in the corpus. Where they are
+still unrunnable, the picker strips the reflection helper so the student program
+compiles.
 
 ## How the real system does it (from `javabuilder`)
 
 - **Execution modes** (`ExecutionType`): `RUN`, `TEST`, `COMPILE_ONLY`.
   Validation is a flavour of test run.
-- **Two file sets.** `JavaRunner` compiles the student's `javaFiles` *and* the
+- **Two file sets.** `JavaRunner` compiles the student's `javaFiles` _and_ the
   level's `validationFiles` together, but they are distinct inputs — the
   validator is teacher-authored and not part of the submission.
 - **`ValidationRunner`** loads the compiled classes through a `URLClassLoader`,
@@ -48,7 +59,7 @@ In rough dependency order. Each item is independently useful.
 
 1. **A reflective class registry.** jvmjs already holds every loaded class
    (`MethodTable` in the compiler, the VM's class map) with fields, methods, and
-   supertypes. Reflection is a *read view* over that data plus instance field
+   supertypes. Reflection is a _read view_ over that data plus instance field
    access — not new execution machinery. Expose: class by name, declared
    fields (name/type/modifiers), declared methods/constructors (signatures +
    invocation), superclass, and get/set of an instance field by `Field`.
@@ -74,7 +85,7 @@ In rough dependency order. Each item is independently useful.
    exception as failure, and report pass/fail per test. Provide the handful of
    `org.junit.jupiter.api.Assertions` methods the validators use
    (`assertEquals`, `assertTrue`, `assertNotNull`, …). Annotations require the
-   compiler to at least *parse and ignore* `@Test`/`@DisplayName` (it currently
+   compiler to at least _parse and ignore_ `@Test`/`@DisplayName` (it currently
    rejects annotations) and retain them as metadata for the runner.
 
 5. **Output capture + `ValidationProtocol`.** `invokeMainMethod()` runs the
@@ -111,7 +122,7 @@ In rough dependency order. Each item is independently useful.
   strips — they would instead be carried as a level's `validationFiles`), runs
   the `VALIDATION` mode, and renders per-test pass/fail.
 - The picker's start-code-only data would gain an optional `validationFiles`
-  field so a level can be *checked*, not just run.
+  field so a level can be _checked_, not just run.
 
 ## Open questions
 

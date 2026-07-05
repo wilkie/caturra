@@ -43,6 +43,9 @@ struct JsCompileResult {
     #[serde(rename = "classNames")]
     class_names: Vec<String>,
     diagnostics: Vec<JsDiagnostic>,
+    /// Entry class for a validation ("Test") run, if `JUnit` tests were found.
+    #[serde(rename = "validationEntry")]
+    validation_entry: Option<String>,
 }
 
 /// A debugger host backed by JS callbacks; `on_pause` blocks the
@@ -428,6 +431,7 @@ impl JvmSession {
                     }),
                 })
                 .collect(),
+            validation_entry: compilation.validation_entry.clone(),
         };
 
         if result.success {
