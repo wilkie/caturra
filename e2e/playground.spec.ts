@@ -141,7 +141,10 @@ test.describe('playground', () => {
     await levelSelect.selectOption(firstLevel);
     await expect(page.getByTestId('viz')).toBeHidden();
     await page.getByTestId('run').click();
-    await expect(page.getByTestId('console')).toContainText('$ java Main');
+    // A console level compiles through javac (some Investigate levels start
+    // with an intentional error to fix), and never drives the canvas.
+    await expect(page.getByTestId('console')).toContainText('$ javac Main.java');
+    await expect(page.getByTestId('viz')).toBeHidden();
   });
   test('renders a theater scene on the stage', async ({ page }) => {
     await page.goto('/');

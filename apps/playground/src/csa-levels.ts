@@ -939,6 +939,150 @@ export const CSA_UNITS: CsaUnit[] = [
     name: 'CSA 2025 Unit 2',
     levels: [
       {
+        name: 'Predict and Run: Attributes',
+        lesson: 'Lesson 2: Attributes',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Content canvas = new Content();\n    Movie findingNemo = new Movie();\n    TVShow strangerThings = new TVShow();\n\n    System.out.println("Content Year: " + canvas.year);\n    System.out.println("Movie Title: " + findingNemo.title);\n    System.out.println("TV Show Episodes: " + strangerThings.numEpisodes);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Content.java',
+            text: '/*\n * Represents content on a streaming app\n */\npublic class Content {\n\n  private String title;     // The title of the content\n  private int year;         // The year the content was released\n\n}',
+          },
+          {
+            path: 'Movie.java',
+            text: '/*\n * Represents a movie on a streaming app\n */\npublic class Movie {\n\n  private String title;     // The title of the movie\n  private int year;         // The year the movie was released\n  private int runningTime;  // The length of the movie in minutes\n  \n}',
+          },
+          {
+            path: 'TVShow.java',
+            text: '/*\n * Represents a TV show on a streaming app\n */\npublic class TVShow {\n\n  private String title;     // The title of the TV show\n  private int year;         // The year the TV show was released\n  private int numEpisodes;  // The number of episodes\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Classes and Attributes #1',
+        lesson: 'Lesson 2: Attributes',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Content canvas = new Content();\n    Movie findingNemo = new Movie();\n    TVShow strangerThings = new TVShow();\n\n    System.out.println("Content Year: " + canvas.year);\n    System.out.println("Movie Title: " + findingNemo.title);\n    System.out.println("TV Show Episodes: " + strangerThings.numEpisodes);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Content.java',
+            text: '/*\n * Represents content on a streaming app\n */\npublic class Content {\n\n  private String title;     // The title of the content\n  private int year;         // The year the content was released\n\n}',
+          },
+          {
+            path: 'Movie.java',
+            text: '/*\n * Represents a movie on a streaming app\n */\npublic class Movie {\n\n  private String title;     // The title of the movie\n  private int year;         // The year the movie was released\n  private int runningTime;  // The length of the movie in minutes\n  \n}',
+          },
+          {
+            path: 'TVShow.java',
+            text: '/*\n * Represents a TV show on a streaming app\n */\npublic class TVShow {\n\n  private String title;     // The title of the TV show\n  private int year;         // The year the TV show was released\n  private int numEpisodes;  // The number of episodes\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Classes and Attributes #2',
+        lesson: 'Lesson 2: Attributes',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Content canvas = new Content();\n    Movie findingNemo = new Movie();\n    TVShow strangerThings = new TVShow();\n\n    System.out.println("Content Year: " + canvas.year);\n    System.out.println("Movie Title: " + findingNemo.title);\n    System.out.println("TV Show Episodes: " + strangerThings.numEpisodes);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Content.java',
+            text: '/*\n * Represents content on a streaming app\n */\npublic class Content {\n\n  private String title;     // The title of the content\n  private int year;         // The year the content was released\n\n}',
+          },
+          {
+            path: 'Movie.java',
+            text: '/*\n * Represents a movie on a streaming app\n */\npublic class Movie {\n\n  private String title;     // The title of the movie\n  private int year;         // The year the movie was released\n  private int runningTime;  // The length of the movie in minutes\n  \n}',
+          },
+          {
+            path: 'TVShow.java',
+            text: '/*\n * Represents a TV show on a streaming app\n */\npublic class TVShow {\n\n  private String title;     // The title of the TV show\n  private int year;         // The year the TV show was released\n  private int numEpisodes;  // The number of episodes\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Classes and Attributes #3',
+        lesson: 'Lesson 2: Attributes',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Content canvas = new Content();\n    Movie findingNemo = new Movie();\n    TVShow strangerThings = new TVShow();\n\n    System.out.println("Content Year: " + canvas.year);\n    System.out.println("Movie Title: " + findingNemo.title);\n    System.out.println("TV Show Episodes: " + strangerThings.numEpisodes);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Content.java',
+            text: '/*\n * Represents content on a streaming app\n */\npublic class Content {\n\n  private String title;     // The title of the content\n  private int year;         // The year the content was released\n\n}',
+          },
+          {
+            path: 'Movie.java',
+            text: '/*\n * Represents a movie on a streaming app\n */\npublic class Movie {\n\n  private String title;     // The title of the movie\n  private int year;         // The year the movie was released\n  private int runningTime;  // The length of the movie in minutes\n  \n}',
+          },
+          {
+            path: 'TVShow.java',
+            text: '/*\n * Represents a TV show on a streaming app\n */\npublic class TVShow {\n\n  private String title;     // The title of the TV show\n  private int year;         // The year the TV show was released\n  private int numEpisodes;  // The number of episodes\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Refactoring Code #1',
+        lesson: 'Lesson 2: Attributes',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Content canvas = new Content();\n    Movie findingNemo = new Movie();\n    TVShow strangerThings = new TVShow();\n\n    System.out.println("Content Year: " + canvas.year);\n    System.out.println("Movie Title: " + findingNemo.title);\n    System.out.println("TV Show Episodes: " + strangerThings.numEpisodes);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Content.java',
+            text: '/*\n * Represents content on a streaming app\n */\npublic class Content {\n\n  private String title;     // The title of the content\n  private int year;         // The year the content was released\n\n}',
+          },
+          {
+            path: 'Movie.java',
+            text: '/*\n * Represents a movie on a streaming app\n */\npublic class Movie {\n\n  private String title;     // The title of the movie\n  private int year;         // The year the movie was released\n  private int runningTime;  // The length of the movie in minutes\n  \n}',
+          },
+          {
+            path: 'TVShow.java',
+            text: '/*\n * Represents a TV show on a streaming app\n */\npublic class TVShow {\n\n  private String title;     // The title of the TV show\n  private int year;         // The year the TV show was released\n  private int numEpisodes;  // The number of episodes\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Refactoring Code #2',
+        lesson: 'Lesson 2: Attributes',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Content canvas = new Content();\n    Movie findingNemo = new Movie();\n    TVShow strangerThings = new TVShow();\n\n    System.out.println("Content Year: " + canvas.year);\n    System.out.println("Movie Title: " + findingNemo.title);\n    System.out.println("TV Show Episodes: " + strangerThings.numEpisodes);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Content.java',
+            text: '/*\n * Represents content on a streaming app\n */\npublic class Content {\n\n  private String title;     // The title of the content\n  private int year;         // The year the content was released\n\n}',
+          },
+          {
+            path: 'Movie.java',
+            text: '/*\n * Represents a movie on a streaming app\n */\npublic class Movie {\n\n  private String title;     // The title of the movie\n  private int year;         // The year the movie was released\n  private int runningTime;  // The length of the movie in minutes\n  \n}',
+          },
+          {
+            path: 'TVShow.java',
+            text: '/*\n * Represents a TV show on a streaming app\n */\npublic class TVShow {\n\n  private String title;     // The title of the TV show\n  private int year;         // The year the TV show was released\n  private int numEpisodes;  // The number of episodes\n  \n}',
+          },
+        ],
+      },
+      {
         name: 'Investigate and Modify: Parameterized Constructors #1',
         lesson: 'Lesson 4: Parameterized Constructors',
         view: 'console',
@@ -975,6 +1119,134 @@ export const CSA_UNITS: CsaUnit[] = [
         ],
       },
       {
+        name: 'Practice: Parameterized Constructors (a)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Rollercoaster object using the parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Rollercoaster.java',
+            text: '/*\n * Represents a rollercoaster at a theme park\n */\npublic class Rollercoaster {\n\n  private String name;     // The name of a rollercoaster\n  private int speed;       // The speed of a rollercoaster\n\n  /*\n   * Sets the name to "unknown" and speed to 20\n   */\n  public Rollercoaster() {\n    name = "unknown";\n    speed = 20;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the name and speed instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to speed\n   */\n  public int getSpeed() {\n    return speed;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: Parameterized Constructors (b)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a NationalPark object using the parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'NationalPark.java',
+            text: '/*\n * Represents a national park\n */\npublic class NationalPark {\n\n  private String name;     // The name of a national park\n  private int area;        // The area in acres of a national park\n\n  /*\n   * Sets the name to "unknown" and area to 100\n   */\n  public NationalPark() {\n    name = "unknown";\n    area = 100;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the name and area instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to area\n   */\n  public int getArea() {\n    return area;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: Parameterized Constructors (c)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Character object using the parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Character.java',
+            text: '/*\n * Represents a character in a play\n */\npublic class Character {\n\n  private String name;          // The name of a character\n  private boolean isLeadRole;   // Whether or not a character is a lead role\n\n  /*\n   * Sets the name to "unknown" and isLeadRole to false\n   */\n  public Character() {\n    name = "unknown";\n    isLeadRole = false;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the name and isLeadRole instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to isLeadRole\n   */\n  public boolean hasLeadRole() {\n    return isLeadRole;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: Parameterized Constructors (d)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Museum object using the parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Museum.java',
+            text: '/*\n * Represents a museum\n */\npublic class Museum {\n\n  private String name;           // The name of a museum\n  private boolean isNonProfit;   // Whether or not a museum is non-profit\n\n  /*\n   * Sets the name to "unknown" and isNonProfit to false\n   */\n  public Museum() {\n    name = "unknown";\n    isNonProfit = false;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the name and isNonProfit instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to isNonProfit\n   */\n  public boolean getIsNonProfit() {\n    return isNonProfit;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: Multiple Parameterized Constructors (a)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Team object using each parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Team.java',
+            text: '/*\n * Represents a team in a sports league\n */\npublic class Team {\n\n  private String name;     // The name of a team\n  private int numWins;     // The number of championship wins\n  \n  /*\n   * Sets the name to "unknown" and numWins to 0\n   */\n  public Team() {\n    name = "unknown";\n    numWins = 0;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the name and numWins instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign a specific value to the\n   * name instance variable and a default value to the numWins instance variable.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n  \n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to numWins\n   */\n  public int getNumWins() {\n    return numWins;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: Multiple Parameterized Constructors (b)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Project object using each parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Project.java',
+            text: '/*\n * Represents a photographer\'s project of photos\n */\npublic class Project {\n\n  private String title;     // The title of a photography project\n  private int numPhotos;    // The number of photos in a project\n  \n  /*\n   * Sets the name to "unknown" and numPhotos to 0\n   */\n  public Project() {\n    title = "unknown";\n    numPhotos = 0;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the title and numPhotos instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign a specific value to the title\n   * instance variable and a default value to the numPhotos instance variable.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n  \n  /*\n   * Returns the current value assigned to title\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the current value assigned to numPhotos\n   */\n  public int getNumPhotos() {\n    return numPhotos;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: Multiple Parameterized Constructors (c)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Planets object using each parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Planet.java',
+            text: '/*\n * Represents a planet\n */\npublic class Planet {\n\n  private String name;             // The name of a planet\n  private int numMoons;            // The number of moons a planet has\n  private boolean hasRingSystem;   // Whether or not a planet has a ring system\n  \n  /*\n   * Sets the name to "unknown", numMoons to 1,\n   * and hasRingSystem to false\n   */\n  public Planet() {\n    name = "unknown";\n    numMoons = 1;\n    hasRingSystem = false;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the name, numMoons, and hasRingSystem instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign a specific value to the name\n   * and numMoons instance variables and a default value to hasRingSystem.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n  \n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to numMoons\n   */\n  public int getNumMoons() {\n    return numMoons;\n  }\n\n  /*\n   * Returns the current value assigned to hasRingSystem\n   */\n  public boolean getHasRingSystem() {\n    return hasRingSystem;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: Multiple Parameterized Constructors (d)',
+        lesson: 'Lesson 4: Parameterized Constructors',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Electronic object using each parameterized constructor,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n  }\n}',
+          },
+          {
+            path: 'Electronic.java',
+            text: '/*\n * Represents an electronic at a store\n */\npublic class Electronic {\n\n  private String name;             // The name of an electronic\n  private double price;            // The price of an electronic\n  private boolean isRefurbished;   // Whether or not an electronic is refurbished\n  \n  /*\n   * Sets the name to "unknown", price to 50.99\n   * and isRefurbished to false\n   */\n  public Electronic() {\n    name = "unknown";\n    price = 50.99;\n    isRefurbished = false;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specific values to\n   * the name, price, and isRefurbished instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign a specific value to the name\n   * and price instance variables and a default value to isRefurbished.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n  \n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to price\n   */\n  public double getPrice() {\n    return price;\n  }\n\n  /*\n   * Returns the current value assigned to isRefurbished\n   */\n  public boolean getIsRefurbished() {\n    return isRefurbished;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
         name: 'Predict: Getting User Input',
         lesson: 'Lesson 5: User Input',
         view: 'console',
@@ -983,6 +1255,74 @@ export const CSA_UNITS: CsaUnit[] = [
           {
             path: 'Main.java',
             text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    Scanner input = new Scanner(System.in);\n\n    System.out.print("Enter the first number: ");\n    int first = input.nextInt();\n\n    System.out.print("Enter the second number: ");\n    int second = input.nextInt();\n\n    int sum = first + second;\n\n    System.out.println("The sum of " + first + " and " + second + " is " + sum);\n\n    input.close();\n    \n  }\n}',
+          },
+        ],
+      },
+      {
+        name: 'Getting User Input (a)',
+        lesson: 'Lesson 5: User Input',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    Greeter myGreeter = new Greeter();\n\n    // TO DO #1: Create a Scanner object called input.\n\n    \n    // Call the printGreeting method with the Scanner\n    myGreeter.printGreeting(input);\n\n    // TO DO #2: Close the Scanner object.\n\n    \n  }\n}\n',
+          },
+          {
+            path: 'Greeter.java',
+            text: "import java.util.Scanner;\n\n/*\n * Gets input from a user and prints a greeting\n */\npublic class Greeter {\n\n  public void printGreeting(Scanner input) {\n    // TO DO #3: Get the user's name with the Scanner input.\n    \n\n    // TO DO #4: Print a greeting using their name.\n    \n    \n  }\n  \n}",
+          },
+        ],
+      },
+      {
+        name: 'Getting User Input (b)',
+        lesson: 'Lesson 5: User Input',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    Calculator myCalc = new Calculator();\n\n    // TO DO #1: Create a Scanner object called input.\n\n    \n    myCalc.printSum(input);\n    \n  }\n}',
+          },
+          {
+            path: 'Calculator.java',
+            text: 'import java.util.Scanner;\n\n/*\n * Gets input from a user and prints the sum\n */\npublic class Calculator {\n\n  public void printSum(Scanner input) {\n    // TO DO #2: Get the first number from the user with the Scanner input.\n    \n\n    // TO DO #3: Get the second number from the user.\n    \n\n    // TO DO #4: Print the sum of the two numbers.\n    \n\n    // TO DO #5: Close the Scanner.\n    \n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Getting User Input (c)',
+        lesson: 'Lesson 5: User Input',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'import java.util.Scanner;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    StudentCreator myCreator = new StudentCreator();\n\n    // TO DO #1: Create a Scanner object called input.\n\n    \n    myCreator.createStudent(input);\n    \n  }\n}',
+          },
+          {
+            path: 'Student.java',
+            text: "/*\n * Represents a student\n */\npublic class Student {\n\n  private String name;  // the name of the student\n  private double gpa;   // the student's gpa\n\n  /*\n   * Constructor to create a Student object\n   * with the specified name and GPA\n   */\n  public Student(String newName, double newGpa) {\n    name = newName;\n    gpa = newGpa;\n  }\n  \n}",
+          },
+          {
+            path: 'StudentCreator.java',
+            text: "import java.util.Scanner;\n\n/*\n * Gets user input to instantiate a Student object\n */\npublic class StudentCreator {\n\n  public void createStudent(Scanner input) {\n    // TO DO #2: Get the student's name with the Scanner input.\n    \n\n    // TO DO #3: Get the student's GPA.\n    \n\n    // TO DO #4: Create a Student object with the user's values.\n    \n\n    // TO DO #5: Print a confirmation that the Student was created.\n    \n\n    // TO DO #6: Close the Scanner.\n    \n    \n  }\n  \n}",
+          },
+        ],
+      },
+      {
+        name: 'Predict and Run: Constructors and Scope',
+        lesson: 'Lesson 6: The this Keyword',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    Shoes sneakers = new Shoes();\n    System.out.println("sneakers");\n    System.out.println("---------------");\n    sneakers.printShoesInfo();\n\n    System.out.println();\n\n    Shoes converse = new Shoes("purple", 8, true);\n    System.out.println("converse");\n    System.out.println("---------------");\n    converse.printShoesInfo();\n    \n  }\n}',
+          },
+          {
+            path: 'Shoes.java',
+            text: '/*\n * Represents a pair of shoes\n */\npublic class Shoes {\n\n  private String color;            // The color of a pair of shoes\n  private double size;             // The size of a pair of shoes\n  private boolean hasShoelaces;    // Whether or not a pair of shoes has shoelaces\n\n  /*\n   * Sets color to "white", size to 7.5, and hasShoelaces to true\n   */\n  public Shoes() {\n    color = "white";\n    size = 7.5;\n    hasShoelaces = true;\n  }\n\n  /*\n   * Sets color to color, size to size, and hasShoelaces to hasShoelaces\n   */\n  public Shoes(String color, double size, boolean hasShoelaces) {\n    color = color;\n    size = size;\n    hasShoelaces = hasShoelaces;\n  }\n\n  /*\n   * Prints the color and size of the pair of shoes\n   * and whether or not it has shoelaces\n   */\n  public void printShoesInfo() {\n    System.out.println("Color: " + color);\n    System.out.println("Size: " + size);\n    System.out.println("Has Shoelaces? " + hasShoelaces);\n  }\n  \n}',
           },
         ],
       },
@@ -1019,6 +1359,70 @@ export const CSA_UNITS: CsaUnit[] = [
           {
             path: 'Main.java',
             text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: The this Keyword (a)',
+        lesson: 'Lesson 6: The this Keyword',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate Crop objects using the no-argument and parameterized constructors,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Crop.java',
+            text: '/*\n * Represents a crop on a farm\n */\npublic class Crop {\n\n  private String type;      // The type of crop\n  private int numDays;      // The number of days it takes a crop to mature\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a no-argument constructor to assign default values to the instance\n   * variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specified values to the\n   * instance variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n\n  /*\n   * Returns the current value assigned to type\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Returns the current value assigned to numDays\n   */\n  public int getNumDays() {\n    return numDays;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: The this Keyword (b)',
+        lesson: 'Lesson 6: The this Keyword',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate HairProduct objects using the no-argument and parameterized constructors,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'HairProduct.java',
+            text: '/*\n * Represents a hair product used by a hair stylist\n */\npublic class HairProduct {\n\n  private String type;      // The type of hair product\n  private double price;     // The price of a hair product\n  private boolean isCurly;  // Whether or not a hair product is for curly hair\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a no-argument constructor to assign default values to the instance\n   * variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specified values to the\n   * instance variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /*\n   * Returns the current value assigned to type\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Returns the current value assigned to price\n   */\n  public double getPrice() {\n    return price;\n  }\n\n  /*\n   * Returns the current value assigned to isCurly\n   */\n  public boolean getIsCurly() {\n    return isCurly;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: The this Keyword (c)',
+        lesson: 'Lesson 6: The this Keyword',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate Candle objects using the no-argument and parameterized constructors,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Candle.java',
+            text: '/*\n * Represents a candle made by a candle maker\n */\npublic class Candle {\n\n  private String scent;        // The scent of a candle\n  private double price;        // The price of a candle\n  private boolean isSeasonal;  // Whether or not a candle is a seasonal scent\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a no-argument constructor to assign default values to the instance\n   * variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specified values to the\n   * instance variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /*\n   * Returns the current value assigned to scent\n   */\n  public String getScent() {\n    return scent;\n  }\n\n  /*\n   * Returns the current value assigned to price\n   */\n  public double getPrice() {\n    return price;\n  }\n\n  /*\n   * Returns the current value assigned to isSeasonal\n   */\n  public boolean getIsSeasonal() {\n    return isSeasonal;\n  }\n  \n}',
+          },
+        ],
+      },
+      {
+        name: 'Practice: The this Keyword (d)',
+        lesson: 'Lesson 6: The this Keyword',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate Course objects using the no-argument and parameterized constructors,\n     * then print the constructors and values assigned to the instance variables.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}',
+          },
+          {
+            path: 'Course.java',
+            text: '/*\n * Represents a course taught by a teacher\n */\npublic class Course {\n\n  private String name;          // The name of a course\n  private int numStudents;      // The number of students in a course\n  private boolean isSemester;   // Whether or not it is a semester course\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a no-argument constructor to assign default values to the instance\n   * variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a parameterized constructor to assign specified values to the\n   * instance variables using the this keyword.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /*\n   * Returns the current value assigned to name\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the current value assigned to numStudents\n   */\n  public int getNumStudents() {\n    return numStudents;\n  }\n\n  /*\n   * Returns the current value assigned to isSemester\n   */\n  public boolean getIsSemester() {\n    return isSemester;\n  }\n  \n}',
           },
         ],
       },
