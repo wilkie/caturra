@@ -47,4 +47,10 @@ class Arrays {
     for (int i = 1; i < a.length; i++) s = s + ", " + a[i];
     return s + "]";
   }
+  // A List view of the array (a reference array widens to Object[]).
+  public static java.util.ArrayList<Object> asList(Object[] a) {
+    java.util.ArrayList<Object> list = new java.util.ArrayList<Object>();
+    for (int i = 0; i < a.length; i++) list.add(a[i]);
+    return list;
+  }
 }

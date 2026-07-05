@@ -4793,6 +4793,971 @@ export const CSA_UNITS: CsaUnit[] = [
     ],
   },
   {
+    name: 'CSA 2025 Unit 4',
+    levels: [
+      {
+        name: 'Predict and Run: Static Variables and Methods',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'ArtClubMember.java', text: "/*\n * Represents a member of an art club\n */\npublic class ArtClubMember {\n\n  private String name;                 // The name of the club member\n  public static int numMembers = 0;   // The number of club members\n\n  /*\n   * Sets name to the specified name\n   */\n  public ArtClubMember(String name) {\n    this.name = name;\n    numMembers++;\n  }\n\n  /*\n   * Returns the name of the club member\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the number of club members\n   */\n  public static String getNumMembers() {\n    return \"The Art Club has \" + numMembers + \" members.\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: The static Keyword #1',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'ArtClubMember.java', text: "/*\n * Represents a member of an art club\n */\npublic class ArtClubMember {\n\n  private String name;                 // The name of the club member\n  public static int numMembers = 0;   // The number of club members\n\n  /*\n   * Sets name to the specified name\n   */\n  public ArtClubMember(String name) {\n    this.name = name;\n    numMembers++;\n  }\n\n  /*\n   * Returns the name of the club member\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the number of club members\n   */\n  public static String getNumMembers() {\n    return \"The Art Club has \" + numMembers + \" members.\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: The static Keyword #2',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'ArtClubMember.java', text: "/*\n * Represents a member of an art club\n */\npublic class ArtClubMember {\n\n  private String name;                 // The name of the club member\n  public static int numMembers = 0;   // The number of club members\n\n  /*\n   * Sets name to the specified name\n   */\n  public ArtClubMember(String name) {\n    this.name = name;\n    numMembers++;\n  }\n\n  /*\n   * Returns the name of the club member\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the number of club members\n   */\n  public static String getNumMembers() {\n    return \"The Art Club has \" + numMembers + \" members.\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: The static Keyword #3',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'ArtClubMember.java', text: "/*\n * Represents a member of an art club\n */\npublic class ArtClubMember {\n\n  private String name;                 // The name of the club member\n  public static int numMembers = 0;   // The number of club members\n\n  /*\n   * Sets name to the specified name\n   */\n  public ArtClubMember(String name) {\n    this.name = name;\n    numMembers++;\n  }\n\n  /*\n   * Returns the name of the club member\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the number of club members\n   */\n  public static String getNumMembers() {\n    return \"The Art Club has \" + numMembers + \" members.\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables (a)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    FoodTruck rosiesFoodTruck = new FoodTruck(\"Rosie\");\n    FoodTruck erinsFoodTruck = new FoodTruck(\"Erin\");\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the value of businessName for each FoodTruck object. Then change\n     * the value of businessName to a different name, and print the new value of\n     * businessName for each FoodTruck object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'FoodTruck.java', text: "/*\n * Represents a single Food Truck at the\n * Project Mercury Pastries Food Truck business\n */\npublic class FoodTruck {\n\n  private String owner;        // The owner of the Food Truck\n\n  /* ---------------------------------------- TO DO ----------------------------------------\n   * \u2705 Declare and initialize a static variable called businessName to \"Joyful Pastries\"\n   * ---------------------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Sets owner to the specified name of the owner\n   */\n  public FoodTruck(String owner) {\n    this.owner = owner;\n  }\n\n  /*\n   * Returns the owner of the food truck\n   */\n  public String getOwner() {\n    return owner;\n  }\n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables (b)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    State texas = new State(\"Texas\");\n    State newYork = new State(\"New York\");\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the value of countryName for each State object. Then change the\n     * value of countryName to a different name, and print the new value of\n     * countryName for each State object.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}" },
+          { path: 'State.java', text: "/*\n * Represents a state in a country\n */\npublic class State {\n\n  private String name;      // The name of the state\n\n  /* ---------------------------------------- TO DO ----------------------------------------\n   * \u2705 Declare and initialize a static variable called countryName to \"United States\"\n   * ---------------------------------------------------------------------------------------\n   */\n\n    \n\n  /*\n   * Sets name to the specified name of the state\n   */\n  public State(String name) {\n    this.name = name;\n  }\n\n  /*\n   * Returns the name of the state\n   */\n  public String getName() {\n    return name;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables (c)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'neighborhood',
+        grid: "1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n",
+        files: [
+          { path: 'Main.java', text: "import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    PainterPlus firstPainter = new PainterPlus(0, 5, \"south\", 10);\n    PainterPlus secondPainter = new PainterPlus(4, 7, \"east\", 10);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the value of totalPainters. Create more PainterPlus objects, then\n     * print the new value of totalPainters.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'PainterPlus.java', text: "import org.code.neighborhood.*;\n\n/*\n * Creates a PainterPlus\n * PainterPlus is a subclass of Painter\n */\npublic class PainterPlus extends Painter {\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a static variable called totalPainters to 0.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Constructor to create a PainterPlus object\n   */\n  public PainterPlus() {\n    super();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Increase the value of totalPainters by 1.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n  }\n\n  /*\n   * Unit 2 Lesson 4\n   * Constructor to create a PainterPlus object\n   */\n  public PainterPlus(int x, int y, String direction, int paint) {\n    super(x, y, direction, paint);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Increase the value of totalPainters by 1.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n  }\n\n  /*\n   * Turns a PainterPlus object to the right\n   * by turning left three times\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables (d)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    Customer aimee = new Customer(\"Aimee\");\n    Customer javier = new Customer(\"Javier\");\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Print the value of newCustomers. Create more Customer objects, then\n     * print the new value of newCustomers.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Customer.java', text: "/*\n * Represents a customer at a store\n */\npublic class Customer {\n\n  private String name;     // The name of the customer\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a static variable called newCustomers to 0.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Sets name to the specified name of a customer\n   */\n  public Customer(String name) {\n    this.name = name;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Increase the value of newCustomers by 1.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n\n  /*\n   * Returns the name of the customer\n   */\n  public String getName() {\n    return name;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Writing Static Methods (a)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcEngineersPay() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n  \n    \n  }\n}" },
+          { path: 'ProjectManager.java', text: "/*\n * Manages information about a project\n */\npublic class ProjectManager {\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a static method called calcEngineersPay() with parameters totalBudget\n   * and numEngineers that returns the totalBudget divided by numEngineers.\n   * -----------------------------------------------------------------------------\n   */\n\n    \n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Writing Static Methods (b)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    int[] oliviaGrades = {75, 95, 86, 93, 84};\n    int[] ameliaGrades = {91, 96, 86, 88, 72, 90, 80, 82, 84, 73};\n    int[] javonGrades = {97, 91, 80, 79, 86, 71, 85};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageGrade() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}" },
+          { path: 'GradeCalculator.java', text: "/*\n * Manages student grades\n */\npublic class GradeCalculator {\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a static method called calcAverageGrade() with a parameter\n   * int[] grades that returns the average of the values in grades.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables and Methods (a)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate several Project objects, then call the getNumProjects()\n     * method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Project.java', text: "/*\n * Represents a project on Kickstarter\n */\npublic class Project {\n\n  private String name;       // The name of a project\n  private int numBackers;    // The number of people who have backed a project\n  private String category;   // The category of a project\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a static variable called numProjects to 0.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Sets name to the specified name, numBackers to the specified\n   * number of backers, and category to the specified category\n   */\n  public Project(String name, int numBackers, String category) {\n    this.name = name;\n    this.numBackers = numBackers;\n    this.category = category;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Increment numProjects by 1.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a static method called getNumProjects() that returns a String\n   * containing the text \"There are {numProjects} on Kickstarter!\"\n   * -----------------------------------------------------------------------------\n   */\n  \n  \n\n  \n\n  /*\n   * Returns a String containing the information about the project\n   */\n  public String toString() {\n    return name + \"\\nCategory: \" + category + \"\\nBackers: \" + numBackers;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables and Methods (b)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate several Startup objects, then call the getNumStartups()\n     * method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Startup.java', text: "/*\n * Represents a startup business that appeared on Shark Tank\n */\npublic class Startup {\n\n  private String name;          // The name of a startup company\n  private String description;   // A description of a company's product\n  private boolean gotDeal;      // Whether or not a startup company got the deal\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a static variable called numStartups to 0.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Sets name to the specified name, description to the specified\n   * description, and gotDeal to the specified status\n   */\n  public Startup(String name, String description, boolean gotDeal) {\n    this.name = name;\n    this.description = description;\n    this.gotDeal = gotDeal;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Increment numStartups by 1.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a static method called getNumStartups() that returns a String containing\n   * the text \"There have been {numStartups} startup pitches on Shark Tank!\", where\n   * numStartups is the number of Startup objects that have been instantiated.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  \n\n  /*\n   * Returns a String containing information about the startup\n   */\n  public String toString() {\n    String result = name + \" - \" + description + \"\\n\";\n\n    if (gotDeal) {\n      result += \"Got the deal!\";\n    }\n    else {\n      result += \"No deal :(\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables and Methods (c)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate several Solver objects, then call the getFastestTime()\n     * method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Solver.java', text: "/*\n * Represents a person that participated in\n * the World Cube Association competition\n */\npublic class Solver {\n\n  private String name;    // The name of a person\n  private int time;       // The time in centiseconds it took a person to solve a Rubik's Cube\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a static variable called fastestTime to 600.\n   *    (Start with a large number so that smaller times can replace it.)\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Sets name to the specified name and time\n   * to the specified time in centiseconds\n   */\n  public Solver(String name, int time) {\n    this.name = name;\n    this.time = time;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Check if the parameter time is smaller than fastestTime.\n     *    If this is true, update fastestTime to the value passed to the parameter time.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a static method called getFastestTime() that returns a String\n   *    containing the text \"The fastest time so far is {fastestTime}\", where\n   *    fastestTime is the fastest time of all Solver objects.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  \n\n  /*\n   * Returns a String containing information about the solver\n   */\n  public String toString() {\n    return name + \": \" + time + \" centiseconds\";\n  }\n  \n}\n" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Static Variables and Methods (d)',
+        lesson: 'Lesson 2: Static Variables and Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate several Concert objects, then call the getMaxAttendance()\n     * method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Concert.java', text: "/*\n * Represents a band's concert during a tour\n */\npublic class Concert {\n\n  private String location;     // The location of a concert\n  private int attendance;      // The number of people that attended a concert\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a static variable called maxAttendance to 0.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Sets location to the specified location and\n   * attendance to the specified attendance\n   */\n  public Concert(String location, int attendance) {\n    this.location = location;\n    this.attendance = attendance;\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Check if the parameter attendance is greater than maxAttendance. If this\n     * is true, update the maxAttendance to the value passed to the parameter attendance.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write a static method called getMaxAttendance() that returns a String\n   * containing the text \"The max attendance at an event is {maxAttendance}\", \n   * where maxAttendance is the largest attendance at an event.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  \n\n  /*\n   * Returns a String containing information about the concert\n   */\n  public String toString() {\n    return location + \": \" + attendance + \" people in attendance\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: The Math Class',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    int number = 25;\n    double firstResult = Math.sqrt(number);\n    System.out.println(\"The result of Math.sqrt(\" + number + \") is \" + firstResult);\n\n    number = 3;\n    double secondResult = Math.pow(number, 2);\n    System.out.println(\"The result of Math.pow(\" + number + \") is \" + secondResult);\n\n    number = -16;\n    double thirdResult = Math.abs(number);\n    System.out.println(\"The result of Math.abs(\" + number + \") is \" + thirdResult);\n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: The Math Class',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n\n\n    \n    \n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Constants (a)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Rollercoaster objects\n    Rollercoaster[] coasters = { new Rollercoaster(\"Shamu Express\", 23), new Rollercoaster(\"Quicksilver Express\", 51),\n                               new Rollercoaster(\"Tig'rr Coaster\", 50), new Rollercoaster(\"Pony Express\", 62),\n                               new Rollercoaster(\"Coastersaurus\", 32), new Rollercoaster(\"Cobra\", 35)};\n\n    // Instantiates a TravelAgency with the array of rollercoasters\n    TravelAgency agency = new TravelAgency(coasters);\n\n    // Calls the getChildFriendly() method and prints the result\n    System.out.println(agency.getChildFriendly());    \n    \n  }\n}" },
+          { path: 'Rollercoaster.java', text: "/*\n * Represents a roller coaster\n */\npublic class Rollercoaster {\n\n  private String name;\n  private int speed;\n\n  /*\n   * Sets name to the specified name and speed to\n   * the specified speed to the roller coaster\n   */\n  public Rollercoaster(String name, int speed) {\n    this.name = name;\n    this.speed = speed;\n  }\n\n  /*\n   * Returns the speed of the roller coaster\n   */\n  public int getSpeed() {\n    return speed;\n  }\n\n  /*\n   * Returns a String containing information about the roller coaster\n   */\n  public String toString() {\n    return name + \": \" + speed + \" mph\";\n  }\n  \n}" },
+          { path: 'TravelAgency.java', text: "/*\n * Manages data about roller coasters\n */\npublic class TravelAgency {\n\n  private Rollercoaster[] rollercoasters;    // The 1D array of rollercoasters\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a constant called CHILD_MAX_SPEED to 35.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Initializes rollercoasters to the specified 1D array of rollercoasters\n   */\n  public TravelAgency(Rollercoaster[] rollercoasters) {\n    this.rollercoasters = rollercoasters;\n  }\n\n  /*\n   * Returns a String containing rollercoasters that are\n   * considered child-friendly (under 35 mph)\n   */\n  public String getChildFriendly() {\n    String result = \"Child-Friendly Roller Coasters\\n---------------\\n\";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Update the condition to use the constant.\n     * -----------------------------------------------------------------------------\n     */\n\n    for (Rollercoaster coaster : rollercoasters) {\n      if (coaster.getSpeed() <= 35) {\n        result += coaster + \"\\n\";\n      }\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Constants (b)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Country objects\n    Country[] countries = {new Country(\"Grenada\", 22), new Country(\"India\", 332), new Country(\"Chile\", 51), new Country(\"Netherlands\", 29),\n                           new Country(\"Turkey\", 180), new Country(\"Costa Rica\", 13), new Country(\"Egypt\", 86), new Country(\"Mexico\", 162)};\n\n    // Instantiates an AirQuality with the array of countries\n    AirQuality data = new AirQuality(countries);\n\n    // Calls the getUnsatisfactory() method and prints the result\n    System.out.println(data.getUnsatisfactory());\n    \n  }\n}" },
+          { path: 'AirQuality.java', text: "/*\n * Manages data about air quality in countries\n */\npublic class AirQuality {\n\n  private Country[] countries;    // The 1D array of countries\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a constant called MAX_AQI_INDEX to 100.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Initializes countries to the specified 1D array of countries\n   */\n  public AirQuality(Country[] countries) {\n    this.countries = countries;\n  }\n\n  /*\n   * Returns a String containing the name and air quality index of\n   * each country that is greater than the maximum acceptable index\n   */\n  public String getUnsatisfactory() {\n    String result = \"Countries Over the Maximum Acceptable Index\\n---------------\\n\";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Update the condition to use the constant.\n     * -----------------------------------------------------------------------------\n     */\n\n    for (Country country : countries) {\n      if (country.getIndex() > 100) {\n        result += country + \"\\n\";\n      }\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Country.java', text: "/*\n * Represents a country\n */\npublic class Country {\n\n  private String name;    // The name of a country\n  private int index;      // The air quality index of a country\n\n  /*\n   * Sets name and index to the specified name and index\n   */\n  public Country(String name, int index) {\n    this.name = name;\n    this.index = index;\n  }\n\n  /*\n   * Returns the index of the country\n   */\n  public int getIndex() {\n    return index;\n  }\n\n  /*\n   * Returns a String containing the name and index of the country\n   */\n  public String toString() {\n    return name + \": \" + index + \" AQI\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Constants (c)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Country objects\n    Country[] countries = {new Country(\"Greece\", 6.7), new Country(\"Denmark\", 2.89), new Country(\"Italy\", 4.42), new Country(\"Dominica\", 28.47),\n                           new Country(\"Guatemala\", 20.88), new Country(\"Japan\", 12.99), new Country(\"Philippines\", 26.7)};\n\n    // Instantiates a ClimateRisk with the array of countries\n    ClimateRisk data = new ClimateRisk(countries);\n\n    // Calls the getHighRiskCountries() method and prints the result\n    System.out.println(data.getHighRiskCountries());\n    \n  }\n}" },
+          { path: 'ClimateRisk.java', text: "/*\n * Manages data about climate risk index for countries\n */\npublic class ClimateRisk {\n\n  private Country[] countries;    // The 1D array of countries\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a constant called MAX_HIGH_RISK to 20.\n   * -----------------------------------------------------------------------------\n   */\n\n  \n\n  /*\n   * Initializes countries to the specified 1D array of countries\n   */\n  public ClimateRisk(Country[] countries) {\n    this.countries = countries;\n  }\n\n  /*\n   * Returns a String containing the name and climate risk index of each country\n   * that is less than or equal to the maximum index for high risk countries\n   */\n  public String getHighRiskCountries() {\n    String result = \"Countries Less Than the Maximum High Risk Index\\n---------------\\n\";\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Update the condition to use the constant.\n     * -----------------------------------------------------------------------------\n     */\n\n    for (Country country : countries) {\n      if (country.getIndex() <= 20) {\n        result += country + \"\\n\";\n      }\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Country.java', text: "/*\n * Represents a country\n */\npublic class Country {\n\n  private String name;       // The name of a country\n  private double index;      // The climate risk index of a country\n\n  /*\n   * Sets name and index to the specified name and index\n   */\n  public Country(String name, double index) {\n    this.name = name;\n    this.index = index;\n  }\n\n  /*\n   * Returns the index of the country\n   */\n  public double getIndex() {\n    return index;\n  }\n\n  /*\n   * Returns a String containing the name and index of the country\n   */\n  public String toString() {\n    return name + \": \" + index + \" Climate Risk Index\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Constants (d)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Instantiates a Person object\n    Person person = new Person(54, 25);\n\n    // Instantiates a TransitCalculator with the person\n    TransitCalculator calc = new TransitCalculator(person);\n\n    // Calls the getWeeklyPricePerRide() method and prints the result\n    System.out.println(\"The price per ride using the weekly pass is \" + calc.getWeeklyPricePerRide());\n    \n  }\n}" },
+          { path: 'Person.java', text: "/*\n * Represents a person using the NYC transit system\n */\npublic class Person {\n\n  private int numDays;    // The number of days a person will be using the transit system\n  private int numRides;   // The number of individual rides the person expects to take in that time\n\n  /*\n   * Sets numDays and numRides to the specified number of days and rides\n   */\n  public Person(int numDays, int numRides) {\n    this.numDays = numDays;\n    this.numRides = numRides;\n  }\n\n  /*\n   * Returns the number of days\n   */\n  public int getNumDays() {\n    return numDays;\n  }\n\n  /*\n   * Returns the number of rides\n   */\n  public int getNumRides() {\n    return numRides;\n  }\n  \n}" },
+          { path: 'TransitCalculator.java', text: "/*\n * Performs fare calculations\n */\npublic class TransitCalculator {\n\n  private Person person;    // The person using the NYC transit system\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Declare and initialize a constant called PRICE_PER_WEEK to 33.00.\n   * -----------------------------------------------------------------------------\n   */\n  \n  \n\n  /*\n   * Sets person to the specified person\n   */\n  public TransitCalculator(Person person) {\n    this.person = person;\n  }\n\n  /*\n   * Returns the number of weekly passes needed for the person\n   */\n  public int getNumWeeklyPasses() {\n    int numWeekPasses = person.getNumDays() / 7;\n\n    if (numWeekPasses % person.getNumDays() > 0) {\n      numWeekPasses++;\n    }\n\n    return numWeekPasses;\n  }\n\n  /*\n   * Returns the overall price per ride using the weekly option\n   */\n  public double getWeeklyPricePerRide() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate the total price for the number of weekly prices needed and\n     * the cost per ride, then return the cost per ride.\n     * -----------------------------------------------------------------------------\n     */\n\n    return 0;\n  }\n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.pow() (a)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use the promptUser() method in the Calculator class to get two numbers\n     * from the user, then call the calcExponent() method with the two numbers\n     * provided and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Calculator.java', text: "import java.util.Scanner;\n\n/*\n * Represents a calculator that performs calculations\n */\npublic class Calculator {\n\n  public static String calcExponent(double firstNumber, double secondNumber) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate the result of the parameter firstNumber raised to the power of\n     * the parameter secondNumber, then return a String containing the text\n     * \"{firstNumber} raised to the power of {secondNumber} is {result}\"\n     * -----------------------------------------------------------------------------\n     */\n\n\n    return \"\";\n  }\n\n  /*\n   * Prompts a user for a number and returns the number entered\n   */\n  public static double promptUser() {\n    Scanner input = new Scanner(System.in);\n    System.out.print(\"Enter a number: \");\n    double number = input.nextDouble();\n    input.close();\n    return number;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.pow() (b)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a City object\n    City manhattan = new City(\"Manhattan\", 250.3);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calculateGrowth() method to get the estimated growth,\n     * and print the current and estimated new population.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}" },
+          { path: 'City.java', text: "/*\n * Represents a city\n */\npublic class City {\n\n  private String name;                 // The name of a city\n  private double currentPopulation;    // The current population of a city\n\n  /*\n   * Sets name to the specified name and  current population to the specified value\n   */\n  public City(String name, double currentPopulation) {\n    this.name = name;\n    this.currentPopulation = currentPopulation;\n  }\n\n  /*\n   * Returns the current population\n   */\n  public double getCurrentPopulation() {\n    return currentPopulation;\n  }\n\n  /*\n   * Returns the new population\n   */\n  public double calculateGrowth(double growthRate, double time) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate the estimated new population using the researcher's formula\n     * and return the result.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return 0;\n  }\n\n  /*\n   * Returns a String containing the name of the city and the current population\n   */\n  public String toString() {\n    return name + \" - Current Population: \" + currentPopulation;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.abs() (a)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of sales amounts\n    double[] sales = {-4.05, 5.06, 3.99, -3.99, -1.99, 2.05, 10.50, -7.85, 6.73, -8.45};\n\n    // Creates a Sales object\n    Sales business = new Sales(sales);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the Sales.salesToString() method with the 1D array returned from\n     * calling the cleanData() method.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Sales.java', text: "/*\n * Represents sales made at a business\n */\npublic class Sales {\n\n  private double[] sales;   // The 1D array of sales\n\n  /*\n   * Initializes sales to the specified 1D array of sales\n   */\n  public Sales(double[] sales) {\n    this.sales = sales;\n  }\n\n  /*\n   * Returns the 1D array of sales\n   */\n  public double[] getSales() {\n    return sales;\n  }\n\n  /*\n   * Returns a new 1D array containing the corrected sales values\n   */\n  public double[] cleanData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the sales array and add the absolute value of each element to\n     * a new 1D array. Return the new 1D array.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return null;\n  }\n\n  /*\n   * Returns a String containing the sales values\n   */\n  public static String salesToString(double[] values) {\n    String result = \"\";\n\n    for (double amt : values) {\n      result += \"$\" + amt + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.abs() (b)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Patient objects\n    Patient[] patients = {new Patient(\"Olivia\", 98.2), new Patient(\"Liam\", 98.9), new Patient(\"Ava\", 102.3),\n                          new Patient(\"Ethan\", 98.4), new Patient(\"Isabella\", 99.6)};\n\n    // Creates a Physician object\n    Physician doctor = new Physician(patients);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getSickPatients() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Patient.java', text: "/*\n * Represents a patient\n */\npublic class Patient {\n\n  private String name;    // The name of a patient\n  private double temp;    // The temperature of a patient\n\n  /*\n   * Sets name and temp to the specified values\n   */\n  public Patient(String name, double temp) {\n    this.name = name;\n    this.temp = temp;\n  }\n\n  /*\n   * Returns the name of the patient\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the temperature of the patient\n   */\n  public double getTemp() {\n    return temp;\n  }\n\n  /*\n   * Returns a String containing the patient's name and temperature\n   */\n  public String toString() {\n    return name + \" - \" + temp;\n  }\n  \n}" },
+          { path: 'Physician.java', text: "/*\n * Represents a physician\n */\npublic class Physician {\n\n  private Patient[] patients;     // A physician's patients\n\n  /*\n   * Initializes patients to the specified 1D array of patients\n   */\n  public Physician(Patient[] patients) {\n    this.patients = patients;\n  }\n\n  /*\n   * Returns the 1D array of patients\n   */\n  public Patient[] getPatients() {\n    return patients;\n  }\n\n  /*\n   * Finds and returns the number of patients with temperatures\n   * that are more than 0.5 degrees from the norm\n   */\n  public int getSickPatients() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the patients array and check if their temperature minus 98.6 is\n     * greater than 0.5. If this is true, update the count. Return the number of\n     * patients with temperatures that are more than 0.5 degrees from normal.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n\n    return 0;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.sqrt() (a)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates an Investment object\n    Investment savings = new Investment(35.89);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcReturn() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}" },
+          { path: 'Investment.java', text: "/*\n * Represents an investment in an asset\n */\npublic class Investment {\n\n  private double purchaseAmount;     // The amount paid for an asset\n\n  /*\n   * Sets purchaseAmount to the specified purchase amount\n   */\n  public Investment(double purchaseAmount) {\n    this.purchaseAmount = purchaseAmount;\n  }\n\n  /*\n   * Returns the amount paid for the asset\n   */\n  public double getPurchaseAmount() {\n    return purchaseAmount;\n  }\n\n  /*\n   * Calculates and returns the rate of return on an asset\n   */\n  public double calcReturn(double soldAmount) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate the square root of soldAmount minus purchaseAmount, then\n     * subtract 1 from the result.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return 0;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.sqrt() (b)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of city names\n    String[] names = {\"New York\", \"Tokyo\", \"Chicago\", \"Atlanta\", \"Philadelphia\", \"Boston\",\n                      \"Los Angeles\", \"Dallas/Fort Worth\", \"Houston\", \"Detroit\"};\n\n    // Creates a 1D array of the land areas of each city\n    double[] cityAreas = {8683, 6993, 5498, 5083, 4661, 4497, 4320, 3644, 3355, 3267};\n\n    // Creates a Research object\n    Research cities = new Research(names, cityAreas);\n\n    /* ------------------------------------------- TO DO -------------------------------------------\n     * \u2705 Call the calculateSizes() method and print the results using the sizesToString() method.\n     * ---------------------------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Research.java', text: "/*\n * Analyzes city data\n */\npublic class Research {\n\n  private String[] names;    // The 1D array of the names of each city\n  private double[] cities;   // The 1D array of the land area of each city\n\n  /*\n   * Initializes names and cities to the specified 1D arrays\n   */\n  public Research(String[] names, double[] cities) {\n    this.names = names;\n    this.cities = cities;\n  }\n\n  /*\n   * Returns the 1D array of names\n   */\n  public String[] getNames() {\n    return names;\n  }\n\n  /*\n   * Returns the 1D array of cities\n   */\n  public double[] getCities() {\n    return cities;\n  }\n\n  /*\n   * Returns a 1D array containing the approximate\n   * width of each city in cities\n   */\n  public double[] calculateSizes() {\n    /* ------------------------------------------- TO DO -------------------------------------------\n     * \u2705 Get the square root of each city value divided by Math.PI, then multiply the result\n     * by 2. Add the result to a new 1D array and return the array.\n     * ---------------------------------------------------------------------------------------------\n     */\n    \n    \n    \n    return null;\n  }\n\n  /*\n   * Returns a String containing the values in the 1D array\n   */\n  public String sizesToString(double[] values) {\n    String result = \"\";\n\n    for (int index = 0; index < values.length; index++) {\n      result += names[index] + \": \" + values[index] + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.sqrt() (c)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcTime() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Drone.java', text: "/*\n * Represents a drone\n */\npublic class Drone {\n\n  public static double calcTime(int height) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Get the square root of height and divide the result by 4;\n     * -----------------------------------------------------------------------------\n     */\n    \n    return 0;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Using Math.sqrt() (d)',
+        lesson: 'Lesson 3: The Math Class',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of city names\n    String[] names = FileReader.toStringArray(\"cities.txt\");\n\n    // Creates a 1D array of salaries\n    int[] salaries = FileReader.toIntArray(\"salaries.txt\");\n\n    // Creates a Salary object\n    Salary data = new Salary(names, salaries);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcDeviation() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'FileReader.java', text: "import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println(\"File not found.\");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}" },
+          { path: 'Salary.java', text: "/*\n * Analyzes data about software engineering salaries\n */\npublic class Salary {\n\n  private String[] cities;      // The 1D array of city names\n  private int[] salaries;       // The 1D array of salaries for each city\n\n  /*\n   * Initializes cities and salaries to the specified 1D arrays\n   */\n  public Salary(String[] cities, int[] salaries) {\n    this.cities = cities;\n    this.salaries = salaries;\n  }\n\n  /*\n   * Returns the 1D array of city names\n   */\n  public String[] getCities() {\n    return cities;\n  }\n\n  /*\n   * Returns the 1D array of salaries for each city\n   */\n  public int[] getSalaries() {\n    return salaries;\n  }\n\n  /*\n   * Returns the amount each salary is from the average salary\n   */\n  public double calcDeviation() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the amount each salary is from the average salary.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    return 0;\n  }\n\n  /*\n   * Calculates and returns the average salary\n   */\n  public double calcAverage() {\n    double sum = 0;\n\n    for (int amount : salaries) {\n      sum += amount;\n    }\n\n    return sum / salaries.length;\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+          { path: 'cities.txt', text: "Columbus, OH\nSeattle-Tacoma-Bellevue, WA\nCharlotte-Concord-Gastonia, NC-SC\nColorado Springs, CO\nDayton, OH\nGreensboro-High Point, NC\nSan Francisco-Oakland-Hayward, CA\nSan Francisco-Oakland-Hayward, CA\nSan Antonio-New Braunfels, TX\nDallas-Fort Worth-Arlington, TX\nDallas-Fort Worth-Arlington, TX\nDurham-Chapel Hill, NC\nAtlanta-Sandy Springs-Roswell, GA\nCincinnati, OH-KY-IN\nAustin-Round Rock, TX\nRaleigh, NC\nHouston-The Woodlands-Sugar Land, TX\nBaltimore-Columbia-Towson, MD\nLas Vegas-Henderson-Paradise, NV\nTucson, AZ\nSalt Lake City, UT\nRichmond, VA\nLexington-Fayette, KY\nDenver-Aurora-Lakewood, CO\nSan Jose-Sunnyvale-Santa Clara, CA\nSan Jose-Sunnyvale-Santa Clara, CA\nPortland-Vancouver-Hillsboro, OR-WA\nPortland-Vancouver-Hillsboro, OR-WA\nWichita, KS\nPhoenix-Mesa-Scottsdale, AZ\nPhoenix-Mesa-Scottsdale, AZ\nSanta Maria-Santa Barbara, CA\nLos Angeles-Long Beach-Anaheim, CA\nLos Angeles-Long Beach-Anaheim, CA\nBoston-Cambridge, MA\nOrlando-Kissimmee-Sanford, FL\nTampa-St. Petersburg-Clearwater, FL\nBirmingham-Hoover, AL\nSyracuse, NY\nWashington-Arlington-Alexandria, DC-VA-MD-WV\nSacramento--Roseville--Arden-Arcade, CA\nPhiladelphia-Camden-Wilmington, PA-NJ-DE-MD\nDes Moines-West Des Moines, IA\nOmaha-Council Bluffs, NE-IA\nMinneapolis-St. Paul-Bloomington, MN-WI\nChicago-Naperville-Elgin, IL-IN-WI\nNashville-Davidson--Murfreesboro--Franklin, TN\nOklahoma City, OK\nDetroit-Warren-Dearborn, MI\nSan Diego-Carlsbad, CA\nPittsburgh, PA\nNew York-Newark-Jersey City, NY-NJ-PA\nNew York-Newark-Jersey City, NY-NJ-PA\nMilwaukee-Waukesha-West Allis, WI\nIndianapolis-Carmel-Anderson, IN\nFort Collins, CO\nCharleston-North Charleston, SC\nKansas City, MO-KS\nTulsa, OK\nRochester, NY\nLouisville/Jefferson County, KY-IN\nAlbany-Schenectady-Troy, NY\nBuffalo-Cheektowaga-Niagara Falls, NY\nLittle Rock-North Little Rock-Conway, AR\nBoise City, ID\nAnn Arbor, MI\nAkron, OH\nJacksonville, FL\nAlbuquerque, NM\nSpokane-Spokane Valley, WA\nMadison, WI\nMemphis, TN-MS-AR\nCleveland-Elyria, OH\nMiami-Fort Lauderdale-West Palm Beach, FL\nMiami-Fort Lauderdale-West Palm Beach, FL\nEugene, OR\nUrban Honolulu, HI" },
+          { path: 'salaries.txt', text: "117552\n117323\n114122\n112118\n111616\n111050\n111017\n111017\n110898\n110891\n110891\n110313\n109849\n109013\n108990\n107676\n107672\n107282\n107175\n107170\n106291\n105258\n105248\n105197\n104964\n104964\n104335\n104335\n103690\n103177\n103177\n102781\n102188\n102188\n102171\n102093\n101733\n101598\n101256\n101188\n100785\n99955\n99878\n99826\n99228\n98726\n98623\n98617\n98156\n97974\n97043\n96686\n96686\n96580\n96448\n95969\n95609\n95308\n95187\n94819\n94320\n94051\n93735\n93194\n93112\n92683\n92207\n91568\n91010\n90269\n90238\n89921\n89040\n88249\n88249\n85912\n72811" },
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Casting',
+        lesson: 'Lesson 4: Casting and Rounding',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n    \n    \n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Division',
+        lesson: 'Lesson 4: Casting and Rounding',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n    \n    \n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Rounding',
+        lesson: 'Lesson 4: Casting and Rounding',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n    \n    \n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Random Numbers',
+        lesson: 'Lesson 5: Random',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    System.out.println(\"First random number: \" + Math.random());\n    System.out.println(\"Second random number: \" + Math.random());\n    System.out.println(\"Third random number: \" + Math.random());\n\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Random Numbers #1',
+        lesson: 'Lesson 5: Random',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Random Numbers #2',
+        lesson: 'Lesson 5: Random',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Generating Random Numbers (a)',
+        lesson: 'Lesson 5: Random',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Player object\n    Player player = new Player(\"Amelia\");\n    \n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getRandomHealth() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n}" },
+          { path: 'Player.java', text: "/*\n * Represents a player in the game\n */\npublic class Player {\n\n  private String name;       // The name of a player\n  private int health;        // The health of a player\n  private int level;         // The level of a player\n\n  /*\n   * Sets name to the specified name, health to 0, and level to 0\n   */\n  public Player(String name) {\n    this.name = name;\n    health = 0;\n    level = 0;\n  }\n\n  /*\n   * Assigns a random value to health\n   */\n  public int getRandomHealth() {\n    /* ------------------------------ TO DO ------------------------------\n     * \u2705 Generate a random amount of health for the player to start with.\n     * -------------------------------------------------------------------\n     */\n    \n    \n    return -1;\n  }\n\n  /*\n   * Returns the current value assigned to level\n   */\n  public int getLevel() {\n    return level;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Generating Random Numbers (b)',
+        lesson: 'Lesson 5: Random',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize a 1D int array that stores the array returned from\n     * calling the generateNumCars() method.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverage() method with the 1D array and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n  }\n}" },
+          { path: 'Simulation.java', text: "/*\n * Represents a simulation of a new bridge\n */\npublic class Simulation {\n\n  /*\n   * Returns a 1D array containing the number of cars that could\n   * cross the bridge each day of a month\n   */\n  public static int[] generateNumCars() {\n    /* ------------------------------ TO DO ------------------------------\n     * \u2705 Return a 1D array containing the number of cars that could cross\n     *  the bridge each day of a month.\n     * -------------------------------------------------------------------\n     */\n\n    return null;\n  }\n\n  /*\n   * Returns the average of the values in the 1D array\n   */\n  public static int calcAverage(int[] cars) {\n    int sum = 0;\n\n    for (int value : cars) {\n      sum += value;\n    }\n\n    return sum / cars.length;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Accessing Random Elements from a 1D Array (a)',
+        lesson: 'Lesson 5: Random',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Planet objects\n    Planet[] worlds = { new Planet(), new Planet(\"HAT-P-26b\", \"Neptunian\"), new Planet(\"TRAPPIST-1 e\", \"Terrestrial\") };\n\n    // Creates a Galaxy object with the 1D array\n    Galaxy theGalaxy = new Galaxy(worlds);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getRandomPlanet() method and print the result\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n  }\n}" },
+          { path: 'Galaxy.java', text: "/*\n * Represents the galaxy\n */\npublic class Galaxy {\n\n  private Planet[] worlds;    // The 1D array of Planet objects\n\n  /*\n   * Initializes worlds to the 1D array of Planet objects\n   */\n  public Galaxy(Planet[] worlds) {\n    this.worlds = worlds;\n  }\n\n  /*\n   * Returns a random Planet\n   */\n  public Planet getRandomPlanet() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return a random planet from the 1D array of Planet objects\n     * -----------------------------------------------------------------------------\n     */\n\n    return null;\n  }\n  \n}" },
+          { path: 'Planet.java', text: "/*\n * Represents a planet\n */\npublic class Planet {\n\n  private String name;    // The name of a planet\n  private String type;    // The type of a planet\n\n  /*\n   * Sets name to \"Unknown\" and type to \"Unknown\"\n   */\n  public Planet() {\n    this(\"Unknown\", \"Unknown\");\n  }\n\n  /*\n   * Sets name and type to the specified values\n   */\n  public Planet(String name, String type) {\n    this.name = name;\n    this.type = type;\n  }\n\n  /*\n   * Returns the name of the planet\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the type of the planet\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Returns a String containing the name and type of the planet\n   */\n  public String toString() {\n    return name + \": \" + type;\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Accessing Random Elements from a 1D Array (b)',
+        lesson: 'Lesson 5: Random',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of letters\n    String[] wordToEncrypt = {\"s\", \"e\", \"c\", \"r\", \"e\", \"t\"};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the encryptWord() method on wordToEncrypt and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n\n  }\n}" },
+          { path: 'Encryption.java', text: "/*\n * Represents a encryption algorithm\n */\npublic class Encryption {\n\n  private static String[] availableLetters = {\"i\", \"j\", \"k\", \"m\", \"n\", \"x\", \"y\", \"z\"};\n\n  /*\n   * Encrypts the word\n   */  \n  public static String encryptWord(String[] letters) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the letters array and replace each letter with a randomly chosen\n     * letter from the availableLetters array. Use the lettersToWord() method to\n     * return the encrypted word as a String.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n  }\n\n  /*\n   * Converts an array of Strings to a String\n   */  \n  public static String lettersToWord(String[] letters) {\n    String word = \"\";\n\n    for (String s : letters) {\n      word += s;\n    }\n\n    return word;\n  }\n\n  /*\n   * Returns the available letters\n   */\n  public static String[] getAvailableLetters() {\n    return availableLetters;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Comparing Objects',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Event.java', text: "/*\n * Represents an event\n */\npublic class Event {\n\n  private String eventName;    // The name of an event\n  private int capacity;        // The number of people attending an event\n\n  /*\n   * Sets eventName and capacity to the specified values\n   */\n  public Event(String eventName, int capacity) {\n    this.eventName = eventName;\n    this.capacity = capacity;\n  }\n\n  /*\n   * Returns the name of the event\n   */\n  public String getEventName() {\n    return eventName;\n  }\n\n  /*\n   * Returns the capacity of the event\n   */\n  public int getCapacity() {\n    return capacity;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Comparing Objects #1',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Event.java', text: "/*\n * Represents an event\n */\npublic class Event {\n\n  private String eventName;    // The name of an event\n  private int capacity;        // The number of people attending an event\n\n  /*\n   * Sets eventName and capacity to the specified values\n   */\n  public Event(String eventName, int capacity) {\n    this.eventName = eventName;\n    this.capacity = capacity;\n  }\n\n  /*\n   * Returns the name of the event\n   */\n  public String getEventName() {\n    return eventName;\n  }\n\n  /*\n   * Returns the capacity of the event\n   */\n  public int getCapacity() {\n    return capacity;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Comparing Objects #2',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Event.java', text: "/*\n * Represents an event\n */\npublic class Event {\n\n  private String eventName;    // The name of an event\n  private int capacity;        // The number of people attending an event\n\n  /*\n   * Sets eventName and capacity to the specified values\n   */\n  public Event(String eventName, int capacity) {\n    this.eventName = eventName;\n    this.capacity = capacity;\n  }\n\n  /*\n   * Returns the name of the event\n   */\n  public String getEventName() {\n    return eventName;\n  }\n\n  /*\n   * Returns the capacity of the event\n   */\n  public int getCapacity() {\n    return capacity;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Comparing Objects #3',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Event.java', text: "/*\n * Represents an event\n */\npublic class Event {\n\n  private String eventName;    // The name of an event\n  private int capacity;        // The number of people attending an event\n\n  /*\n   * Sets eventName and capacity to the specified values\n   */\n  public Event(String eventName, int capacity) {\n    this.eventName = eventName;\n    this.capacity = capacity;\n  }\n\n  /*\n   * Returns the name of the event\n   */\n  public String getEventName() {\n    return eventName;\n  }\n\n  /*\n   * Returns the capacity of the event\n   */\n  public int getCapacity() {\n    return capacity;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Comparing Objects (a)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Dog objects\n    Dog[] dogs = {new Dog(\"Max\", 3), new Dog(\"Bella\", 2), new Dog(\"Duke\", 5), new Dog(\"Luna\", 4), new Dog(\"Rocky\", 1)};\n\n    // Creates a PetStore object\n    PetStore pets = new PetStore(dogs);\n\n    // Creates two Dog objects to find\n    Dog firstDog = new Dog(\"Charlie\", 4);\n    Dog secondDog = new Dog(\"Daisy\", 10);\n\n    // Calls the findMatchingDog() method and prints the result\n    System.out.println(\"Match for Charlie: \" + pets.findMatchingDog(firstDog) + \"\\n\");\n    System.out.println(\"Match for Daisy: \" + pets.findMatchingDog(secondDog));\n    \n  }\n}" },
+          { path: 'Dog.java', text: "/*\n * Represents a dog\n */\npublic class Dog {\n\n  private String name;   // The name of a dog\n  private int age;       // The age of a dog\n\n  /*\n   * Sets name to the specified name and age to the specified age\n   */\n  public Dog(String name, int age) {\n    this.name = name;\n    this.age = age;\n  }\n\n  /*\n   * Returns the name of the dog\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the age of the dog\n   */\n  public int getAge() {\n    return age;\n  }\n\n  /*\n   * Returns true if the ages are the same, otherwise returns false\n   */\n  public boolean equals(Object other) {\n    if (other == this) {\n      return true;\n    }\n\n    if (!(other instanceof Dog)) {\n      return false;\n    }\n\n    Dog otherDog = (Dog) other;\n    return this.age == otherDog.age;\n  }\n\n  /*\n   * Returns a String containing the dog's name and age\n   */\n  public String toString() {\n    return name + \": \" + age + \" years old\";\n  }\n  \n}" },
+          { path: 'PetStore.java', text: "/*\n * Represents a pet store\n */\npublic class PetStore {\n\n  private Dog[] dogs;     // The 1D array of Dog objects\n\n  /*\n   * Initializes dogs to the specified 1D array of Dog objects\n   */\n  public PetStore(Dog[] dogs) {\n    this.dogs = dogs;\n  }\n\n  /*\n   * Returns a String containing information about the Dog\n   * object that has the same age as the parameter dogToFind\n   */\n  public String findMatchingDog(Dog dogToFind) {\n    String result = \"\";\n\n    for (Dog pet : dogs) {\n      if (pet == dogToFind) {\n        result += \"Matching dog found!\\n\" + pet;\n      }\n    }\n\n    if (result.equals(\"\")) {\n      result += \"No matching dog found.\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Comparing Objects (b)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Video objects\n    Video[] videos = {new Video(\"The Lion King\", 1994), new Video(\"Beauty and the Beast\", 1991), new Video(\"Aladdin\", 1992),\n                      new Video(\"Frozen\", 2013), new Video(\"Moana\", 2016)};\n\n    // Creates a Catalog object\n    Catalog videoCatalog = new Catalog(videos);\n\n    // Creates two Video objects to find\n    Video frozen = new Video(\"Frozen\", 2013);\n    Video toyStory = new Video(\"Toy Story\", 1995);\n\n    // Calls the findMatchingVideo() method and prints the result\n    System.out.println(videoCatalog.findMatchingVideo(frozen) + \"\\n\");\n    System.out.println(videoCatalog.findMatchingVideo(toyStory));\n    \n  }\n}" },
+          { path: 'Catalog.java', text: "/*\n * Represents a catalog of videos\n */\npublic class Catalog {\n\n  private Video[] videos;      // The 1D array of Video objects\n\n  /*\n   * Initializes videos to the specified 1D array of Video objects\n   */\n  public Catalog(Video[] videos) {\n    this.videos = videos;\n  }\n\n  /*\n   * Returns a String containing information about the Video\n   * object that has the same title as the parameter videoToFind\n   */\n  public String findMatchingVideo(Video videoToFind) {\n    String result = \"\";\n\n    for (Video item : videos) {\n      if (item == videoToFind) {\n        result += \"Matching video found!\\n\" + item;\n      }\n    }\n\n    if (result.equals(\"\")) {\n      result += \"No matching video found.\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Video.java', text: "/*\n * Represents a video\n */\npublic class Video {\n\n  private String title;     // The title of a video\n  private int year;         // The year the video was released\n\n  /*\n   * Sets title to the specified title and year to the specified year\n   */\n  public Video(String title, int year) {\n    this.title = title;\n    this.year = year;\n  }\n\n  /*\n   * Returns the title of the video\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the year of the video\n   */\n  public int getYear() {\n    return year;\n  }\n\n  /*\n   * Returns true if the title of other is the same as this Video\n   */\n  public boolean equals(Object other) {\n    if (other == this) {\n      return true;\n    }\n\n    if (!(other instanceof Video)) {\n      return false;\n    }\n\n    Video otherVideo = (Video) other;\n    return this.title.equals(otherVideo.title);\n  }\n\n  /*\n   * Returns a String containing the video's title\n   */\n  public String toString() {\n    return title + \"(\" + year + \")\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Comparing Objects (c)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Song objects\n    Song[] songs = {new Song(\"Eye of the Tiger\"), new Song(\"I Will Survive\"), new Song(\"Don't Stop Believin'\"), new Song(\"Stronger\"), new Song(\"Hero\")};\n\n    // Creates a Playlist object\n    Playlist inspire = new Playlist(songs);\n\n    // Creates first test array of Song objects and Playlist\n    Song[] firstTestSongs = {new Song(\"Eye of the Tiger\"), new Song(\"I Will Survive\"), new Song(\"Don't Stop Believin'\"), new Song(\"Stronger\"), new Song(\"Hero\")};\n    Playlist first = new Playlist(firstTestSongs);\n\n    // Creates second test array of Song objects and Playlist\n    Song[] secondTestSongs = {new Song(\"Beautiful\"), new Song(\"I Will Survive\"), new Song(\"Hall of Fame\"), new Song(\"Stronger\"), new Song(\"We Are the Champions\")};\n    Playlist second = new Playlist(secondTestSongs);\n\n    // Calls the findMatchingPlaylist() method and prints the result\n    System.out.println(inspire.findMatchingPlaylist(first) + \"\\n\");\n    System.out.println(inspire.findMatchingPlaylist(second));\n    \n  }\n}" },
+          { path: 'Playlist.java', text: "/*\n * Represents a playlist\n */\npublic class Playlist {\n\n  private Song[] songs;    // The 1D array of Song objects\n\n  /*\n   * Initializes songs to the specified 1D array of Song objects\n   */\n  public Playlist(Song[] songs) {\n    this.songs = songs;\n  }\n\n  /*\n   * Returns the 1D array of Song objects\n   */\n  public Song[] getSongs() {\n    return songs;\n  }\n\n  /*\n   * Returns a String containing the text \"All of the songs are the same!\"\n   * if all Song objects in the playlist have the same title\n   */\n  public String findMatchingPlaylist(Playlist other) {\n    boolean allSame = true;\n    \n    for (int index = 0; index < songs.length; index++) {\n      if (this.songs[index] != other.songs[index]) {\n        allSame = false;\n      }\n    }\n\n    if (allSame) {\n      return \"All of the songs are the same!\";\n    }\n    else {\n      return \"Not all of the songs are the same.\";\n    }\n  }\n  \n}" },
+          { path: 'Song.java', text: "/*\n * Represents a song\n */\npublic class Song {\n\n  private String title;     // The title of a song\n\n  /*\n   * Sets title to the specified title\n   */\n  public Song(String title) {\n    this.title = title;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns true if the title of other is the same as this Song\n   */\n  public boolean equals(Object other) {\n    if (other == this) {\n      return true;\n    }\n\n    if (!(other instanceof Song)) {\n      return false;\n    }\n\n    Song otherSong = (Song) other;\n    return this.title.equals(otherSong.title);\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Comparing Objects (d)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of MenuItem objects\n    MenuItem[] items = {new MenuItem(\"burger\"), new MenuItem(\"curry\"), new MenuItem(\"pizza\"), new MenuItem(\"sushi\"), new MenuItem(\"samosa\")};\n\n    // Creates a Menu object\n    Menu foods = new Menu(items);\n\n    // Creates first test array of MenuItem objects and Menu\n    MenuItem[] firstTestItems = {new MenuItem(\"burger\"), new MenuItem(\"curry\"), new MenuItem(\"pizza\"), new MenuItem(\"sushi\"), new MenuItem(\"samosa\")};\n    Menu first = new Menu(firstTestItems);\n\n    // Creates second test array of MenuItem objects and Menu\n    MenuItem[] secondTestItems = {new MenuItem(\"burger\"), new MenuItem(\"moussaka\"), new MenuItem(\"pizza\"), new MenuItem(\"sushi\"), new MenuItem(\"paella\")};\n    Menu second = new Menu(secondTestItems);\n\n    // Calls the findMatchingMeal() method and prints the result\n    System.out.println(foods.findMatchingMeal(first) + \"\\n\");\n    System.out.println(foods.findMatchingMeal(second));\n    \n  }\n}" },
+          { path: 'Menu.java', text: "/*\n * Represents a restaurant menu\n */\npublic class Menu {\n\n  private MenuItem[] items;     // The 1D array of MenuItem objects\n\n  /*\n   * Initializes items to the specified 1D array of MenuItem objects\n   */\n  public Menu(MenuItem[] items) {\n    this.items = items;\n  }\n\n  /*\n   * Returns the 1D array of MenuItem objects\n   */\n  public MenuItem[] getItems() {\n    return items;\n  }\n\n  /*\n   * Returns a String containing the text \"All of the options are the same!\"\n   * if all MenuItem objects in the menu have the same type\n   */\n  public String findMatchingMeal(Menu other) {\n    boolean allSame = true;\n\n    for (int index = 0; index < items.length; index++) {\n      if (this.items[index] != other.items[index]) {\n        allSame = false;\n      }\n    }\n\n    if (allSame) {\n      return \"All of the options are the same!\";\n    }\n    else {\n      return \"Not all of the options are the same.\";\n    }\n  }\n  \n}" },
+          { path: 'MenuItem.java', text: "/*\n * Represents an item on a menu\n */\npublic class MenuItem {\n\n  private String type;     // The type of menu item\n\n  /*\n   * Sets type to the specified type\n   */\n  public MenuItem(String type) {\n    this.type = type;\n  }\n\n  /*\n   * Returns the type of the menu item\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Returns true if the type of other is the same as this MenuItem\n   */\n  public boolean equals(Object other) {\n    if (other == this) {\n      return true;\n    }\n\n    if (!(other instanceof MenuItem)) {\n      return false;\n    }\n\n    MenuItem otherItem = (MenuItem) other;\n    return this.type.equals(otherItem.type);\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overriding the equals() Method (a)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates 1D arrays containing movie titles\n    String[] tinkerBellMovies = {\"Peter Pan\", \"Return to Neverland\", \"Tinker Bell\"};\n    String[] elsaMovies = {\"Frozen\", \"Frozen 2\"};\n    String[] simbaMovies = {\"The Lion King\", \"The Lion King II: Simba's Pride\"};\n\n    // Creates a Character object called tinkerBell\n    Character tinkerBell = new Character(\"Tinker Bell\", tinkerBellMovies);\n\n    // Creates a Character object called elsa\n    Character elsa = new Character(\"Elsa\", elsaMovies);\n\n    // Creates a 1D array of Character objects\n    Character[] characters = {tinkerBell, elsa};\n\n    // Creates a Disney object\n    Disney catalog = new Disney(characters);\n\n    // Creates additional Character objects\n    Character newTinkerBell = new Character(\"Tinker Bell\", tinkerBellMovies);\n    Character simba = new Character(\"Simba\", simbaMovies);\n\n    // Calls the getCharacterFilms() method and prints the results\n    System.out.println(catalog.getCharacterFilms(newTinkerBell) + \"\\n\");\n    System.out.println(catalog.getCharacterFilms(simba));\n    \n  }\n}" },
+          { path: 'Character.java', text: "/*\n * Represents a character\n */\npublic class Character {\n\n  private String name;        // The name of a character\n  private String[] movies;    // The 1D array of movies that a character appeared in\n\n  /*\n   * Sets name to the specified name and initializes\n   * movies to the specified 1D array of movies\n   */\n  public Character(String name, String[] movies) {\n    this.name = name;\n    this.movies = movies;\n  }\n\n  /*\n   * Returns the name of the character\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the 1D array of movies the character appeared in\n   */\n  public String[] getMovies() {\n    return movies;\n  }\n\n  /*\n   * Returns true if the other Character has the same name as this Character\n   */\n  public boolean equals(Object other) {\n    /* ----------------------------------- TO DO -----------------------------------\n      * \u2705 Return true if this character has the same name as the other character.\n      * If the object is not a Character, return false.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n    return false;\n  }\n\n  /*\n   * Returns a String containing the name of the character\n   * and the movies the character appeared in\n   */\n  public String toString() {\n    String result = name + \"\\n----------\\n\";\n\n    for (String title : movies) {\n      result += title + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Disney.java', text: "/*\n * Represents a catalog of Disney characters\n */\npublic class Disney {\n\n  private Character[] characters;    // The 1D array of Character objects\n\n  /*\n   * Initializes characters to the specified 1D array of characters\n   */\n  public Disney(Character[] characters) {\n    this.characters = characters;\n  }\n\n  /*\n   *\n   */\n  public Character[] getCharacters() {\n    return characters;\n  }\n\n  /*\n   * Returns the information for the Character from\n   * characters that has the same name as other\n   */\n  public String getCharacterFilms(Character other) {\n    String result = \"No character found\";\n\n    for (Character item : characters) {\n      if (item.equals(other)) {\n        result = \"Character found!\\n\" + item;\n      }\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overriding the equals() Method (b)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Poem objects\n    Poem[] poems = {new Poem(\"T.S. Eliot\", \"The Waste Land\"), new Poem(\"Edgar Allan Poe\", \"The Raven\"),\n                    new Poem(\"T.S. Eliot\", \"The Love Song of J. Alfred Prufrock\"), new Poem(\"John Keats\", \"Ode to a Nightingale\"),\n                    new Poem(\"William Wordsworth\", \"I Wandered Lonely as a Cloud\")};\n\n    // Creates a Library object\n    Library catalog = new Library(poems);\n\n    // Creates a new Poem object\n    Poem another = new Poem(\"T.S. Eliot\", \"Four Quartets\");\n\n    // Calls the getSimilarPoems() method and prints the results\n    System.out.println(catalog.getSimilarPoems(another));\n    \n  }\n}" },
+          { path: 'Library.java', text: "/*\n * Represents a library\n */\npublic class Library {\n\n  private Poem[] poems;    // The 1D array of Poem objects\n\n  /*\n   * Initializes poems to the specified 1D array of Poem objects\n   */\n  public Library(Poem[] poems) {\n    this.poems = poems;\n  }\n\n  /*\n   * Returns the 1D array of Poem objects\n   */\n  public Poem[] getPoems() {\n    return poems;\n  }\n\n  /*\n   * Returns a String containing the title of each poem by\n   * the same author as other\n   */\n  public String getSimilarPoems(Poem other) {\n    String result = \"\";\n\n    for (int index = 0; index < poems.length; index++) {\n      if (poems[index].equals(other)) {\n        result += poems[index] + \"\\n\";\n      }\n    }\n\n    if (result.equals(\"\")) {\n      result = \"No poems found.\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Poem.java', text: "/*\n * Represents a poem\n */\npublic class Poem {\n\n  private String author;      // The author of a poem\n  private String title;       // The title of a poem\n\n  /*\n   * Sets author and title to the specified values\n   */\n  public Poem(String author, String title) {\n    this.author = author;\n    this.title = title;\n  }\n\n  /*\n   * Returns the author of the poem\n   */\n  public String getAuthor() {\n    return author;\n  }\n\n  /*\n   * Returns the title of the poem\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns true if the other Poem has the same author as this Poem\n   */\n  public boolean equals(Object other) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return true if this poem has the same author as the other poem.\n     * If the object is not a Poem, return false.\n     * -----------------------------------------------------------------------------\n     */\n\n    return false;\n  }\n\n  /*\n   * Returns a String containing the title and author of the poem\n   */\n  public String toString() {\n    return title + \" by \" + author;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overriding the equals() Method (c)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Player objects\n    Player[] players = {new Player(\"Mike Trout\", \"Center Fielder\"), new Player(\"Clayton Kershaw\", \"Starting Pitcher\"),\n                        new Player(\"Aaron Judge\", \"Right Fielder\"), new Player(\"Mookie Betts\", \"Right Fielder\"),\n                        new Player(\"Salvador Perez\", \"Catcher\")};\n\n    // Creates a Team object\n    Team baseball = new Team(players);\n\n    // Creates a new Player object\n    Player max = new Player(\"Max Scherzer\", \"Starting Pitcher\");\n\n    // Calls the getSamePositions() method and prints the results\n    System.out.println(baseball.getSamePositions(max));\n    \n  }\n}" },
+          { path: 'Player.java', text: "import org.code.theater.*;\n\n/*\n * Represents a baseball player\n */\npublic class Player {\n\n  private String name;      // The name of a player\n  private String position;  // The position of a player\n\n  /*\n   * Sets name to the specified name and position\n   * to the specified position\n   */\n  public Player(String name, String position) {\n    this.name = name;\n    this.position = position;\n  }\n\n  /*\n   * Returns the name of the player\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the position of the player\n   */\n  public String getPosition() {\n    return position;\n  }\n\n  /*\n   * Returns true if this Player has the same position as other\n   */\n  public boolean equals(Object other) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return true if this player has the same position as the other player.\n     * If the object is not a Player, return false.\n     * -----------------------------------------------------------------------------\n     */\n\n    return false;\n  }\n\n  /*\n   * Returns a String containing the name and position of the player\n   */\n  public String toString() {\n    return name + \": \" + position;\n  }\n  \n}" },
+          { path: 'Team.java', text: "/*\n * Represents a team\n */\npublic class Team {\n\n  private Player[] players;     // The 1D array of Player objects\n\n  /*\n   * Initializes players to the specified 1D array of Player objects\n   */\n  public Team(Player[] players) {\n    this.players = players;\n  }\n\n  /*\n   * Returns the 1D array of players\n   */\n  public Player[] getPlayers() {\n    return players;\n  }\n\n  /*\n   * Returns a String containing the names of each player\n   * that has the same position as other\n   */\n  public String getSamePositions(Player other) {\n    String result = \"\";\n\n    for (int index = 0; index < players.length; index++) {\n      if (players[index].equals(other)) {\n        result += players[index] + \"\\n\";\n      }\n    }\n\n    if (result.equals(\"\")) {\n      result = \"No players found.\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overriding the equals() Method (d)',
+        lesson: 'Lesson 6: Object Aliases and Equality',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates several Color objects\n    Color teal = new Color(0, 128, 128);\n    Color maroon = new Color(128, 0, 0);\n    Color otherColor = new Color(0, 128, 128);\n\n    // Compares the Color objects and prints the results\n    System.out.println(teal.equals(maroon));\n    System.out.println(teal.equals(otherColor));\n    \n  }\n}" },
+          { path: 'Color.java', text: "/*\n * Represents a custom color\n */\npublic class Color {\n\n  private int red;      // The red value of a color\n  private int green;    // The green value of a color\n  private int blue;     // The blue value of a color\n\n  /*\n   * Sets red, green, and blue to the specified values\n   */\n  public Color(int red, int green, int blue) {\n    this.red = red;\n    this.green = green;\n    this.blue = blue;\n  }\n\n  /*\n   * Returns the red value of the color\n   */\n  public int getRed() {\n    return red;\n  }\n\n  /*\n   * Returns the green value of the color\n   */\n  public int getGreen() {\n    return green;\n  }\n\n  /*\n   * Returns the blue value of the color\n   */\n  public int getBlue() {\n    return blue;\n  }\n\n  /*\n   * Returns true if this CustomColor has the same red,\n   * green, and blue values as other\n   */\n  public boolean equals(Object other) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return true if this color has the same red, green, and blue values\n     * as the other color. If the object is not a Color, return false.\n     * -----------------------------------------------------------------------------\n     */\n\n    return false;\n  }\n\n  /*\n   * Returns a String containing the red, green, and blue values\n   */\n  public String toString() {\n    return \"Red: \" + red + \", Green: \" + green + \", Blue: \" + blue;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Nested if Statements',
+        lesson: 'Lesson 7: Nested If Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'AgeChecker.java', text: "public class AgeChecker {\n\n  public String checkAge(int age) {\n    if (age <= 18) {\n      if (age <= 13) {\n        return \"Child\";\n      }\n      else {\n        return \"Teenager\";\n      }\n    }\n    else {\n      return \"Adult\";\n    }\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Nested if Statements #1',
+        lesson: 'Lesson 7: Nested If Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'AgeChecker.java', text: "public class AgeChecker {\n\n  public String checkAge(int age) {\n    if (age <= 18) {\n      if (age <= 13) {\n        return \"Child\";\n      }\n      else {\n        return \"Teenager\";\n      }\n    }\n    else {\n      return \"Adult\";\n    }\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Nested if Statements #2',
+        lesson: 'Lesson 7: Nested If Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'AgeChecker.java', text: "public class AgeChecker {\n\n  public String checkAge(int age) {\n    if (age <= 18) {\n      if (age <= 13) {\n        return \"Child\";\n      }\n      else {\n        return \"Teenager\";\n      }\n    }\n    else {\n      return \"Adult\";\n    }\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Nested if Statements (a)',
+        lesson: 'Lesson 7: Nested If Statements',
+        view: 'neighborhood',
+        grid: "1,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 1,0\n0,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0\n1,0 1,0 1,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0 1,0 1,0\n1,0 1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 0,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0\n1,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0 1,0 0,0 0,0 0,0\n1,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0 1,0 0,0 1,0 1,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a TrafficPainter object at (0, 0) facing \"east\" and call\n     * the getToStore() method.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'PainterPlus.java', text: "import org.code.neighborhood.Painter;\n\n/*\n * Represents a Painter that can turn right\n */\npublic class PainterPlus extends Painter {\n\n  /*\n   * Sets the x and y direction to the specified starting location,\n   * direction to the specified starting direction, and numPaint\n   * to the specified amount of paint to start with\n   */\n  public PainterPlus(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Turns the PainterPlus object to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n  \n}" },
+          { path: 'TrafficPainter.java', text: "import org.code.neighborhood.*;\n\n/*\n * Represents a Painter that can navigate traffic in The Neighborhood\n */\npublic class TrafficPainter extends PainterPlus {\n\n  /*\n   * Sets the x and y direction to the specified starting location,\n   * direction to the specified starting direction, and numPaint\n   * to the specified amount of paint to start with\n   */\n  public TrafficPainter(int x, int y, String direction, int numPaint) {\n    super(x, y, direction, numPaint);\n  }\n\n  /*\n   * Navigates a TrafficPainter object through\n   * traffic to reach the store\n   */\n  public void getToStore() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use nested if statements to navigate a TrafficPainter object from\n     * (0, 0) to the store.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Nested if Statements (b)',
+        lesson: 'Lesson 7: Nested If Statements',
+        view: 'neighborhood',
+        grid: "0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n0,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0\n",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a RowPainter object and call the paintArea() method.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'RowPainter.java', text: "import org.code.neighborhood.*;\n\n/*\n * A Painter that paints rows in The Neighborhood\n */\npublic class RowPainter extends Painter {\n\n  /*\n   * Sets the x and y values to the starting x and y location,\n   * direction to the specified starting direction, and paint\n   * to the specified starting paint amount\n   */\n  public RowPainter(int x, int y, String direction, int paint) {\n    super(x, y, direction, paint);\n  }\n\n  /*\n   * Turns the RowPainter object to the right\n   */\n  public void turnRight() {\n    turnLeft();\n    turnLeft();\n    turnLeft();\n  }\n\n  /*\n   * Moves the RowPainter object forward in the direction it is facing if it can move\n   */\n  public void moveIfCanMove() {\n    if (canMove()) {\n      move();\n    }\n  }\n\n  /*\n   * Paints a row in The Neighborhood with firstColor\n   * then moves to the next row with secondColor\n   */\n  public void paintArea(String firstColor, String secondColor) {\n    while (canMove()) {\n      paintEast(firstColor);\n      paintWest(secondColor);\n      moveIfCanMove();\n\n      if (!canMove()) {\n        paintEast(firstColor);\n        paintWest(secondColor);\n        moveToNextRow();\n      }\n    }\n  }\n\n  /*\n   * Paints a row if facing east and y location is even\n   */\n  public void paintEast(String color) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 If the RowPainter object is facing east and its y location is an even\n     * number, paint with the parameter color.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n\n  /*\n   * Paints a row if facing west and y location is odd\n   */\n  public void paintWest(String color) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 If the RowPainter object is facing west and its y location is an odd\n     * number, paint with the parameter color.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n\n  /*\n   * Moves to the next row if unable to move forward\n   */\n  public void moveToNextRow() {\n    if (canMove(\"south\")) {\n      if (facingEast()) {\n        turnRight();\n        moveIfCanMove();\n        turnRight();\n      }\n      else {\n        turnLeft();\n        moveIfCanMove();\n        turnLeft();\n      }\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Logical Operators',
+        lesson: 'Lesson 8: Logical Operators',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "import java.util.Scanner;\n\n/*\n * Represents a course at a school\n */ \npublic class Course {\n\n  private String teacher;    // The name of the teacher\n\n  /*\n   * Sets teacher to the given name of the teacher\n   */\n  public Course(String teacher) {\n    this.teacher = teacher;\n  }\n\n  /*\n   * Prompts the user to enter grades while the input is not -1\n   * and prints the score entered\n   */\n  public void promptForGrade() {\n    Scanner input = new Scanner(System.in);\n    int score = 0;\n\n    while (score != -1) {\n      System.out.print(\"Enter the student's score (or -1 to quit): \");\n      score = input.nextInt();\n      printResult(score);\n    }\n\n    input.close();\n  }\n\n  /*\n   * Prints the score provided by the user\n   */\n  public void printResult(int enteredScore) {\n    if (isValidScore(enteredScore)) {\n      System.out.println(\"Score is: \" + enteredScore);\n    }\n    else {\n      if (enteredScore == -1) {\n        System.out.println(\"Goodbye!\");\n      }\n      else {\n        System.out.println(\"The score is invalid. Please try again.\");\n      }\n    }\n  }\n\n  /*\n   * Returns true if the score is valid, otherwise returns false\n   */\n  public boolean isValidScore(int score) {\n    if (score >= 50 && score <= 100) {\n      return true;\n    }\n    else {\n      return false;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Logical Operators #1',
+        lesson: 'Lesson 8: Logical Operators',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "import java.util.Scanner;\n\n/*\n * Represents a course at a school\n */ \npublic class Course {\n\n  private String teacher;    // The name of the teacher\n\n  /*\n   * Sets teacher to the given name of the teacher\n   */\n  public Course(String teacher) {\n    this.teacher = teacher;\n  }\n\n  /*\n   * Prompts the user to enter grades while the input is not -1\n   * and prints the score entered\n   */\n  public void promptForGrade() {\n    Scanner input = new Scanner(System.in);\n    int score = 0;\n\n    while (score != -1) {\n      System.out.print(\"Enter the student's score (or -1 to quit): \");\n      score = input.nextInt();\n      printResult(score);\n    }\n\n    input.close();\n  }\n\n  /*\n   * Prints the score provided by the user\n   */\n  public void printResult(int enteredScore) {\n    if (isValidScore(enteredScore)) {\n      System.out.println(\"Score is: \" + enteredScore);\n    }\n    else {\n      if (enteredScore == -1) {\n        System.out.println(\"Goodbye!\");\n      }\n      else {\n        System.out.println(\"The score is invalid. Please try again.\");\n      }\n    }\n  }\n\n  /*\n   * Returns true if the score is valid, otherwise returns false\n   */\n  public boolean isValidScore(int score) {\n    if (score >= 50 && score <= 100) {\n      return true;\n    }\n    else {\n      return false;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Logical Operators #2',
+        lesson: 'Lesson 8: Logical Operators',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "import java.util.Scanner;\n\n/*\n * Represents a course at a school\n */ \npublic class Course {\n\n  private String teacher;    // The name of the teacher\n\n  /*\n   * Sets teacher to the given name of the teacher\n   */\n  public Course(String teacher) {\n    this.teacher = teacher;\n  }\n\n  /*\n   * Prompts the user to enter grades while the input is not -1\n   * and prints the score entered\n   */\n  public void promptForGrade() {\n    Scanner input = new Scanner(System.in);\n    int score = 0;\n\n    while (score != -1) {\n      System.out.print(\"Enter the student's score (or -1 to quit): \");\n      score = input.nextInt();\n      printResult(score);\n    }\n\n    input.close();\n  }\n\n  /*\n   * Prints the score provided by the user\n   */\n  public void printResult(int enteredScore) {\n    if (isValidScore(enteredScore)) {\n      System.out.println(\"Score is: \" + enteredScore);\n    }\n    else {\n      if (enteredScore == -1) {\n        System.out.println(\"Goodbye!\");\n      }\n      else {\n        System.out.println(\"The score is invalid. Please try again.\");\n      }\n    }\n  }\n\n  /*\n   * Returns true if the score is valid, otherwise returns false\n   */\n  public boolean isValidScore(int score) {\n    if (score >= 50 && score <= 100) {\n      return true;\n    }\n    else {\n      return false;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Logical Operators #3',
+        lesson: 'Lesson 8: Logical Operators',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "import java.util.Scanner;\n\n/*\n * Represents a course at a school\n */ \npublic class Course {\n\n  private String teacher;    // The name of the teacher\n\n  /*\n   * Sets teacher to the given name of the teacher\n   */\n  public Course(String teacher) {\n    this.teacher = teacher;\n  }\n\n  /*\n   * Prompts the user to enter grades while the input is not -1\n   * and prints the score entered\n   */\n  public void promptForGrade() {\n    Scanner input = new Scanner(System.in);\n    int score = 0;\n\n    while (score != -1) {\n      System.out.print(\"Enter the student's score (or -1 to quit): \");\n      score = input.nextInt();\n      printResult(score);\n    }\n\n    input.close();\n  }\n\n  /*\n   * Prints the score provided by the user\n   */\n  public void printResult(int enteredScore) {\n    if (isValidScore(enteredScore)) {\n      System.out.println(\"Score is: \" + enteredScore);\n    }\n    else {\n      if (enteredScore == -1) {\n        System.out.println(\"Goodbye!\");\n      }\n      else {\n        System.out.println(\"The score is invalid. Please try again.\");\n      }\n    }\n  }\n\n  /*\n   * Returns true if the score is valid, otherwise returns false\n   */\n  public boolean isValidScore(int score) {\n    if (score >= 50 && score <= 100) {\n      return true;\n    }\n    else {\n      return false;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Multi-Selection Statements',
+        lesson: 'Lesson 10: Multi-Selection Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Order.java', text: "/*\n * Represents a customer's order\n */\npublic class Order {\n\n  private boolean isFilled;     // Whether or not an order has been filled\n  private double cost;          // The cost of an order\n  private String shipping;      // The shipping method to send an order\n\n  /*\n   * Sets isFilled to the specified status, cost to the specified\n   * cost and shipping to the specified shipping method\n   */\n  public Order(boolean isFilled, double cost, String shipping) {\n    this.isFilled = isFilled;\n    this.cost = cost;\n    this.shipping = shipping;\n  }\n\n  /*\n   * Returns a String containing the shipping cost if the order is filled,\n   * other returns a String indicating that the order is not ready\n   */\n  public String ship() {\n    if (isFilled) {\n      return \"Shipping cost: \" + calculateShipping();\n    }\n    else {\n      return \"Order not ready.\";\n    }\n  }\n\n  /*\n   * Returns the shipping cost based on the shipping method\n   */\n  public double calculateShipping() {\n    if (shipping.equals(\"Regular\")) {\n      return 0;\n    }\n    else if (shipping.equals(\"Express\")) {\n      return 1.75;\n    }\n    else {\n      return 0.50;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Multi-Selection Statements #1',
+        lesson: 'Lesson 10: Multi-Selection Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Order.java', text: "/*\n * Represents a customer's order\n */\npublic class Order {\n\n  private boolean isFilled;     // Whether or not an order has been filled\n  private double cost;          // The cost of an order\n  private String shipping;      // The shipping method to send an order\n\n  /*\n   * Sets isFilled to the specified status, cost to the specified\n   * cost and shipping to the specified shipping method\n   */\n  public Order(boolean isFilled, double cost, String shipping) {\n    this.isFilled = isFilled;\n    this.cost = cost;\n    this.shipping = shipping;\n  }\n\n  /*\n   * Returns a String containing the shipping cost if the order is filled,\n   * other returns a String indicating that the order is not ready\n   */\n  public String ship() {\n    if (isFilled) {\n      return \"Shipping cost: \" + calculateShipping();\n    }\n    else {\n      return \"Order not ready.\";\n    }\n  }\n\n  /*\n   * Returns the shipping cost based on the shipping method\n   */\n  public double calculateShipping() {\n    if (shipping.equals(\"Regular\")) {\n      return 0;\n    }\n    else if (shipping.equals(\"Express\")) {\n      return 1.75;\n    }\n    else {\n      return 0.50;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Multi-Selection Statements #2',
+        lesson: 'Lesson 10: Multi-Selection Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Order.java', text: "/*\n * Represents a customer's order\n */\npublic class Order {\n\n  private boolean isFilled;     // Whether or not an order has been filled\n  private double cost;          // The cost of an order\n  private String shipping;      // The shipping method to send an order\n\n  /*\n   * Sets isFilled to the specified status, cost to the specified\n   * cost and shipping to the specified shipping method\n   */\n  public Order(boolean isFilled, double cost, String shipping) {\n    this.isFilled = isFilled;\n    this.cost = cost;\n    this.shipping = shipping;\n  }\n\n  /*\n   * Returns a String containing the shipping cost if the order is filled,\n   * other returns a String indicating that the order is not ready\n   */\n  public String ship() {\n    if (isFilled) {\n      return \"Shipping cost: \" + calculateShipping();\n    }\n    else {\n      return \"Order not ready.\";\n    }\n  }\n\n  /*\n   * Returns the shipping cost based on the shipping method\n   */\n  public double calculateShipping() {\n    if (shipping.equals(\"Regular\")) {\n      return 0;\n    }\n    else if (shipping.equals(\"Express\")) {\n      return 1.75;\n    }\n    else {\n      return 0.50;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Multi-Selection Statements #3',
+        lesson: 'Lesson 10: Multi-Selection Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Order.java', text: "/*\n * Represents a customer's order\n */\npublic class Order {\n\n  private boolean isFilled;     // Whether or not an order has been filled\n  private double cost;          // The cost of an order\n  private String shipping;      // The shipping method to send an order\n\n  /*\n   * Sets isFilled to the specified status, cost to the specified\n   * cost and shipping to the specified shipping method\n   */\n  public Order(boolean isFilled, double cost, String shipping) {\n    this.isFilled = isFilled;\n    this.cost = cost;\n    this.shipping = shipping;\n  }\n\n  /*\n   * Returns a String containing the shipping cost if the order is filled,\n   * other returns a String indicating that the order is not ready\n   */\n  public String ship() {\n    if (isFilled) {\n      return \"Shipping cost: \" + calculateShipping();\n    }\n    else {\n      return \"Order not ready.\";\n    }\n  }\n\n  /*\n   * Returns the shipping cost based on the shipping method\n   */\n  public double calculateShipping() {\n    if (shipping.equals(\"Regular\")) {\n      return 0;\n    }\n    else if (shipping.equals(\"Express\")) {\n      return 1.75;\n    }\n    else {\n      return 0.50;\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Writing Algorithms (c)',
+        lesson: 'Lesson 10: Multi-Selection Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Company object\n    Company cardCompany = new Company();\n\n    // Creates several Card objects\n    int[] validCardNo = {1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 0};\n    Card validCard = new Card(validCardNo);\n\n    int[] invalidCardNo = {4, 6, 2, 4, 7, 4, 8, 2, 3, 3, 2, 4, 9, 0, 8, 0};\n    Card invalidCard = new Card(invalidCardNo);\n\n    // Calls the validateNumber() method on each Card object and prints the result\n    System.out.println(validCard + \" is valid? \" + cardCompany.validateNumber(validCard));\n    System.out.println(invalidCard + \" is valid? \" + cardCompany.validateNumber(invalidCard));\n    \n  }\n}" },
+          { path: 'Card.java', text: "/*\n * Represents a credit card\n */\npublic class Card {\n\n  private int[] digits;      // The 1D array of digits that make up the card number\n\n  /*\n   * Initializes digits to the specified 1D array of digits\n   */\n  public Card(int[] digits) {\n    this.digits = digits;\n  }\n\n  /*\n   * Returns the 1D array of digits\n   */\n  public int[] getDigits() {\n    return digits;\n  }\n\n  /*\n   * Returns a String representing the credit card number\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (int index = 0; index < digits.length; index++) {\n      result += digits[index];\n\n      if (index % 4 == 3) {\n        result += \" \";\n      }\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Company.java', text: "/*\n * Represents a credit card company\n */\npublic class Company {\n\n  /*\n   * Returns true if the digits in creditCard are valid,\n   * otherwise returns false\n   */\n  public boolean validateNumber(Card creditCard) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Implement the Luhn algorithm to check if the digits in creditCard are\n     * valid. Return true if valid, otherwise return false.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return false;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Writing Algorithms (d)',
+        lesson: 'Lesson 10: Multi-Selection Statements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Lender object\n    Lender auto = new Lender();\n\n    // Creates several Customer objects\n    Customer firstCustomer = new Customer(10000, 5, 4.5, 1000);\n    Customer secondCustomer = new Customer(20000, 10, 0, 2000);\n    Customer thirdCustomer = new Customer(15000, 3, 5.2, 15000);\n\n    // Calls the calculateMonthlyPayment() method and prints the result\n    double firstResult = auto.calculateMonthlyPayment(firstCustomer);\n    System.out.println(\"First customer: \" + auto.getResult(firstResult));\n\n    double secondResult = auto.calculateMonthlyPayment(secondCustomer);\n    System.out.println(\"Second customer: \" + auto.getResult(secondResult));\n\n    double thirdResult = auto.calculateMonthlyPayment(thirdCustomer);\n    System.out.println(\"Third customer: \" + auto.getResult(thirdResult));\n    \n  }\n}" },
+          { path: 'Customer.java', text: "/*\n * Represents a customer\n */\npublic class Customer {\n\n  private double amount;        // The requested amount for the loan\n  private int length;           // The requested length of the loan in years\n  private double rate;          // The requested interest rate for the loan\n  private double downPayment;   // The down payment a customer will make\n\n  /*\n   * Sets amount, length, rate, and downPayment to the specified values\n   */\n  public Customer(double amount, int length, double rate, double downPayment) {\n    this.amount = amount;\n    this.length = length;\n    this.rate = rate;\n    this.downPayment = downPayment;\n  }\n\n  /*\n   * Returns the requested amount for the loan\n   */\n  public double getAmount() {\n    return amount;\n  }\n\n  /*\n   * Returns the requested length for the loan\n   */\n  public int getLength() {\n    return length;\n  }\n\n  /*\n   * Returns the requested interest rate for the loan\n   */\n  public double getRate() {\n    return rate;\n  }\n\n  /*\n   * Returns the down payment the customer will make\n   */\n  public double getDownPayment() {\n    return downPayment;\n  }\n}" },
+          { path: 'Lender.java', text: "/*\n * Represents an auto loan lender\n */\npublic class Lender {\n\n  /*\n   * Returns -1 if the customer's loan length is less than or equal to 0 OR the\n   * interest rate is less than or equal to 0, returns 1 if the down payment is\n   * greater than or equal to the loan amount, or returns the result of a call\n   * to the getPaymentAmount() method\n   */\n  public double calculateMonthlyPayment(Customer customer) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use if/else-if/else statements to check each condition and return\n     * the expected result.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return -1;\n  }\n\n  /*\n   * Calculates and returns the payment amount\n   */\n  public double getPaymentAmount(Customer customer) {\n    int months = customer.getLength() * 12;\n    double remainingBalance = customer.getAmount() - customer.getDownPayment();\n    double monthlyBalance = remainingBalance / months;\n    double interest = (monthlyBalance * customer.getRate()) / 100;\n    double monthlyPayment = monthlyBalance + interest;\n    return monthlyPayment;\n  }\n\n  /*\n   * Returns \"Error! You must take out a valid car loan.\" if\n   * result is -1, \"The car can be paid in full.\" if result is\n   * 1, or \"Your monthly payment will be {payment}.\"\n   */\n  public String getResult(double payment) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use if/else-if/else statements to check each condition and return\n     * the expected result.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return \"\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'CSA 2023 Console Sandbox_2025',
+        lesson: 'Sandbox: Console',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'With Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: "1,0 1,10 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n",
+        files: [
+          { path: 'Main.java', text: "import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'No Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: "1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n",
+        files: [
+          { path: 'Main.java', text: "import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+    ],
+  },
+  {
     name: 'AP FRQ Practice',
     levels: [
       {

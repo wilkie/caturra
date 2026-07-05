@@ -1505,6 +1505,7 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 "Boolean" => Some(ElemType::Boolean),
                 "Character" => Some(ElemType::Char),
                 "String" => Some(ElemType::Str),
+                "Object" => Some(ElemType::Object(table.object_id)),
                 other => table.class_id(other).map(ElemType::Object),
             }
         }
@@ -6874,6 +6875,15 @@ impl BodyGen<'_> {
         self.code
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
         self.code.drop_stack(args_width);
+        // `Arrays.asList` is generic (`<T> List<T>`): the bundle returns a raw
+        // `ArrayList`, but type the result as a `List` of the argument array's
+        // element type so `List<String> x = Arrays.asList(strs)` type-checks.
+        if class == "Arrays"
+            && method == "asList"
+            && let Some(JType::Array { elem, dims: 1 }) = arg_types.first()
+        {
+            return Some(Some(JType::List(*elem)));
+        }
         Some(sig.ret)
     }
 
