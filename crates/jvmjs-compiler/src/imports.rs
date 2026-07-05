@@ -208,6 +208,7 @@ static ORG_CODE_NEIGHBORHOOD: &[&str] = &["Painter"];
 /// Public classes of the bundled validation library (neighborhood harness).
 static ORG_CODE_VALIDATION: &[&str] = &[
     "NeighborhoodTestRunner",
+    "SystemOutTestRunner",
     "NeighborhoodLog",
     "PainterLog",
     "PainterEvent",

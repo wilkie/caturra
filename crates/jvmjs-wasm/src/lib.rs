@@ -330,6 +330,9 @@ struct JsConsole<'a> {
     stdout: &'a js_sys::Function,
     stderr: &'a js_sys::Function,
     stdin: Option<&'a js_sys::Function>,
+    /// Buffer for an active `SystemOutTestRunner` capture (the JS console
+    /// streams, so capture needs its own buffer). `None` when not capturing.
+    capture: Option<Vec<u8>>,
 }
 
 impl ConsoleIo for JsConsole<'_> {
@@ -340,6 +343,9 @@ impl ConsoleIo for JsConsole<'_> {
     }
 
     fn stdout(&mut self, bytes: &[u8]) {
+        if let Some(buf) = &mut self.capture {
+            buf.extend_from_slice(bytes);
+        }
         let text = JsValue::from_str(&String::from_utf8_lossy(bytes));
         let _ = self.stdout.call1(&JsValue::NULL, &text);
     }
@@ -352,6 +358,17 @@ impl ConsoleIo for JsConsole<'_> {
     fn read_line(&mut self) -> Option<String> {
         let result = self.stdin?.call0(&JsValue::NULL).ok()?;
         result.as_string()
+    }
+
+    fn begin_capture(&mut self) {
+        self.capture = Some(Vec::new());
+    }
+
+    fn take_capture(&mut self) -> String {
+        self.capture
+            .take()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
     }
 }
 
@@ -461,6 +478,7 @@ impl JvmSession {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
+            capture: None,
         };
         // Real entropy for Math.random(); tests off-browser use the
         // deterministic default seed instead.
@@ -521,6 +539,7 @@ impl JvmSession {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
+            capture: None,
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let seed = (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64;

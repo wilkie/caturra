@@ -1787,6 +1787,15 @@ pub fn invoke_static(
             "nanoTime" => Ok(Some(JValue::Long(
                 console.now_millis().wrapping_mul(1_000_000),
             ))),
+            // Standard-out capture for org.code.validation's SystemOutTestRunner.
+            "__captureStart" => {
+                console.begin_capture();
+                Ok(None)
+            }
+            "__captureEnd" => {
+                let text = console.take_capture();
+                Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+            }
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),

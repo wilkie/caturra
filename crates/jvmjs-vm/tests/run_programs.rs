@@ -469,6 +469,34 @@ fn easymock_partial_mock_record_replay_verify() {
 }
 
 #[test]
+fn system_out_test_runner_captures_printed_lines() {
+    // org.code.validation SystemOutTestRunner: runs the student main and
+    // returns the lines it printed (capture tees to stdout, so the printed
+    // text still appears).
+    let out = run_stdout(
+        r#"
+        import org.code.validation.*;
+        import java.util.*;
+        public class Main {
+            public static void main(String[] a) {
+                System.out.println("first");
+                System.out.println("second");
+            }
+        }
+        class Checker {
+            public static void main(String[] a) {
+                List<String> lines = SystemOutTestRunner.run();
+                System.out.println("count=" + lines.size());
+                System.out.println("has=" + lines.contains("second"));
+            }
+        }
+        "#,
+        "Checker",
+    );
+    assert_eq!(out, "first\nsecond\ncount=2\nhas=true\n");
+}
+
+#[test]
 fn class_reflection_get_constructor_and_new_instance() {
     // Reflective instantiation: class literals (incl. `int.class`), a
     // `Class<?>[]` built from arg types, getConstructor (with boxing), and

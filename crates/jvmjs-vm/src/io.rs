@@ -22,6 +22,17 @@ pub trait ConsoleIo {
     /// Read one line from standard in, without the trailing newline.
     /// Returns `None` at end of input.
     fn read_line(&mut self) -> Option<String>;
+
+    /// Start capturing standard-out text (for `SystemOutTestRunner`, which
+    /// runs the student's `main` and inspects what it printed). Output is
+    /// still delivered normally. Default: no capture.
+    fn begin_capture(&mut self) {}
+
+    /// Stop capturing and return the text written to standard out since
+    /// [`begin_capture`](ConsoleIo::begin_capture).
+    fn take_capture(&mut self) -> String {
+        String::new()
+    }
 }
 
 /// An in-memory console: collects output and serves scripted input.
@@ -32,6 +43,8 @@ pub struct BufferedConsole {
     stderr: Vec<u8>,
     input: Vec<String>,
     next_input: usize,
+    /// Byte offset into `stdout` where the active capture began.
+    capture_from: Option<usize>,
 }
 
 impl BufferedConsole {
@@ -69,6 +82,15 @@ impl ConsoleIo for BufferedConsole {
 
     fn stderr(&mut self, bytes: &[u8]) {
         self.stderr.extend_from_slice(bytes);
+    }
+
+    fn begin_capture(&mut self) {
+        self.capture_from = Some(self.stdout.len());
+    }
+
+    fn take_capture(&mut self) -> String {
+        let from = self.capture_from.take().unwrap_or(self.stdout.len());
+        String::from_utf8_lossy(&self.stdout[from..]).into_owned()
     }
 
     fn read_line(&mut self) -> Option<String> {
