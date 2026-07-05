@@ -170,6 +170,19 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('runs a Constructors level using reflection (ConstructorsHelper)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });
+    await page
+      .getByTestId('level-select')
+      .selectOption({ label: 'Predict and Run: No-Argument Constructors' });
+    await expect(page.getByTestId('file-tabs')).toContainText('ConstructorsHelper.java');
+    await page.getByTestId('run').click();
+    const console = page.getByTestId('console');
+    await expect(console).toContainText('Vlogger Class Constructors');
+    await expect(console).toContainText('public Vlogger()');
+  });
+
   test('runs an Attributes level using reflection (AttributesHelper)', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });
