@@ -2629,6 +2629,46 @@ impl<'run> Interpreter<'run> {
                             ))),
                         }
                     }
+                    "getDeclaredField" | "getField" => {
+                        let field_name = match args.first() {
+                            Some(JValue::Ref(Some(r))) => {
+                                self.heap.string_text(*r).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        };
+                        let found = self.classes.get(&name).and_then(|cf| {
+                            cf.fields.iter().find_map(|fi| {
+                                let fname =
+                                    cf.constant_pool.get_utf8(fi.name_index).unwrap_or_default();
+                                (fname == field_name).then(|| {
+                                    (
+                                        fname.to_owned(),
+                                        cf.constant_pool
+                                            .get_utf8(fi.descriptor_index)
+                                            .unwrap_or_default()
+                                            .to_owned(),
+                                        fi.access_flags.0,
+                                    )
+                                })
+                            })
+                        });
+                        match found {
+                            Some((fname, descriptor, access)) => {
+                                let declaring = simple_class_name(&name).to_owned();
+                                Ok(Some(JValue::Ref(Some(self.heap.alloc(
+                                    HeapObject::Field {
+                                        declaring,
+                                        name: fname,
+                                        descriptor,
+                                        access,
+                                    },
+                                )))))
+                            }
+                            None => Err(VmError::UncaughtException(format!(
+                                "java.lang.NoSuchFieldException: {field_name}"
+                            ))),
+                        }
+                    }
                     other => Err(VmError::UnknownIntrinsic(format!("Class.{other}"))),
                 }
             }
@@ -2653,6 +2693,30 @@ impl<'run> Interpreter<'run> {
                             intrinsics::field_to_string(&declaring, &name, &descriptor, access);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
+                    // `setAccessible` is a no-op (jvmjs enforces no access control).
+                    "setAccessible" => Ok(None),
+                    "getInt" | "getLong" | "getDouble" | "getBoolean" => {
+                        // Primitive accessors return the raw value unboxed.
+                        self.read_reflected_field(&declaring, &name, access, args.first())
+                            .map(Some)
+                    }
+                    "get" => {
+                        // `Field.get` returns Object — a primitive field boxes
+                        // (real Java returns an Integer/Double/… wrapper).
+                        let raw =
+                            self.read_reflected_field(&declaring, &name, access, args.first())?;
+                        Ok(Some(self.box_if_primitive(raw, &descriptor)))
+                    }
+                    "set" => {
+                        self.write_reflected_field(
+                            &declaring,
+                            &name,
+                            access,
+                            args.first(),
+                            args.get(1).copied(),
+                        )?;
+                        Ok(None)
+                    }
                     other => Err(VmError::UnknownIntrinsic(format!("Field.{other}"))),
                 }
             }
@@ -2675,6 +2739,95 @@ impl<'run> Interpreter<'run> {
                 }
             }
             _ => Err(VmError::UnknownIntrinsic(format!("reflect.{method}"))),
+        }
+    }
+
+    /// Read a field reflectively (`Field.get`): from the class statics for a
+    /// static field, otherwise from the instance passed as the argument.
+    fn read_reflected_field(
+        &mut self,
+        declaring: &str,
+        name: &str,
+        access: u16,
+        obj: Option<&JValue>,
+    ) -> Result<JValue, VmError> {
+        if access & 0x0008 != 0 {
+            return self
+                .statics
+                .get(declaring)
+                .and_then(|fields| fields.get(name))
+                .copied()
+                .ok_or_else(|| {
+                    VmError::UncaughtException(format!("java.lang.NoSuchFieldException: {name}"))
+                });
+        }
+        let Some(JValue::Ref(Some(reference))) = obj else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        match self.heap.get(*reference) {
+            Some(crate::value::HeapObject::Instance { fields, .. }) => {
+                fields.get(name).copied().ok_or_else(|| {
+                    VmError::UncaughtException(format!("java.lang.NoSuchFieldException: {name}"))
+                })
+            }
+            _ => Err(VmError::UncaughtException(format!(
+                "cannot read field {name}"
+            ))),
+        }
+    }
+
+    /// Box a primitive value into its wrapper (for `Field.get`, which is
+    /// typed `Object`); references pass through unchanged.
+    fn box_if_primitive(&mut self, value: JValue, descriptor: &str) -> JValue {
+        let wrapper = match descriptor {
+            "I" => "java/lang/Integer",
+            "J" => "java/lang/Long",
+            "D" => "java/lang/Double",
+            "F" => "java/lang/Float",
+            "Z" => "java/lang/Boolean",
+            "S" => "java/lang/Short",
+            "B" => "java/lang/Byte",
+            "C" => "java/lang/Character",
+            _ => return value,
+        };
+        let reference = self.heap.alloc(crate::value::HeapObject::Boxed {
+            class_name: wrapper.to_owned(),
+            value,
+        });
+        JValue::Ref(Some(reference))
+    }
+
+    /// Write a field reflectively (`Field.set`).
+    fn write_reflected_field(
+        &mut self,
+        declaring: &str,
+        name: &str,
+        access: u16,
+        obj: Option<&JValue>,
+        value: Option<JValue>,
+    ) -> Result<(), VmError> {
+        let value = value.unwrap_or(JValue::NULL);
+        if access & 0x0008 != 0 {
+            if let Some(fields) = self.statics.get_mut(declaring) {
+                fields.insert(name.to_owned(), value);
+            }
+            return Ok(());
+        }
+        let Some(JValue::Ref(Some(reference))) = obj else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        match self.heap.get_mut(*reference) {
+            Some(crate::value::HeapObject::Instance { fields, .. }) => {
+                fields.insert(name.to_owned(), value);
+                Ok(())
+            }
+            _ => Err(VmError::UncaughtException(format!(
+                "cannot set field {name}"
+            ))),
         }
     }
 

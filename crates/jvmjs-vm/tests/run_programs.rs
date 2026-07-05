@@ -410,6 +410,35 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn reflection_field_access_and_modifiers() {
+    // getDeclaredField -> Field.get (boxing) -> (int) unbox cast; getModifiers
+    // + Modifier.isStatic/isFinal on a static final field.
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.Field;
+        import java.lang.reflect.Modifier;
+        public class Main {
+            static final int LIMIT = 42;
+            int count = 7;
+            public static void main(String[] a) throws Exception {
+                Main m = new Main();
+                Field cf = Main.class.getDeclaredField("count");
+                int c = (int) cf.get(m);
+                System.out.println(c);
+                Field lf = Main.class.getDeclaredField("LIMIT");
+                System.out.println((int) lf.get(null));
+                int mods = lf.getModifiers();
+                System.out.println(Modifier.isStatic(mods));
+                System.out.println(Modifier.isFinal(mods));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "7\n42\ntrue\ntrue\n");
+}
+
+#[test]
 fn array_object_methods_reference_semantics() {
     // Arrays are Objects: equals is reference identity (not element compare).
     let out = run_stdout(

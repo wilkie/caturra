@@ -80,6 +80,10 @@ const JUNIT_LIB: &str = include_str!("stdlib/junit.java");
 /// imports `java.util` — element concatenation coerces each via `toString`.
 const ARRAYS_LIB: &str = include_str!("stdlib/arrays.java");
 
+/// Bundled `java.lang.reflect.Modifier` subset, injected when a source uses
+/// `Modifier.` (the access-flag decoder used by reflection validators).
+const REFLECT_LIB: &str = include_str!("stdlib/reflect.java");
+
 /// Bundled `org.code.validation` (test harness helpers), injected when a
 /// source imports it: `SystemOutTestRunner`, `ValidationHelper`, and the
 /// neighborhood log types.
@@ -356,6 +360,16 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<arrays>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<arrays>"), unit));
+    }
+    if sources.iter().any(|s| s.text.contains("Modifier."))
+        && !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "Modifier"))
+    {
+        let (tokens, _) = lexer::lex("<reflect>", REFLECT_LIB);
+        let (unit, mut errs) = parser::parse("<reflect>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<reflect>"), unit));
     }
     if imports_prefix(&units, &["org", "junit"]) {
         let (tokens, _) = lexer::lex("<junit>", JUNIT_LIB);

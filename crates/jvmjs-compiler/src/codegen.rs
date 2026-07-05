@@ -2390,6 +2390,8 @@ enum BParam {
     Class,
     /// Any reference array (`getConstructor(Class[])`, `newInstance(Object[])`).
     RefArray,
+    /// `java.lang.Object` (`Field.get(Object)`, `Method.invoke(Object, ...)`).
+    Object,
 }
 
 /// The return of an intrinsic method.
@@ -2419,6 +2421,8 @@ enum BRet {
     ConstructorArray,
     /// A single `java.lang.reflect.Constructor` (`Class.getConstructor`).
     Constructor,
+    /// A single `java.lang.reflect.Field` (`Class.getDeclaredField`).
+    Field,
     /// `java.lang.Object` (`Constructor.newInstance`).
     Object,
 }
@@ -3587,6 +3591,18 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         BRet::Constructor,
         "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
     ),
+    bm(
+        "getDeclaredField",
+        &[BParam::Str],
+        BRet::Field,
+        "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+    ),
+    bm(
+        "getField",
+        &[BParam::Str],
+        BRet::Field,
+        "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+    ),
 ];
 
 /// `java.lang.reflect.Constructor` methods.
@@ -3608,6 +3624,43 @@ const FIELD_METHODS: &[BuiltinMethod] = &[
     bm("getType", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("setAccessible", &[Z], BRet::Void, "(Z)V"),
+    bm(
+        "get",
+        &[BParam::Object],
+        BRet::Object,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "getInt",
+        &[BParam::Object],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "getLong",
+        &[BParam::Object],
+        BRet::Long,
+        "(Ljava/lang/Object;)J",
+    ),
+    bm(
+        "getDouble",
+        &[BParam::Object],
+        BRet::Double,
+        "(Ljava/lang/Object;)D",
+    ),
+    bm(
+        "getBoolean",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "set",
+        &[BParam::Object, BParam::Object],
+        BRet::Void,
+        "(Ljava/lang/Object;Ljava/lang/Object;)V",
+    ),
 ];
 
 /// `java.util.Arrays` static methods.
@@ -3728,6 +3781,7 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
         BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
         BParam::Class => JType::Class,
         BParam::RefArray => JType::Error,
+        BParam::Object => JType::Object(ClassId(0)),
     }
 }
 
@@ -3735,6 +3789,8 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
 fn bparam_matches(param: BParam, arg: JType, elem: Option<ElemType>, table: &MethodTable) -> bool {
     match param {
         BParam::RefArray => matches!(arg, JType::Array { .. }),
+        // Any reference (or boxable value) satisfies an `Object` parameter.
+        BParam::Object => widens(arg, JType::Object(table.object_id), table),
         other => widens(arg, bparam_type(other, elem), table),
     }
 }
@@ -3801,6 +3857,7 @@ fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<J
             dims: 1,
         }),
         BRet::Constructor => Some(JType::Constructor),
+        BRet::Field => Some(JType::Field),
         BRet::Object => Some(JType::Object(table.object_id)),
     }
 }
@@ -8227,6 +8284,17 @@ impl BodyGen<'_> {
                     return JType::Error;
                 }
             }
+        }
+        // Unbox a reference to a primitive (JLS §5.5): an erased `Object`
+        // (e.g. from `Field.get`) or a wrapper, cast to `int`/`double`/…
+        // `checkcast Wrapper` + `Wrapper.xxxValue()` — jvmjs's boxed values
+        // answer the unboxing accessor directly.
+        let erased_object = matches!(source, JType::Object(id) if id == self.table.object_id);
+        if (erased_object || matches!(source, JType::Boxed(_)))
+            && let Some(elem) = elem_type_of(target)
+        {
+            self.emit_unbox(elem);
+            return target;
         }
         match (source, target) {
             (s, t) if s == t => t,
