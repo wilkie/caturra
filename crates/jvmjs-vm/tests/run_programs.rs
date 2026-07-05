@@ -491,6 +491,35 @@ fn neighborhood_painter_subclass_and_walls() {
 }
 
 #[test]
+fn structural_reflection_prints_field_signatures() {
+    // The AttributesHelper surface end to end: getClass, getSuperclass,
+    // getDeclaredFields, canonical Field.toString via Arrays.toString.
+    let out = run_stdout(
+        r"
+        import java.lang.reflect.*;
+        import java.util.*;
+        public class Main {
+            public static void main(String[] args) {
+                Object o = new Dog();
+                Class c = o.getClass();
+                System.out.println(c.getSimpleName());
+                System.out.println(c.getSuperclass().getSimpleName());
+                Field[] fs = c.getDeclaredFields();
+                System.out.println(Arrays.toString(fs));
+            }
+        }
+        class Animal { private int legs; }
+        class Dog extends Animal { private String name; public int age; }
+        ",
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "Dog\nAnimal\n[private java.lang.String Dog.name, public int Dog.age]\n"
+    );
+}
+
+#[test]
 fn junit_validation_runner_reports_pass_and_fail() {
     // A JUnit validator with a passing and a failing test; the injected
     // __ValidationRunner runs each and reports per-test outcomes.

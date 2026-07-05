@@ -91,6 +91,20 @@ pub enum HeapObject {
         class_name: String,
         message: Option<String>,
     },
+    /// A `java.lang.Class` handle from `obj.getClass()` — the (flat,
+    /// simple) class name is enough for the structural reflection the
+    /// curriculum uses.
+    Class { name: String },
+    /// A `java.lang.reflect.Field` from `Class.getDeclaredFields()`.
+    /// Self-contained so `toString()` needs no class lookup.
+    Field {
+        declaring: String,
+        name: String,
+        /// JVM field descriptor, e.g. `I` or `Ljava/lang/String;`.
+        descriptor: String,
+        /// Raw `FieldAccessFlags` bits.
+        access: u16,
+    },
 }
 
 /// The per-run object heap.

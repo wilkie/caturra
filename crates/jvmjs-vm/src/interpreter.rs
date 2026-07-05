@@ -393,6 +393,13 @@ impl<'run> Interpreter<'run> {
                     Some(message) => format!("{class_name}: {message}"),
                     None => class_name.clone(),
                 },
+                Some(crate::value::HeapObject::Field {
+                    declaring,
+                    name,
+                    descriptor,
+                    access,
+                }) => intrinsics::field_to_string(declaring, name, descriptor, *access),
+                Some(crate::value::HeapObject::Class { name }) => format!("class {name}"),
                 Some(crate::value::HeapObject::Scanner { .. }) => String::from("Scanner"),
                 Some(crate::value::HeapObject::File(path)) => format!("File({path})"),
                 Some(crate::value::HeapObject::Writer { path }) => {
@@ -2047,6 +2054,13 @@ impl<'run> Interpreter<'run> {
                 let reference = self.heap.alloc_string(&text);
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
             }
+            // Object.getClass(): a reflection `Class` handle.
+            if method_name == "getClass" && descriptor == "()Ljava/lang/Class;" {
+                let reference = self.heap.alloc(crate::value::HeapObject::Class {
+                    name: instance_class.to_owned(),
+                });
+                return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
+            }
             return Err(VmError::UnknownIntrinsic(format!(
                 "{instance_class}.{method_name}{descriptor}"
             )));
@@ -2193,6 +2207,10 @@ impl<'run> Interpreter<'run> {
             Some(crate::value::HeapObject::Instance { class_name, .. }) => Some(class_name.clone()),
             _ => None,
         };
+        let is_reflect = matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Class { .. } | crate::value::HeapObject::Field { .. })
+        );
         let result = if let Some(instance_class) = instance_class {
             match self.user_virtual_dispatch(
                 receiver,
@@ -2204,6 +2222,10 @@ impl<'run> Interpreter<'run> {
                 UserDispatch::Call(callee) => return Ok(Some(callee)),
                 UserDispatch::Value(value) => value,
             }
+        } else if is_reflect {
+            // Class/Field methods need the class table (superclass,
+            // declared fields), which the intrinsic layer lacks.
+            self.reflect_virtual(receiver, &method_name)?
         } else {
             intrinsics::invoke_virtual(
                 &mut self.heap,
@@ -2220,6 +2242,108 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(value);
         }
         Ok(None)
+    }
+
+    /// `java.lang.Class` / `java.lang.reflect.Field` methods — the
+    /// structural, read-only reflection the curriculum uses. Reads the
+    /// loaded [`ClassFile`] metadata; performs no invocation.
+    fn reflect_virtual(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+    ) -> Result<Option<JValue>, VmError> {
+        use crate::value::HeapObject;
+        match self.heap.get(receiver) {
+            Some(HeapObject::Class { name }) => {
+                let name = name.clone();
+                match method {
+                    "getSimpleName" | "getName" => {
+                        let simple = simple_class_name(&name);
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(simple)))))
+                    }
+                    "getSuperclass" => {
+                        let super_name = self.classes.get(&name).and_then(|cf| {
+                            cf.constant_pool
+                                .get_class_name(cf.super_class)
+                                .map(str::to_owned)
+                        });
+                        match super_name {
+                            Some(super_name) => {
+                                let simple = simple_class_name(&super_name).to_owned();
+                                let reference = self.heap.alloc(HeapObject::Class { name: simple });
+                                Ok(Some(JValue::Ref(Some(reference))))
+                            }
+                            // `Object` (or an unloaded root) has no super.
+                            None => Ok(Some(JValue::NULL)),
+                        }
+                    }
+                    "getDeclaredFields" => {
+                        let fields: Vec<(String, String, u16)> = self
+                            .classes
+                            .get(&name)
+                            .map(|cf| {
+                                cf.fields
+                                    .iter()
+                                    .map(|fi| {
+                                        (
+                                            cf.constant_pool
+                                                .get_utf8(fi.name_index)
+                                                .unwrap_or_default()
+                                                .to_owned(),
+                                            cf.constant_pool
+                                                .get_utf8(fi.descriptor_index)
+                                                .unwrap_or_default()
+                                                .to_owned(),
+                                            fi.access_flags.0,
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let simple = simple_class_name(&name).to_owned();
+                        let refs: Vec<JValue> = fields
+                            .into_iter()
+                            .map(|(field_name, descriptor, access)| {
+                                JValue::Ref(Some(self.heap.alloc(HeapObject::Field {
+                                    declaring: simple.clone(),
+                                    name: field_name,
+                                    descriptor,
+                                    access,
+                                })))
+                            })
+                            .collect();
+                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        Ok(Some(JValue::Ref(Some(array))))
+                    }
+                    other => Err(VmError::UnknownIntrinsic(format!("Class.{other}"))),
+                }
+            }
+            Some(HeapObject::Field {
+                declaring,
+                name,
+                descriptor,
+                access,
+            }) => {
+                let (declaring, name, descriptor, access) =
+                    (declaring.clone(), name.clone(), descriptor.clone(), *access);
+                match method {
+                    "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&name))))),
+                    "getModifiers" => Ok(Some(JValue::Int(i32::from(access)))),
+                    "getType" => {
+                        let type_name = intrinsics::type_name_of_descriptor(&descriptor);
+                        let reference = self.heap.alloc(HeapObject::Class { name: type_name });
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    "toString" => {
+                        let text =
+                            intrinsics::field_to_string(&declaring, &name, &descriptor, access);
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
+                    }
+                    other => Err(VmError::UnknownIntrinsic(format!("Field.{other}"))),
+                }
+            }
+            _ => Err(VmError::UnknownIntrinsic(format!("reflect.{method}"))),
+        }
     }
 
     /// Materialize a loadable constant-pool entry as a value
@@ -2690,6 +2814,12 @@ impl Frame<'_> {
 }
 
 /// `[a, b, c]` capped at 20 elements for the locals view.
+/// The simple name of a (possibly `/`- or `.`-qualified) class name.
+/// jvmjs is a flat namespace, so this is usually a no-op.
+fn simple_class_name(name: &str) -> &str {
+    name.rsplit(['/', '.']).next().unwrap_or(name)
+}
+
 fn render_array(items: impl Iterator<Item = String>) -> String {
     let mut parts: Vec<String> = items.take(21).collect();
     if parts.len() > 20 {

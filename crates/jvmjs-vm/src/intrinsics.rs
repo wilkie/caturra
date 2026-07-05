@@ -1438,6 +1438,13 @@ fn display_jvalue(heap: &Heap, value: JValue) -> String {
                 // fall back to the default form here.
                 format!("{class_name}@{reference:x}")
             }
+            Some(HeapObject::Field {
+                declaring,
+                name,
+                descriptor,
+                access,
+            }) => field_to_string(declaring, name, descriptor, *access),
+            Some(HeapObject::Class { name }) => format!("class {name}"),
             _ => String::from("<object>"),
         },
     }
@@ -1749,8 +1756,101 @@ pub fn invoke_static(
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),
+        "java/util/Arrays" => arrays_static(heap, method, args),
         _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
     }
+}
+
+/// `java.util.Arrays` static methods (currently `toString`).
+fn arrays_static(
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    match method {
+        "toString" => {
+            let rendered = match args.first() {
+                Some(JValue::Ref(Some(reference))) => array_to_string(heap, *reference),
+                _ => String::from("null"),
+            };
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&rendered)))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("Arrays.{method}"))),
+    }
+}
+
+/// `Arrays.toString`: `[e0, e1, ...]` over any array kind.
+fn array_to_string(heap: &Heap, reference: HeapRef) -> String {
+    let elems: Vec<String> = match heap.get(reference) {
+        Some(HeapObject::RefArray(values)) => {
+            values.iter().map(|v| display_jvalue(heap, *v)).collect()
+        }
+        Some(HeapObject::IntArray(values)) => values.iter().map(i32::to_string).collect(),
+        Some(HeapObject::DoubleArray(values)) => {
+            values.iter().map(|v| java_double_to_string(*v)).collect()
+        }
+        Some(HeapObject::LongArray(values)) => values.iter().map(i64::to_string).collect(),
+        Some(HeapObject::FloatArray(values)) => values.iter().map(f32::to_string).collect(),
+        Some(HeapObject::ShortArray(values)) => values.iter().map(i16::to_string).collect(),
+        Some(HeapObject::ByteArray(values)) => values.iter().map(i8::to_string).collect(),
+        _ => return String::from("null"),
+    };
+    format!("[{}]", elems.join(", "))
+}
+
+/// The Java type name for a field descriptor: `I` -> `int`,
+/// `Ljava/lang/String;` -> `java.lang.String`, `[I` -> `int[]`.
+#[must_use]
+pub fn type_name_of_descriptor(descriptor: &str) -> String {
+    let base = descriptor.trim_start_matches('[');
+    let dims = descriptor.len() - base.len();
+    let mut name = match base {
+        "I" => String::from("int"),
+        "J" => String::from("long"),
+        "D" => String::from("double"),
+        "F" => String::from("float"),
+        "Z" => String::from("boolean"),
+        "C" => String::from("char"),
+        "S" => String::from("short"),
+        "B" => String::from("byte"),
+        "V" => String::from("void"),
+        other if other.starts_with('L') && other.ends_with(';') => {
+            other[1..other.len() - 1].replace('/', ".")
+        }
+        other => other.to_owned(),
+    };
+    for _ in 0..dims {
+        name.push_str("[]");
+    }
+    name
+}
+
+/// Java's canonical `Field.toString()`:
+/// `<modifiers> <type> <DeclaringClass>.<name>`.
+#[must_use]
+pub fn field_to_string(declaring: &str, name: &str, descriptor: &str, access: u16) -> String {
+    use jvmjs_classfile::FieldAccessFlags as F;
+    let mut out = String::new();
+    for (flag, word) in [
+        (F::PUBLIC, "public"),
+        (F::PRIVATE, "private"),
+        (F::PROTECTED, "protected"),
+        (F::STATIC, "static"),
+        (F::FINAL, "final"),
+        (F::TRANSIENT, "transient"),
+        (F::VOLATILE, "volatile"),
+    ] {
+        if access & flag != 0 {
+            out.push_str(word);
+            out.push(' ');
+        }
+    }
+    out.push_str(&type_name_of_descriptor(descriptor));
+    out.push(' ');
+    out.push_str(declaring);
+    out.push('.');
+    out.push_str(name);
+    out
 }
 
 /// Java's `Math.max`/`min` double semantics: NaN wins, `+0.0 > -0.0`.
