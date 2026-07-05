@@ -194,6 +194,29 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('alive');
   });
 
+  test('switching levels replaces a same-named file that is the active tab', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });
+    const level = page.getByTestId('level-select');
+    await level.selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (a)' });
+    // Make the shared MusicSurvey.java the active tab — the bug trigger:
+    // an active non-Main file used to survive the level switch with stale
+    // content (here a 2-arg constructor) shadowing the new level's version.
+    await selectFile(page, 'MusicSurvey.java');
+    await level.selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    const source = await page.evaluate(() => {
+      const pg = (window as unknown as { playground: PlaygroundHooks }).playground;
+      pg.selectFile('MusicSurvey.java');
+      return pg.getSource();
+    });
+    expect(source).toContain('String timesFile, String agesFile, String hoursFile');
+    expect(source).not.toContain('String agesFile, String streamingFile');
+    // (d)'s 3-arg Main now matches its 3-arg constructor: compiles cleanly.
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('$ java Main');
+    await expect(page.getByTestId('console')).not.toContainText('error:');
+  });
+
   test('loads and runs a Unit 3 (arrays) level', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });

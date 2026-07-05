@@ -274,10 +274,14 @@ export function App(): React.JSX.Element {
   };
 
   const loadLevelFiles = (files: CsaLevelFile[]): void => {
+    // Switch to Main.java first: otherwise a non-Main file left active
+    // from the previous level is the live editor (not in the inactive
+    // map), survives the clear below, and its stale content shadows the
+    // new level's same-named file (which addFile then only switches to).
+    switchToFile('Main.java');
     for (const name of [...inactiveFilesRef.current.keys()]) {
       removeFile(name);
     }
-    switchToFile('Main.java');
     const mainFile = files.find((file) => file.path === 'Main.java');
     setSource(editor(), mainFile?.text ?? '');
     for (const file of files) {
