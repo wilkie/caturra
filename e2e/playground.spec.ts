@@ -170,6 +170,30 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('Stop button interrupts a running program and the session recovers', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      'public class Main { public static void main(String[] a) { while (true) {} } }',
+    );
+    await page.getByTestId('run').click();
+    // Stop is offered while running; Run is disabled.
+    await expect(page.getByTestId('stop-run')).toBeVisible();
+    await expect(page.getByTestId('run')).toBeDisabled();
+    await page.getByTestId('stop-run').click();
+    // The loop is interrupted and the controls reset.
+    await expect(page.getByTestId('console')).toContainText('program stopped');
+    await expect(page.getByTestId('stop-run')).toBeHidden();
+    await expect(page.getByTestId('run')).toBeEnabled();
+    // The respawned session still works.
+    await setSource(
+      page,
+      'public class Main { public static void main(String[] a) { System.out.println("alive"); } }',
+    );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('alive');
+  });
+
   test('runs a Constructors level using reflection (ConstructorsHelper)', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });

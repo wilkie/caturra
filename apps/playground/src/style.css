@@ -279,3 +279,13 @@ label {
 #test-results .test-fail {
   color: #b3261e;
 }
+
+#stop-run {
+  color: #b3261e;
+  border-color: #b3261e;
+  font-weight: 600;
+}
+
+#stop-run[hidden] {
+  display: none;
+}

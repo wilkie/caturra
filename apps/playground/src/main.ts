@@ -118,6 +118,7 @@ const runEl = mustGet('#run', HTMLButtonElement);
 const versionEl = mustGet('#engine-version', HTMLSpanElement);
 const debugEl = mustGet('#debug', HTMLButtonElement);
 const testEl = mustGet('#test', HTMLButtonElement);
+const stopRunEl = mustGet('#stop-run', HTMLButtonElement);
 const testResultsEl = mustGet('#test-results', HTMLUListElement);
 const debugBarEl = mustGet('#debug-bar', HTMLDivElement);
 const pausedViewEl = mustGet('#paused-view', HTMLDivElement);
@@ -427,8 +428,48 @@ function reportDiagnostics(diagnostics: Diagnostic[]): void {
 }
 
 // One long-lived engine worker for the page; each Compile & Run
-// replaces the compiled classes, like re-invoking javac + java.
-const sessionReady = JvmWorkerSession.create();
+// replaces the compiled classes, like re-invoking javac + java. `let`,
+// not `const`: Stop terminates the worker (the only way to interrupt a
+// tight loop) and we respawn a fresh one for the next run.
+let sessionReady = JvmWorkerSession.create();
+
+// True between clicking Stop and the terminated run settling, so the
+// resulting rejection is reported as "stopped" rather than an error.
+let stopRequested = false;
+
+/** Enter the running state: only Stop is actionable. */
+function startRun(): void {
+  stopRequested = false;
+  runEl.disabled = true;
+  debugEl.disabled = true;
+  testEl.disabled = true;
+  stopRunEl.hidden = false;
+}
+
+/** Leave the running state, restoring the normal controls. */
+function finishRun(): void {
+  runEl.disabled = false;
+  debugEl.disabled = false;
+  testEl.disabled = false;
+  stopRunEl.hidden = true;
+}
+
+/**
+ * Stop a running program. A tight loop won't process a postMessage, so
+ * the only reliable interrupt is terminating the worker; we then respawn
+ * a fresh session (the next Run recompiles into it).
+ */
+async function stopProgram(): Promise<void> {
+  stopRequested = true;
+  stopRunEl.disabled = true;
+  const session = await sessionReady;
+  session.terminate();
+  sessionReady = JvmWorkerSession.create();
+  await sessionReady;
+  append('\n^C program stopped\n');
+  stopRunEl.disabled = false;
+  finishRun();
+}
 
 async function main(): Promise<void> {
   const session = await sessionReady;
@@ -445,6 +486,9 @@ async function main(): Promise<void> {
   });
   testEl.addEventListener('click', () => {
     void testProgram();
+  });
+  stopRunEl.addEventListener('click', () => {
+    void stopProgram();
   });
 }
 
@@ -741,7 +785,7 @@ async function renderTheater(): Promise<void> {
 }
 
 async function runProgram(): Promise<void> {
-  runEl.disabled = true;
+  startRun();
   consoleEl.textContent = '';
   neighborhoodViz.stop();
   try {
@@ -789,9 +833,15 @@ async function runProgram(): Promise<void> {
       }
     }
   } catch (error) {
-    append(`${String(error)}\n`, 'error');
+    // A terminated worker (Stop) rejects the in-flight run; that path
+    // already reset the UI and printed the notice.
+    if (!stopRequested) {
+      append(`${String(error)}\n`, 'error');
+    }
   } finally {
-    runEl.disabled = false;
+    if (!stopRequested) {
+      finishRun();
+    }
   }
 }
 
