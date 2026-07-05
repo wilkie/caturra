@@ -217,6 +217,23 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).not.toContainText('error:');
   });
 
+  test('a level reads its .txt data files from the VFS (and shows them as tabs)', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });
+    await page
+      .getByTestId('level-select')
+      .selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    // Data files load as editable tabs alongside the Java files.
+    await expect(page.getByTestId('file-tabs')).toContainText('times.txt');
+    await expect(page.getByTestId('file-tabs')).toContainText('ages.txt');
+    await page.getByTestId('run').click();
+    // The program reads the .txt files from the VFS and prints real rows.
+    await expect(page.getByTestId('console')).toContainText('years old');
+    await expect(page.getByTestId('console')).toContainText('hours per day');
+  });
+
   test('loads and runs a Unit 3 (arrays) level', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });

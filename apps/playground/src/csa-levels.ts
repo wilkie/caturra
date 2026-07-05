@@ -14,6 +14,8 @@ export interface CsaLevel {
   files: CsaLevelFile[];
   /** Teacher-authored JUnit validator files run by the Test button. */
   validationFiles: CsaLevelFile[];
+  /** Data files (e.g. .txt read via FileReader) written to the VFS before a run. */
+  dataFiles: CsaLevelFile[];
 }
 
 export interface CsaUnit {
@@ -37,6 +39,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Working with Java Files',
@@ -50,6 +53,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Syntax Errors (a)',
@@ -63,6 +67,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Syntax Errors (b)',
@@ -76,6 +81,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Syntax Errors (c)',
@@ -89,6 +95,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Syntax Errors (d)',
@@ -102,6 +109,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Classes and Objects',
@@ -119,6 +127,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: The Painter Class',
@@ -136,6 +145,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Painter Objects',
@@ -149,6 +159,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Objects',
@@ -162,6 +173,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Objects (a)',
@@ -175,6 +187,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Objects (b)',
@@ -188,6 +201,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Objects (c)',
@@ -201,6 +215,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Objects (d)',
@@ -214,6 +229,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Painter Class Methods',
@@ -227,6 +243,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Painter Class Methods #1',
@@ -240,6 +257,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Painter Class Methods #2',
@@ -253,6 +271,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Class Methods (a)',
@@ -266,6 +285,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Class Methods (b)',
@@ -279,6 +299,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Class Methods (c)',
@@ -292,6 +313,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Painter Class Methods (d)',
@@ -305,6 +327,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Painting',
@@ -318,6 +341,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Painting #1',
@@ -331,6 +355,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Painting #2',
@@ -344,6 +369,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Painting #3',
@@ -357,6 +383,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Moving and Painting #1',
@@ -370,6 +397,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Moving and Painting #2',
@@ -383,6 +411,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Moving and Painting #3',
@@ -396,6 +425,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Moving and Painting #4',
@@ -409,6 +439,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Loops and Boolean Methods',
@@ -422,6 +453,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Loops and Boolean Methods #1',
@@ -435,6 +467,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Loops and Boolean Methods #2',
@@ -448,6 +481,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Loops and Boolean Methods #3',
@@ -461,6 +495,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Loops and Boolean Methods #4',
@@ -474,6 +509,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using Loops and Boolean Methods (a)',
@@ -487,6 +523,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using Loops and Boolean Methods (b)',
@@ -500,6 +537,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using Loops and Boolean Methods (c)',
@@ -513,6 +551,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using Loops and Boolean Methods (d)',
@@ -526,6 +565,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigating AI-Generated Code #1',
@@ -547,6 +587,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigating AI-Generated Code #2',
@@ -568,6 +609,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating PainterPlus #1',
@@ -581,6 +623,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating PainterPlus #2',
@@ -594,6 +637,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Writing Methods',
@@ -611,6 +655,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Void Methods #1',
@@ -628,6 +673,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Void Methods #2',
@@ -645,6 +691,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Void Methods #3',
@@ -662,6 +709,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Methods',
@@ -675,6 +723,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Methods (a)',
@@ -688,6 +737,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Methods (b)',
@@ -701,6 +751,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Methods (c)',
@@ -714,6 +765,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Methods (d)',
@@ -727,6 +779,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate: Programming Style and Tools #1',
@@ -744,6 +797,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate: Programming Style and Tools #2',
@@ -761,6 +815,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate: Programming Style and Tools #3',
@@ -774,6 +829,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate: Programming Style and Tools #4',
@@ -787,6 +843,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Conducting a Code Review (a)',
@@ -804,6 +861,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Conducting a Code Review (b)',
@@ -821,6 +879,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Conducting a Code Review (c)',
@@ -838,6 +897,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Conducting a Code Review (d)',
@@ -855,6 +915,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Selection Statements',
@@ -872,6 +933,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Selection Statements',
@@ -889,6 +951,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (a)',
@@ -902,6 +965,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (b)',
@@ -915,6 +979,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (c)',
@@ -928,6 +993,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (d)',
@@ -941,6 +1007,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Variables and Printing',
@@ -958,6 +1025,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Debugging',
@@ -975,6 +1043,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Debugging in The Neighborhood (a)',
@@ -992,6 +1061,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Debugging in The Neighborhood (b)',
@@ -1009,6 +1079,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Debugging in The Neighborhood (c)',
@@ -1026,6 +1097,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Debugging in The Neighborhood (d)',
@@ -1043,6 +1115,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Selection and Logic',
@@ -1060,6 +1133,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Selection and Logic',
@@ -1077,6 +1151,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (a)',
@@ -1094,6 +1169,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (b)',
@@ -1111,6 +1187,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (c)',
@@ -1128,6 +1205,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing Algorithms (d)',
@@ -1145,6 +1223,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #1',
@@ -1158,6 +1237,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #2',
@@ -1171,6 +1251,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #3',
@@ -1184,6 +1265,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #4',
@@ -1197,6 +1279,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #1',
@@ -1210,6 +1293,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #2',
@@ -1223,6 +1307,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #3',
@@ -1236,6 +1321,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Asphalt Art Project #4',
@@ -1249,6 +1335,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'With Paint Bucket',
@@ -1262,6 +1349,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'No Paint Bucket',
@@ -1275,6 +1363,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
     ],
   },
@@ -1309,6 +1398,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Classes and Attributes #1',
@@ -1338,6 +1428,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Classes and Attributes #2',
@@ -1367,6 +1458,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Classes and Attributes #3',
@@ -1396,6 +1488,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Declaring Instance Variables (a)',
@@ -1417,6 +1510,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Declaring Instance Variables (b)',
@@ -1438,6 +1532,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Declaring Instance Variables (c)',
@@ -1459,6 +1554,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Declaring Instance Variables (d)',
@@ -1480,6 +1576,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Refactoring Code #1',
@@ -1509,6 +1606,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Refactoring Code #2',
@@ -1538,6 +1636,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (a)',
@@ -1563,6 +1662,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (b)',
@@ -1588,6 +1688,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (c)',
@@ -1613,6 +1714,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (d)',
@@ -1638,6 +1740,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: No-Argument Constructors',
@@ -1659,6 +1762,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Constructors #1',
@@ -1680,6 +1784,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Constructors #2',
@@ -1701,6 +1806,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Constructors #3',
@@ -1722,6 +1828,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Writing a Constructor (a)',
@@ -1743,6 +1850,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Writing a Constructor (b)',
@@ -1764,6 +1872,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Writing a Constructor (c)',
@@ -1785,6 +1894,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Writing a Constructor (d)',
@@ -1806,6 +1916,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing a Class (a)',
@@ -1831,6 +1942,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing a Class (b)',
@@ -1856,6 +1968,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing a Class (c)',
@@ -1881,6 +1994,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Writing a Class (d)',
@@ -1906,6 +2020,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck',
@@ -1923,6 +2038,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Parameterized Constructors',
@@ -1944,6 +2060,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Parameterized Constructors #1',
@@ -1961,6 +2078,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Parameterized Constructors #2',
@@ -1978,6 +2096,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Parameterized Constructors #3',
@@ -1995,6 +2114,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Parameterized Constructors (a)',
@@ -2012,6 +2132,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Parameterized Constructors (b)',
@@ -2029,6 +2150,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Parameterized Constructors (c)',
@@ -2046,6 +2168,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Parameterized Constructors (d)',
@@ -2063,6 +2186,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Multiple Parameterized Constructors (a)',
@@ -2080,6 +2204,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Multiple Parameterized Constructors (b)',
@@ -2097,6 +2222,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Multiple Parameterized Constructors (c)',
@@ -2114,6 +2240,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Multiple Parameterized Constructors (d)',
@@ -2131,6 +2258,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict: Getting User Input',
@@ -2144,6 +2272,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Getting User Input (a)',
@@ -2161,6 +2290,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Getting User Input (b)',
@@ -2178,6 +2308,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Getting User Input (c)',
@@ -2199,6 +2330,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Getting User Input (d)',
@@ -2216,6 +2348,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Constructors and Scope',
@@ -2233,6 +2366,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: The this Keyword #1',
@@ -2250,6 +2384,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: The this Keyword #2',
@@ -2267,6 +2402,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: The this Keyword #3',
@@ -2284,6 +2420,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The this Keyword (a)',
@@ -2301,6 +2438,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The this Keyword (b)',
@@ -2318,6 +2456,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The this Keyword (c)',
@@ -2335,6 +2474,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The this Keyword (d)',
@@ -2352,6 +2492,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The this Keyword',
@@ -2369,6 +2510,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Constructors and Inheritance',
@@ -2394,6 +2536,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: The super Keyword #1',
@@ -2419,6 +2562,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: The super Keyword #2',
@@ -2444,6 +2588,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: The super Keyword #3',
@@ -2469,6 +2614,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Constructors (a)',
@@ -2482,6 +2628,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Constructors (b)',
@@ -2495,6 +2642,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Constructors (c)',
@@ -2508,6 +2656,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: PainterPlus Constructors (d)',
@@ -2521,6 +2670,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (a)',
@@ -2538,6 +2688,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (b)',
@@ -2555,6 +2706,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (c)',
@@ -2572,6 +2724,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (d)',
@@ -2589,6 +2742,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Variables',
@@ -2602,6 +2756,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Variables',
@@ -2615,6 +2770,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Accessor Methods',
@@ -2632,6 +2788,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Accessor Methods #1',
@@ -2649,6 +2806,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Accessor Methods #2',
@@ -2666,6 +2824,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Accessor Methods (a)',
@@ -2683,6 +2842,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Accessor Methods (b)',
@@ -2700,6 +2860,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Accessor Methods (c)',
@@ -2717,6 +2878,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Accessor Methods (d)',
@@ -2734,6 +2896,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Accessor Methods',
@@ -2747,6 +2910,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (a)',
@@ -2760,6 +2924,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (b)',
@@ -2773,6 +2938,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (c)',
@@ -2786,6 +2952,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (d)',
@@ -2799,6 +2966,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Operators and Expressions',
@@ -2812,6 +2980,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Expressions #1',
@@ -2825,6 +2994,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Expressions #2',
@@ -2838,6 +3008,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Expressions #3',
@@ -2851,6 +3022,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Operators #1',
@@ -2864,6 +3036,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Operators #2',
@@ -2877,6 +3050,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Mutator Methods',
@@ -2898,6 +3072,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Mutator Methods #1',
@@ -2919,6 +3094,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Mutator Methods #2',
@@ -2940,6 +3116,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Mutator Methods (a)',
@@ -2957,6 +3134,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Mutator Methods (b)',
@@ -2974,6 +3152,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Mutator Methods (c)',
@@ -2991,6 +3170,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: Mutator Methods (d)',
@@ -3008,6 +3188,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Mutator Methods',
@@ -3021,6 +3202,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (a)',
@@ -3034,6 +3216,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (b)',
@@ -3047,6 +3230,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (c)',
@@ -3060,6 +3244,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (d)',
@@ -3073,6 +3258,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Printing Objects',
@@ -3098,6 +3284,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Printing Objects #1',
@@ -3123,6 +3310,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Printing Objects #2',
@@ -3148,6 +3336,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: The toString() Method (a)',
@@ -3165,6 +3354,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: The toString() Method (b)',
@@ -3182,6 +3372,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: The toString() Method (c)',
@@ -3199,6 +3390,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Skill Building: The toString() Method (d)',
@@ -3216,6 +3408,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The toString() Method',
@@ -3229,6 +3422,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (a)',
@@ -3242,6 +3436,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (b)',
@@ -3255,6 +3450,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (c)',
@@ -3268,6 +3464,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: The Food Truck (d)',
@@ -3281,6 +3478,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Store Management Project',
@@ -3294,6 +3492,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Store Management Project',
@@ -3307,6 +3506,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'CSA 2023 Console Sandbox_2025',
@@ -3320,6 +3520,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'With Paint Bucket',
@@ -3333,6 +3534,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'No Paint Bucket',
@@ -3346,6 +3548,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
     ],
   },
@@ -3368,6 +3571,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: 1D Arrays #1',
@@ -3385,6 +3589,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: 1D Arrays #2',
@@ -3402,6 +3607,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: 1D Arrays #3',
@@ -3419,6 +3625,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Getting the Length of a 1D Array (a)',
@@ -3436,6 +3643,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Getting the Length of a 1D Array (b)',
@@ -3453,6 +3661,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Getting the Length of a 1D Array (c)',
@@ -3470,6 +3679,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Getting the Length of a 1D Array (d)',
@@ -3487,6 +3697,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (a)',
@@ -3504,6 +3715,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (b)',
@@ -3521,6 +3733,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (c)',
@@ -3538,6 +3751,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (d)',
@@ -3555,6 +3769,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Initializer Lists',
@@ -3572,6 +3787,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Assigning and Accessing Elements #1',
@@ -3589,6 +3805,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Assigning and Accessing Elements #2',
@@ -3606,6 +3823,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Assigning and Accessing Elements #3',
@@ -3623,6 +3841,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (a) #1',
@@ -3640,6 +3859,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (b) #1',
@@ -3657,6 +3877,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (c) #1',
@@ -3674,6 +3895,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (d) #1',
@@ -3691,6 +3913,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (a) #2',
@@ -3708,6 +3931,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (b) #2',
@@ -3725,6 +3949,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (c) #2',
@@ -3742,6 +3967,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Creating 1D Arrays (d) #2',
@@ -3759,6 +3985,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Traversing 1D Arrays',
@@ -3776,6 +4003,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Traversing 1D Arrays #1',
@@ -3793,6 +4021,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Traversing 1D Arrays #2',
@@ -3810,6 +4039,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Traversing 1D Arrays #3',
@@ -3827,6 +4057,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse a 1D Array (a)',
@@ -3844,6 +4075,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse a 1D Array (b)',
@@ -3861,6 +4093,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse a 1D Array (c)',
@@ -3878,6 +4111,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse a 1D Array (d)',
@@ -3895,6 +4129,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse Multiple 1D Arrays (a)',
@@ -3912,6 +4147,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse Multiple 1D Arrays (b)',
@@ -3929,6 +4165,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse Multiple 1D Arrays (c)',
@@ -3946,6 +4183,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traverse Multiple 1D Arrays (d)',
@@ -3963,6 +4201,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: For Loops',
@@ -3980,6 +4219,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: For Loops #1',
@@ -3997,6 +4237,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: For Loops #2',
@@ -4014,6 +4255,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: For Loops #3',
@@ -4031,6 +4273,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Converting Loops (a)',
@@ -4048,6 +4291,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Converting Loops (b)',
@@ -4065,6 +4309,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Converting Loops (c)',
@@ -4082,6 +4327,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Converting Loops (d)',
@@ -4099,6 +4345,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using for Loops (a)',
@@ -4116,6 +4363,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using for Loops (b)',
@@ -4133,6 +4381,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using for Loops (c)',
@@ -4150,6 +4399,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Using for Loops (d)',
@@ -4167,6 +4417,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Reading Text Files',
@@ -4184,6 +4435,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'student_data.txt',
+            text: 'Aiden Chen\nFatima Ahmed\nLiam Smith\nPriya Patel\nSantiago Garcia\nHiroshi Tanaka\nAmara Johnson\nElena Rossi\nNguyen Tran\nOlga Ivanova',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Reading Text Files',
@@ -4201,6 +4458,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'student_data.txt',
+            text: 'Aiden Chen\nFatima Ahmed\nLiam Smith\nPriya Patel\nSantiago Garcia\nHiroshi Tanaka\nAmara Johnson\nElena Rossi\nNguyen Tran\nOlga Ivanova',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Processing File Data',
@@ -4218,6 +4481,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'gpa_data.txt',
+            text: '3.85\n2.67\n3.14\n3.76\n2.94\n3.45\n3.98\n2.75\n3.33\n3.89',
+          },
+          {
+            path: 'student_data.txt',
+            text: 'Aiden Chen\nFatima Ahmed\nLiam Smith\nPriya Patel\nSantiago Garcia\nHiroshi Tanaka\nAmara Johnson\nElena Rossi\nNguyen Tran\nOlga Ivanova',
+          },
+        ],
       },
       {
         name: 'Reading and Processing Files (a)',
@@ -4235,6 +4508,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'temperature_data.txt',
+            text: '32.0\u00b0F  \n45.5\u00b0F  \n60.0\u00b0F  \n72.5\u00b0F  \n85.0\u00b0F  \n95.7\u00b0F  \n100.0\u00b0F  \n110.3\u00b0F  \n55.4\u00b0F  \n40.2\u00b0F  \n66.8\u00b0F  \n77.1\u00b0F  \n82.6\u00b0F  \n90.0\u00b0F  \n104.9\u00b0F',
+          },
+        ],
       },
       {
         name: 'Reading and Processing Files (b)',
@@ -4252,6 +4531,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'inventory_data.txt',
+            text: '34.99\n23.50\n45.00\n12.75\n78.20\n56.10\n19.99\n5.49\n89.95\n43.80\n60.25\n10.00\n25.99\n67.40\n29.95',
+          },
+        ],
       },
       {
         name: 'Reading and Processing Files (c)',
@@ -4269,6 +4554,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'survey_data.txt',
+            text: 'true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue',
+          },
+        ],
       },
       {
         name: 'Reading and Processing Files (d)',
@@ -4286,6 +4577,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'population_data.txt',
+            text: '39512223\n28995881\n21477737\n19453561\n12801989\n12671821\n11689100\n10617423\n10488084\n9986857',
+          },
+          {
+            path: 'state_data.txt',
+            text: 'California\nTexas\nFlorida\nNew York\nPennsylvania\nIllinois\nOhio\nGeorgia\nNorth Carolina\nMichigan',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Reading a File',
@@ -4307,6 +4608,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'durations.txt',
+            text: '10\n9\n7\n66\n55\n7\n8\n15\n13\n6\n9\n10\n9\n16\n13\n10\n15\n17\n21\n6\n15\n12\n18\n9\n9',
+          },
+          {
+            path: 'titles.txt',
+            text: "The Future Will Be Shaped by Optimists \nAn Olympic Champion's Unwavering Advocacy for Mothers in Sports \nThe African Swamp Protecting Earth's Environment \nElon Musk: A future worth getting excited about \nElon Musk talks Twitter, Tesla and how his brain works\nUkraine's Fight to Keep Educating Its Children \nWhy Entrepreneurship Flourishes in The Countryside \nStand with Ukraine in the Fight against Evil \nThe Deep Sea's Medicinal Secrets \nClimate Change Isn't a Distant Threat -- It's Our Reality \n3 Things Men Can Do to Promote Gender Equity \nThe Power of Purpose in Business \nAre Ad Agencies, PR Firms and Lobbyists Destroying the Climate? \nThe Hidden Power of Sad Songs and Rainy Days \nWhat It's Like To Be a War Refugee \nSelf-Assembling Robots and the Potential of Artificial Evolution \nHow to Design Mosquitoes Out of Cities \n3 Ways to Find Hope in Hopeless Times \nThe Critical Role of Black Mothers -- and How to Support All Moms \nWhat Does a Voice of the Future Sound Like? \nThe Creativity and Community Behind Fanfiction \nHow to Share Public Money Fairly \nWhy US Laws Must Expand Beyond the Nuclear Family \n3 Ways Your Company's Data Can Jump-Start Climate Action \nWhat Seaweed and Cow Burps Have to Do with Climate Change ",
+          },
+          {
+            path: 'views.txt',
+            text: '51273\n25597\n21430\n3609893\n4405481\n38252\n32369\n137166\n34071\n39376\n37296\n51525\n25438\n82889\n31855\n63375\n36946\n45843\n14674\n273563\n25954\n39904\n39526\n25959\n18783',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (a) #1',
@@ -4328,6 +4643,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'exams.txt',
+            text: '2399\n100\n1587\n1406\n31189\n2584\n3251\n513\n14864\n7221\n782\n429\n8572\n2883\n521\n236\n1462\n1191\n242\n7662\n5451\n4504\n1432\n400\n1199\n42\n514\n1701\n403\n9391\n270\n13304\n6273\n109\n3754\n500\n714\n6104\n617\n2159\n26\n2046\n17307\n612\n150\n6034\n4034\n352\n2080\n112',
+          },
+          {
+            path: 'states.txt',
+            text: 'Alabama\nAlaska\nArizona\nArkansas\nCalifornia\nColorado\nConnecticut\nDelaware\nFlorida\nGeorgia\nHawaii\nIdaho\nIllinois\nIndiana\nIowa\nKansas\nKentucky\nLouisiana\nMaine\nMaryland\nMassachusetts\nMichigan\nMinnesota\nMississippi\nMissouri\nMontana\nNebraska\nNevada\nNew Hampshire\nNew Jersey\nNew Mexico\nNew York\nNorth Carolina\nNorth Dakota\nOhio\nOklahoma\nOregon\nPennsylvania\nRhode Island\nSouth Carolina\nSouth Dakota\nTennessee\nTexas\nUtah\nVermont\nVirginia\nWashington\nWest Virginia\nWisconsin\nWyoming',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (b) #1',
@@ -4349,6 +4674,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'dailyPlays.txt',
+            text: '4750185\n5102574\n6149812\n5811600\n4506688\n4873139\n5009612\n5562741\n5799207\n7068846\n6882528\n5372271\n5364677\n5532812\n5901056\n6708201\n7723706\n6543891\n5942353\n6314185\n6903992\n8020508\n10905559\n21273357\n16216593\n4510287\n2037749\n1483957\n1224254\n1091757\n1500302',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (c) #1',
@@ -4370,6 +4701,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'storeProfits.txt',
+            text: '-16.28\n2121.66\n598.28\n421.13\n-256.02\n1572.71\n1373.42\n1474.12\n3427.62\n772.90\n6438.50\n1082.35',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (d) #1',
@@ -4391,6 +4728,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'episodes.txt',
+            text: '37\n30\n34\n38\n32\n41\n37\n45\n50\n38\n32\n36\n43\n30\n35\n44',
+          },
+          {
+            path: 'titles.txt',
+            text: 'Chapter 1: The Mandalorian\nChapter 2: The Child\nChapter 3: The Sin\nChapter 4: Sanctuary\nChapter 5: The Gunslinger\nChapter 6: The Prisoner\nChapter 7: The Reckoning\nChapter 8: Redemption\nChapter 9: The Marshal\nChapter 10: The Passenger\nChapter 11: The Heiress\nChapter 12: The Siege\nChapter 13: The Jedi\nChapter 14: The Tragedy\nChapter 15: The Believer\nChapter 16: The Rescue',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (a) #2',
@@ -4412,6 +4759,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'exams.txt',
+            text: '2399\n100\n1587\n1406\n31189\n2584\n3251\n513\n14864\n7221\n782\n429\n8572\n2883\n521\n236\n1462\n1191\n242\n7662\n5451\n4504\n1432\n400\n1199\n42\n514\n1701\n403\n9391\n270\n13304\n6273\n109\n3754\n500\n714\n6104\n617\n2159\n26\n2046\n17307\n612\n150\n6034\n4034\n352\n2080\n112',
+          },
+          {
+            path: 'states.txt',
+            text: 'Alabama\nAlaska\nArizona\nArkansas\nCalifornia\nColorado\nConnecticut\nDelaware\nFlorida\nGeorgia\nHawaii\nIdaho\nIllinois\nIndiana\nIowa\nKansas\nKentucky\nLouisiana\nMaine\nMaryland\nMassachusetts\nMichigan\nMinnesota\nMississippi\nMissouri\nMontana\nNebraska\nNevada\nNew Hampshire\nNew Jersey\nNew Mexico\nNew York\nNorth Carolina\nNorth Dakota\nOhio\nOklahoma\nOregon\nPennsylvania\nRhode Island\nSouth Carolina\nSouth Dakota\nTennessee\nTexas\nUtah\nVermont\nVirginia\nWashington\nWest Virginia\nWisconsin\nWyoming',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (b) #2',
@@ -4433,6 +4790,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'dailyPlays.txt',
+            text: '4750185\n5102574\n6149812\n5811600\n4506688\n4873139\n5009612\n5562741\n5799207\n7068846\n6882528\n5372271\n5364677\n5532812\n5901056\n6708201\n7723706\n6543891\n5942353\n6314185\n6903992\n8020508\n10905559\n21273357\n16216593\n4510287\n2037749\n1483957\n1224254\n1091757\n1500302',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (c) #2',
@@ -4454,6 +4817,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'storeProfits.txt',
+            text: '-16.28\n2121.66\n598.28\n421.13\n-256.02\n1572.71\n1373.42\n1474.12\n3427.62\n772.90\n6438.50\n1082.35',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with Arrays (d) #2',
@@ -4475,6 +4844,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'episodes.txt',
+            text: '37\n30\n34\n38\n32\n41\n37\n45\n50\n38\n32\n36\n43\n30\n35\n44',
+          },
+          {
+            path: 'titles.txt',
+            text: 'Chapter 1: The Mandalorian\nChapter 2: The Child\nChapter 3: The Sin\nChapter 4: Sanctuary\nChapter 5: The Gunslinger\nChapter 6: The Prisoner\nChapter 7: The Reckoning\nChapter 8: Redemption\nChapter 9: The Marshal\nChapter 10: The Passenger\nChapter 11: The Heiress\nChapter 12: The Siege\nChapter 13: The Jedi\nChapter 14: The Tragedy\nChapter 15: The Believer\nChapter 16: The Rescue',
+          },
+        ],
       },
       {
         name: 'Analyzing Data Sets #1',
@@ -4492,6 +4871,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'artists.txt',
+            text: "Queen\nLed Zeppelin\nJohn Lennon\nNirvana\nEagles\nAC/DC\nGuns N' Roses\nQueen\nThe Rolling Stones\nVan Halen\nLed Zeppelin\nPink Floyd\nLed Zeppelin\nOzzy Osbourne\nAC/DC\nMetallica\nLed Zeppelin\nGuns N' Roses\nDeep Purple\nDerek and the Dominos\n",
+          },
+          {
+            path: 'genre.txt',
+            text: 'Rock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\n',
+          },
+          {
+            path: 'plays.txt',
+            text: '245\n300\n450\n200\n220\n150\n170\n190\n210\n180\n275\n340\n415\n195\n205\n160\n185\n215\n225\n195\n',
+          },
+          {
+            path: 'titles.txt',
+            text: "Bohemian Rhapsody\nStairway to Heaven\nImagine\nSmells Like Teen Spirit\nHotel California\nBack in Black\nSweet Child o' Mine\nAnother One Bites the Dust\nPaint It Black\nJump\nWhole Lotta Love\nComfortably Numb\nBlack Dog\nCrazy Train\nHighway to Hell\nEnter Sandman\nKashmir\nParadise City\nSmoke on the Water\nLayla\n",
+          },
+        ],
       },
       {
         name: 'Analyzing Data Sets #2',
@@ -4509,6 +4906,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'age.txt',
+            text: '46\n59\n54\n50\n47\n60\n46\n58\n50\n50\n60\n43\n47\n42\n60\n41\n51\n45\n41\n60',
+          },
+          {
+            path: 'cholesterol.txt',
+            text: '200\n257\n204\n213\n280\n200\n284\n170\n222\n167\n281\n238\n209\n163\n158\n239\n202\n279\n233\n241',
+          },
+          {
+            path: 'gender.txt',
+            text: 'Male\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale\nMale',
+          },
+          {
+            path: 'heart_disease.txt',
+            text: 'TRUE\nFALSE\nFALSE\nFALSE\nTRUE\nFALSE\nTRUE\nTRUE\nTRUE\nTRUE\nTRUE\nFALSE\nFALSE\nFALSE\nFALSE\nFALSE\nTRUE\nFALSE\nFALSE\nTRUE',
+          },
+        ],
       },
       {
         name: 'Analyzing Data Sets #3',
@@ -4526,6 +4941,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'gender.txt',
+            text: 'Female\nMale\nMale\nFemale\nFemale\nMale\nMale\nFemale\nMale\nFemale\nFemale\nMale\nFemale\nFemale\nMale\nMale\nFemale\nMale\nFemale\nMale',
+          },
+          {
+            path: 'school_type.txt',
+            text: 'Private\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate\nPrivate',
+          },
+          {
+            path: 'scores.txt',
+            text: '85\n92\n88\n91\n87\n90\n93\n89\n86\n94\n88\n91\n87\n90\n92\n89\n86\n94\n85\n93',
+          },
+          {
+            path: 'state.txt',
+            text: 'California\nNew York\nTexas\nFlorida\nNevada\nOhio\nGeorgia\nNew Jersey\nWashington\nIllinois\nColorado\nArizona\nMichigan\nMassachusetts\nVirginia\nOregon\nPennsylvania\nMaryland\nIndiana\nNorth Carolina',
+          },
+        ],
       },
       {
         name: 'Analyzing Data Sets #4',
@@ -4543,6 +4976,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'annual_salary.txt',
+            text: '120000\n95000\n135000\n110000\n125000\n98000\n140000\n102000\n115000\n108000\n130000\n99000\n145000\n112000\n123000\n107000\n128000\n97000\n139000\n104000',
+          },
+          {
+            path: 'city.txt',
+            text: 'San Francisco\nNew York\nLos Angeles\nSeattle\nChicago\nBoston\nWashington, D.C.\nAustin\nSan Diego\nDallas\nSan Francisco\nNew York\nLos Angeles\nSeattle\nChicago\nBoston\nWashington, D.C.\nAustin\nSan Diego\nDallas',
+          },
+          {
+            path: 'employment_type.txt',
+            text: 'Full-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time\nFull-Time',
+          },
+          {
+            path: 'profession.txt',
+            text: 'Software Engineer\nLawyer\nDoctor\nFinancial Analyst\nArchitect\nEngineer\nConsultant\nData Scientist\nManager\nPharmacist\nDentist\nBusiness Executive\nSurgeon\nAttorney\nMarketing Director\nSoftware Developer\nInvestment Banker\nAccountant\nProduct Manager\nEngineer',
+          },
+        ],
       },
       {
         name: 'Predict and Run: Polymorphism',
@@ -4572,6 +5023,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Polymorphism #1',
@@ -4601,6 +5053,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Polymorphism #2',
@@ -4630,6 +5083,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Polymorphism #3',
@@ -4659,6 +5113,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Arrays of Objects (a)',
@@ -4688,6 +5143,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Arrays of Objects (b)',
@@ -4725,6 +5181,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Arrays of Objects (c)',
@@ -4754,6 +5211,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Arrays of Objects (d)',
@@ -4787,6 +5245,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traversing Arrays of Objects (a)',
@@ -4812,6 +5271,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traversing Arrays of Objects (b)',
@@ -4837,6 +5297,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traversing Arrays of Objects (c)',
@@ -4866,6 +5327,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Traversing Arrays of Objects (d)',
@@ -4899,6 +5361,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Predict and Run: Enhanced For Loops',
@@ -4924,6 +5387,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'companies.txt',
+            text: 'Berkshire Hathaway\nJPMorgan Chase\nAmazon\nApple\nBank of America\nAlphabet\nMicrosoft\nExxonMobil\nWells Fargo\nVerizon Communications\nAT&T\nUnitedHealth Group\nWalmart\nChevron\nCitigroup\nComcast\nMeta Platforms\nMorgan Stanley\nGoldman Sachs Group\nJohnson & Johnson\nCVS Health\nPfizer\nIntel\nProcter & Gamble\nAbbVie\nGeneral Motors\nMetLife\nAmerican Express\nCigna\nPrudential Financial\nPepsiCo\nMerck & Co.\nElevance Health\nAmerican International Group\nCisco Systems\nWalt Disney\nIBM\nUnited Parcel Service\nRaytheon Technologies\nCapital One\nBristol Myers Squibb\nCoca-Cola\nOracle\nThermo Fisher Scientific\nCostco Wholesale\nCharter Communications\nConocoPhillips\nUS Bancorp\nAbbott Laboratories\nCaterpillar',
+          },
+          {
+            path: 'profits.txt',
+            text: '89.8\n42.12\n33.36\n100.56\n31\n76.03\n71.18\n23.04\n20.58\n21.52\n17.33\n17.45\n13.67\n15.62\n18.23\n14.16\n39.37\n14.58\n18.74\n19.83\n7.91\n21.98\n19.87\n14.6\n11.46\n10.02\n6.55\n7.86\n5.36\n7.61\n7.62\n13.05\n6.24\n9.39\n11.82\n3.08\n5.52\n12.89\n3.86\n12.29\n6.99\n9.77\n7.56\n7.72\n5.51\n4.65\n8.08\n7.21\n7.7\n6.49',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Enhanced For Loops #1',
@@ -4949,6 +5422,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'companies.txt',
+            text: 'Berkshire Hathaway\nJPMorgan Chase\nAmazon\nApple\nBank of America\nAlphabet\nMicrosoft\nExxonMobil\nWells Fargo\nVerizon Communications\nAT&T\nUnitedHealth Group\nWalmart\nChevron\nCitigroup\nComcast\nMeta Platforms\nMorgan Stanley\nGoldman Sachs Group\nJohnson & Johnson\nCVS Health\nPfizer\nIntel\nProcter & Gamble\nAbbVie\nGeneral Motors\nMetLife\nAmerican Express\nCigna\nPrudential Financial\nPepsiCo\nMerck & Co.\nElevance Health\nAmerican International Group\nCisco Systems\nWalt Disney\nIBM\nUnited Parcel Service\nRaytheon Technologies\nCapital One\nBristol Myers Squibb\nCoca-Cola\nOracle\nThermo Fisher Scientific\nCostco Wholesale\nCharter Communications\nConocoPhillips\nUS Bancorp\nAbbott Laboratories\nCaterpillar',
+          },
+          {
+            path: 'profits.txt',
+            text: '89.8\n42.12\n33.36\n100.56\n31\n76.03\n71.18\n23.04\n20.58\n21.52\n17.33\n17.45\n13.67\n15.62\n18.23\n14.16\n39.37\n14.58\n18.74\n19.83\n7.91\n21.98\n19.87\n14.6\n11.46\n10.02\n6.55\n7.86\n5.36\n7.61\n7.62\n13.05\n6.24\n9.39\n11.82\n3.08\n5.52\n12.89\n3.86\n12.29\n6.99\n9.77\n7.56\n7.72\n5.51\n4.65\n8.08\n7.21\n7.7\n6.49',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Enhanced For Loops #2',
@@ -4974,6 +5457,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'companies.txt',
+            text: 'Berkshire Hathaway\nJPMorgan Chase\nAmazon\nApple\nBank of America\nAlphabet\nMicrosoft\nExxonMobil\nWells Fargo\nVerizon Communications\nAT&T\nUnitedHealth Group\nWalmart\nChevron\nCitigroup\nComcast\nMeta Platforms\nMorgan Stanley\nGoldman Sachs Group\nJohnson & Johnson\nCVS Health\nPfizer\nIntel\nProcter & Gamble\nAbbVie\nGeneral Motors\nMetLife\nAmerican Express\nCigna\nPrudential Financial\nPepsiCo\nMerck & Co.\nElevance Health\nAmerican International Group\nCisco Systems\nWalt Disney\nIBM\nUnited Parcel Service\nRaytheon Technologies\nCapital One\nBristol Myers Squibb\nCoca-Cola\nOracle\nThermo Fisher Scientific\nCostco Wholesale\nCharter Communications\nConocoPhillips\nUS Bancorp\nAbbott Laboratories\nCaterpillar',
+          },
+          {
+            path: 'profits.txt',
+            text: '89.8\n42.12\n33.36\n100.56\n31\n76.03\n71.18\n23.04\n20.58\n21.52\n17.33\n17.45\n13.67\n15.62\n18.23\n14.16\n39.37\n14.58\n18.74\n19.83\n7.91\n21.98\n19.87\n14.6\n11.46\n10.02\n6.55\n7.86\n5.36\n7.61\n7.62\n13.05\n6.24\n9.39\n11.82\n3.08\n5.52\n12.89\n3.86\n12.29\n6.99\n9.77\n7.56\n7.72\n5.51\n4.65\n8.08\n7.21\n7.7\n6.49',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Enhanced For Loops #3',
@@ -4999,6 +5492,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'companies.txt',
+            text: 'Berkshire Hathaway\nJPMorgan Chase\nAmazon\nApple\nBank of America\nAlphabet\nMicrosoft\nExxonMobil\nWells Fargo\nVerizon Communications\nAT&T\nUnitedHealth Group\nWalmart\nChevron\nCitigroup\nComcast\nMeta Platforms\nMorgan Stanley\nGoldman Sachs Group\nJohnson & Johnson\nCVS Health\nPfizer\nIntel\nProcter & Gamble\nAbbVie\nGeneral Motors\nMetLife\nAmerican Express\nCigna\nPrudential Financial\nPepsiCo\nMerck & Co.\nElevance Health\nAmerican International Group\nCisco Systems\nWalt Disney\nIBM\nUnited Parcel Service\nRaytheon Technologies\nCapital One\nBristol Myers Squibb\nCoca-Cola\nOracle\nThermo Fisher Scientific\nCostco Wholesale\nCharter Communications\nConocoPhillips\nUS Bancorp\nAbbott Laboratories\nCaterpillar',
+          },
+          {
+            path: 'profits.txt',
+            text: '89.8\n42.12\n33.36\n100.56\n31\n76.03\n71.18\n23.04\n20.58\n21.52\n17.33\n17.45\n13.67\n15.62\n18.23\n14.16\n39.37\n14.58\n18.74\n19.83\n7.91\n21.98\n19.87\n14.6\n11.46\n10.02\n6.55\n7.86\n5.36\n7.61\n7.62\n13.05\n6.24\n9.39\n11.82\n3.08\n5.52\n12.89\n3.86\n12.29\n6.99\n9.77\n7.56\n7.72\n5.51\n4.65\n8.08\n7.21\n7.7\n6.49',
+          },
+        ],
       },
       {
         name: 'Practice: Converting Loops (a)',
@@ -5020,6 +5523,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'counts.txt',
+            text: '26\n20\n4\n10\n14\n62\n310\n704\n874\n552\n236\n84\n152\n180\n256\n328\n630\n1166\n760\n256\n160\n126\n98\n34\n36\n6\n18\n6\n16\n52\n284\n638\n836\n482\n240\n216\n208\n252\n238\n294\n550\n1014\n756\n328\n166\n140\n92\n82',
+          },
+        ],
       },
       {
         name: 'Practice: Converting Loops (b)',
@@ -5045,6 +5554,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'copies.txt',
+            text: '48410000\n40170000\n29530000\n27790000\n25370000\n24400000\n18350000\n14920000\n14870000\n14810000\n13910000\n13310000\n13300000\n11430000\n10000000\n9430000\n9070000\n8070000\n7900000\n7890000\n7700000\n6150000\n6080000\n5270000\n4280000\n4220000\n4120000\n4000000\n3980000\n3910000\n3820000\n3630000\n3500000\n3340000\n3310000\n3200000\n3010000\n2900000\n2740000\n2660000\n2440000\n2350000\n2230000\n2170000\n2160000\n2130000\n2010000\n2000000\n1890000\n1890000\n1720000\n1680000\n1680000\n1590000\n1580000\n1550000\n1540000\n1500000\n1420000\n1280000\n1270000\n1260000\n1200000\n1200000\n1060000\n1040000\n1000000\n1000000\n1000000\n1000000\n1000000\n1000000\n1000000',
+          },
+          {
+            path: 'titles.txt',
+            text: "Mario Kart 8 Deluxe\nAnimal Crossing: New Horizons\nSuper Smash Bros. Ultimate\nThe Legend of Zelda: Breath of the Wild\nPokemon Sword and Shield\nSuper Mario Odyssey\nSuper Mario Party\nPokemon Brilliant Diamond and Shining Pearl\nRing Fit Adventure\nPokemon: Let's Go, Pikachu! and Let's Go, Eevee!\nPokemon Legends: Arceus\nNew Super Mario Bros. U Deluxe\nSplatoon 2\nLuigi's Mansion 3\nPokemon Scarlet and Violet\nSuper Mario 3D World + Bowser's Fury\nSuper Mario 3D All-Stars\nMario Party Superstars\nSplatoon 3\nSuper Mario Maker 2\nMonster Hunter Rise\nNintendo Switch Sports\nThe Legend of Zelda: Link's Awakening\nKirby and the Forgotten Land\nMario Tennis Aces\nClubhouse Games: 51 Worldwide Classics\nDonkey Kong Country: Tropical Freeze\nHyrule Warriors: Age of Calamity\nKirby Star Allies\nThe Legend of Zelda: Skyward Sword HD\nFire Emblem: Three Houses\n1-2-Switch\nMomotaro Dentetsu: Showa, Heisei, Reiwa Mo Teiban!\nPaper Mario: The Origami King\nMinecraft\nAmong Us\nYoshi's Crafted World\nMetroid Dread\nNew Pokemon Snap\nArms\nXenoblade Chronicles 2\nMario Golf: Super Rush\nPikmin 3 Deluxe\nMario Strikers: Battle League\nOctopath Traveler\nCaptain Toad: Treasure Tracker\nDragon Ball FighterZ\nMario + Rabbids Kingdom Battle\nPokemon Mystery Dungeon: Rescue Team DX\nTaiko no Tatsujin: Drum 'n' Fun!\nXenoblade Chronicles 3\nMiitopia\nXenoblade Chronicles: Definitive Edition\nBig Brain Academy: Brain vs. Brain\nMario Kart Live: Home Circuit\nDragon Ball Xenoverse 2\nPokken Tournament DX\nMarvel Ultimate Alliance 3: The Black Order\nNintendo Labo Toy-Con 01: Variety Kit\nAstral Chain\nWarioWare: Get It Together!\nNaruto Shippudden: Ultimate Ninja Storm Trilogy\nDr Kawashima's Brain Training for Nintendo Switch\nResident Evil: Revelations Collection\nGame Builder Garage\nBayonetta 2\nEnter the Gungeon\nFire Emblem Warriors: Three Hopes\nFitness Boxing\nFitness Boxing 2: Rhythm and Exercise\nShin Megami Tensei V\nStory of Seasons: Pioneers of Olive Town\nThief Simulator",
+          },
+        ],
       },
       {
         name: 'Practice: Converting Loops (c)',
@@ -5070,6 +5589,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'attend.txt',
+            text: '590549\n363000\n375700\n1045246\n768607\n819810\n893172\n1563135\n1603975\n1865753\n1545791\n2109723\n2394031\n2516215\n3587538\n2785100\n2705197\n3359439\n3178856\n3429873\n3031768\n3404252',
+          },
+          {
+            path: 'hosts.txt',
+            text: 'Uruguay\nItaly\nFrance\nBrazil\nSwitzerland\nSweden\nChile\nEngland\nMexico\nWest Germany\nArgentina\nSpain\nMexico\nItaly\nUnited States\nFrance\nSouth Korea\u00c2\u00a0Japan\nGermany\nSouth Africa\nBrazil\nRussia\nQatar',
+          },
+          {
+            path: 'years.txt',
+            text: '1930\n1934\n1938\n1950\n1954\n1958\n1962\n1966\n1970\n1974\n1978\n1982\n1986\n1990\n1994\n1998\n2002\n2006\n2010\n2014\n2018\n2022',
+          },
+        ],
       },
       {
         name: 'Practice: Converting Loops (d)',
@@ -5095,6 +5628,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'ages.txt',
+            text: '18\n63\n18\n61\n18\n18\n18\n21\n19\n18\n18\n19\n17\n19\n18\n17\n16\n16\n17\n15\n15\n17\n19\n18\n16\n18\n14\n18\n17\n17\n20\n19\n19\n17\n16\n18\n21\n17\n26\n20\n23\n18\n37\n17\n18\n17\n36\n24\n18\n19\n17\n16\n23\n23\n22\n16\n18\n42\n23\n23\n19\n22\n15\n25\n32\n36\n24\n29\n41\n36\n19\n31\n16\n26\n22\n16\n17\n19\n18\n18\n19\n19\n22\n16\n19\n37\n14\n33\n26\n32\n30\n43\n24\n36\n19\n22\n20\n31\n19\n15\n18\n25\n17\n28\n20\n21\n41\n20\n34\n21\n23\n16\n19\n22\n19\n23\n23\n22\n17\n28\n23\n19\n17\n21\n29\n22\n18\n13\n24\n35\n29\n28\n32\n32\n21\n18\n19\n18\n16\n25\n17\n16\n27\n53\n25\n34\n22\n17\n26\n19\n21\n32\n21\n25\n26\n21\n17\n28\n41\n18\n22\n18\n49\n21\n27\n19\n27\n27\n19\n42\n60\n19\n20\n28\n16\n18\n34\n18\n21\n38\n17\n35\n21\n25\n18\n16\n19\n31\n26\n16\n26\n17\n22\n20\n30\n26\n19\n21\n33\n28\n25\n22\n19\n44\n22\n26\n23\n17\n42\n30\n35\n20\n18\n21\n19\n37\n31\n29\n20\n36\n18\n18\n25\n18\n31\n17\n21\n30\n40\n64\n14\n26\n35\n33\n30\n31\n27\n53\n23\n25\n16\n18\n29\n31\n31\n38\n17\n25\n20\n15\n16\n20\n23\n22\n15\n17\n22\n21\n19\n32\n34\n18\n21\n20\n19\n25\n31\n21\n31\n20\n19\n19\n23\n24\n20\n15\n17\n20\n14\n24\n14\n23\n28\n22\n25\n27\n18\n17\n23\n40\n27\n18\n16\n18\n23\n15\n20\n16\n16\n20\n33\n22\n21\n21\n29\n56\n17\n22\n26\n30\n49\n22\n32\n32\n22\n17\n21\n17\n25\n15\n13\n38\n23\n17\n59\n22\n17\n27\n23\n15\n22\n23\n19\n32\n40\n21\n21\n23\n21\n35\n18\n21\n22\n23\n13\n19\n33\n18\n17\n16\n18\n19\n15\n17\n25\n24\n23\n16\n25\n16\n20\n17\n29\n20\n16\n21\n16\n43\n32\n10\n27\n24\n18\n17\n19\n16\n64\n33\n32\n15\n27\n20\n23\n19\n12\n16\n17\n14\n32\n20\n54\n18\n14\n13\n19\n14\n14\n18\n15\n24\n17\n44\n23\n21\n57\n23\n18\n26\n13\n15\n57\n12\n26\n17\n17\n69\n17\n32\n22\n38\n18\n14\n14\n19\n20\n18\n30\n31\n72\n73\n16\n19\n16\n12\n39\n15\n14\n21\n38\n23\n16\n21\n13\n16\n18\n21\n17\n24\n14\n25\n22\n20\n23\n61\n24\n34\n49\n33\n22\n38\n23\n34\n40\n27\n54\n16\n23\n35\n22\n41\n63\n28\n22\n58\n58\n67\n70\n60\n15\n18\n58\n28\n22\n49\n20\n55\n48\n14\n18\n25\n71\n60\n18\n19\n74\n36\n14\n20\n15\n19\n29\n24\n18\n21\n19\n25\n28\n27\n60\n25\n60\n43\n51\n63\n64\n22\n24\n19\n56\n20\n19\n20\n60\n65\n28\n18\n42\n80\n22\n56\n20\n15\n67\n57\n22\n17\n19\n50\n24\n67\n18\n20\n15\n17\n32\n18\n18\n18\n19\n18\n17\n34\n18\n18\n22\n18\n19\n25\n17\n25\n18\n21\n24\n16\n18\n18\n16\n68\n16\n21\n53\n29\n18\n29\n18\n22\n19\n13\n26\n14\n27\n26\n59\n30\n27\n18\n23\n18\n40\n24\n23\n56\n29\n16\n18\n21\n32\n22\n17\n18\n18\n24\n21\n46\n18\n16\n21\n19\n20\n21\n56\n21\n20\n21\n25\n33\n20\n17\n24\n26\n17\n16\n27\n28\n48\n19\n21\n21\n15\n20\n21\n22\n22\n31\n20\n49\n42\n26\n17\n30\n23\n30\n31\n42\n16\n34\n21\n27\n18\n26\n37\n26\n19\n22\n43\n24\n21\n28\n23\n20\n17\n19\n32\n18\n20\n27\n15\n26\n24\n20\n21\n16\n21\n27\n17\n21\n17\n21\n17\n36\n18\n18\n18\n18\n18\n18\n18\n18\n18\n20\n19\n17\n23\n18\n19\n89\n20\n16\n17\n16\n20\n30\n37\n44\n21\n19\n23\n26\n18\n35\n16\n19\n23\n17\n29\n21\n17\n23\n17\n22\n17\n19\n19\n16\n19\n13\n18\n26\n14\n21\n21\n17\n18\n19\n19\n29',
+          },
+          {
+            path: 'hours.txt',
+            text: '3\n1.5\n4\n2.5\n4\n5\n3\n1\n6\n1\n3\n8\n3\n2\n4\n2\n8\n12\n24\n3\n8\n4\n5\n2\n3\n2\n12\n6\n2\n1\n5\n2\n6\n4\n1\n5\n4\n3\n0.5\n4\n2\n5\n0.25\n3\n4\n1\n1\n3\n5\n3\n2\n6\n1\n12\n4\n2\n6\n0\n7\n1\n1\n1\n2\n2\n5\n6\n3\n4\n3\n2\n3\n2\n4\n2\n0.5\n5\n5\n10\n2\n4\n5\n3\n2\n2.5\n3\n1\n7\n1\n1\n3\n5\n6\n4\n1\n4\n10\n3\n2\n4\n8\n2\n0.5\n5\n1\n3\n2\n3\n2\n4\n3\n2\n3\n4\n2\n8\n4\n2\n1\n3\n0.5\n2\n3\n2\n1\n5\n10\n4\n2\n1\n6\n1\n6\n7\n1\n3\n2\n3\n2\n3\n1.5\n4\n2\n10\n7\n1\n2\n6\n2\n3\n8\n3\n3\n3\n2\n1\n2\n2\n4\n4\n1\n2\n2\n1\n3\n10\n1\n3\n1.5\n3\n2.5\n2\n5\n2\n2\n2\n2\n1\n1.5\n5\n0.5\n2\n0.5\n2\n2.5\n2\n2\n1\n4\n5\n2\n2\n2\n1\n4\n1\n4\n5\n5\n7\n2\n3\n2\n3\n3\n3\n5\n6\n2\n2\n1\n1\n3\n3\n1\n6\n4\n2\n2\n3\n8\n3\n2\n7\n12\n9\n2\n1\n1\n2\n4\n2\n6\n4\n1\n6\n2\n5\n1.5\n5\n2\n4\n2\n5\n6\n1\n6\n4\n2\n2\n2\n4\n2\n6\n3\n5\n0.5\n1\n10\n2\n0.5\n1\n2\n3\n3\n2\n1\n8\n1\n1\n1\n5\n5\n4\n8\n0.7\n3\n7\n1.5\n4\n4\n10\n2\n2\n6\n0.5\n2\n5\n3\n4.5\n3\n20\n1\n2.5\n1\n2\n5\n3\n3\n0.5\n8\n2\n3\n3\n5\n1.5\n1\n2\n1\n4\n1\n2\n2\n2\n1\n6\n2\n4\n1.5\n3\n4\n10\n3\n3\n3\n2\n2\n3\n2\n5\n6\n3\n5\n5\n6\n6\n3\n10\n2\n2\n3\n1.5\n10\n2\n3\n2.5\n3\n0.5\n16\n6\n3\n0.5\n5\n2\n2\n2\n1.5\n1\n10\n2\n15\n0.5\n3\n2\n4\n2\n1\n24\n1\n2\n2\n3\n3\n2\n7\n6\n3\n5\n4\n3\n2\n3\n2\n2\n3\n2\n3\n0\n1\n2\n2\n6\n5\n2\n4\n8\n4\n1.5\n2\n5\n6\n2\n2\n1\n1\n2\n2\n1\n14\n3\n3\n2\n0.5\n6\n1\n2\n4\n3\n12\n3\n1\n10\n5\n0.5\n5\n3\n2\n13\n4\n6\n3\n4\n3\n2\n2\n1\n6\n9\n1\n1\n0.5\n1\n1.5\n6\n4\n6\n4\n1.5\n2\n2\n4\n3\n4\n2\n2\n6\n0\n1\n4\n2\n3\n4\n2\n3\n1\n10\n10\n10\n4\n4\n3\n2\n1\n6\n1\n1\n4\n2\n2\n2\n6\n3\n1\n4\n0.5\n8\n15\n1.5\n2\n3\n1\n0.25\n1\n1\n5\n1\n1\n7\n3\n3\n7\n8\n2\n2\n2\n2\n4\n8\n4\n1\n5\n2\n1\n5\n8\n2\n2\n1\n8\n8\n1\n1\n8\n2\n6\n3\n4\n2\n3\n4\n2\n1\n1\n1\n2\n7\n5\n3\n1\n6\n2\n3\n1.5\n4\n2\n2\n2\n1\n3\n3\n2\n6\n3\n3\n2\n2\n2\n3\n4\n2\n5\n2\n1\n7\n3\n3\n4\n3\n1\n7\n1\n4\n4\n3\n2\n4\n5\n6\n1\n1\n3\n1\n8\n1\n8\n1\n1\n10\n10\n5\n10\n2\n6\n2\n3\n8\n8\n8\n8\n12\n6\n4\n8\n2\n1\n2\n3\n1\n0\n2\n0.1\n2\n12\n1\n1\n3\n2\n2\n3\n1\n3\n3\n5\n8\n4\n5\n3\n4\n1\n4\n1\n2\n6\n2\n1\n4\n8\n2\n2\n10\n0\n6\n3\n2\n0.25\n4\n2\n2\n3\n6\n3\n2\n5\n4\n4\n0\n12\n0.5\n1\n3\n12\n4\n3\n1\n4\n2\n3\n3\n1\n2\n1\n0.5\n2\n11\n10\n5\n1.5\n2\n3\n2\n3\n4\n1\n5\n2\n7\n2\n1\n1\n4\n6\n3\n4\n4\n1\n2\n24\n5\n3\n4\n9\n1\n1\n2\n1.5\n2\n4\n1\n1\n3\n4\n8\n5\n3\n8\n1\n4\n1\n2\n1\n3\n5\n5\n4\n6\n6\n1\n18\n1\n7\n0.5\n2\n2\n1\n6\n5\n2',
+          },
+        ],
       },
       {
         name: 'Practice: Traversing 1D Arrays (a)',
@@ -5116,6 +5659,12 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'times.txt',
+            text: '89\n78\n52\n69\n35\n68\n56\n98\n25\n76\n75\n42\n46\n40\n90\n60\n64\n34\n109\n81\n70\n53\n42\n93\n49\n28\n37\n41',
+          },
+        ],
       },
       {
         name: 'Practice: Traversing 1D Arrays (b)',
@@ -5137,6 +5686,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'names.txt',
+            text: 'China\nIndia\nUnited States\nIndonesia\nPakistan\nNigeria\nBrazil\nBangladesh\nRussia\nMexico\nJapan\nPhilippines\nEthiopia\nEgypt\nDR Congo\nVietnam\nIran\nTurkey\nGermany\nFrance\nUnited Kingdom\nThailand\nTanzania\nSouth Africa\nItaly',
+          },
+          {
+            path: 'populations.txt',
+            text: '1412600000\n1375586000\n334200979\n275773800\n235825000\n218541000\n215565116\n165158616\n145100000\n128533664\n125104000\n112869745\n105163988\n104243583\n99010000\n98506193\n86053807\n84680273\n84270625\n67975000\n67026292\n66875330\n61741120\n60604992\n58853482',
+          },
+        ],
       },
       {
         name: 'Practice: Traversing 1D Arrays (c)',
@@ -5162,6 +5721,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'names.txt',
+            text: "Kareem Abdul-Jabbar\nLeBron James\nKarl Malone\nKobe Bryant\nMichael Jordan\nDirk Nowitzki\nWilt Chamberlain\nShaquille O'Neal\nCarmelo Anthony\nMoses Malone\nElvin Hayes\nHakeem Olajuwon\nOscar Robertson\nKevin Durant\nDominique Wilkins\nTim Duncan\nPaul Pierce\nJohn Havlicek\nKevin Garnett\nVince Carter\nAlex English\nReggie Miller\nJerry West\nPatrick Ewing\nRay Allen\nAllen Iverson\nJames Harden\nRussell Westbrook\nCharles Barkley\nRobert Parish\nAdrian Dantley\nDwyane Wade\nElgin Baylor\nClyde Drexler\nGary Payton\nLarry Bird\nHal Greer\nChris Paul\nWalt Bellamy\nDeMar DeRozan\nPau Gasol\nBob Pettit\nStephen Curry\nDavid Robinson\nGeorge Gervin\nLaMarcus Aldridge\nMitch Richmond\nJoe Johnson\nTom Chambers\nAntawn Jamison",
+          },
+          {
+            path: 'points.txt',
+            text: '38387\n37965\n36928\n33643\n32292\n31560\n31419\n28596\n28289\n27409\n27313\n26946\n26710\n26684\n26668\n26496\n26397\n26395\n26071\n25728\n25613\n25279\n25192\n24815\n24505\n24368\n24005\n23845\n23757\n23334\n23177\n23165\n23149\n22195\n21813\n21791\n21586\n21276\n20941\n20925\n20894\n20880\n20843\n20790\n20708\n20558\n20497\n20407\n20049\n20042',
+          },
+        ],
       },
       {
         name: 'Practice: Traversing 1D Arrays (d)',
@@ -5187,6 +5756,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'funds.txt',
+            text: '7719396.00\n2192741.00\n20993041.00\n1211111.00\n1617611.00\n1178693.00\n346571.00\n593604.00\n181286.00\n204340.00\n4262971.00\n11253771.00\n11326505.00\n838536.00\n54700.00\n1355357.00\n3234766.00\n725565.00\n726917.00\n3184656.00\n3447266.00\n1761000.00\n1757044.00\n6069123.00\n2586972.00\n6817301.00\n81913.00\n0.00\n3873628.00\n4331508.00\n1857034.00\n448866.00\n778998.00\n6446790.00\n2639948.00\n761878.00\n1242476.00\n1881840.00\n717298.00\n790735.00\n152052.00\n858890.00\n1097555.00\n951050.00\n1247753.00\n14074831.00\n3465317.00\n1991061.00\n1978660.00\n3289974.00\n2369794.00\n2480390.00\n1534981.00\n1389395.00\n620848.00\n893757.00\n1289389.00\n2370318.00\n1580076.00\n4120442.00\n321762.00\n1038921.00\n1411641.00\n193192.00\n758691.00\n781122.00\n1242835.00\n3360517.00\n1593208.00\n1904466.00\n344191.00\n1406396.00\n2094504.00\n875803.00\n3991112.00\n1447143.00\n6007472.00\n2328949.00\n1656992.00\n3232315.00\n1854187.00\n3149814.00\n5225390.00\n2016114.00\n1084888.00\n2746695.00\n4353630.00\n37993811.00\n5808554.00\n35899966.00\n381761.00\n509569.00\n167506.00\n2071661.00\n858263.00\n474819.00\n4220118.00\n1332282.00\n996345.00\n6167303.00\n4418709.00\n569007.00\n510936.00\n7828900.00\n6131905.00\n806946.00\n2989524.00\n856339.00\n1010336.00\n3119825.00\n5272240.00\n2212505.00\n5794554.00\n220970.00\n1793984.00\n14535870.00\n4798334.00\n853475.00\n1979358.00\n629343.00\n704798.00\n570467.00\n3632692.00\n1115797.00\n1191099.00\n1838461.00\n1800445.00\n2111035.00\n2367635.00\n199991.00\n1204897.00\n1646710.00\n1911503.00\n12990741.00\n3215917.00\n2049518.00\n983002.00\n1427992.00\n1076710.00\n3437752.00\n1881484.00\n1936676.00\n2461642.00\n1029410.00\n1720763.00\n9778.00\n1028474.00\n2588432.00\n3367598.00\n1993756.00\n1836753.00\n1260631.00\n821439.00\n1284829.00\n783541.00\n465226.00\n3163351.00\n2447306.00\n970454.00\n1083660.00\n1218880.00\n991211.00\n904754.00\n627622.00\n15000.00\n8724776.00\n217953.00\n8417574.00\n8700992.00\n4754168.00\n1042771.00\n3390174.00\n1388678.00\n1871503.00\n2803934.00\n634266.00\n1396865.00\n563173.00\n2895371.00\n217083.00\n1733173.00\n1113250.00\n3667685.00\n1941614.00\n1210017.00\n2412193.00\n1423370.00\n295443.00\n1724862.00\n2097733.00\n3879556.00\n1472022.00\n2498238.00\n1746079.00\n1701888.00\n1042952.00\n5529626.00\n696558.00\n5300715.00\n481307.00\n4269860.00\n2828252.00\n472779.00\n273672.00\n4215388.00\n2253420.00\n3078342.00\n2824798.00\n6278712.00\n1393362.00\n1754371.00\n1506882.00\n3208608.00\n403990.00\n5429416.00\n975577.00\n4160925.00\n1445030.00\n5051130.00\n827098.00\n2417062.00\n2714726.00\n854849.00\n1020109.00\n1536235.00\n1558322.00\n2816286.00\n3369890.00\n560343.00\n2124293.00\n923401.00\n538284.00\n4880505.00\n844278.00\n335990.00\n2302093.00\n561230.00\n1727906.00\n1520006.00\n12417107.00\n402848.00\n1566445.00\n2287480.00\n638820.00\n1888539.00\n-42855.00\n1729051.00\n7790164.00\n241369.00\n910221.00\n1480419.00\n1622189.00\n6252176.00\n1192842.00\n1974574.00\n1898707.00\n1012953.00\n864182.00\n2941980.00\n1373506.00\n1517310.00\n28119082.00\n1614911.00\n1992376.00\n1442822.00\n710380.00\n177476.00\n6770674.00\n190197.00\n10260242.00\n2335296.00\n1642695.00\n1775246.00\n2099507.00\n7720264.00\n6193616.00\n11028757.00\n2027765.00\n905730.00\n1275434.00\n1998752.00\n2620536.00\n463256.00\n0.00\n507962.00\n2091623.00\n2002236.00\n466705.00\n1432885.00\n2692609.00\n21441693.00\n1846695.00\n1794452.00\n1375514.00\n3077072.00\n273024.00\n458054.00\n1167360.00\n24791538.00\n8163575.00\n3301708.00\n2244429.00\n452659.00\n7112616.00\n814098.00\n1296300.00\n6175563.00\n6227355.00\n766924.00\n1403194.00\n6695582.00\n2543199.00\n1189244.00\n8559805.00\n0.00\n3412257.00\n1131363.00\n1407018.00\n1117075.00\n1812003.00\n1174363.00\n206591.00\n168660.00\n5042351.00\n1727651.00\n3965149.00\n30914830.00\n1652257.00\n36709285.00\n2855041.00\n686777.00\n4516392.00\n4225010.00\n1449001.00\n1718171.00\n1584197.00\n11571029.00\n924763.00\n566400.00\n1447075.00\n73140886.00\n1000923.00\n1123015.00\n2563285.00\n4466785.00\n2561756.00\n1403676.00\n1434559.00\n1869196.00\n4163482.00\n4604399.00\n5929700.00\n1977326.00\n1117733.00\n3305211.00\n640039.00\n3211215.00\n18086343.00\n1159191.00\n975508.00\n1240555.00\n2265809.00\n1349285.00\n13025.00\n2728460.00\n1515656.00\n6258368.00\n1500937.00\n1269505.00\n2181022.00\n4182600.00\n1788743.00\n166850.00\n2940815.00\n6128156.00\n1276358.00\n1180269.00\n7703753.00\n4448589.00\n963237.00\n138756.00\n1547000.00\n2000373.00\n5622081.00\n5503392.00\n474786.00\n3148542.00\n3013074.00\n720632.00\n5119356.00\n22216583.00\n1107829.00\n1531504.00\n4260780.00\n1066976.00\n677046.00\n543105.00\n3352245.00\n13254.00\n730885.00\n812657.00\n3471514.00\n13377243.00\n737101.00\n1661023.00\n2916586.00\n876121.00\n2279020.00\n0.00\n2399884.00\n5143410.00\n2533189.00\n7843935.00\n306434.00\n22490627.00\n2664811.00\n921792.00\n86581469.00\n3105241.00\n549117.00\n2099148.00\n6871179.00\n145474.00\n20520.00\n3163938.00\n2846323.00\n856257.00\n979267.00\n1516417.00\n4731925.00\n4080074.00\n5550174.00\n-1386356.00\n1859691.00\n1385034.00\n4598365.00\n1562228.00\n3304702.00\n605073.00\n1386724.00\n1589224.00\n1674579.00\n27680901.00\n587143.00\n10024604.00\n4442159.00\n1895941.00\n-367162.00\n2153850.00\n479167.00\n2031545.00\n2005290.00\n2680786.00\n1584377.00\n141458.00\n919350.00\n972575.00\n2529397.00\n2227355.00\n4650448.00\n4717097.00\n1867651.00\n6717662.00\n4250064.00\n761516.00\n1373474.00\n707321.00\n3672268.00\n4522424.00\n920408.00\n3583458.00\n2185504.00\n1111888.00\n714987.00\n1731244.00\n509828.00\n17940130.00\n1404019.00\n1179969.00\n4254563.00\n1048457.00\n966641.00\n5771483.00\n5420136.00\n2252066.00\n918476.00\n836909.00\n3943221.00\n13588871.00\n11030158.00\n17471712.00\n309658.00\n1323092.00\n2684930.00\n2093425.00\n783940.00\n973980.00\n1314552.00\n2239085.00\n38334636.00\n37743256.00\n1375262.00\n1418349.00\n10055406.00\n697627.00\n2095503.00\n4637570.00\n3893173.00\n7599512.00\n1509014.00\n3688187.00\n1587079.00\n1548007.00\n1037497.00\n881479.00\n1393256.00\n3851900.00\n1144309.00\n959008.00\n354993.00\n1752943.00\n2904436.00\n1247447.00\n64682883.00\n2353035.00\n3664655.00\n1166742.00\n2492127.00\n2992372.00\n3612075.00\n1929971.00\n871656.00\n892064.00\n7900497.00\n684268.00\n3777731.00\n1679466.00',
+          },
+          {
+            path: 'names.txt',
+            text: "Abigail Spanberger\nAdam Kinzinger\nAdam Schiff\nAdam Smith\nAdrian Smith\nAdriano Espaillat\nAl Green\nAl Lawson\nAlan Lowenthal\nAlbio Sires\nAlex Mooney\nAlex Padilla\nAlexandria Ocasio-Cortez\nAlma Adams\nAumua Amata Radewagen\nAmi Bera\nAmy Klobuchar\nAndre Carson\nAndrew Clyde\nAndrew Garbarino\nAndy Barr\nAndy Biggs\nAndy Harris\nAndy Kim\nAndy Levin\nAngie Craig\nAngus King\nAnn Kirkpatrick\nAnn Kuster\nAnn Wagner\nAnna Eshoo\nAnthony Brown\nAnthony Gonzalez\nAshley Hinson\nAugust Pfluger\nAustin Scott\nAyanna Pressley\nBarbara Lee\nBarry Loudermilk\nBarry Moore\nBen Cardin\nBen Cline\nBen Ray Luj\u00c3\u00a1n\nBen Sasse\nBennie Thompson\nBernie Sanders\nBeth Van Duyne\nBetty McCollum\nBill Cassidy\nBill Foster\nBill Hagerty\nBill Huizenga\nBill Johnson\nBill Pascrell\nBill Keating\nBill Posey\nBilly Long\nBlaine Luetkemeyer\nBlake Moore\nBob Casey Jr.\nBob Gibbs\nBob Good\nBob Latta\nBobby Rush\nBobby Scott\nBonnie Watson Coleman\nBrad Finstad\nBrad Schneider\nBrad Sherman\nBrad Wenstrup\nBrenda Lawrence\nBrendan Boyle\nBrett Guthrie\nBrian Babin\nBrian Fitzpatrick\nBrian Higgins\nBrian Mast\nBrian Schatz\nBruce Westerman\nBryan Steil\nBuddy Carter\nBurgess Owens\nByron Donalds\nCarlos Gimenez\nCarol Miller\nCarolyn Bourdeaux\nCarolyn Maloney\nCatherine Cortez Masto\nCathy McMorris Rodgers\nChuck Schumer\nCharlie Crist\nChellie Pingree\nCheri Bustos\nChip Roy\nChris Coons\nChris Jacobs\nChris Pappas\nChris Smith\nChris Stewart\nChris Van Hollen\nChrissy Houlahan\nChristopher S. Murphy\nChuck Fleischmann\nChuck Grassley\nCindy Axne\nCindy Hyde-Smith\nClaudia Tenney\nClay Higgins\nCliff Bentz\nColin Allred\nConor Lamb\nCori Bush\nCory Booker\nCynthia Lummis\nDan Bishop\nDan Crenshaw\nDan Kildee\nDan Meuser\nDan Newhouse\nDan Sullivan\nDaniel Webster\nDanny K. Davis\nDarin LaHood\nDarrell Issa\nDarren Soto\nDavid Cicilline\nDavid Kustoff\nDavid McKinley\nDavid Joyce\nDavid Price\nDavid Rouzer\nDavid Schweikert\nDavid Scott\nDavid Trone\nDavid Valadao\nDean Phillips\nDeb Fischer\nDebbie Dingell\nDebbie Lesko\nDebbie Stabenow\nDebbie Wasserman Schultz\nDeborah Ross\nDerek Kilmer\nDiana DeGette\nDiana Harshbarger\nDianne Feinstein\nDick Durbin\nDina Titus\nDon Bacon\nDon Beyer\nDon Norcross\nDonald Payne Jr.\nDonald McEachin\nDoris Matsui\nDoug LaMalfa\nDoug Lamborn\nDrew Ferguson\nDusty Johnson\nDutch Ruppersberger\nDwight Evans\nEarl Blumenauer\nEd Case\nEd Markey\nEd Perlmutter\nEddie Bernice Johnson\nElaine Luria\nEleanor Holmes Norton\nElise Stefanik\nElissa Slotkin\nElizabeth Warren\nEmanuel Cleaver\nEric Swalwell\nFrank Lucas\nFrank Mrvan\nFrank Pallone Jr.\nFred Keller\nFred Upton\nFrederica Wilson\nFrench Hill\nG.K. Butterfield\nGarret Graves\nGary Palmer\nGary Peters\nGerry Connolly\nGlenn Grothman\nGlenn Thompson\nGrace Meng\nGrace Napolitano\nGreg Murphy\nGreg Pence\nGreg Stanton\nGreg Steube\nGregory Meeks\nGus Bilirakis\nGuy Reschenthaler\nGwen Moore\nHakeem Jeffries\nHal Rogers\nHaley Stevens\nHank Johnson\nHenry Cuellar\nIlhan Omar\nJack Reed\nJackie Speier\nJacky Rosen\nJahana Hayes\nJaime Herrera Beutler\nJake Auchincloss\nJake Ellzey\nJake LaTurner\nJamaal Bowman\nJames Comer\nJames Clyburn\nJim Risch\nJames Lankford\nJim McGovern\nJamie Raskin\nJan Schakowsky\nJared Golden\nJared Huffman\nJason Crow\nJason Smith\nJay Obernolte\nJeanne Shaheen\nJeff Duncan\nJeff Merkley\nJeff Van Drew\nJennifer Wexton\nJenniffer Gonzalez\nJerrold Nadler\nJerry Carl\nJerry McNerney\nJerry Moran\nJesus Garcia\nJim Baird\nJim Banks\nJim Cooper\nJim Costa\nJim Himes\nJim Jordan\nJim Langevin\nJimmy Gomez\nJimmy Panetta\nJoaquin Castro\nJodey Arrington\nJody Hice\nJoe Courtney\nJoe Manchin\nJoe Sempolinski\nJoe Wilson\nJohn Barrasso\nJohn Bergman\nJohn Boozman\nJohn Carter\nJohn Cornyn\nJohn Curtis\nJohn Garamendi\nJohn Hickenlooper\nJohn Hoeven\nJohn Joyce\nJohn Katko\nJohn Kennedy\nJohn Larson\nJohn Moolenaar\nJohn Rose\nJohn Rutherford\nJohn Sarbanes\nJohn Thune\nJohn Yarmuth\nJon Ossoff\nJon Tester\nJoni Ernst\nJoseph Morelle\nJoe Neguse\nJosh Gottheimer\nJosh Harder\nJosh Hawley\nJoyce Beatty\nJuan Vargas\nJudy Chu\nJulia Brownley\nJulia Letlow\nKai Kahele\nKamala Harris\nKaren Bass\nKat Cammack\nKatherine Clark\nKathleen Rice\nKathy Castor\nKathy Manning\nKatie Porter\nKay Granger\nKelly Armstrong\nKen Buck\nKen Calvert\nKevin Brady\nKevin Cramer\nKevin Hern\nKevin McCarthy\nKim Schrier\nKirsten Gillibrand\nKurt Schrader\nKweisi Mfume\nKyrsten Sinema\nLance Gooden\nLarry Bucshon\nLauren Underwood\nLauren Boebert\nLee Zeldin\nLinda S\u00c3\u00a1nchez\nLindsey Graham\nLisa Blunt Rochester\nLisa McClain\nLisa Murkowski\nLiz Cheney\nLizzie Fletcher\nLloyd Doggett\nLloyd Smucker\nLois Frankel\nLori Trahan\nLou Correa\nLouis B. Gohmert Jr.\nLucille Roybal-Allard\nLucy McBath\nMadeleine Dean\nMadison Cawthorn\nMaggie Hassan\nMarc Veasey\nMarco Rubio\nMarcy Kaptur\nMaria Cantwell\nMaria Salazar\nMariannette Miller-Meeks\nMarie Newman\nMarilyn Strickland\nMario Diaz-Balart\nMarjorie Taylor Greene\nMark Amodei\nMark Desaulnier\nMark Green\nMark Kelly\nMark Pocan\nMark Takano\nMark Warner\nMarkwayne Mullin\nMarsha Blackburn\nMartin Heinrich\nMary Gay Scanlon\nMary Miller\nMary Peltola\nMatt Cartwright\nMatt Gaetz\nMatt Rosendale\nMaxine Waters\nMayra Flores\nMazie K. Hirono\nMelanie Stansbury\nMichael Bennet\nMichael Burgess\nMichael Cloud\nMichael Guest\nMichael McCaul\nMichael Turner\nMichael San Nicolas\nMichael Waltz\nMichelle Fischbach\nMichelle Steel\nMike Bost\nMike Braun\nMike Carey\nMike Crapo\nMike Rogers\nMike Doyle\nMike Gallagher\nMike Garcia\nMike Johnson\nMike Kelly\nMike Lee\nMike Levin\nMike Quigley\nMike Rounds\nMike Simpson\nMike Thompson\nMikie Sherrill\nMitch McConnell\nMitt Romney\nMo Brooks\nMondaire Jones\nMorgan Griffith\nNancy Mace\nNancy Pelosi\nNanette Barrag\u00c3\u00a1n\nNeal Dunn\nNicole Malliotakis\nNikema Williams\nNorma Torres\nNydia Velazquez\nPat Ryan\nPat Toomey\nPat Fallon\nPatrick Leahy\nPatrick McHenry\nPatty Murray\nPaul Gosar\nPaul Tonko\nPete Aguilar\nPete Sessions\nPete Stauber\nPeter DeFazio\nPeter Meijer\nPeter Welch\nPramila Jayapal\nRaja Krishnamoorthi\nRalph Norman\nRand Paul\nRandy Feenstra\nRandy Weber\nRaphael Warnock\nRashida Tlaib\nRaul Grijalva\nRaul Ruiz\nRichard Blumenthal\nRichard Burr\nRichard Shelby\nRichard Neal\nRichard Hudson\nRick Allen\nRick Crawford\nRick Larsen\nRick Scott\nRitchie Torres\nRo Khanna\nRob Portman\nRob Wittman\nRobert Aderholt\nBob Menendez\nRobin Kelly\nRodney Davis\nRoger Marshall\nRoger Wicker\nRoger Williams\nRon Estes\nRon Johnson\nRon Kind\nRon Wyden\nRonny Jackson\nRosa DeLauro\nRoy Blunt\nRuben Gallego\nRuss Fulcher\nSalud Carbajal\nSam Graves\nSanford Bishop Jr.\nSara Jacobs\nScott Desjarlais\nScott Fitzgerald\nScott Franklin\nScott Perry\nScott Peters\nSean Casten\nSean Maloney\nSeth Moulton\nSharice Davids\nSheila Cherfilus-McCormick\nSheila Jackson Lee\nSheldon Whitehouse\nShelley Moore Capito\nSherrod Brown\nShontel Brown\nStacey Plaskett\nSteny Hoyer\nStephanie Bice\nStephanie Murphy\nStephen Lynch\nSteve Chabot\nSteve Cohen\nSteve Scalise\nSteve Womack\nSteve Daines\nSteven Horsford\nSteven Palazzo\nSusan Collins\nSusan Wild\nSusie Lee\nSuzan DelBene\nSuzanne Bonamici\nSylvia Garcia\nTammy Baldwin\nTammy Duckworth\nTed Budd\nTed Cruz\nTed Deutch\nTed Lieu\nTeresa Leger Fernandez\nTerri Sewell\nThom Tillis\nThomas Massie\nTim Burchett\nTim Kaine\nTim Ryan\nTim Scott\nTim Walberg\nTina Smith\nTodd Young\nTom Carper\nTom Cole\nTom Cotton\nTom Emmer\nTom Malinowski\nTom McClintock\nTom O'Halleran\nTom Rice\nTom Suozzi\nTom Tiffany\nTommy Tuberville\nTony C\u00c3\u00a1rdenas\nTony Gonzales\nTracey Mann\nTrent Kelly\nTrey Hollingsworth\nTroy Balderson\nTroy Carter\nTroy Nehls\nVal Demings\nVan Taylor\nVernon Buchanan\nVeronica Escobar\nVicente Gonzalez\nVicky Hartzler\nVictoria Spartz\nVirginia Foxx\nWarren Davidson\nWilliam Timmons\nYoung Kim\nYvette Clarke\nYvette Herrell\nZoe Lofgren",
+          },
+        ],
       },
       {
         name: 'Predict and Run: Comparing String Objects',
@@ -5212,6 +5791,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'effect.txt',
+            text: 'No effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nWorsen\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove',
+          },
+          {
+            path: 'genre.txt',
+            text: 'Latin\nRock\nVideo game music\nJazz\nR&B\nJazz\nVideo game music\nK pop\nRock\nR&B\nCountry\nEDM\nHip hop\nCountry\nJazz\nPop\nHip hop\nHip hop\nRap\nHip hop\nHip hop\nRap\nR&B\nPop\nRock',
+          },
+          {
+            path: 'hours.txt',
+            text: '3\n1.5\n4\n2.5\n4\n5\n3\n1\n6\n1\n3\n8\n3\n2\n4\n2\n8\n12\n24\n3\n8\n4\n5\n2\n3',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Comparing and Returning #1',
@@ -5237,6 +5830,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'effect.txt',
+            text: 'No effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nWorsen\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove',
+          },
+          {
+            path: 'genre.txt',
+            text: 'Latin\nRock\nVideo game music\nJazz\nR&B\nJazz\nVideo game music\nK pop\nRock\nR&B\nCountry\nEDM\nHip hop\nCountry\nJazz\nPop\nHip hop\nHip hop\nRap\nHip hop\nHip hop\nRap\nR&B\nPop\nRock',
+          },
+          {
+            path: 'hours.txt',
+            text: '3\n1.5\n4\n2.5\n4\n5\n3\n1\n6\n1\n3\n8\n3\n2\n4\n2\n8\n12\n24\n3\n8\n4\n5\n2\n3',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Comparing and Returning #2',
@@ -5262,6 +5869,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'effect.txt',
+            text: 'No effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nWorsen\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove',
+          },
+          {
+            path: 'genre.txt',
+            text: 'Latin\nRock\nVideo game music\nJazz\nR&B\nJazz\nVideo game music\nK pop\nRock\nR&B\nCountry\nEDM\nHip hop\nCountry\nJazz\nPop\nHip hop\nHip hop\nRap\nHip hop\nHip hop\nRap\nR&B\nPop\nRock',
+          },
+          {
+            path: 'hours.txt',
+            text: '3\n1.5\n4\n2.5\n4\n5\n3\n1\n6\n1\n3\n8\n3\n2\n4\n2\n8\n12\n24\n3\n8\n4\n5\n2\n3',
+          },
+        ],
       },
       {
         name: 'Investigate and Modify: Comparing and Returning #3',
@@ -5287,6 +5908,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'effect.txt',
+            text: 'No effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nWorsen\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove',
+          },
+          {
+            path: 'genre.txt',
+            text: 'Latin\nRock\nVideo game music\nJazz\nR&B\nJazz\nVideo game music\nK pop\nRock\nR&B\nCountry\nEDM\nHip hop\nCountry\nJazz\nPop\nHip hop\nHip hop\nRap\nHip hop\nHip hop\nRap\nR&B\nPop\nRock',
+          },
+          {
+            path: 'hours.txt',
+            text: '3\n1.5\n4\n2.5\n4\n5\n3\n1\n6\n1\n3\n8\n3\n2\n4\n2\n8\n12\n24\n3\n8\n4\n5\n2\n3',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with 1D Arrays (a)',
@@ -5312,6 +5947,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'ages.txt',
+            text: '18\n63\n18\n61\n18\n18\n18\n21\n19\n18\n18\n19\n17\n19\n18\n17\n16\n16\n17\n15\n15\n17\n19\n18\n16\n18\n14\n18\n17\n17\n20\n19\n19\n17\n16\n18\n21\n17\n26\n20\n23\n18\n37\n17\n18\n17\n36\n24\n18\n19\n17\n16\n23\n23\n22\n16\n18\n42\n23\n23\n19\n22\n15\n25\n32\n36\n24\n29\n41\n36\n19\n31\n16\n26\n22\n16\n17\n19\n18\n18\n19\n19\n22\n16\n19\n37\n14\n33\n26\n32\n30\n43\n24\n36\n19\n22\n20\n31\n19\n15',
+          },
+          {
+            path: 'streaming.txt',
+            text: 'Spotify\nPandora\nSpotify\nYouTube Music\nSpotify\nSpotify\nYouTube Music\nSpotify\nSpotify\nNone\nSpotify\nYouTube Music\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nApple Music\nSpotify\nNone\nSpotify\nOther\nSpotify\nSpotify\nYouTube Music\nSpotify\nApple Music\nApple Music\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nOther\nOther\nSpotify\nYouTube Music\nSpotify\nYouTube Music\nSpotify\nSpotify\nNone\nSpotify\nSpotify\nSpotify\nSpotify\nApple Music\nSpotify\nApple Music\nSpotify\nSpotify\nApple Music\nSpotify\nNone\nSpotify\nNone\nYouTube Music\nPandora\nOther\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nApple Music\nNone\nYouTube Music\nSpotify\nSpotify\nSpotify\nApple Music\nSpotify\nSpotify\nSpotify\nYouTube Music\nYouTube Music\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify\nNone\nSpotify\nSpotify\nSpotify\nNone\nSpotify\nYouTube Music\nYouTube Music\nSpotify\nSpotify\nSpotify\nSpotify\nSpotify',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with 1D Arrays (b)',
@@ -5337,6 +5982,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'effects.txt',
+            text: 'No effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nWorsen\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nImprove\nImprove\nImprove\nNo effect\nImprove\nNo effect\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nWorsen\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove',
+          },
+          {
+            path: 'hours.txt',
+            text: '3\n1.5\n4\n2.5\n4\n5\n3\n1\n6\n1\n3\n8\n3\n2\n4\n2\n8\n12\n24\n3\n8\n4\n5\n2\n3\n2\n12\n6\n2\n1\n5\n2\n6\n4\n1\n5\n4\n3\n0.5\n4\n2\n5\n0.25\n3\n4\n1\n1\n3\n5\n3\n2\n6\n1\n12\n4\n2\n6\n0\n7\n1\n1\n1\n2\n2\n5\n6\n3\n4\n3\n2\n3\n2\n4\n2\n0.5\n5\n5\n10\n2\n4\n5\n3\n2\n2.5\n3\n1\n7\n1\n1\n3\n5\n6\n4\n1\n4\n10\n3\n2\n4\n8',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with 1D Arrays (c)',
@@ -5362,6 +6017,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'effects.txt',
+            text: 'No effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nWorsen\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nImprove\nImprove\nImprove\nNo effect\nImprove\nNo effect\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nWorsen\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nImprove\nImprove\nNo effect\nNo effect\nNo effect\nNo effect\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove\nImprove',
+          },
+          {
+            path: 'genres.txt',
+            text: 'Latin\nRock\nVideo game music\nJazz\nR&B\nJazz\nVideo game music\nK pop\nRock\nR&B\nCountry\nEDM\nHip hop\nCountry\nJazz\nPop\nHip hop\nHip hop\nRap\nHip hop\nHip hop\nRap\nR&B\nPop\nRock\nPop\nRock\nPop\nPop\nPop\nRock\nClassical\nMetal\nRock\nClassical\nPop\nPop\nPop\nRock\nEDM\nVideo game music\nRock\nVideo game music\nClassical\nMetal\nFolk\nClassical\nRock\nMetal\nPop\nEDM\nK pop\nRap\nPop\nRock\nClassical\nRock\nRock\nFolk\nVideo game music\nK pop\nRock\nRock\nMetal\nRock\nMetal\nRock\nHip hop\nMetal\nRock\nRock\nRock\nRock\nHip hop\nHip hop\nJazz\nMetal\nR&B\nEDM\nHip hop\nRock\nJazz\nK pop\nRock\nR&B\nRock\nJazz\nMetal\nR&B\nHip hop\nMetal\nVideo game music\nClassical\nRock\nVideo game music\nMetal\nEDM\nRock\nMetal\nRock',
+          },
+        ],
       },
       {
         name: 'Practice: Writing Algorithms with 1D Arrays (d)',
@@ -5387,6 +6052,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'ages.txt',
+            text: '18\n63\n18\n61\n18\n18\n18\n21\n19\n18\n18\n19\n17\n19\n18\n17\n16\n16\n17\n15\n15\n17\n19\n18\n16\n18\n14\n18\n17\n17\n20\n19\n19\n17\n16\n18\n21\n17\n26\n20\n23\n18\n37\n17\n18\n17\n36\n24\n18\n19\n17\n16\n23\n23\n22\n16\n18\n42\n23\n23\n19\n22\n15\n25\n32\n36\n24\n29\n41\n36\n19\n31\n16\n26\n22\n16\n17\n19\n18\n18\n19\n19\n22\n16\n19\n37\n14\n33\n26\n32\n30\n43\n24\n36\n19\n22\n20\n31\n19\n15',
+          },
+          {
+            path: 'hours.txt',
+            text: '3\n1.5\n4\n2.5\n4\n5\n3\n1\n6\n1\n3\n8\n3\n2\n4\n2\n8\n12\n24\n3\n8\n4\n5\n2\n3\n2\n12\n6\n2\n1\n5\n2\n6\n4\n1\n5\n4\n3\n0.5\n4\n2\n5\n0.25\n3\n4\n1\n1\n3\n5\n3\n2\n6\n1\n12\n4\n2\n6\n0\n7\n1\n1\n1\n2\n2\n5\n6\n3\n4\n3\n2\n3\n2\n4\n2\n0.5\n5\n5\n10\n2\n4\n5\n3\n2\n2.5\n3\n1\n7\n1\n1\n3\n5\n6\n4\n1\n4\n10\n3\n2\n4\n8',
+          },
+          {
+            path: 'times.txt',
+            text: '08/27 @ 07:29\n08/27 @ 07:57\n08/27 @ 09:28\n08/27 @ 09:40\n08/27 @ 09:54\n08/27 @ 09:56\n08/27 @ 10:00\n08/27 @ 10:18\n08/27 @ 10:33\n08/27 @ 10:44\n08/27 @ 10:51\n08/27 @ 11:00\n08/27 @ 11:04\n08/27 @ 11:12\n08/27 @ 11:16\n08/27 @ 11:19\n08/27 @ 11:39\n08/27 @ 11:39\n08/27 @ 11:40\n08/27 @ 11:41\n08/27 @ 11:43\n08/28 @ 12:28\n08/28 @ 01:39\n08/28 @ 03:19\n08/28 @ 04:13\n08/28 @ 04:38\n08/28 @ 04:40\n08/28 @ 05:05\n08/28 @ 05:16\n08/28 @ 08:36\n08/28 @ 10:30\n08/28 @ 10:38\n08/28 @ 10:54\n08/28 @ 10:59\n08/28 @ 11:08\n08/28 @ 11:13\n08/28 @ 11:25\n08/28 @ 11:27\n08/28 @ 11:36\n08/28 @ 11:39\n08/28 @ 11:50\n08/28 @ 11:54\n08/28 @ 11:55\n08/28 @ 11:58\n08/28 @ 12:08\n08/28 @ 12:12\n08/28 @ 12:15\n08/28 @ 12:23\n08/28 @ 12:30\n08/28 @ 12:32\n08/28 @ 12:37\n08/28 @ 12:39\n08/28 @ 12:52\n08/28 @ 12:53\n08/28 @ 12:54\n08/28 @ 01:01\n08/28 @ 01:05\n08/28 @ 01:08\n08/28 @ 01:09\n08/28 @ 01:18\n08/28 @ 01:22\n08/28 @ 01:22\n08/28 @ 01:34\n08/28 @ 01:34\n08/28 @ 01:42\n08/28 @ 01:43\n08/28 @ 01:46\n08/28 @ 01:48\n08/28 @ 01:55\n08/28 @ 01:57\n08/28 @ 01:59\n08/28 @ 02:00\n08/28 @ 02:01\n08/28 @ 02:02\n08/28 @ 02:04\n08/28 @ 02:04\n08/28 @ 02:07\n08/28 @ 02:08\n08/28 @ 02:10\n08/28 @ 02:10\n08/28 @ 02:12\n08/28 @ 02:14\n08/28 @ 02:18\n08/28 @ 02:24\n08/28 @ 02:25\n08/28 @ 02:26\n08/28 @ 02:29\n08/28 @ 02:30\n08/28 @ 02:38\n08/28 @ 02:41\n08/28 @ 02:45\n08/28 @ 02:47\n08/28 @ 02:49\n08/28 @ 02:51\n08/28 @ 02:58\n08/28 @ 02:59\n08/28 @ 03:02\n08/28 @ 03:03\n08/28 @ 03:03\n08/28 @ 03:07',
+          },
+        ],
       },
       {
         name: 'Predict and Run: Nested Loops',
@@ -5404,6 +6083,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Nested Loops #1',
@@ -5421,6 +6101,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Nested Loops #2',
@@ -5438,6 +6119,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Investigate and Modify: Nested Loops #3',
@@ -5455,6 +6137,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Practice: Finding Duplicates (a)',
@@ -5480,6 +6163,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'names.txt',
+            text: 'Berkshire Hathaway\nJPMorgan Chase\nAmazon\nApple\nBank of America\nAlphabet\nMicrosoft\nExxonMobil\nWells Fargo\nVerizon Communications\nAT&T\nUnitedHealth Group\nWalmart\nChevron\nCitigroup\nComcast\nMeta Platforms\nMorgan Stanley\nGoldman Sachs Group\nJohnson & Johnson\nCVS Health\nPfizer\nIntel\nProcter & Gamble\nAbbVie\nGeneral Motors\nMetLife\nAmerican Express\nCigna\nPrudential Financial\nPepsiCo\nMerck & Co.\nElevance Health\nAmerican International Group\nCisco Systems\nWalt Disney\nIBM\nUnited Parcel Service\nRaytheon Technologies\nCapital One\nBristol Myers Squibb\nCoca-Cola\nOracle\nThermo Fisher Scientific\nCostco Wholesale\nCharter Communications\nConocoPhillips\nUS Bancorp\nAbbott Laboratories\nCaterpillar',
+          },
+          {
+            path: 'years.txt',
+            text: '1939\n2000\n1994\n1976\n1998\n1998\n1975\n1999\n1852\n1983\n1876\n1977\n1962\n1879\n1998\n1963\n2004\n1924\n1869\n1886\n1963\n1849\n1968\n1837\n2013\n1908\n1868\n1850\n1792\n1875\n1965\n1891\n2004\n1919\n1984\n1923\n1911\n1907\n2020\n1994\n1933\n1892\n1977\n1956\n1983\n1993\n1875\n1929\n1888\n1925',
+          },
+        ],
       },
       {
         name: 'Practice: Finding Duplicates (b)',
@@ -5505,6 +6198,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'names.txt',
+            text: 'Jurassic World\nMad Max: Fury Road\nInsurgent\nStar Wars: The Force Awakens\nFurious 7\nThe Revenant\nTerminator Genisys\nThe Martian\nMinions\nInside Out\nSpectre\nJupiter Ascending\nEx Machina\nPixels\nAvengers: Age of Ultron\nThe Hateful Eight\nTaken 3\nAnt-Man\nThe Hunger Games: Mockingjay - Part 2\nTomorrowland\nSan Andreas\nThe Big Short\nMission: Impossible - Rogue Nation\nKingsman: The Secret Service\nSpotlight\nMaze Runner: The Scorch Trials\nChappie\nGoosebumps\nRoom\nThe Good Dinosaur\nBrooklyn\nStraight Outta Compton\nThe Last Witch Hunter\nThe Age of Adaline\nHardcore Henry\nHome\nThe Lobster\nCarol\nThe Intern\nEverest\nPoint Break\nBurnt\nSelf/less\nMortdecai\nBlackhat\nFantastic Four\nThe Witch\nSpy\nFocus\nHitman: Agent 47',
+          },
+          {
+            path: 'ratings.txt',
+            text: '6.5\n7.1\n6.3\n7.5\n7.3\n7.2\n5.8\n7.6\n6.5\n8\n6.2\n5.2\n7.6\n5.8\n7.4\n7.4\n6.1\n7\n6.5\n6.2\n6.1\n7.3\n7.1\n7.6\n7.8\n6.4\n6.6\n6.2\n8\n6.6\n7.3\n7.7\n5.6\n7.3\n5.9\n6.9\n6.6\n7.1\n7.1\n6.7\n5.5\n6.3\n6.2\n5.3\n5\n4.4\n5.8\n6.9\n6.7\n5.5',
+          },
+          {
+            path: 'runtimes.txt',
+            text: '124\n120\n119\n136\n137\n156\n125\n141\n91\n94\n148\n124\n108\n105\n141\n167\n109\n115\n136\n130\n114\n130\n131\n130\n128\n132\n120\n103\n117\n93\n111\n147\n106\n112\n97\n94\n118\n118\n121\n121\n114\n100\n116\n106\n133\n100\n92\n120\n105\n96',
+          },
+        ],
       },
       {
         name: 'Practice: Finding Duplicates (c)',
@@ -5530,6 +6237,16 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'attacks.txt',
+            text: '49\n62\n82\n100\n52\n64\n84\n104\n130\n48\n63\n83\n103\n30\n20\n45\n35\n25\n90\n150\n45\n60\n80\n80\n56\n56\n81\n71\n60\n90\n60\n95\n55\n90\n85\n75\n75\n100\n100\n47\n62\n92\n57\n72\n102\n45\n70\n41\n41\n76\n67\n45\n70\n45\n80\n50\n65\n80\n70\n95\n55\n65\n55\n55',
+          },
+          {
+            path: 'names.txt',
+            text: 'Bulbasaur\nIvysaur\nVenusaur\nMega Venusaur\nCharmander\nCharmeleon\nCharizard\nMega Charizard Y\nMega Charizard X\nSquirtle\nWartortle\nBlastoise\nMega Blastoise\nCaterpie\nMetapod\nButterfree\nWeedle\nKakuna\nBeedrill\nMega Beedrill\nPidgey\nPidgeotto\nPidgeot\nMega Pidgeot\nRattata\nAlolan Rattata\nRaticate\nAlolan Raticate\nSpearow\nFearow\nEkans\nArbok\nPikachu\nRaichu\nAlolan Raichu\nSandshrew\nAlolan Sandshrew\nSandslash\nAlolan Sandslash\nNidoran Female\nNidorina\nNidoqueen\nNidoran Male\nNidorino\nNidoking\nClefairy\nClefable\nVulpix\nAlolan Vulpix\nNinetales\nAlolan Ninetales\nJigglypuff\nWigglytuff\nZubat\nGolbat\nOddish\nGloom\nVileplume\nParas\nParasect\nVenonat\nVenomoth\nDiglett\nAlolan Diglett',
+          },
+        ],
       },
       {
         name: 'Practice: Finding Duplicates (d)',
@@ -5555,6 +6272,18 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'names.txt',
+            text: 'Alien\nKiller Frost\nMystique\nNebula\nAbe Sapien\nDr Manhattan\nShadow Lass\nBeast\nArchangel\nCopycat\nLobo\nNova\nArdina\nLiving Tribunal\nK-2SO\nPoison Ivy\nBrainiac\nSwamp Thing\nKiller Croc\nGreedo\nEvilhawk\nMartian Manhunter\nBeast Boy\nYoda\nDonatello\nLeonardo\nRaphael\nMichelangelo\nDrax the Destroyer\nTriton\nFin Fang Foom\nMan-Thing\nHulk\nMantis\nGamora\nToad\nDarkseid\nTiger Shark\nApocalypse\nGodzilla\nCentury\nStarfire\nJar Jar Binks\nKilowog\nBlink\nPurple Man\nThanos\nGladiator\nTrigon\nKlaw',
+          },
+          {
+            path: 'publishers.txt',
+            text: 'Dark Horse Comics\nDC Comics\nMarvel Comics\nMarvel Comics\nDark Horse Comics\nDC Comics\nDC Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nDC Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nGeorge Lucas\nDC Comics\nDC Comics\nDC Comics\nDC Comics\nGeorge Lucas\nMarvel Comics\nDC Comics\nDC Comics\nGeorge Lucas\nIDW Publishing\nIDW Publishing\nIDW Publishing\nIDW Publishing\nMarvel Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nDC Comics\nMarvel Comics\nMarvel Comics\nunknown\nMarvel Comics\nDC Comics\nGeorge Lucas\nDC Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nMarvel Comics\nDC Comics\nMarvel Comics',
+          },
+          { path: 'testNames.txt', text: 'Superman\nBatman\nSpider-Man\nIron Man' },
+          { path: 'testPublishersWithDuplicates.txt', text: 'DC\nDC\nMarvel\nMarvel' },
+        ],
       },
       {
         name: 'Data for Social Good Project #1',
@@ -5576,6 +6305,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'colors.txt',
+            text: 'Yellow\nBlue\nBlack\nBlack\nWhite\nBrown\nGrey\nGrey\nWhite\nBlue\nBlue\nGrey\nBrown\nBlack\nGreen\nBrown\nBrown\nBrown\nBlack\nBrown\nBlack\nWhite\nBrown\nBlack\nBlack\nBrown\nBrown\nYellow\nRed\nGrey\nYellow\nWhite\nBlue\nYellow\nGreen\nGrey\nBlack\nBlack\nBlack\nBrown\nWhite\nPink\nGrey\nBlack\nBrown\nGreen\nWhite\nBrown\nBrown\nBlue\nBrown\nWhite\nBrown\nBrown\nYellow\nBrown\nRed\nBrown\nGrey\nWhite\nBlack\nPink\nBlue\nWhite\nBrown\nGrey\nWhite\nBrown\nBlack\nWhite\nGrey\nPink\nWhite\nBrown\nGreen\nBrown\nRed\nWhite\nBrown\nGrey\nBrown\nBlack\nGrey\nWhite\nBrown\nBlack\nBrown\nBlack\nBlack\nBlack\nBlue\nPink\nBlue\nWhite\nWhite\nRed\nBrown\nBlack',
+          },
+          {
+            path: 'diets.txt',
+            text: 'seeds\nfrogs\nflying insects\nsquid\nfish\nfish\nfish\nfish\nfish\nnuts\nfruit\nflies\ninsects\nants\nnectar\ninsects\nflying insects\nseeds\nseeds\nfruit\ncarrion\nlarvae\ncarcasses\nseeds\nfish\ninsects\nflying insects\ninsects\ninsects\nshoots\nfruit\nflying insects\ninsects\ninsects\nseeds\nfish\nfruits\nfish\nfruit\nflying insects\nfish\nplankton\nmonkeys\nfish\nleaves\nplants\ncarcasses\nsnakes\nmice\nlicuri palm nuts\ngrubs\ncrustaceans\ninsects\nseeds\nInsects\nleaves\nseeds\ninsects\npigeons\ncrustaceans\ninsects\nspiders\npinyon seeds\nfish\nblood\ninsects\nsquid\nfruit\neucalyptus nectar\ninsects\nfruits\ncrustaceans\ninsects\ninsects\nflower nectar\ninsects\ninsects\ninsects\nbirds\nfish\ninsects\ninsects\nsnails\nsmall mammals\nmosquitoes\nfruit\nlarge insects\nfruit\nbeetles\nfish\nseeds\nfruit\nseeds\naquatic insects\ncrustaceans\nfruit\nberries\ntree sap',
+          },
+          {
+            path: 'names.txt',
+            text: "American Goldfinch\nAmerican Purple Gallinule\nAmerican Redstart\nAmsterdam Albatross\nArctic Tern\nBald Eagle\nBelted Kingfisher\nBlack-Crowned Night Heron\nBlue Footed Booby\nBlue Jay\nBlue Manakin\nBokikokiko\nBrown Creeper\nBuff-Spotted Flufftail\nBumblebee Hummingbird\nCarolina Wren\nCave Swallow\nCommon Buttonquail\nCommon Ostrich\nCommon Pheasant\nCommon Raven\nCommon Sandpiper\nCrested Caracara\nDark-Eyed Junco\nDouble-Crested Cormorant\nEastern Screech Owl\nEastern Whip-Poor-Will\nElegant Sunbird\nElegant Trogon\nEmperor Goose\nFlame Bowerbird\nFork-Tailed Flycatcher\nGambel's Quail\nGolden White-Eye\nGouldian Finch\nGreat Blue Heron\nGreat Curassow\nGreat Frigatebird\nGreat Hornbill\nGreat Potoo\nGreat White Pelican\nGreater Flamingo\nHarpy Eagle\nHawaiian Stilt\nHoatzin\nKakapo\nKing Vulture\nLaughing Falcon\nLaughing Kookaburra\nLear's Macaw\nLittle Spotted Kiwi\nMacaroni Penguin\nMallard\nMourning Dove\nNarcissus Flycatcher\nNene\nNorthern Cardinal\nOvenbird\nPeregrine Falcon\nPied Avocet\nPileated Woodpecker\nPink Robin\nPinyon Jay\nRazorbill\nRed-Billed Oxpecker\nRed-Breasted Nuthatch\nRed-Tailed Tropicbird\nRed-Whiskered Bulbul\nRegent Honeyeater\nRing-Billed Gull\nRock Dove\nRoseate Spoonbill\nRose-Breasted Gosbeak\nRuby-Crowned Kinglet\nRuby-Throated Hummingbird\nRudd's Lark\nScarlet Tanager\nSecretarybird\nSharp-Shinned Hawk\nShoebill\nSierra Madre Sparrow\nSmooth-Billed Ani\nSnail Kite\nSnowy Owl\nSpoon-Billed Sandpiper\nSuperb Bird-of-Paradise\nTawny Frogmouth\nToco Toucan\nTricolored Blackbird\nTufted Puffin\nVictoria Crowned Pigeon\nViolet-Backed Starling\nVulturine Guineafowl\nWhite Wagtail\nWhooping Crane\nWilson's Bird-Of-Paradise\nWood Duck\nYellow Bellied Sapsucker",
+          },
+          {
+            path: 'status.txt',
+            text: 'Least Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nNear Threatened\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nNear Threatened\nLeast Concern\nVulnerable\nLeast Concern\nNear Threatened\nLeast Concern\nLeast Concern\nLeast Concern\nNear Threatened\nEndangered\nLeast Concern\nCritically Endangered\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nNear Threatened\nVulnerable\nLeast Concern\nLeast Concern\nLeast Concern\nVulnerable\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nVulnerable\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nCritically Endangered\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nVulnerable\nLeast Concern\nVulnerable\nLeast Concern\nVulnerable\nEndangered\nLeast Concern\nLeast Concern\nVulnerable\nCritically Endangered\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nNear Threatened\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nNear Threatened\nLeast Concern\nLeast Concern',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #2',
@@ -5597,6 +6344,28 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'countries.txt',
+            text: "Afghanistan\nAlbania\nAlgeria\nAmerican Samoa\nAndorra\nAngola\nAntigua and Barbuda\nArgentina\nArmenia\nAruba\nAustralia\nAustria\nAzerbaijan\nBahamas, The\nBahrain\nBangladesh\nBarbados\nBelarus\nBelgium\nBelize\nBenin\nBermuda\nBhutan\nBolivia\nBosnia and Herzegovina\nBotswana\nBrazil\nBritish Virgin Islands\nBrunei Darussalam\nBulgaria\nBurkina Faso\nBurundi\nCabo Verde\nCambodia\nCameroon\nCanada\nCayman Islands\nCentral African Republic\nChad\nChile\nChina\nColombia\nComoros\nCongo, Dem. Rep.\nCongo, Rep.\nCosta Rica\nCote d'Ivoire\nCroatia\nCuba\nCuracao\nCyprus\nCzech Republic\nDenmark\nDjibouti\nDominica\nDominican Republic\nEcuador\nEgypt, Arab Rep.\nEl Salvador\nEquatorial Guinea\nEritrea\nEstonia\nEswatini\nEthiopia\nFaroe Islands\nFiji\nFinland\nFrance\nFrench Polynesia\nGabon\nGambia, The\nGeorgia\nGermany\nGhana\nGibraltar\nGreece\nGreenland\nGrenada\nGuam\nGuatemala\nGuinea\nGuinea-Bissau\nGuyana\nHaiti\nHonduras\nHong Kong SAR, China\nHungary\nIceland\nIndia\nIndonesia\nIran, Islamic Rep.\nIraq\nIreland\nIsle of Man\nIsrael\nItaly\nJamaica\nJapan\nJordan\nKazakhstan\nKenya\nKiribati\nKorea, Dem. People's Rep.\nKorea, Rep.\nKuwait\nKyrgyz Republic\nLao PDR\nLatvia\nLebanon\nLesotho\nLiberia\nLibya\nLiechtenstein\nLithuania\nLuxembourg\nMacao SAR, China\nMadagascar\nMalawi\nMalaysia\nMaldives\nMali\nMalta\nMarshall Islands\nMauritania\nMauritius\nMexico\nMicronesia, Fed. Sts.\nMoldova\nMonaco\nMongolia\nMontenegro\nMorocco\nMozambique\nMyanmar\nNamibia\nNauru\nNepal\nNetherlands\nNew Caledonia\nNew Zealand\nNicaragua\nNiger\nNigeria\nNorth Macedonia\nNorthern Mariana Islands\nNorway\nOman\nPakistan\nPalau\nPanama\nPapua New Guinea\nParaguay\nPeru\nPhilippines\nPoland\nPortugal\nPuerto Rico\nQatar\nRomania\nRussian Federation\nRwanda\nSamoa\nSan Marino\nSao Tome and Principe\nSaudi Arabia\nSenegal\nSerbia\nSeychelles\nSierra Leone\nSingapore\nSint Maarten (Dutch part)\nSlovak Republic\nSlovenia\nSolomon Islands\nSomalia\nSouth Africa\nSouth Sudan\nSpain\nSri Lanka\nSt. Kitts and Nevis\nSt. Lucia\nSt. Martin (French part)\nSt. Vincent and the Grenadines\nSudan\nSuriname\nSweden\nSwitzerland\nSyrian Arab Republic\nTajikistan\nTanzania\nThailand\nTimor-Leste\nTogo\nTonga\nTrinidad and Tobago\nTunisia\nTurkey\nTurkmenistan\nTurks and Caicos Islands\nTuvalu\nUganda\nUkraine\nUnited Arab Emirates\nUnited Kingdom\nUnited States\nUruguay\nUzbekistan\nVanuatu\nVenezuela, RB\nVietnam\nVirgin Islands (U.S.)\nWest Bank and Gaza\nYemen, Rep.\nZambia\nZimbabwe",
+          },
+          {
+            path: 'incomes.txt',
+            text: 'Low Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nLower Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLow Income\nHigh Income\nupper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nLow Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLow income\nLow Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nLow Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nLower Middle Income',
+          },
+          {
+            path: 'internetpercent.txt',
+            text: '13.5\n71.85\n49.04\n-1\n91.57\n14.34\n76\n74.29\n64.74\n97.17\n86.55\n87.48\n79.8\n85\n98.64\n15\n81.76\n79.13\n88.66\n47.08\n20\n98.37\n48.11\n44.29\n70.12\n47\n70.43\n77.7\n94.87\n64.78\n16\n2.66\n57.16\n40\n23.2\n91\n81.07\n4.34\n6.5\n82.33\n54.3\n64.13\n8.48\n8.62\n8.65\n74.09\n46.82\n75.29\n57.15\n68.13\n84.43\n80.69\n97.32\n55.68\n69.62\n74.82\n57.27\n46.92\n33.82\n26.24\n1.31\n89.36\n47\n18.62\n97.58\n49.97\n88.89\n82.04\n72.7\n62\n19.84\n62.72\n89.74\n39\n94.44\n72.95\n69.48\n59.07\n80.51\n65\n18\n3.93\n37.33\n32.47\n31.7\n90.51\n76.07\n99.01\n34.45\n39.9\n70\n75\n84.52\n-1\n83.73\n74.39\n55.07\n91.28\n66.79\n78.9\n17.83\n14.58\n-1\n96.02\n99.6\n38\n25.51\n83.58\n78.18\n29\n7.98\n21.76\n98.1\n79.72\n97.06\n83.79\n9.8\n13.78\n81.2\n63.19\n13\n81.66\n38.7\n20.8\n58.6\n65.77\n35.3\n76.12\n97.05\n47.16\n71.52\n64.8\n10\n30.68\n51\n57\n34\n94.71\n82.01\n90.81\n27.86\n5.25\n42\n79.17\n-1\n96.49\n80.19\n15.51\n-1\n57.87\n11.21\n64.99\n52.54\n60.05\n77.54\n74.66\n70.6\n99.65\n70.68\n80.86\n21.77\n33.61\n60.18\n29.93\n93.31\n46\n73.36\n58.77\n9\n88.17\n-1\n80.66\n79.75\n11.92\n2\n56.17\n7.98\n86.11\n34.11\n80.71\n50.82\n-1\n22.39\n30.87\n48.95\n92.14\n89.69\n34.25\n21.96\n25\n56.82\n27.49\n12.36\n41.25\n77.33\n64.19\n71.04\n21.25\n-1\n49.32\n23.71\n62.55\n98.45\n94.9\n87.27\n74.77\n55.2\n25.72\n72\n70.35\n64.38\n64.4\n26.72\n14.3\n27.06',
+          },
+          {
+            path: 'populations.txt',
+            text: '37172386\n2866376\n42228429\n55465\n77006\n30809762\n96286\n44494502\n2951776\n105845\n24982688\n8840521\n9939800\n385640\n1569439\n161356039\n286641\n9483499\n11433256\n383071\n11485048\n63973\n754394\n11353142\n3323929\n2254126\n209469333\n29802\n428962\n7025037\n19751535\n11175378\n543767\n16249798\n25216237\n37057765\n64174\n4666377\n15477751\n18729160\n1392730000\n49648685\n832322\n84068091\n5244363\n4999441\n25069229\n4087843\n11338138\n159800\n1189265\n10629928\n5793636\n958920\n71625\n10627165\n17084357\n98423595\n6420744\n1308974\n3213972\n1321977\n1136191\n109224559\n48497\n883483\n5515525\n66977107\n277679\n2119275\n2280102\n3726549\n82905782\n29767108\n33718\n10731726\n56025\n111454\n165768\n17247807\n12414318\n1874309\n779004\n11123176\n9587522\n7451000\n9775564\n352721\n1352617328\n267663435\n81800269\n38433600\n4867309\n84077\n8882800\n60421760\n2934855\n126529100\n9956011\n18272430\n51393010\n115847\n25549819\n51606633\n4137309\n6322800\n7061507\n1927174\n6848925\n2108132\n4818977\n6678567\n37910\n2801543\n607950\n631636\n26262368\n18143315\n31528585\n515696\n19077690\n484630\n58413\n4403319\n1265303\n126190788\n112640\n2706049\n38682\n3170208\n622227\n36029138\n29495962\n53708395\n2448255\n12704\n28087871\n17231624\n284060\n4841000\n6465513\n22442948\n195874740\n2082958\n56882\n5311916\n4829483\n212215030\n17907\n4176873\n8606316\n6956071\n31989256\n106651922\n37974750\n10283822\n3195153\n2781677\n19466145\n144478050\n12301939\n196130\n33785\n211028\n33699947\n15854360\n6982604\n96762\n7650154\n5638676\n40654\n5446771\n2073894\n652858\n15008154\n57779622\n10975920\n46796540\n21670000\n52441\n181889\n37264\n110210\n41801533\n575991\n10175214\n8513227\n16906283\n9100837\n56318348\n69428524\n1267972\n7889094\n103197\n1389858\n11565204\n82319724\n5850908\n37665\n11508\n42723139\n44622516\n9630959\n66460344\n326687501\n3449299\n32955400\n292680\n28870195\n95540395\n106977\n4569087\n28498687\n17351822\n14439018',
+          },
+          {
+            path: 'unemployment.txt',
+            text: '11.18\n13.75\n13.57\n9.2\n3.7\n7.36\n8.42\n9.22\n17.7\n8.9\n5.16\n4.85\n4.9\n12.7\n1.2\n4.37\n9.72\n4.76\n5.95\n6.6\n2.65\n8.94\n2.45\n3.52\n15.69\n17.86\n11.93\n2.9\n8.7\n5.21\n6.48\n1.57\n12.17\n0.72\n3.53\n5.66\n4.24\n5.6\n5.9\n7.23\n3.8\n9.11\n8.14\n4.49\n10\n11.49\n3.27\n8.43\n2.4\n13.43\n8.37\n2.24\n4.97\n5.8\n10.96\n5.86\n3.81\n11.74\n4.01\n8.1\n5.1\n5.37\n22.72\n2.25\n3.7\n4.32\n7.36\n9.06\n11.74\n20.39\n9.42\n12.67\n3.38\n4.22\n1\n19.29\n9.1\n22.9\n5.4\n2.46\n4.55\n6\n14.02\n14.1\n5.65\n3.09\n3.71\n2.7\n5.33\n4.4\n12.06\n13.02\n5.74\n2.67\n4\n10.61\n7.72\n2.4\n15.27\n4.9\n2.76\n9.33\n4.7\n3.82\n2.16\n4.54\n9.41\n7.41\n6.35\n24.58\n3.08\n19.03\n2.01\n6.15\n5.59\n2\n1.79\n28.67\n3.3\n6.12\n1.62\n3.66\n4.74\n10.34\n6.43\n3.48\n8.86\n2.98\n6.33\n5.38\n15.17\n9.3\n3.43\n0.87\n19.88\n13.28\n11.36\n3.83\n14.59\n4.3\n4.52\n7.77\n8.39\n20.74\n11.17\n3.8\n1.8\n4.08\n1.36\n3.89\n2.62\n6.22\n6.43\n2.34\n3.85\n6.99\n8.27\n0.11\n4.19\n4.85\n15.11\n14.47\n6.45\n13.59\n6.04\n6.76\n12.73\n3.53\n4.68\n4.2\n9.9\n6.54\n5.11\n0.69\n5.9\n28.47\n12.15\n15.25\n4.05\n5.12\n21.26\n12\n18.79\n17.44\n7.22\n6.35\n4.71\n8.61\n6.9\n2.12\n0.77\n4.66\n3.74\n3.07\n3.21\n15.46\n10.89\n4\n8.3\n8.49\n9.44\n8.8\n2.23\n4\n3.9\n8.34\n9.3\n1.85\n6.6\n2\n7\n26.26\n13.47\n11.63\n4.77',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #3',
@@ -5618,6 +6387,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'countries.txt',
+            text: "Afghanistan\nAlbania\nAlgeria\nAmerican Samoa\nAndorra\nAngola\nAntigua and Barbuda\nArgentina\nArmenia\nAruba\nAustralia\nAustria\nAzerbaijan\nBahamas, The\nBahrain\nBangladesh\nBarbados\nBelarus\nBelgium\nBelize\nBenin\nBermuda\nBhutan\nBolivia\nBosnia and Herzegovina\nBotswana\nBrazil\nBritish Virgin Islands\nBrunei Darussalam\nBulgaria\nBurkina Faso\nBurundi\nCabo Verde\nCambodia\nCameroon\nCanada\nCayman Islands\nCentral African Republic\nChad\nChile\nChina\nColombia\nComoros\nCongo, Dem. Rep.\nCongo, Rep.\nCosta Rica\nCote d'Ivoire\nCroatia\nCuba\nCuracao\nCyprus\nCzech Republic\nDenmark\nDjibouti\nDominica\nDominican Republic\nEcuador\nEgypt, Arab Rep.\nEl Salvador\nEquatorial Guinea\nEritrea\nEstonia\nEswatini\nEthiopia\nFaroe Islands\nFiji\nFinland\nFrance\nFrench Polynesia\nGabon\nGambia, The\nGeorgia\nGermany\nGhana\nGibraltar\nGreece\nGreenland\nGrenada\nGuam\nGuatemala\nGuinea\nGuinea-Bissau\nGuyana\nHaiti\nHonduras\nHong Kong SAR, China\nHungary\nIceland\nIndia\nIndonesia\nIran, Islamic Rep.\nIraq\nIreland\nIsle of Man\nIsrael\nItaly\nJamaica\nJapan\nJordan\nKazakhstan\nKenya\nKiribati\nKorea, Dem. People's Rep.\nKorea, Rep.\nKuwait\nKyrgyz Republic\nLao PDR\nLatvia\nLebanon\nLesotho\nLiberia\nLibya\nLiechtenstein\nLithuania\nLuxembourg\nMacao SAR, China\nMadagascar\nMalawi\nMalaysia\nMaldives\nMali\nMalta\nMarshall Islands\nMauritania\nMauritius\nMexico\nMicronesia, Fed. Sts.\nMoldova\nMonaco\nMongolia\nMontenegro\nMorocco\nMozambique\nMyanmar\nNamibia\nNauru\nNepal\nNetherlands\nNew Caledonia\nNew Zealand\nNicaragua\nNiger\nNigeria\nNorth Macedonia\nNorthern Mariana Islands\nNorway\nOman\nPakistan\nPalau\nPanama\nPapua New Guinea\nParaguay\nPeru\nPhilippines\nPoland\nPortugal\nPuerto Rico\nQatar\nRomania\nRussian Federation\nRwanda\nSamoa\nSan Marino\nSao Tome and Principe\nSaudi Arabia\nSenegal\nSerbia\nSeychelles\nSierra Leone\nSingapore\nSint Maarten (Dutch part)\nSlovak Republic\nSlovenia\nSolomon Islands\nSomalia\nSouth Africa\nSouth Sudan\nSpain\nSri Lanka\nSt. Kitts and Nevis\nSt. Lucia\nSt. Martin (French part)\nSt. Vincent and the Grenadines\nSudan\nSuriname\nSweden\nSwitzerland\nSyrian Arab Republic\nTajikistan\nTanzania\nThailand\nTimor-Leste\nTogo\nTonga\nTrinidad and Tobago\nTunisia\nTurkey\nTurkmenistan\nTurks and Caicos Islands\nTuvalu\nUganda\nUkraine\nUnited Arab Emirates\nUnited Kingdom\nUnited States\nUruguay\nUzbekistan\nVanuatu\nVenezuela, RB\nVietnam\nVirgin Islands (U.S.)\nWest Bank and Gaza\nYemen, Rep.\nZambia\nZimbabwe",
+          },
+          {
+            path: 'incomes.txt',
+            text: 'Low Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nLower Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLow Income\nHigh Income\nupper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nLow Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLow income\nLow Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nLow Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nLower Middle Income',
+          },
+          {
+            path: 'populations.txt',
+            text: '37172386\n2866376\n42228429\n55465\n77006\n30809762\n96286\n44494502\n2951776\n105845\n24982688\n8840521\n9939800\n385640\n1569439\n161356039\n286641\n9483499\n11433256\n383071\n11485048\n63973\n754394\n11353142\n3323929\n2254126\n209469333\n29802\n428962\n7025037\n19751535\n11175378\n543767\n16249798\n25216237\n37057765\n64174\n4666377\n15477751\n18729160\n1392730000\n49648685\n832322\n84068091\n5244363\n4999441\n25069229\n4087843\n11338138\n159800\n1189265\n10629928\n5793636\n958920\n71625\n10627165\n17084357\n98423595\n6420744\n1308974\n3213972\n1321977\n1136191\n109224559\n48497\n883483\n5515525\n66977107\n277679\n2119275\n2280102\n3726549\n82905782\n29767108\n33718\n10731726\n56025\n111454\n165768\n17247807\n12414318\n1874309\n779004\n11123176\n9587522\n7451000\n9775564\n352721\n1352617328\n267663435\n81800269\n38433600\n4867309\n84077\n8882800\n60421760\n2934855\n126529100\n9956011\n18272430\n51393010\n115847\n25549819\n51606633\n4137309\n6322800\n7061507\n1927174\n6848925\n2108132\n4818977\n6678567\n37910\n2801543\n607950\n631636\n26262368\n18143315\n31528585\n515696\n19077690\n484630\n58413\n4403319\n1265303\n126190788\n112640\n2706049\n38682\n3170208\n622227\n36029138\n29495962\n53708395\n2448255\n12704\n28087871\n17231624\n284060\n4841000\n6465513\n22442948\n195874740\n2082958\n56882\n5311916\n4829483\n212215030\n17907\n4176873\n8606316\n6956071\n31989256\n106651922\n37974750\n10283822\n3195153\n2781677\n19466145\n144478050\n12301939\n196130\n33785\n211028\n33699947\n15854360\n6982604\n96762\n7650154\n5638676\n40654\n5446771\n2073894\n652858\n15008154\n57779622\n10975920\n46796540\n21670000\n52441\n181889\n37264\n110210\n41801533\n575991\n10175214\n8513227\n16906283\n9100837\n56318348\n69428524\n1267972\n7889094\n103197\n1389858\n11565204\n82319724\n5850908\n37665\n11508\n42723139\n44622516\n9630959\n66460344\n326687501\n3449299\n32955400\n292680\n28870195\n95540395\n106977\n4569087\n28498687\n17351822\n14439018',
+          },
+          {
+            path: 'unemployment.txt',
+            text: '11.18\n13.75\n13.57\n9.2\n3.7\n7.36\n8.42\n9.22\n17.7\n8.9\n5.16\n4.85\n4.9\n12.7\n1.2\n4.37\n9.72\n4.76\n5.95\n6.6\n2.65\n8.94\n2.45\n3.52\n15.69\n17.86\n11.93\n2.9\n8.7\n5.21\n6.48\n1.57\n12.17\n0.72\n3.53\n5.66\n4.24\n5.6\n5.9\n7.23\n3.8\n9.11\n8.14\n4.49\n10\n11.49\n3.27\n8.43\n2.4\n13.43\n8.37\n2.24\n4.97\n5.8\n10.96\n5.86\n3.81\n11.74\n4.01\n8.1\n5.1\n5.37\n22.72\n2.25\n3.7\n4.32\n7.36\n9.06\n11.74\n20.39\n9.42\n12.67\n3.38\n4.22\n1\n19.29\n9.1\n22.9\n5.4\n2.46\n4.55\n6\n14.02\n14.1\n5.65\n3.09\n3.71\n2.7\n5.33\n4.4\n12.06\n13.02\n5.74\n2.67\n4\n10.61\n7.72\n2.4\n15.27\n4.9\n2.76\n9.33\n4.7\n3.82\n2.16\n4.54\n9.41\n7.41\n6.35\n24.58\n3.08\n19.03\n2.01\n6.15\n5.59\n2\n1.79\n28.67\n3.3\n6.12\n1.62\n3.66\n4.74\n10.34\n6.43\n3.48\n8.86\n2.98\n6.33\n5.38\n15.17\n9.3\n3.43\n0.87\n19.88\n13.28\n11.36\n3.83\n14.59\n4.3\n4.52\n7.77\n8.39\n20.74\n11.17\n3.8\n1.8\n4.08\n1.36\n3.89\n2.62\n6.22\n6.43\n2.34\n3.85\n6.99\n8.27\n0.11\n4.19\n4.85\n15.11\n14.47\n6.45\n13.59\n6.04\n6.76\n12.73\n3.53\n4.68\n4.2\n9.9\n6.54\n5.11\n0.69\n5.9\n28.47\n12.15\n15.25\n4.05\n5.12\n21.26\n12\n18.79\n17.44\n7.22\n6.35\n4.71\n8.61\n6.9\n2.12\n0.77\n4.66\n3.74\n3.07\n3.21\n15.46\n10.89\n4\n8.3\n8.49\n9.44\n8.8\n2.23\n4\n3.9\n8.34\n9.3\n1.85\n6.6\n2\n7\n26.26\n13.47\n11.63\n4.77',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #4',
@@ -5639,6 +6426,28 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'arenas.txt',
+            text: 'TD Garden\nBarclays Center\nMadison Square Garden\nWells Fargo Center\nScotiabank Arena\nUnited Center\nRocket Mortgage FieldHouse\nLittle Caesars Arena\nBankers Life Fieldhouse\nFiserv Forum\nState Farm Arena\nSpectrum Center\nAmerican Airlines Arena\nAmway Center\nCapital One Arena\nPepsi Center\nTarget Center\nChesapeake Energy Arena\nModa Center\nVivint Smart Home Arena\nChase Center\nStaples Center\nStaples Center\nTalking Stick Resort Arena\nGolden 1 Center\nAmerican Airlines Center\nToyota Center\nFedExForum\nSmoothie King Center\nAT&T Center',
+          },
+          {
+            path: 'capacities.txt',
+            text: '18624\n17732\n19812\n21600\n19800\n20917\n20562\n20491\n17923\n18717\n15711\n19077\n19600\n18846\n20356\n19520\n19356\n18203\n19441\n19911\n18064\n19060\n18997\n18055\n17500\n19200\n18055\n18119\n16867\n18418',
+          },
+          {
+            path: 'championships.txt',
+            text: '17\n0\n2\n3\n1\n6\n1\n3\n0\n1\n1\n0\n3\n0\n1\n0\n0\n1\n1\n0\n6\n0\n16\n0\n1\n1\n2\n0\n0\n5',
+          },
+          {
+            path: 'locations.txt',
+            text: 'Boston\nNew York City\nNew York City\nPhiladelphia\nToronto\nChicago\nCleveland\nDetroit\nIndianapolis\nMilwaukee\nAtlanta\nCharlotte\nMiami\nOrlando\nWashington\nDenver\nMinneapolis\nOklahoma City\nPortland\nSalt Lake City\nSan Francisco\nLos Angeles\nLos Angeles\nPhoenix\nSacramento\nDallas\nHouston\nMemphis\nNew Orleans\nSan Antonio',
+          },
+          {
+            path: 'teams.txt',
+            text: 'Boston Celtics\nBrooklyn Nets\nNew York Knicks\nPhiladelphia 76ers\nToronto Raptors\nChicago Bulls\nCleveland Cavaliers\nDetroit Pistons\nIndiana Pacers\nMilwaukee Bucks\nAtlanta Hawks\nCharlotte Hornets\nMiami Heat\nOrlando Magic\nWashington Wizards\nDenver Nuggets\nMinnesota Timberwolves\nOklahoma City Thunder\nPortland Trail Blazers\nUtah Jazz\nGolden State Warriors\nLos Angeles Clippers\nLos Angeles Lakers\nPhoenix Suns\nSacramento Kings\nDallas Mavericks\nHouston Rockets\nMemphis Grizzlies\nNew Orleans Pelicans\nSan Antonio Spurs',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #5',
@@ -5660,6 +6469,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'albums.txt',
+            text: "Sgt. Pepper's Lonely Hearts Club Band\nPet Sounds\nRevolver\nHighway 61 Revisited\nRubber Soul\nWhat's Going On\nExile on Main St.\nLondon Calling\nBlonde on Blonde\nThe Beatles (\"The White Album\")\nThe Sun Sessions\nKind of Blue\nThe Velvet Underground & Nico\nAbbey Road\nAre You Experienced\nBlood on the Tracks\nNevermind\nBorn to Run\nAstral Weeks\nThriller\nThe Great Twenty_Eight\nThe Complete Recordings\nJohn Lennon/Plastic Ono Band\nInnervisions\nLive at the Apollo, 1962\nRumours\nThe Joshua Tree\nWho's Next\nLed Zeppelin\nBlue\nBringing It All Back Home\nLet It Bleed\nRamones\nMusic From Big Pink\nThe Rise and Fall of Ziggy Stardust and the Spiders From Mars\nTapestry\nHotel California\nThe Anthology\nPlease Please Me\nForever Changes\nNever Mind the Bollocks Here's the Sex Pistols\nThe Doors\nThe Dark Side of the Moon\nHorses\nThe Band (\"The Brown Album\")\nLegend: The Best of Bob Marley and The Wailers\nA Love Supreme\nIt Takes a Nation of Millions to Hold Us Back\nAt Fillmore East\nHere's Little Richard\nBridge Over Troubled Water\nGreatest Hits\nMeet The Beatles!\nThe Birth of Soul\nElectric Ladyland\nElvis Presley\nSongs in the Key of Life\nBeggars Banquet\nChronicle: The 20 Greatest Hits\nTrout Mask Replica\nGreatest Hits\nAppetite for Destruction\nAchtung Baby\nSticky Fingers\nBack to Mono (1958-1969)\nMoondance\nKid A\nOff the Wall\n[Led Zeppelin IV]\nThe Stranger\nGraceland\nSuperfly\nPhysical Graffiti\nAfter the Gold Rush\nStar Time\nPurple Rain\nBack in Black\nOtis Blue: Otis Redding Sings Soul\nLed Zeppelin II\nImagine\nThe Clash\nHarvest\nAxis: Bold as Love\nI Never Loved a Man the Way I Love You\nLady Soul\nBorn in the U.S.A.\nThe Wall\nAt Folsom Prison\nDusty in Memphis\nTalking Book\nGoodbye Yellow Brick Road\n20 Golden Greats\nSign \"Peace\" the Times\n40 Greatest Hits\nBrew\nTommy\nThe Freewheelin' Bob Dylan\nThis Year's Model\nThere's a Riot Goin' On\nOdessey and Oracle\nIn the Wee Small Hours\nFresh Cream\nGiant Steps\nSweet Baby James\nModern Sounds in Country and Western Music\nRocket to Russia\nPortrait of a Legend 1951-1964\nHunky Dory\nAftermath\nLoaded\nThe Bends\nIf You Can Believe Your Eyes and Ears\nCourt and Spark\nDisraeli Gears\nThe Who Sell Out\nOut of Our Heads\nLayla and Other Assorted Love Songs\nLate Registration\nAt Last!\nSweetheart of the Rodeo\nStand!\nThe Harder They Come\nRaising Hell\nMoby Grape\nPearl\nCatch a Fire\nYounger Than Yesterday\nRaw Power\nRemain in Light\nMarquee Moon\nParanoid\nSaturday Night Fever: The Original Movie Sound Track\nThe Wild, the Innocent & the E Street Shuffle\nReady to Die\nSlanted and Enchanted\nGreatest Hits\nTim\nThe Chronic\nRejuvenation\nParallel Lines\nLive at the Regal\nA Christmas Gift for You From Phil Spector\nGris-Gris\nStraight Outta Compton\nAja\nSurrealistic Pillow\nDeja vu\nHouses of the Holy\nSantana\nDarkness on the Edge of Town\nFuneral\nThe B 52's / Play Loud\nThe Low End Theory\nMoanin' in the Moonlight\nPretenders\nPaul's Boutique\nCloser\nCaptain Fantastic and the Brown Dirt Cowboy\nAlive!\nElectric Warrior\nThe Dock of the Bay\nOK Computer\n1999\nThe Very Best of Linda Ronstadt\nLet's Get It On\nImperial Bedroom\nMaster of Puppets\nMy Aim Is True\nExodus\nLive at Leeds\nThe Notorious Byrd Brothers\nEvery Picture Tells a Story\nSomething/Anything?\nDesire\nClose to You\nRocks\nOne Nation Under a Groove\nThe Anthology: 1961-1977\nThe Definitive Collection\nThe Rolling Stones, Now!\nNatty Dread\nFleetwood Mac\nRed Headed Stranger\nThe Immaculate Collection\nThe Stooges\nFresh\nSo\nBuffalo Springfield Again\nHappy Trails\nFrom Elvis in Memphis\nFun House\nThe Gilded Palace of Sin\nDookie\nTransformer\nBlues Breakers With Eric Clapton (\"The Beano Album\")\nNuggets: Original Artyfacts From the First Psychedelic Era, 1965-1968\nMurmur\nThe Best of Little Walter\nIs This It\nHighway to Hell\nThe Downward Spiral\nParsley, Sage, Rosemary and Thyme\nBad\nModern Times\nWheels of Fire\nDirty Mind\nAbraxas\nTea for the Tillerman\nTen\nEverybody Knows This Is Nowhere\nWish You Were Here\nCrooked Rain Crooked Rain\nTattoo You\nProud Mary: The Best of Ike and Tina Turner\nNew York Dolls\nBo Diddley / Go Bo Diddley\nTwo Steps From the Blues\nThe Queen Is Dead\nLicensed to Ill\nLook-Ka Py Py\nLoveless\nNew Orleans Piano\nWar\nThe Neil Diamond Collection\nAmerican Idiot\nNebraska\nDoolittle\nPaid in Full\nToys in the Attic\nNick of Time\nA Night at the Opera\nThe Kink Kronikles\nMr. Tambourine Man\nBookends\nThe Ultimate Collection\nMr. Excitement!\nMy Generation\nHowlin' Wolf\nLike a Prayer\nCan't Buy a Thrill\nLet It Be\nRun D.M.C.\nBlack Sabbath\nThe Marshall Mathers LP\nAll Killer No Filler! The Jerry Lee Lewis Anthology\nFreak Out!\nLive/Dead\nThe Shape of Jazz to Come\nAutomatic for the People\nReasonable Doubt\nLow\nThe Blueprint\nThe River\nComplete & Unbelievable: The Otis Redding Dictionary of Soul\nMetallica (\"The Black Album\")\nTrans Europa Express\nWhitney Houston\nThe Kinks Are The Village Green Preservation Society\nThe Velvet Rope\nStardust\nAmerican Beauty\nCrosby, Stills & Nash\nTracy Chapman\nWorkingman's Dead\nThe Genius of Ray Charles\nChild Is Father to the Man\nQuadrophenia\nPaul Simon\nPsychocandy\nSome Girls\nThe Beach Boys Today!\nDig Me Out\nGoing to a Go-Go\nNightbirds\nThe Slim Shady LP\nMothership Connection\nRhythm Nation 1814\nAnthology of American Folk Music\nAladdin Sane\nAll That You Can't Leave Behind\nMy Life\nFolk Singer\nCan't Get Enough\nThe Cars\nMusic of My Mind\nI'm Still in Love With You\nLos Angeles\nAnthem of the Sun\nSomething Else by The Kinks\nCall Me\nTalking Heads: 77\nThe Basement Tapes\nWhite Light/White Heat\nKick Out the Jams\nSongs of Love and Hate\nMeat Is Murder\nWe're Only in It for the Money\nThe College Dropout\nWeezer (Blue Album)\nMaster of Reality\nCoat of Many Colors\nFear of a Black Planet\nJohn Wesley Harding\nGrace\nCar Wheels on a Gravel Road\nOdelay\nA Hard Day's Night\nSongs for Swingin' Lovers!\nWilly and the Poor Boys\nBlood Sugar Sex Magik\nThe Sun Records Collection\nNothing's Shocking\nMTV Unplugged in New York\nThe Miseducation of Lauryn Hill\nDamn the Torpedoes\nThe Velvet Underground\nSurfer Rosa\nBack Stabbers\nBurnin'\nAmnesiac\nPink Moon\nSail Away\nGhost in the Machine\nStation to Station\nSlowhand\nDisintegration\nExile in Guyville\nDaydream Nation\nIn the Jungle Groove\nTonight's the Night\nHelp!\nShoot Out the Lights\nWild Gift\nSqueezing Out Sparks\nSuperunknown\nIn Rainbows\nAqualung\nCheap Thrills\nThe Heart of Saturday Night\nDamaged\nPlay\nViolator\nBat Out of Hell\nBerlin\nStop Making Sense\n3 Feet High and Rising\nThe Piper at the Gates of Dawn\nMuddy Waters at Newport 1960\nThe Black Album\nRoger the Engineer\nRust Never Sleeps\nBrothers in Arms\nMy Beautiful Dark Twisted Fantasy\n52nd Street\nHaving a Rave Up\n12 Songs\nBetween the Buttons\nSketches of Spain\nHonky Chateau\nSingles Going Steady\nStankonia\nSiamese Dream\nSubstance 1987\nL.A. Woman\nRage Against the Machine\nAmerican Recordings\nRay of Light\nEagles\nLouder Than Bombs\nMott\nWhatever People Say I Am, That's What I'm Not\nReggatta de Blanc\nVolunteers\nSiren\nLate for the Sky\nPost\nThe Ultimate Collection: 1948-1990\n(What's the Story) Morning Glory?\nCrazySexyCool\nFunky Kingston\nThe Smile Sessions\nThe Modern Lovers\nMore Songs About Buildings and Food\nA Quick One\nLove and Theft\nPretzel Logic\nEnter the Wu_Tang: 36 Chambers\nThe Indestructible Beat of Soweto\nThe End of the Innocence\nElephant\nThe Pretender\nLet It Be\nKala\nGood Old Boys\nSound of Silver\nFor Your Pleasure\nBlue Lines\nEliminator\nRain Dogs\nAnthology: The Best of The Temptations\nCalifornication\nIllmatic\n(pronounced 'leh-'nerd 'skin-'nerd)\nDr. John's Gumbo\nRadio City\nRid of Me\nSandinista!\nI Do Not Want What I Haven't Got\nStrange Days\nTime Out of Mind\n461 Ocean Boulevard\nPink Flag\nDouble Nickels on the Dime\nBeauty and the Beat\nVan Halen\nMule Variations\nBoy\nBand on the Run\nDummy\nThe \"Chirping\" Crickets\nThe Best of the Girl Groups, Volume 1\nPresenting the Fabulous Ronettes Featuring Veronica\nAnthology\nThe Rising\nGrievous Angel\nCheap Trick at Budokan\nSleepless\nOutlandos d'Amour\nAnother Green World\nVampire Weekend\nStories From the City, Stories From the Sea\nHere Come the Warm Jets\nAll Things Must Pass\n#1 Record\nIn Utero\nSea Change\nTha Carter III\nBoys Don't Cry\nLive at the Harlem Square Club, 1963\nQ: Are We Not Men? A: We Are Devo!\nIn Color\nThe World Is a Ghetto\nFly Like an Eagle\nBack in the USA\nGetz / Gilberto\nSynchronicity\nThird/Sister Lovers\nFor Everyman\nBack to Black\nJohn Prine\nStrictly Business\nLove It to Death\nHow Will the Wolf Survive?\nHere, My Dear\nZ\nTumbleweed Connection\nThe Drifters' Golden Hits\nLive Through This\nMetal Box\nDocument\nHeaven Up Here\nHysteria\n69 Love Songs\nA Rush of Blood to the Head\nTunnel of Love\nThe Paul Butterfield Blues Band\nThe Score\nRadio\nI Want to See the Bright Lights Tonight\nFaith\nThe Smiths\nProxima estacion: Esperanza\nArmed Forces\nLife After Death\nDown Every Road\nAll Time Greatest Hits\nMaggot Brain\nOnly Built 4 Cuban Linx\nVoodoo\nGuitar Town\nEntertainment!\nAll the Young Dudes\nVitalogy\nThat's the Way of the World\nShe's So Unusual\nNew Day Rising\nDestroyer\nTres hombres\nBorn Under a Bad Sign\nTouch\nYankee Hotel Foxtrot\nOracular Spectacular\nGive It Up\nBoz Scaggs\nWhite Blood Cells\nThe Stone Roses\nLive in Cook County Jail\nAquemini",
+          },
+          {
+            path: 'artists.txt',
+            text: "The Beatles\nThe Beach Boys\nThe Beatles\nBob Dylan\nThe Beatles\nMarvin Gaye\nThe Rolling Stones\nThe Clash\nBob Dylan\nThe Beatles\nElvis Presley\nMiles Davis\nThe Velvet Underground\nThe Beatles\nThe Jimi Hendrix Experience\nBob Dylan\nNirvana\nBruce Springsteen\nVan Morrison\nMichael Jackson\nChuck Berry\nRobert Johnson\nJohn Lennon / Plastic Ono Band\nStevie Wonder\nJames Brown\nFleetwood Mac\nU2\nThe Who\nLed Zeppelin\nJoni Mitchell\nBob Dylan\nThe Rolling Stones\nRamones\nThe Band\nDavid Bowie\nCarole King\nEagles\nMuddy Waters\nThe Beatles\nLove\nSex Pistols\nThe Doors\nPink Floyd\nPatti Smith\nThe Band\nBob Marley & The Wailers\nJohn Coltrane\nPublic Enemy\nThe Allman Brothers Band\nLittle Richard\nSimon & Garfunkel\nAl Green\nThe Beatles\nRay Charles\nThe Jimi Hendrix Experience\nElvis Presley\nStevie Wonder\nThe Rolling Stones\nCreedence Clearwater Revival\nCaptain Beefheart & His Magic Band\nSly & The Family Stone\nGuns N' Roses\nU2\nThe Rolling Stones\nPhil Spector\nVan Morrison\nRadiohead\nMichael Jackson\nLed Zeppelin\nBilly Joel\nPaul Simon\nCurtis Mayfield\nLed Zeppelin\nNeil Young\nJames Brown\nPrince and the Revolution\nAC/DC\nOtis Redding\nLed Zeppelin\nJohn Lennon\nThe Clash\nNeil Young\nThe Jimi Hendrix Experience\nAretha Franklin\nAretha Franklin\nBruce Springsteen\nPink Floyd\nJohnny Cash\nDusty Springfield\nStevie Wonder\nElton John\nBuddy Holly\nPrince\nHank Williams\nMiles Davis\nThe Who\nBob Dylan\nElvis Costello\nSly & The Family Stone\nThe Zombies\nFrank Sinatra\nCream\nJohn Coltrane\nJames Taylor\nRay Charles\nRamones\nSam Cooke\nDavid Bowie\nThe Rolling Stones\nThe Velvet Underground\nRadiohead\nThe Mamas and the Papas\nJoni Mitchell\nCream\nThe Who\nThe Rolling Stones\nDerek and the Dominos\nKanye West\nEtta James\nThe Byrds\nSly & The Family Stone\nVarious Artists\nRun D.M.C.\nMoby Grape\nJanis Joplin\nThe Wailers\nThe Byrds\nIggy and The Stooges\nTalking Heads\nTelevision\nBlack Sabbath\nVarious Artists\nBruce Springsteen\nThe Notorious B.I.G.\nPavement\nElton John\nThe Replacements\nDr. Dre\nThe Meters\nBlondie\nB.B. King\nPhil Spector\nDr. John, the Night Tripper\nN.W.A\nSteely Dan\nJefferson Airplane\nCrosby, Stills, Nash & Young\nLed Zeppelin\nSantana\nBruce Springsteen\nArcade Fire\nThe B 52's\nA Tribe Called Quest\nHowlin' Wolf\nPretenders\nBeastie Boys\nJoy Division\nElton John\nKISS\nT. Rex\nOtis Redding\nRadiohead\nPrince\nLinda Ronstadt\nMarvin Gaye\nElvis Costello & The Attractions\nMetallica\nElvis Costello\nBob Marley & The Wailers\nThe Who\nThe Byrds\nRod Stewart\nTodd Rundgren\nBob Dylan\nCarpenters\nAerosmith\nFunkadelic\nCurtis Mayfield and The Impressions\nABBA\nThe Rolling Stones\nBob Marley & The Wailers\nFleetwood Mac\nWillie Nelson\nMadonna\nThe Stooges\nSly & The Family Stone\nPeter Gabriel\nBuffalo Springfield\nQuicksilver Messenger Service\nElvis Presley\nThe Stooges\nThe Flying Burrito Brothers\nGreen Day\nLou Reed\nJohn Mayall & The Bluesbreakers\nVarious Artists\nR.E.M.\nLittle Walter\nThe Strokes\nAC/DC\nNine Inch Nails\nSimon & Garfunkel\nMichael Jackson\nBob Dylan\nCream\nPrince\nSantana\nCat Stevens\nPearl Jam\nNeil Young & Crazy Horse\nPink Floyd\nPavement\nThe Rolling Stones\nIke & Tina Turner\nNew York Dolls\nBo Diddley\nBobby \"Blue\" Bland\nThe Smiths\nBeastie Boys\nThe Meters\nMy Bloody Valentine\nProfessor Longhair\nU2\nNeil Diamond\nGreen Day\nBruce Springsteen\nPixies\nEric B. & Rakim\nAerosmith\nBonnie Raitt\nQueen\nThe Kinks\nThe Byrds\nSimon & Garfunkel\nPatsy Cline\nJackie Wilson\nThe Who\nHowlin' Wolf\nMadonna\nSteely Dan\nThe Replacements\nRun D.M.C.\nBlack Sabbath\nEminem\nJerry Lee Lewis\nThe Mothers of Invention\nThe Grateful Dead\nOrnette Coleman\nR.E.M.\nJay Z\nDavid Bowie\nJay Z\nBruce Springsteen\nOtis Redding\nMetallica\nKraftwerk\nWhitney Houston\nThe Kinks\nJanet\nWillie Nelson\nGrateful Dead\nCrosby, Stills & Nash\nTracy Chapman\nGrateful Dead\nRay Charles\nBlood, Sweat & Tears\nThe Who\nPaul Simon\nThe Jesus and Mary Chain\nThe Rolling Stones\nThe Beach Boys\nSleater Kinney\nSmokey Robinson & The Miracles\nLaBelle\nEminem\nParliament\nJanet Jackson\nVarious\nDavid Bowie\nU2\nMary J. Blige\nMuddy Waters\nBarry White\nThe Cars\nStevie Wonder\nAl Green\nX\nGrateful Dead\nThe Kinks\nAl Green\nTalking Heads\nBob Dylan and the Band\nThe Velvet Underground\nMC5\nLeonard Cohen\nThe Smiths\nThe Mothers of Invention\nKanye West\nWeezer\nBlack Sabbath\nDolly Parton\nPublic Enemy\nBob Dylan\nJeff Buckley\nLucinda Williams\nBeck\nThe Beatles\nFrank Sinatra\nCreedence Clearwater Revival\nRed Hot Chili Peppers\nVarious\nJane's Addiction\nNirvana\nLauryn Hill\nTom Petty and the Heartbreakers\nThe Velvet Underground\nPixies\nThe O'Jays\nThe Wailers\nRadiohead\nNick Drake\nRandy Newman\nThe Police\nDavid Bowie\nEric Clapton\nThe Cure\nLiz Phair\nSonic Youth\nJames Brown\nNeil Young\nThe Beatles\nRichard & Linda Thompson\nX\nGraham Parker & The Rumour\nSoundgarden\nRadiohead\nJethro Tull\nBig Brother & the Holding Company\nTom Waits\nBlack Flag\nMoby\nDepeche Mode\nMeat Loaf\nLou Reed\nTalking Heads\nDe La Soul\nPink Floyd\nMuddy Waters\nJay Z\nThe Yardbirds\nNeil Young & Crazy Horse\nDire Straits\nKanye West\nBilly Joel\nThe Yardbirds\nRandy Newman\nThe Rolling Stones\nMiles Davis\nElton John\nBuzzcocks\nOutKast\nThe Smashing Pumpkins\nNew Order\nThe Doors\nRage Against the Machine\nJohnny Cash\nMadonna\nEagles\nThe Smiths\nMott the Hoople\nArctic Monkeys\nThe Police\nJefferson Airplane\nRoxy Music\nJackson Browne\nBjork\nJohn Lee Hooker\nOasis\nTLC\nToots & The Maytals\nThe Beach Boys\nThe Modern Lovers\nTalking Heads\nThe Who\nBob Dylan\nSteely Dan\nWu Tang Clan\nVarious Artists\nDon Henley\nThe White Stripes\nJackson Browne\nThe Beatles\nM.I.A.\nRandy Newman\nLCD Soundsystem\nRoxy Music\nMassive Attack\nZZ Top\nTom Waits\nThe Temptations\nRed Hot Chili Peppers\nNas\nLynyrd Skynyrd\nDr. John\nBig Star\nPJ Harvey\nThe Clash\nSinead O'Connor\nThe Doors\nBob Dylan\nEric Clapton\nWire\nMinutemen\nThe Go Go's\nVan Halen\nTom Waits\nU2\nPaul McCartney & Wings\nPortishead\nThe Crickets\nVarious Artists\nThe Ronettes\nDiana Ross & The Supremes\nBruce Springsteen\nGram Parsons\nCheap Trick\nPeter Wolf\nThe Police\nBrian Eno\nVampire Weekend\nPJ Harvey\nBrian Eno\nGeorge Harrison\nBig Star\nNirvana\nBeck\nLil Wayne\nThe Cure\nSam Cooke\nDEVO\nCheap Trick\nWar\nSteve Miller Band\nMC5\nStan Getz\nThe Police\nBig Star\nJackson Browne\nAmy Winehouse\nJohn Prine\nEPMD\nAlice Cooper\nLos Lobos\nMarvin Gaye\nMy Morning Jacket\nElton John\nThe Drifters\nHole\nPublic Image Ltd.\nR.E.M.\nEcho and The Bunnymen\nDef Leppard\nThe Magnetic Fields\nColdplay\nBruce Springsteen\nThe Paul Butterfield Blues Band\nFugees\nL.L. Cool J\nRichard & Linda Thompson\nGeorge Michael\nThe Smiths\nManu Chao\nElvis Costello & The Attractions\nThe Notorious B.I.G.\nMerle Haggard\nLoretta Lynn\nFunkadelic\nRaekwon\nD'Angelo\nSteve Earle\nGang of Four\nMott the Hoople\nPearl Jam\nEarth, Wind & Fire\nCyndi Lauper\nHusker Du\nKISS\nZZ Top\nAlbert King\nEurythmics\nWilco\nMGMT\nBonnie Raitt\nBoz Scaggs\nThe White Stripes\nThe Stone Roses\nB.B. King\nOutKast",
+          },
+          {
+            path: 'genres.txt',
+            text: 'Rock\nRock\nRock\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nJazz\nRock\nRock\nRock\nRock\nRock\nRock\nJazz\nFunk \nRock\nBlues\nRock\nFunk \nFunk \nRock\nRock\nRock\nRock\nPop\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFolk\nRock\nRock\nRock\nRock\nRock\nRock\nClassical\nReggae\nJazz\nHip Hop\nRock\nRock\nRock\nFunk \nRock\nJazz\nRock\nRock\nFunk \nRock\nRock\nRock\nFunk \nRock\nElectronic\nRock\nRock\nJazz\nElectronic\nFunk \nRock\nRock\nJazz\nFunk \nRock\nRock\nFunk \nElectronic\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nFunk \nFunk \nRock\nRock\nFolk\nRock\nFunk \nRock\nRock\nRock\nFolk\nJazz\nRock\nFolk\nRock\nFunk \nRock\nJazz\nRock\nJazz\nRock\nFunk \nRock\nLatin\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nHip Hop\nFunk \nRock\nFunk \nReggae\nHip Hop\nRock\nRock\nReggae\nRock\nRock\nElectronic\nRock\nRock\nElectronic\nRock\nHip Hop\nRock\nRock\nRock\nHip Hop\nFunk \nElectronic\nBlues\nRock\nJazz\nHip Hop\nJazz\nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nHip Hop\nBlues\nRock\nHip Hop\nRock\nRock\nRock\nRock\nFunk \nElectronic\nFunk \nRock\nFunk \nRock\nRock\nRock\nReggae\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFunk \nFunk \nElectronic\nRock\nReggae\nRock\nFolk\nElectronic\nRock\nFunk \nElectronic\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nBlues\nRock\nRock\nElectronic\nRock\nFunk \nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFunk \nRock\nRock\nFunk \nRock\nHip Hop\nFunk \nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nHip Hop\nRock\nRock\nRock\nRock\nRock\nRock\nFolk\nFunk \nRock\nBlues\nElectronic\nRock\nRock\nHip Hop\nRock\nHip Hop\nRock\nElectronic\nRock\nJazz\nRock\nHip Hop\nElectronic\nHip Hop\nRock\nFunk \nRock\nElectronic\nFunk \nRock\nElectronic\nPop\nRock\nRock\nRock\nRock\nJazz\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFunk \nFunk \nHip Hop\nFunk \nElectronic\nBlues\nRock\nRock\nHip Hop\nBlues\nFunk \nElectronic\nFunk \nFunk \nRock\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nFolk\nRock\nElectronic\nHip Hop\nRock\nRock\nFolk\nHip Hop\nRock\nRock\nFolk\nElectronic\nRock\nJazz\nRock\nRock\nRock\nRock\nRock\nHip Hop\nRock\nRock\nRock\nFunk \nReggae\nElectronic\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nJazz\nRock\nElectronic\nElectronic\nRock\nRock\nRock\nHip Hop\nRock\nRock\nHip Hop\nRock\nRock\nRock\nHip Hop\nJazz\nRock\nRock\nRock\nJazz\nRock\nRock\nHip Hop\nRock\nElectronic\nRock\nHip Hop\nFolk\nElectronic\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nBlues\nRock\nElectronic\nReggae\nRock\nRock\nRock\nRock\nRock\nJazz\nHip Hop\nFunk\nRock\nRock\nRock\nRock\nElectronic\nRock\nElectronic\nRock\nElectronic\nRock\nRock\nElectronic\nRock\nHip Hop\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nElectronic\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nHip Hop\nRock\nFunk \nRock\nRock\nFunk \nRock\nRock\nJazz\nRock\nRock\nRock\nFunk \nFolk\nHip Hop\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nHip Hop\nHip Hop\nRock\nElectronic\nRock\nRock\nRock\nHip Hop\nFolk\nFolk\nRock\nHip Hop\nHip Hop\nRock\nRock\nRock\nRock\nFunk \nElectronic\nRock\nRock\nRock\nFunk \nElectronic\nRock\nElectronic\nRock\nRock\nRock\nRock\nBlues\nHip Hop',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #6',
@@ -5681,6 +6504,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'Data for Social Good Project #1',
@@ -5702,6 +6526,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'colors.txt',
+            text: 'Yellow\nBlue\nBlack\nBlack\nWhite\nBrown\nGrey\nGrey\nWhite\nBlue\nBlue\nGrey\nBrown\nBlack\nGreen\nBrown\nBrown\nBrown\nBlack\nBrown\nBlack\nWhite\nBrown\nBlack\nBlack\nBrown\nBrown\nYellow\nRed\nGrey\nYellow\nWhite\nBlue\nYellow\nGreen\nGrey\nBlack\nBlack\nBlack\nBrown\nWhite\nPink\nGrey\nBlack\nBrown\nGreen\nWhite\nBrown\nBrown\nBlue\nBrown\nWhite\nBrown\nBrown\nYellow\nBrown\nRed\nBrown\nGrey\nWhite\nBlack\nPink\nBlue\nWhite\nBrown\nGrey\nWhite\nBrown\nBlack\nWhite\nGrey\nPink\nWhite\nBrown\nGreen\nBrown\nRed\nWhite\nBrown\nGrey\nBrown\nBlack\nGrey\nWhite\nBrown\nBlack\nBrown\nBlack\nBlack\nBlack\nBlue\nPink\nBlue\nWhite\nWhite\nRed\nBrown\nBlack',
+          },
+          {
+            path: 'diets.txt',
+            text: 'seeds\nfrogs\nflying insects\nsquid\nfish\nfish\nfish\nfish\nfish\nnuts\nfruit\nflies\ninsects\nants\nnectar\ninsects\nflying insects\nseeds\nseeds\nfruit\ncarrion\nlarvae\ncarcasses\nseeds\nfish\ninsects\nflying insects\ninsects\ninsects\nshoots\nfruit\nflying insects\ninsects\ninsects\nseeds\nfish\nfruits\nfish\nfruit\nflying insects\nfish\nplankton\nmonkeys\nfish\nleaves\nplants\ncarcasses\nsnakes\nmice\nlicuri palm nuts\ngrubs\ncrustaceans\ninsects\nseeds\nInsects\nleaves\nseeds\ninsects\npigeons\ncrustaceans\ninsects\nspiders\npinyon seeds\nfish\nblood\ninsects\nsquid\nfruit\neucalyptus nectar\ninsects\nfruits\ncrustaceans\ninsects\ninsects\nflower nectar\ninsects\ninsects\ninsects\nbirds\nfish\ninsects\ninsects\nsnails\nsmall mammals\nmosquitoes\nfruit\nlarge insects\nfruit\nbeetles\nfish\nseeds\nfruit\nseeds\naquatic insects\ncrustaceans\nfruit\nberries\ntree sap',
+          },
+          {
+            path: 'names.txt',
+            text: "American Goldfinch\nAmerican Purple Gallinule\nAmerican Redstart\nAmsterdam Albatross\nArctic Tern\nBald Eagle\nBelted Kingfisher\nBlack-Crowned Night Heron\nBlue Footed Booby\nBlue Jay\nBlue Manakin\nBokikokiko\nBrown Creeper\nBuff-Spotted Flufftail\nBumblebee Hummingbird\nCarolina Wren\nCave Swallow\nCommon Buttonquail\nCommon Ostrich\nCommon Pheasant\nCommon Raven\nCommon Sandpiper\nCrested Caracara\nDark-Eyed Junco\nDouble-Crested Cormorant\nEastern Screech Owl\nEastern Whip-Poor-Will\nElegant Sunbird\nElegant Trogon\nEmperor Goose\nFlame Bowerbird\nFork-Tailed Flycatcher\nGambel's Quail\nGolden White-Eye\nGouldian Finch\nGreat Blue Heron\nGreat Curassow\nGreat Frigatebird\nGreat Hornbill\nGreat Potoo\nGreat White Pelican\nGreater Flamingo\nHarpy Eagle\nHawaiian Stilt\nHoatzin\nKakapo\nKing Vulture\nLaughing Falcon\nLaughing Kookaburra\nLear's Macaw\nLittle Spotted Kiwi\nMacaroni Penguin\nMallard\nMourning Dove\nNarcissus Flycatcher\nNene\nNorthern Cardinal\nOvenbird\nPeregrine Falcon\nPied Avocet\nPileated Woodpecker\nPink Robin\nPinyon Jay\nRazorbill\nRed-Billed Oxpecker\nRed-Breasted Nuthatch\nRed-Tailed Tropicbird\nRed-Whiskered Bulbul\nRegent Honeyeater\nRing-Billed Gull\nRock Dove\nRoseate Spoonbill\nRose-Breasted Gosbeak\nRuby-Crowned Kinglet\nRuby-Throated Hummingbird\nRudd's Lark\nScarlet Tanager\nSecretarybird\nSharp-Shinned Hawk\nShoebill\nSierra Madre Sparrow\nSmooth-Billed Ani\nSnail Kite\nSnowy Owl\nSpoon-Billed Sandpiper\nSuperb Bird-of-Paradise\nTawny Frogmouth\nToco Toucan\nTricolored Blackbird\nTufted Puffin\nVictoria Crowned Pigeon\nViolet-Backed Starling\nVulturine Guineafowl\nWhite Wagtail\nWhooping Crane\nWilson's Bird-Of-Paradise\nWood Duck\nYellow Bellied Sapsucker",
+          },
+          {
+            path: 'status.txt',
+            text: 'Least Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nNear Threatened\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nNear Threatened\nLeast Concern\nVulnerable\nLeast Concern\nNear Threatened\nLeast Concern\nLeast Concern\nLeast Concern\nNear Threatened\nEndangered\nLeast Concern\nCritically Endangered\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nNear Threatened\nVulnerable\nLeast Concern\nLeast Concern\nLeast Concern\nVulnerable\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nVulnerable\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nCritically Endangered\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nLeast Concern\nVulnerable\nLeast Concern\nVulnerable\nLeast Concern\nVulnerable\nEndangered\nLeast Concern\nLeast Concern\nVulnerable\nCritically Endangered\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nLeast Concern\nNear Threatened\nLeast Concern\nLeast Concern\nLeast Concern\nEndangered\nNear Threatened\nLeast Concern\nLeast Concern',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #2',
@@ -5723,6 +6565,28 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'countries.txt',
+            text: "Afghanistan\nAlbania\nAlgeria\nAmerican Samoa\nAndorra\nAngola\nAntigua and Barbuda\nArgentina\nArmenia\nAruba\nAustralia\nAustria\nAzerbaijan\nBahamas, The\nBahrain\nBangladesh\nBarbados\nBelarus\nBelgium\nBelize\nBenin\nBermuda\nBhutan\nBolivia\nBosnia and Herzegovina\nBotswana\nBrazil\nBritish Virgin Islands\nBrunei Darussalam\nBulgaria\nBurkina Faso\nBurundi\nCabo Verde\nCambodia\nCameroon\nCanada\nCayman Islands\nCentral African Republic\nChad\nChile\nChina\nColombia\nComoros\nCongo, Dem. Rep.\nCongo, Rep.\nCosta Rica\nCote d'Ivoire\nCroatia\nCuba\nCuracao\nCyprus\nCzech Republic\nDenmark\nDjibouti\nDominica\nDominican Republic\nEcuador\nEgypt, Arab Rep.\nEl Salvador\nEquatorial Guinea\nEritrea\nEstonia\nEswatini\nEthiopia\nFaroe Islands\nFiji\nFinland\nFrance\nFrench Polynesia\nGabon\nGambia, The\nGeorgia\nGermany\nGhana\nGibraltar\nGreece\nGreenland\nGrenada\nGuam\nGuatemala\nGuinea\nGuinea-Bissau\nGuyana\nHaiti\nHonduras\nHong Kong SAR, China\nHungary\nIceland\nIndia\nIndonesia\nIran, Islamic Rep.\nIraq\nIreland\nIsle of Man\nIsrael\nItaly\nJamaica\nJapan\nJordan\nKazakhstan\nKenya\nKiribati\nKorea, Dem. People's Rep.\nKorea, Rep.\nKuwait\nKyrgyz Republic\nLao PDR\nLatvia\nLebanon\nLesotho\nLiberia\nLibya\nLiechtenstein\nLithuania\nLuxembourg\nMacao SAR, China\nMadagascar\nMalawi\nMalaysia\nMaldives\nMali\nMalta\nMarshall Islands\nMauritania\nMauritius\nMexico\nMicronesia, Fed. Sts.\nMoldova\nMonaco\nMongolia\nMontenegro\nMorocco\nMozambique\nMyanmar\nNamibia\nNauru\nNepal\nNetherlands\nNew Caledonia\nNew Zealand\nNicaragua\nNiger\nNigeria\nNorth Macedonia\nNorthern Mariana Islands\nNorway\nOman\nPakistan\nPalau\nPanama\nPapua New Guinea\nParaguay\nPeru\nPhilippines\nPoland\nPortugal\nPuerto Rico\nQatar\nRomania\nRussian Federation\nRwanda\nSamoa\nSan Marino\nSao Tome and Principe\nSaudi Arabia\nSenegal\nSerbia\nSeychelles\nSierra Leone\nSingapore\nSint Maarten (Dutch part)\nSlovak Republic\nSlovenia\nSolomon Islands\nSomalia\nSouth Africa\nSouth Sudan\nSpain\nSri Lanka\nSt. Kitts and Nevis\nSt. Lucia\nSt. Martin (French part)\nSt. Vincent and the Grenadines\nSudan\nSuriname\nSweden\nSwitzerland\nSyrian Arab Republic\nTajikistan\nTanzania\nThailand\nTimor-Leste\nTogo\nTonga\nTrinidad and Tobago\nTunisia\nTurkey\nTurkmenistan\nTurks and Caicos Islands\nTuvalu\nUganda\nUkraine\nUnited Arab Emirates\nUnited Kingdom\nUnited States\nUruguay\nUzbekistan\nVanuatu\nVenezuela, RB\nVietnam\nVirgin Islands (U.S.)\nWest Bank and Gaza\nYemen, Rep.\nZambia\nZimbabwe",
+          },
+          {
+            path: 'incomes.txt',
+            text: 'Low Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nLower Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLow Income\nHigh Income\nupper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nLow Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLow income\nLow Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nLow Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nLower Middle Income',
+          },
+          {
+            path: 'internetpercent.txt',
+            text: '13.5\n71.85\n49.04\n-1\n91.57\n14.34\n76\n74.29\n64.74\n97.17\n86.55\n87.48\n79.8\n85\n98.64\n15\n81.76\n79.13\n88.66\n47.08\n20\n98.37\n48.11\n44.29\n70.12\n47\n70.43\n77.7\n94.87\n64.78\n16\n2.66\n57.16\n40\n23.2\n91\n81.07\n4.34\n6.5\n82.33\n54.3\n64.13\n8.48\n8.62\n8.65\n74.09\n46.82\n75.29\n57.15\n68.13\n84.43\n80.69\n97.32\n55.68\n69.62\n74.82\n57.27\n46.92\n33.82\n26.24\n1.31\n89.36\n47\n18.62\n97.58\n49.97\n88.89\n82.04\n72.7\n62\n19.84\n62.72\n89.74\n39\n94.44\n72.95\n69.48\n59.07\n80.51\n65\n18\n3.93\n37.33\n32.47\n31.7\n90.51\n76.07\n99.01\n34.45\n39.9\n70\n75\n84.52\n-1\n83.73\n74.39\n55.07\n91.28\n66.79\n78.9\n17.83\n14.58\n-1\n96.02\n99.6\n38\n25.51\n83.58\n78.18\n29\n7.98\n21.76\n98.1\n79.72\n97.06\n83.79\n9.8\n13.78\n81.2\n63.19\n13\n81.66\n38.7\n20.8\n58.6\n65.77\n35.3\n76.12\n97.05\n47.16\n71.52\n64.8\n10\n30.68\n51\n57\n34\n94.71\n82.01\n90.81\n27.86\n5.25\n42\n79.17\n-1\n96.49\n80.19\n15.51\n-1\n57.87\n11.21\n64.99\n52.54\n60.05\n77.54\n74.66\n70.6\n99.65\n70.68\n80.86\n21.77\n33.61\n60.18\n29.93\n93.31\n46\n73.36\n58.77\n9\n88.17\n-1\n80.66\n79.75\n11.92\n2\n56.17\n7.98\n86.11\n34.11\n80.71\n50.82\n-1\n22.39\n30.87\n48.95\n92.14\n89.69\n34.25\n21.96\n25\n56.82\n27.49\n12.36\n41.25\n77.33\n64.19\n71.04\n21.25\n-1\n49.32\n23.71\n62.55\n98.45\n94.9\n87.27\n74.77\n55.2\n25.72\n72\n70.35\n64.38\n64.4\n26.72\n14.3\n27.06',
+          },
+          {
+            path: 'populations.txt',
+            text: '37172386\n2866376\n42228429\n55465\n77006\n30809762\n96286\n44494502\n2951776\n105845\n24982688\n8840521\n9939800\n385640\n1569439\n161356039\n286641\n9483499\n11433256\n383071\n11485048\n63973\n754394\n11353142\n3323929\n2254126\n209469333\n29802\n428962\n7025037\n19751535\n11175378\n543767\n16249798\n25216237\n37057765\n64174\n4666377\n15477751\n18729160\n1392730000\n49648685\n832322\n84068091\n5244363\n4999441\n25069229\n4087843\n11338138\n159800\n1189265\n10629928\n5793636\n958920\n71625\n10627165\n17084357\n98423595\n6420744\n1308974\n3213972\n1321977\n1136191\n109224559\n48497\n883483\n5515525\n66977107\n277679\n2119275\n2280102\n3726549\n82905782\n29767108\n33718\n10731726\n56025\n111454\n165768\n17247807\n12414318\n1874309\n779004\n11123176\n9587522\n7451000\n9775564\n352721\n1352617328\n267663435\n81800269\n38433600\n4867309\n84077\n8882800\n60421760\n2934855\n126529100\n9956011\n18272430\n51393010\n115847\n25549819\n51606633\n4137309\n6322800\n7061507\n1927174\n6848925\n2108132\n4818977\n6678567\n37910\n2801543\n607950\n631636\n26262368\n18143315\n31528585\n515696\n19077690\n484630\n58413\n4403319\n1265303\n126190788\n112640\n2706049\n38682\n3170208\n622227\n36029138\n29495962\n53708395\n2448255\n12704\n28087871\n17231624\n284060\n4841000\n6465513\n22442948\n195874740\n2082958\n56882\n5311916\n4829483\n212215030\n17907\n4176873\n8606316\n6956071\n31989256\n106651922\n37974750\n10283822\n3195153\n2781677\n19466145\n144478050\n12301939\n196130\n33785\n211028\n33699947\n15854360\n6982604\n96762\n7650154\n5638676\n40654\n5446771\n2073894\n652858\n15008154\n57779622\n10975920\n46796540\n21670000\n52441\n181889\n37264\n110210\n41801533\n575991\n10175214\n8513227\n16906283\n9100837\n56318348\n69428524\n1267972\n7889094\n103197\n1389858\n11565204\n82319724\n5850908\n37665\n11508\n42723139\n44622516\n9630959\n66460344\n326687501\n3449299\n32955400\n292680\n28870195\n95540395\n106977\n4569087\n28498687\n17351822\n14439018',
+          },
+          {
+            path: 'unemployment.txt',
+            text: '11.18\n13.75\n13.57\n9.2\n3.7\n7.36\n8.42\n9.22\n17.7\n8.9\n5.16\n4.85\n4.9\n12.7\n1.2\n4.37\n9.72\n4.76\n5.95\n6.6\n2.65\n8.94\n2.45\n3.52\n15.69\n17.86\n11.93\n2.9\n8.7\n5.21\n6.48\n1.57\n12.17\n0.72\n3.53\n5.66\n4.24\n5.6\n5.9\n7.23\n3.8\n9.11\n8.14\n4.49\n10\n11.49\n3.27\n8.43\n2.4\n13.43\n8.37\n2.24\n4.97\n5.8\n10.96\n5.86\n3.81\n11.74\n4.01\n8.1\n5.1\n5.37\n22.72\n2.25\n3.7\n4.32\n7.36\n9.06\n11.74\n20.39\n9.42\n12.67\n3.38\n4.22\n1\n19.29\n9.1\n22.9\n5.4\n2.46\n4.55\n6\n14.02\n14.1\n5.65\n3.09\n3.71\n2.7\n5.33\n4.4\n12.06\n13.02\n5.74\n2.67\n4\n10.61\n7.72\n2.4\n15.27\n4.9\n2.76\n9.33\n4.7\n3.82\n2.16\n4.54\n9.41\n7.41\n6.35\n24.58\n3.08\n19.03\n2.01\n6.15\n5.59\n2\n1.79\n28.67\n3.3\n6.12\n1.62\n3.66\n4.74\n10.34\n6.43\n3.48\n8.86\n2.98\n6.33\n5.38\n15.17\n9.3\n3.43\n0.87\n19.88\n13.28\n11.36\n3.83\n14.59\n4.3\n4.52\n7.77\n8.39\n20.74\n11.17\n3.8\n1.8\n4.08\n1.36\n3.89\n2.62\n6.22\n6.43\n2.34\n3.85\n6.99\n8.27\n0.11\n4.19\n4.85\n15.11\n14.47\n6.45\n13.59\n6.04\n6.76\n12.73\n3.53\n4.68\n4.2\n9.9\n6.54\n5.11\n0.69\n5.9\n28.47\n12.15\n15.25\n4.05\n5.12\n21.26\n12\n18.79\n17.44\n7.22\n6.35\n4.71\n8.61\n6.9\n2.12\n0.77\n4.66\n3.74\n3.07\n3.21\n15.46\n10.89\n4\n8.3\n8.49\n9.44\n8.8\n2.23\n4\n3.9\n8.34\n9.3\n1.85\n6.6\n2\n7\n26.26\n13.47\n11.63\n4.77',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #3',
@@ -5744,6 +6608,24 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'countries.txt',
+            text: "Afghanistan\nAlbania\nAlgeria\nAmerican Samoa\nAndorra\nAngola\nAntigua and Barbuda\nArgentina\nArmenia\nAruba\nAustralia\nAustria\nAzerbaijan\nBahamas, The\nBahrain\nBangladesh\nBarbados\nBelarus\nBelgium\nBelize\nBenin\nBermuda\nBhutan\nBolivia\nBosnia and Herzegovina\nBotswana\nBrazil\nBritish Virgin Islands\nBrunei Darussalam\nBulgaria\nBurkina Faso\nBurundi\nCabo Verde\nCambodia\nCameroon\nCanada\nCayman Islands\nCentral African Republic\nChad\nChile\nChina\nColombia\nComoros\nCongo, Dem. Rep.\nCongo, Rep.\nCosta Rica\nCote d'Ivoire\nCroatia\nCuba\nCuracao\nCyprus\nCzech Republic\nDenmark\nDjibouti\nDominica\nDominican Republic\nEcuador\nEgypt, Arab Rep.\nEl Salvador\nEquatorial Guinea\nEritrea\nEstonia\nEswatini\nEthiopia\nFaroe Islands\nFiji\nFinland\nFrance\nFrench Polynesia\nGabon\nGambia, The\nGeorgia\nGermany\nGhana\nGibraltar\nGreece\nGreenland\nGrenada\nGuam\nGuatemala\nGuinea\nGuinea-Bissau\nGuyana\nHaiti\nHonduras\nHong Kong SAR, China\nHungary\nIceland\nIndia\nIndonesia\nIran, Islamic Rep.\nIraq\nIreland\nIsle of Man\nIsrael\nItaly\nJamaica\nJapan\nJordan\nKazakhstan\nKenya\nKiribati\nKorea, Dem. People's Rep.\nKorea, Rep.\nKuwait\nKyrgyz Republic\nLao PDR\nLatvia\nLebanon\nLesotho\nLiberia\nLibya\nLiechtenstein\nLithuania\nLuxembourg\nMacao SAR, China\nMadagascar\nMalawi\nMalaysia\nMaldives\nMali\nMalta\nMarshall Islands\nMauritania\nMauritius\nMexico\nMicronesia, Fed. Sts.\nMoldova\nMonaco\nMongolia\nMontenegro\nMorocco\nMozambique\nMyanmar\nNamibia\nNauru\nNepal\nNetherlands\nNew Caledonia\nNew Zealand\nNicaragua\nNiger\nNigeria\nNorth Macedonia\nNorthern Mariana Islands\nNorway\nOman\nPakistan\nPalau\nPanama\nPapua New Guinea\nParaguay\nPeru\nPhilippines\nPoland\nPortugal\nPuerto Rico\nQatar\nRomania\nRussian Federation\nRwanda\nSamoa\nSan Marino\nSao Tome and Principe\nSaudi Arabia\nSenegal\nSerbia\nSeychelles\nSierra Leone\nSingapore\nSint Maarten (Dutch part)\nSlovak Republic\nSlovenia\nSolomon Islands\nSomalia\nSouth Africa\nSouth Sudan\nSpain\nSri Lanka\nSt. Kitts and Nevis\nSt. Lucia\nSt. Martin (French part)\nSt. Vincent and the Grenadines\nSudan\nSuriname\nSweden\nSwitzerland\nSyrian Arab Republic\nTajikistan\nTanzania\nThailand\nTimor-Leste\nTogo\nTonga\nTrinidad and Tobago\nTunisia\nTurkey\nTurkmenistan\nTurks and Caicos Islands\nTuvalu\nUganda\nUkraine\nUnited Arab Emirates\nUnited Kingdom\nUnited States\nUruguay\nUzbekistan\nVanuatu\nVenezuela, RB\nVietnam\nVirgin Islands (U.S.)\nWest Bank and Gaza\nYemen, Rep.\nZambia\nZimbabwe",
+          },
+          {
+            path: 'incomes.txt',
+            text: 'Low Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nLower Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nLower Middle Income\nLow Income\nHigh Income\nupper Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLow Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nLow Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLow income\nLow Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nHigh Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nUpper Middle Income\nUpper Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nLow Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLow Income\nUpper Middle Income\nLow Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLower Middle Income\nUpper Middle Income\nHigh Income\nHigh Income\nLow Income\nLow Income\nLow Income\nUpper Middle Income\nLower Middle Income\nLow Income\nUpper Middle Income\nHigh Income\nLower Middle Income\nUpper Middle Income\nUpper Middle Income\nHigh Income\nUpper Middle Income\nLow Income\nLower Middle Income\nHigh Income\nHigh Income\nHigh Income\nHigh Income\nLower Middle Income\nLower Middle Income\nUpper Middle Income\nLower Middle Income\nHigh Income\nLower Middle Income\nLow Income\nLower Middle Income\nLower Middle Income',
+          },
+          {
+            path: 'populations.txt',
+            text: '37172386\n2866376\n42228429\n55465\n77006\n30809762\n96286\n44494502\n2951776\n105845\n24982688\n8840521\n9939800\n385640\n1569439\n161356039\n286641\n9483499\n11433256\n383071\n11485048\n63973\n754394\n11353142\n3323929\n2254126\n209469333\n29802\n428962\n7025037\n19751535\n11175378\n543767\n16249798\n25216237\n37057765\n64174\n4666377\n15477751\n18729160\n1392730000\n49648685\n832322\n84068091\n5244363\n4999441\n25069229\n4087843\n11338138\n159800\n1189265\n10629928\n5793636\n958920\n71625\n10627165\n17084357\n98423595\n6420744\n1308974\n3213972\n1321977\n1136191\n109224559\n48497\n883483\n5515525\n66977107\n277679\n2119275\n2280102\n3726549\n82905782\n29767108\n33718\n10731726\n56025\n111454\n165768\n17247807\n12414318\n1874309\n779004\n11123176\n9587522\n7451000\n9775564\n352721\n1352617328\n267663435\n81800269\n38433600\n4867309\n84077\n8882800\n60421760\n2934855\n126529100\n9956011\n18272430\n51393010\n115847\n25549819\n51606633\n4137309\n6322800\n7061507\n1927174\n6848925\n2108132\n4818977\n6678567\n37910\n2801543\n607950\n631636\n26262368\n18143315\n31528585\n515696\n19077690\n484630\n58413\n4403319\n1265303\n126190788\n112640\n2706049\n38682\n3170208\n622227\n36029138\n29495962\n53708395\n2448255\n12704\n28087871\n17231624\n284060\n4841000\n6465513\n22442948\n195874740\n2082958\n56882\n5311916\n4829483\n212215030\n17907\n4176873\n8606316\n6956071\n31989256\n106651922\n37974750\n10283822\n3195153\n2781677\n19466145\n144478050\n12301939\n196130\n33785\n211028\n33699947\n15854360\n6982604\n96762\n7650154\n5638676\n40654\n5446771\n2073894\n652858\n15008154\n57779622\n10975920\n46796540\n21670000\n52441\n181889\n37264\n110210\n41801533\n575991\n10175214\n8513227\n16906283\n9100837\n56318348\n69428524\n1267972\n7889094\n103197\n1389858\n11565204\n82319724\n5850908\n37665\n11508\n42723139\n44622516\n9630959\n66460344\n326687501\n3449299\n32955400\n292680\n28870195\n95540395\n106977\n4569087\n28498687\n17351822\n14439018',
+          },
+          {
+            path: 'unemployment.txt',
+            text: '11.18\n13.75\n13.57\n9.2\n3.7\n7.36\n8.42\n9.22\n17.7\n8.9\n5.16\n4.85\n4.9\n12.7\n1.2\n4.37\n9.72\n4.76\n5.95\n6.6\n2.65\n8.94\n2.45\n3.52\n15.69\n17.86\n11.93\n2.9\n8.7\n5.21\n6.48\n1.57\n12.17\n0.72\n3.53\n5.66\n4.24\n5.6\n5.9\n7.23\n3.8\n9.11\n8.14\n4.49\n10\n11.49\n3.27\n8.43\n2.4\n13.43\n8.37\n2.24\n4.97\n5.8\n10.96\n5.86\n3.81\n11.74\n4.01\n8.1\n5.1\n5.37\n22.72\n2.25\n3.7\n4.32\n7.36\n9.06\n11.74\n20.39\n9.42\n12.67\n3.38\n4.22\n1\n19.29\n9.1\n22.9\n5.4\n2.46\n4.55\n6\n14.02\n14.1\n5.65\n3.09\n3.71\n2.7\n5.33\n4.4\n12.06\n13.02\n5.74\n2.67\n4\n10.61\n7.72\n2.4\n15.27\n4.9\n2.76\n9.33\n4.7\n3.82\n2.16\n4.54\n9.41\n7.41\n6.35\n24.58\n3.08\n19.03\n2.01\n6.15\n5.59\n2\n1.79\n28.67\n3.3\n6.12\n1.62\n3.66\n4.74\n10.34\n6.43\n3.48\n8.86\n2.98\n6.33\n5.38\n15.17\n9.3\n3.43\n0.87\n19.88\n13.28\n11.36\n3.83\n14.59\n4.3\n4.52\n7.77\n8.39\n20.74\n11.17\n3.8\n1.8\n4.08\n1.36\n3.89\n2.62\n6.22\n6.43\n2.34\n3.85\n6.99\n8.27\n0.11\n4.19\n4.85\n15.11\n14.47\n6.45\n13.59\n6.04\n6.76\n12.73\n3.53\n4.68\n4.2\n9.9\n6.54\n5.11\n0.69\n5.9\n28.47\n12.15\n15.25\n4.05\n5.12\n21.26\n12\n18.79\n17.44\n7.22\n6.35\n4.71\n8.61\n6.9\n2.12\n0.77\n4.66\n3.74\n3.07\n3.21\n15.46\n10.89\n4\n8.3\n8.49\n9.44\n8.8\n2.23\n4\n3.9\n8.34\n9.3\n1.85\n6.6\n2\n7\n26.26\n13.47\n11.63\n4.77',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #4',
@@ -5765,6 +6647,28 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'arenas.txt',
+            text: 'TD Garden\nBarclays Center\nMadison Square Garden\nWells Fargo Center\nScotiabank Arena\nUnited Center\nRocket Mortgage FieldHouse\nLittle Caesars Arena\nBankers Life Fieldhouse\nFiserv Forum\nState Farm Arena\nSpectrum Center\nAmerican Airlines Arena\nAmway Center\nCapital One Arena\nPepsi Center\nTarget Center\nChesapeake Energy Arena\nModa Center\nVivint Smart Home Arena\nChase Center\nStaples Center\nStaples Center\nTalking Stick Resort Arena\nGolden 1 Center\nAmerican Airlines Center\nToyota Center\nFedExForum\nSmoothie King Center\nAT&T Center',
+          },
+          {
+            path: 'capacities.txt',
+            text: '18624\n17732\n19812\n21600\n19800\n20917\n20562\n20491\n17923\n18717\n15711\n19077\n19600\n18846\n20356\n19520\n19356\n18203\n19441\n19911\n18064\n19060\n18997\n18055\n17500\n19200\n18055\n18119\n16867\n18418',
+          },
+          {
+            path: 'championships.txt',
+            text: '17\n0\n2\n3\n1\n6\n1\n3\n0\n1\n1\n0\n3\n0\n1\n0\n0\n1\n1\n0\n6\n0\n16\n0\n1\n1\n2\n0\n0\n5',
+          },
+          {
+            path: 'locations.txt',
+            text: 'Boston\nNew York City\nNew York City\nPhiladelphia\nToronto\nChicago\nCleveland\nDetroit\nIndianapolis\nMilwaukee\nAtlanta\nCharlotte\nMiami\nOrlando\nWashington\nDenver\nMinneapolis\nOklahoma City\nPortland\nSalt Lake City\nSan Francisco\nLos Angeles\nLos Angeles\nPhoenix\nSacramento\nDallas\nHouston\nMemphis\nNew Orleans\nSan Antonio',
+          },
+          {
+            path: 'teams.txt',
+            text: 'Boston Celtics\nBrooklyn Nets\nNew York Knicks\nPhiladelphia 76ers\nToronto Raptors\nChicago Bulls\nCleveland Cavaliers\nDetroit Pistons\nIndiana Pacers\nMilwaukee Bucks\nAtlanta Hawks\nCharlotte Hornets\nMiami Heat\nOrlando Magic\nWashington Wizards\nDenver Nuggets\nMinnesota Timberwolves\nOklahoma City Thunder\nPortland Trail Blazers\nUtah Jazz\nGolden State Warriors\nLos Angeles Clippers\nLos Angeles Lakers\nPhoenix Suns\nSacramento Kings\nDallas Mavericks\nHouston Rockets\nMemphis Grizzlies\nNew Orleans Pelicans\nSan Antonio Spurs',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #5',
@@ -5786,6 +6690,20 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [
+          {
+            path: 'albums.txt',
+            text: "Sgt. Pepper's Lonely Hearts Club Band\nPet Sounds\nRevolver\nHighway 61 Revisited\nRubber Soul\nWhat's Going On\nExile on Main St.\nLondon Calling\nBlonde on Blonde\nThe Beatles (\"The White Album\")\nThe Sun Sessions\nKind of Blue\nThe Velvet Underground & Nico\nAbbey Road\nAre You Experienced\nBlood on the Tracks\nNevermind\nBorn to Run\nAstral Weeks\nThriller\nThe Great Twenty_Eight\nThe Complete Recordings\nJohn Lennon/Plastic Ono Band\nInnervisions\nLive at the Apollo, 1962\nRumours\nThe Joshua Tree\nWho's Next\nLed Zeppelin\nBlue\nBringing It All Back Home\nLet It Bleed\nRamones\nMusic From Big Pink\nThe Rise and Fall of Ziggy Stardust and the Spiders From Mars\nTapestry\nHotel California\nThe Anthology\nPlease Please Me\nForever Changes\nNever Mind the Bollocks Here's the Sex Pistols\nThe Doors\nThe Dark Side of the Moon\nHorses\nThe Band (\"The Brown Album\")\nLegend: The Best of Bob Marley and The Wailers\nA Love Supreme\nIt Takes a Nation of Millions to Hold Us Back\nAt Fillmore East\nHere's Little Richard\nBridge Over Troubled Water\nGreatest Hits\nMeet The Beatles!\nThe Birth of Soul\nElectric Ladyland\nElvis Presley\nSongs in the Key of Life\nBeggars Banquet\nChronicle: The 20 Greatest Hits\nTrout Mask Replica\nGreatest Hits\nAppetite for Destruction\nAchtung Baby\nSticky Fingers\nBack to Mono (1958-1969)\nMoondance\nKid A\nOff the Wall\n[Led Zeppelin IV]\nThe Stranger\nGraceland\nSuperfly\nPhysical Graffiti\nAfter the Gold Rush\nStar Time\nPurple Rain\nBack in Black\nOtis Blue: Otis Redding Sings Soul\nLed Zeppelin II\nImagine\nThe Clash\nHarvest\nAxis: Bold as Love\nI Never Loved a Man the Way I Love You\nLady Soul\nBorn in the U.S.A.\nThe Wall\nAt Folsom Prison\nDusty in Memphis\nTalking Book\nGoodbye Yellow Brick Road\n20 Golden Greats\nSign \"Peace\" the Times\n40 Greatest Hits\nBrew\nTommy\nThe Freewheelin' Bob Dylan\nThis Year's Model\nThere's a Riot Goin' On\nOdessey and Oracle\nIn the Wee Small Hours\nFresh Cream\nGiant Steps\nSweet Baby James\nModern Sounds in Country and Western Music\nRocket to Russia\nPortrait of a Legend 1951-1964\nHunky Dory\nAftermath\nLoaded\nThe Bends\nIf You Can Believe Your Eyes and Ears\nCourt and Spark\nDisraeli Gears\nThe Who Sell Out\nOut of Our Heads\nLayla and Other Assorted Love Songs\nLate Registration\nAt Last!\nSweetheart of the Rodeo\nStand!\nThe Harder They Come\nRaising Hell\nMoby Grape\nPearl\nCatch a Fire\nYounger Than Yesterday\nRaw Power\nRemain in Light\nMarquee Moon\nParanoid\nSaturday Night Fever: The Original Movie Sound Track\nThe Wild, the Innocent & the E Street Shuffle\nReady to Die\nSlanted and Enchanted\nGreatest Hits\nTim\nThe Chronic\nRejuvenation\nParallel Lines\nLive at the Regal\nA Christmas Gift for You From Phil Spector\nGris-Gris\nStraight Outta Compton\nAja\nSurrealistic Pillow\nDeja vu\nHouses of the Holy\nSantana\nDarkness on the Edge of Town\nFuneral\nThe B 52's / Play Loud\nThe Low End Theory\nMoanin' in the Moonlight\nPretenders\nPaul's Boutique\nCloser\nCaptain Fantastic and the Brown Dirt Cowboy\nAlive!\nElectric Warrior\nThe Dock of the Bay\nOK Computer\n1999\nThe Very Best of Linda Ronstadt\nLet's Get It On\nImperial Bedroom\nMaster of Puppets\nMy Aim Is True\nExodus\nLive at Leeds\nThe Notorious Byrd Brothers\nEvery Picture Tells a Story\nSomething/Anything?\nDesire\nClose to You\nRocks\nOne Nation Under a Groove\nThe Anthology: 1961-1977\nThe Definitive Collection\nThe Rolling Stones, Now!\nNatty Dread\nFleetwood Mac\nRed Headed Stranger\nThe Immaculate Collection\nThe Stooges\nFresh\nSo\nBuffalo Springfield Again\nHappy Trails\nFrom Elvis in Memphis\nFun House\nThe Gilded Palace of Sin\nDookie\nTransformer\nBlues Breakers With Eric Clapton (\"The Beano Album\")\nNuggets: Original Artyfacts From the First Psychedelic Era, 1965-1968\nMurmur\nThe Best of Little Walter\nIs This It\nHighway to Hell\nThe Downward Spiral\nParsley, Sage, Rosemary and Thyme\nBad\nModern Times\nWheels of Fire\nDirty Mind\nAbraxas\nTea for the Tillerman\nTen\nEverybody Knows This Is Nowhere\nWish You Were Here\nCrooked Rain Crooked Rain\nTattoo You\nProud Mary: The Best of Ike and Tina Turner\nNew York Dolls\nBo Diddley / Go Bo Diddley\nTwo Steps From the Blues\nThe Queen Is Dead\nLicensed to Ill\nLook-Ka Py Py\nLoveless\nNew Orleans Piano\nWar\nThe Neil Diamond Collection\nAmerican Idiot\nNebraska\nDoolittle\nPaid in Full\nToys in the Attic\nNick of Time\nA Night at the Opera\nThe Kink Kronikles\nMr. Tambourine Man\nBookends\nThe Ultimate Collection\nMr. Excitement!\nMy Generation\nHowlin' Wolf\nLike a Prayer\nCan't Buy a Thrill\nLet It Be\nRun D.M.C.\nBlack Sabbath\nThe Marshall Mathers LP\nAll Killer No Filler! The Jerry Lee Lewis Anthology\nFreak Out!\nLive/Dead\nThe Shape of Jazz to Come\nAutomatic for the People\nReasonable Doubt\nLow\nThe Blueprint\nThe River\nComplete & Unbelievable: The Otis Redding Dictionary of Soul\nMetallica (\"The Black Album\")\nTrans Europa Express\nWhitney Houston\nThe Kinks Are The Village Green Preservation Society\nThe Velvet Rope\nStardust\nAmerican Beauty\nCrosby, Stills & Nash\nTracy Chapman\nWorkingman's Dead\nThe Genius of Ray Charles\nChild Is Father to the Man\nQuadrophenia\nPaul Simon\nPsychocandy\nSome Girls\nThe Beach Boys Today!\nDig Me Out\nGoing to a Go-Go\nNightbirds\nThe Slim Shady LP\nMothership Connection\nRhythm Nation 1814\nAnthology of American Folk Music\nAladdin Sane\nAll That You Can't Leave Behind\nMy Life\nFolk Singer\nCan't Get Enough\nThe Cars\nMusic of My Mind\nI'm Still in Love With You\nLos Angeles\nAnthem of the Sun\nSomething Else by The Kinks\nCall Me\nTalking Heads: 77\nThe Basement Tapes\nWhite Light/White Heat\nKick Out the Jams\nSongs of Love and Hate\nMeat Is Murder\nWe're Only in It for the Money\nThe College Dropout\nWeezer (Blue Album)\nMaster of Reality\nCoat of Many Colors\nFear of a Black Planet\nJohn Wesley Harding\nGrace\nCar Wheels on a Gravel Road\nOdelay\nA Hard Day's Night\nSongs for Swingin' Lovers!\nWilly and the Poor Boys\nBlood Sugar Sex Magik\nThe Sun Records Collection\nNothing's Shocking\nMTV Unplugged in New York\nThe Miseducation of Lauryn Hill\nDamn the Torpedoes\nThe Velvet Underground\nSurfer Rosa\nBack Stabbers\nBurnin'\nAmnesiac\nPink Moon\nSail Away\nGhost in the Machine\nStation to Station\nSlowhand\nDisintegration\nExile in Guyville\nDaydream Nation\nIn the Jungle Groove\nTonight's the Night\nHelp!\nShoot Out the Lights\nWild Gift\nSqueezing Out Sparks\nSuperunknown\nIn Rainbows\nAqualung\nCheap Thrills\nThe Heart of Saturday Night\nDamaged\nPlay\nViolator\nBat Out of Hell\nBerlin\nStop Making Sense\n3 Feet High and Rising\nThe Piper at the Gates of Dawn\nMuddy Waters at Newport 1960\nThe Black Album\nRoger the Engineer\nRust Never Sleeps\nBrothers in Arms\nMy Beautiful Dark Twisted Fantasy\n52nd Street\nHaving a Rave Up\n12 Songs\nBetween the Buttons\nSketches of Spain\nHonky Chateau\nSingles Going Steady\nStankonia\nSiamese Dream\nSubstance 1987\nL.A. Woman\nRage Against the Machine\nAmerican Recordings\nRay of Light\nEagles\nLouder Than Bombs\nMott\nWhatever People Say I Am, That's What I'm Not\nReggatta de Blanc\nVolunteers\nSiren\nLate for the Sky\nPost\nThe Ultimate Collection: 1948-1990\n(What's the Story) Morning Glory?\nCrazySexyCool\nFunky Kingston\nThe Smile Sessions\nThe Modern Lovers\nMore Songs About Buildings and Food\nA Quick One\nLove and Theft\nPretzel Logic\nEnter the Wu_Tang: 36 Chambers\nThe Indestructible Beat of Soweto\nThe End of the Innocence\nElephant\nThe Pretender\nLet It Be\nKala\nGood Old Boys\nSound of Silver\nFor Your Pleasure\nBlue Lines\nEliminator\nRain Dogs\nAnthology: The Best of The Temptations\nCalifornication\nIllmatic\n(pronounced 'leh-'nerd 'skin-'nerd)\nDr. John's Gumbo\nRadio City\nRid of Me\nSandinista!\nI Do Not Want What I Haven't Got\nStrange Days\nTime Out of Mind\n461 Ocean Boulevard\nPink Flag\nDouble Nickels on the Dime\nBeauty and the Beat\nVan Halen\nMule Variations\nBoy\nBand on the Run\nDummy\nThe \"Chirping\" Crickets\nThe Best of the Girl Groups, Volume 1\nPresenting the Fabulous Ronettes Featuring Veronica\nAnthology\nThe Rising\nGrievous Angel\nCheap Trick at Budokan\nSleepless\nOutlandos d'Amour\nAnother Green World\nVampire Weekend\nStories From the City, Stories From the Sea\nHere Come the Warm Jets\nAll Things Must Pass\n#1 Record\nIn Utero\nSea Change\nTha Carter III\nBoys Don't Cry\nLive at the Harlem Square Club, 1963\nQ: Are We Not Men? A: We Are Devo!\nIn Color\nThe World Is a Ghetto\nFly Like an Eagle\nBack in the USA\nGetz / Gilberto\nSynchronicity\nThird/Sister Lovers\nFor Everyman\nBack to Black\nJohn Prine\nStrictly Business\nLove It to Death\nHow Will the Wolf Survive?\nHere, My Dear\nZ\nTumbleweed Connection\nThe Drifters' Golden Hits\nLive Through This\nMetal Box\nDocument\nHeaven Up Here\nHysteria\n69 Love Songs\nA Rush of Blood to the Head\nTunnel of Love\nThe Paul Butterfield Blues Band\nThe Score\nRadio\nI Want to See the Bright Lights Tonight\nFaith\nThe Smiths\nProxima estacion: Esperanza\nArmed Forces\nLife After Death\nDown Every Road\nAll Time Greatest Hits\nMaggot Brain\nOnly Built 4 Cuban Linx\nVoodoo\nGuitar Town\nEntertainment!\nAll the Young Dudes\nVitalogy\nThat's the Way of the World\nShe's So Unusual\nNew Day Rising\nDestroyer\nTres hombres\nBorn Under a Bad Sign\nTouch\nYankee Hotel Foxtrot\nOracular Spectacular\nGive It Up\nBoz Scaggs\nWhite Blood Cells\nThe Stone Roses\nLive in Cook County Jail\nAquemini",
+          },
+          {
+            path: 'artists.txt',
+            text: "The Beatles\nThe Beach Boys\nThe Beatles\nBob Dylan\nThe Beatles\nMarvin Gaye\nThe Rolling Stones\nThe Clash\nBob Dylan\nThe Beatles\nElvis Presley\nMiles Davis\nThe Velvet Underground\nThe Beatles\nThe Jimi Hendrix Experience\nBob Dylan\nNirvana\nBruce Springsteen\nVan Morrison\nMichael Jackson\nChuck Berry\nRobert Johnson\nJohn Lennon / Plastic Ono Band\nStevie Wonder\nJames Brown\nFleetwood Mac\nU2\nThe Who\nLed Zeppelin\nJoni Mitchell\nBob Dylan\nThe Rolling Stones\nRamones\nThe Band\nDavid Bowie\nCarole King\nEagles\nMuddy Waters\nThe Beatles\nLove\nSex Pistols\nThe Doors\nPink Floyd\nPatti Smith\nThe Band\nBob Marley & The Wailers\nJohn Coltrane\nPublic Enemy\nThe Allman Brothers Band\nLittle Richard\nSimon & Garfunkel\nAl Green\nThe Beatles\nRay Charles\nThe Jimi Hendrix Experience\nElvis Presley\nStevie Wonder\nThe Rolling Stones\nCreedence Clearwater Revival\nCaptain Beefheart & His Magic Band\nSly & The Family Stone\nGuns N' Roses\nU2\nThe Rolling Stones\nPhil Spector\nVan Morrison\nRadiohead\nMichael Jackson\nLed Zeppelin\nBilly Joel\nPaul Simon\nCurtis Mayfield\nLed Zeppelin\nNeil Young\nJames Brown\nPrince and the Revolution\nAC/DC\nOtis Redding\nLed Zeppelin\nJohn Lennon\nThe Clash\nNeil Young\nThe Jimi Hendrix Experience\nAretha Franklin\nAretha Franklin\nBruce Springsteen\nPink Floyd\nJohnny Cash\nDusty Springfield\nStevie Wonder\nElton John\nBuddy Holly\nPrince\nHank Williams\nMiles Davis\nThe Who\nBob Dylan\nElvis Costello\nSly & The Family Stone\nThe Zombies\nFrank Sinatra\nCream\nJohn Coltrane\nJames Taylor\nRay Charles\nRamones\nSam Cooke\nDavid Bowie\nThe Rolling Stones\nThe Velvet Underground\nRadiohead\nThe Mamas and the Papas\nJoni Mitchell\nCream\nThe Who\nThe Rolling Stones\nDerek and the Dominos\nKanye West\nEtta James\nThe Byrds\nSly & The Family Stone\nVarious Artists\nRun D.M.C.\nMoby Grape\nJanis Joplin\nThe Wailers\nThe Byrds\nIggy and The Stooges\nTalking Heads\nTelevision\nBlack Sabbath\nVarious Artists\nBruce Springsteen\nThe Notorious B.I.G.\nPavement\nElton John\nThe Replacements\nDr. Dre\nThe Meters\nBlondie\nB.B. King\nPhil Spector\nDr. John, the Night Tripper\nN.W.A\nSteely Dan\nJefferson Airplane\nCrosby, Stills, Nash & Young\nLed Zeppelin\nSantana\nBruce Springsteen\nArcade Fire\nThe B 52's\nA Tribe Called Quest\nHowlin' Wolf\nPretenders\nBeastie Boys\nJoy Division\nElton John\nKISS\nT. Rex\nOtis Redding\nRadiohead\nPrince\nLinda Ronstadt\nMarvin Gaye\nElvis Costello & The Attractions\nMetallica\nElvis Costello\nBob Marley & The Wailers\nThe Who\nThe Byrds\nRod Stewart\nTodd Rundgren\nBob Dylan\nCarpenters\nAerosmith\nFunkadelic\nCurtis Mayfield and The Impressions\nABBA\nThe Rolling Stones\nBob Marley & The Wailers\nFleetwood Mac\nWillie Nelson\nMadonna\nThe Stooges\nSly & The Family Stone\nPeter Gabriel\nBuffalo Springfield\nQuicksilver Messenger Service\nElvis Presley\nThe Stooges\nThe Flying Burrito Brothers\nGreen Day\nLou Reed\nJohn Mayall & The Bluesbreakers\nVarious Artists\nR.E.M.\nLittle Walter\nThe Strokes\nAC/DC\nNine Inch Nails\nSimon & Garfunkel\nMichael Jackson\nBob Dylan\nCream\nPrince\nSantana\nCat Stevens\nPearl Jam\nNeil Young & Crazy Horse\nPink Floyd\nPavement\nThe Rolling Stones\nIke & Tina Turner\nNew York Dolls\nBo Diddley\nBobby \"Blue\" Bland\nThe Smiths\nBeastie Boys\nThe Meters\nMy Bloody Valentine\nProfessor Longhair\nU2\nNeil Diamond\nGreen Day\nBruce Springsteen\nPixies\nEric B. & Rakim\nAerosmith\nBonnie Raitt\nQueen\nThe Kinks\nThe Byrds\nSimon & Garfunkel\nPatsy Cline\nJackie Wilson\nThe Who\nHowlin' Wolf\nMadonna\nSteely Dan\nThe Replacements\nRun D.M.C.\nBlack Sabbath\nEminem\nJerry Lee Lewis\nThe Mothers of Invention\nThe Grateful Dead\nOrnette Coleman\nR.E.M.\nJay Z\nDavid Bowie\nJay Z\nBruce Springsteen\nOtis Redding\nMetallica\nKraftwerk\nWhitney Houston\nThe Kinks\nJanet\nWillie Nelson\nGrateful Dead\nCrosby, Stills & Nash\nTracy Chapman\nGrateful Dead\nRay Charles\nBlood, Sweat & Tears\nThe Who\nPaul Simon\nThe Jesus and Mary Chain\nThe Rolling Stones\nThe Beach Boys\nSleater Kinney\nSmokey Robinson & The Miracles\nLaBelle\nEminem\nParliament\nJanet Jackson\nVarious\nDavid Bowie\nU2\nMary J. Blige\nMuddy Waters\nBarry White\nThe Cars\nStevie Wonder\nAl Green\nX\nGrateful Dead\nThe Kinks\nAl Green\nTalking Heads\nBob Dylan and the Band\nThe Velvet Underground\nMC5\nLeonard Cohen\nThe Smiths\nThe Mothers of Invention\nKanye West\nWeezer\nBlack Sabbath\nDolly Parton\nPublic Enemy\nBob Dylan\nJeff Buckley\nLucinda Williams\nBeck\nThe Beatles\nFrank Sinatra\nCreedence Clearwater Revival\nRed Hot Chili Peppers\nVarious\nJane's Addiction\nNirvana\nLauryn Hill\nTom Petty and the Heartbreakers\nThe Velvet Underground\nPixies\nThe O'Jays\nThe Wailers\nRadiohead\nNick Drake\nRandy Newman\nThe Police\nDavid Bowie\nEric Clapton\nThe Cure\nLiz Phair\nSonic Youth\nJames Brown\nNeil Young\nThe Beatles\nRichard & Linda Thompson\nX\nGraham Parker & The Rumour\nSoundgarden\nRadiohead\nJethro Tull\nBig Brother & the Holding Company\nTom Waits\nBlack Flag\nMoby\nDepeche Mode\nMeat Loaf\nLou Reed\nTalking Heads\nDe La Soul\nPink Floyd\nMuddy Waters\nJay Z\nThe Yardbirds\nNeil Young & Crazy Horse\nDire Straits\nKanye West\nBilly Joel\nThe Yardbirds\nRandy Newman\nThe Rolling Stones\nMiles Davis\nElton John\nBuzzcocks\nOutKast\nThe Smashing Pumpkins\nNew Order\nThe Doors\nRage Against the Machine\nJohnny Cash\nMadonna\nEagles\nThe Smiths\nMott the Hoople\nArctic Monkeys\nThe Police\nJefferson Airplane\nRoxy Music\nJackson Browne\nBjork\nJohn Lee Hooker\nOasis\nTLC\nToots & The Maytals\nThe Beach Boys\nThe Modern Lovers\nTalking Heads\nThe Who\nBob Dylan\nSteely Dan\nWu Tang Clan\nVarious Artists\nDon Henley\nThe White Stripes\nJackson Browne\nThe Beatles\nM.I.A.\nRandy Newman\nLCD Soundsystem\nRoxy Music\nMassive Attack\nZZ Top\nTom Waits\nThe Temptations\nRed Hot Chili Peppers\nNas\nLynyrd Skynyrd\nDr. John\nBig Star\nPJ Harvey\nThe Clash\nSinead O'Connor\nThe Doors\nBob Dylan\nEric Clapton\nWire\nMinutemen\nThe Go Go's\nVan Halen\nTom Waits\nU2\nPaul McCartney & Wings\nPortishead\nThe Crickets\nVarious Artists\nThe Ronettes\nDiana Ross & The Supremes\nBruce Springsteen\nGram Parsons\nCheap Trick\nPeter Wolf\nThe Police\nBrian Eno\nVampire Weekend\nPJ Harvey\nBrian Eno\nGeorge Harrison\nBig Star\nNirvana\nBeck\nLil Wayne\nThe Cure\nSam Cooke\nDEVO\nCheap Trick\nWar\nSteve Miller Band\nMC5\nStan Getz\nThe Police\nBig Star\nJackson Browne\nAmy Winehouse\nJohn Prine\nEPMD\nAlice Cooper\nLos Lobos\nMarvin Gaye\nMy Morning Jacket\nElton John\nThe Drifters\nHole\nPublic Image Ltd.\nR.E.M.\nEcho and The Bunnymen\nDef Leppard\nThe Magnetic Fields\nColdplay\nBruce Springsteen\nThe Paul Butterfield Blues Band\nFugees\nL.L. Cool J\nRichard & Linda Thompson\nGeorge Michael\nThe Smiths\nManu Chao\nElvis Costello & The Attractions\nThe Notorious B.I.G.\nMerle Haggard\nLoretta Lynn\nFunkadelic\nRaekwon\nD'Angelo\nSteve Earle\nGang of Four\nMott the Hoople\nPearl Jam\nEarth, Wind & Fire\nCyndi Lauper\nHusker Du\nKISS\nZZ Top\nAlbert King\nEurythmics\nWilco\nMGMT\nBonnie Raitt\nBoz Scaggs\nThe White Stripes\nThe Stone Roses\nB.B. King\nOutKast",
+          },
+          {
+            path: 'genres.txt',
+            text: 'Rock\nRock\nRock\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nJazz\nRock\nRock\nRock\nRock\nRock\nRock\nJazz\nFunk \nRock\nBlues\nRock\nFunk \nFunk \nRock\nRock\nRock\nRock\nPop\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFolk\nRock\nRock\nRock\nRock\nRock\nRock\nClassical\nReggae\nJazz\nHip Hop\nRock\nRock\nRock\nFunk \nRock\nJazz\nRock\nRock\nFunk \nRock\nRock\nRock\nFunk \nRock\nElectronic\nRock\nRock\nJazz\nElectronic\nFunk \nRock\nRock\nJazz\nFunk \nRock\nRock\nFunk \nElectronic\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nFunk \nFunk \nRock\nRock\nFolk\nRock\nFunk \nRock\nRock\nRock\nFolk\nJazz\nRock\nFolk\nRock\nFunk \nRock\nJazz\nRock\nJazz\nRock\nFunk \nRock\nLatin\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nHip Hop\nFunk \nRock\nFunk \nReggae\nHip Hop\nRock\nRock\nReggae\nRock\nRock\nElectronic\nRock\nRock\nElectronic\nRock\nHip Hop\nRock\nRock\nRock\nHip Hop\nFunk \nElectronic\nBlues\nRock\nJazz\nHip Hop\nJazz\nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nHip Hop\nBlues\nRock\nHip Hop\nRock\nRock\nRock\nRock\nFunk \nElectronic\nFunk \nRock\nFunk \nRock\nRock\nRock\nReggae\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFunk \nFunk \nElectronic\nRock\nReggae\nRock\nFolk\nElectronic\nRock\nFunk \nElectronic\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nBlues\nRock\nRock\nElectronic\nRock\nFunk \nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFunk \nRock\nRock\nFunk \nRock\nHip Hop\nFunk \nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nHip Hop\nRock\nRock\nRock\nRock\nRock\nRock\nFolk\nFunk \nRock\nBlues\nElectronic\nRock\nRock\nHip Hop\nRock\nHip Hop\nRock\nElectronic\nRock\nJazz\nRock\nHip Hop\nElectronic\nHip Hop\nRock\nFunk \nRock\nElectronic\nFunk \nRock\nElectronic\nPop\nRock\nRock\nRock\nRock\nJazz\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nFunk \nFunk \nHip Hop\nFunk \nElectronic\nBlues\nRock\nRock\nHip Hop\nBlues\nFunk \nElectronic\nFunk \nFunk \nRock\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nFolk\nRock\nElectronic\nHip Hop\nRock\nRock\nFolk\nHip Hop\nRock\nRock\nFolk\nElectronic\nRock\nJazz\nRock\nRock\nRock\nRock\nRock\nHip Hop\nRock\nRock\nRock\nFunk \nReggae\nElectronic\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nJazz\nRock\nElectronic\nElectronic\nRock\nRock\nRock\nHip Hop\nRock\nRock\nHip Hop\nRock\nRock\nRock\nHip Hop\nJazz\nRock\nRock\nRock\nJazz\nRock\nRock\nHip Hop\nRock\nElectronic\nRock\nHip Hop\nFolk\nElectronic\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nBlues\nRock\nElectronic\nReggae\nRock\nRock\nRock\nRock\nRock\nJazz\nHip Hop\nFunk\nRock\nRock\nRock\nRock\nElectronic\nRock\nElectronic\nRock\nElectronic\nRock\nRock\nElectronic\nRock\nHip Hop\nRock\nFunk \nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nElectronic\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nRock\nRock\nRock\nRock\nHip Hop\nRock\nFunk \nRock\nRock\nFunk \nRock\nRock\nJazz\nRock\nRock\nRock\nFunk \nFolk\nHip Hop\nRock\nRock\nFunk \nRock\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nElectronic\nRock\nRock\nRock\nHip Hop\nHip Hop\nRock\nElectronic\nRock\nRock\nRock\nHip Hop\nFolk\nFolk\nRock\nHip Hop\nHip Hop\nRock\nRock\nRock\nRock\nFunk \nElectronic\nRock\nRock\nRock\nFunk \nElectronic\nRock\nElectronic\nRock\nRock\nRock\nRock\nBlues\nHip Hop',
+          },
+        ],
       },
       {
         name: 'Data for Social Good Project #6',
@@ -5807,6 +6725,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'CSA 2023 Console Sandbox_pilot_oo2025',
@@ -5820,6 +6739,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'With Paint Bucket',
@@ -5833,6 +6753,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
       {
         name: 'No Paint Bucket',
@@ -5846,6 +6767,7 @@ export const CSA_UNITS: CsaUnit[] = [
           },
         ],
         validationFiles: [],
+        dataFiles: [],
       },
     ],
   },
@@ -5873,6 +6795,7 @@ export const CSA_UNITS: CsaUnit[] = [
             text: 'import static org.junit.jupiter.api.Assertions.*;\n\nimport org.junit.jupiter.api.BeforeEach;\nimport org.junit.jupiter.api.DisplayName;\nimport org.junit.jupiter.api.Test;\nimport org.junit.jupiter.api.TestMethodOrder;\nimport org.junit.jupiter.api.MethodOrderer.OrderAnnotation;\nimport org.junit.jupiter.api.Order;\n\n\n@TestMethodOrder(OrderAnnotation.class)\n@DisplayName("BoxOfCandy Test")\npublic class BoxOfCandyTest\n{\n  \n    private static Candy[][] getShallowCopy(Candy[][] box)\n    {\n        Candy[][] shallowCopy = new Candy[box.length][box[0].length];\n        \n        for(int r = 0; r < shallowCopy.length; r++)\n            for(int c = 0; c < shallowCopy[0].length; c++)\n                shallowCopy[r][c] = box[r][c];\n        \n        return shallowCopy;\n    }\n    \n    // references must be to exact same objects\n    public static boolean equals(Candy[][] one, Candy[][] two)\n    {\n        if(one.length != two.length || one[0].length != two[0].length)\n            return false;\n        \n        for(int r = 0; r < one.length; r++)\n            for(int c = 0; c < one[0].length; c++)\n                if(one[r][c] != two[r][c])\n                    return false;\n        \n        return true;\n    }\n   \n    @Test\n    @Order(1)\n    @DisplayName("Test 1: MoveCandyToFirstRow")\n    public void testMoveCandyToFirstRow()\n    {\n        BoxOfCandy boc = new BoxOfCandy();\n        boc.box = new Candy[4][3];\n        boc.box[0][1] = new Candy("lime");\n        boc.box[1][1] = new Candy("orange");\n        boc.box[2][2] = new Candy("cherry");\n        boc.box[3][1] = new Candy("lemon");\n        boc.box[3][2] = new Candy("grape");\n        \n        Candy[][] expectedResult = getShallowCopy(boc.box);\n        \n        assertTrue( ! boc.moveCandyToFirstRow(0) );\n        assertTrue(equals(expectedResult, boc.box));\n        \n        assertTrue(boc.moveCandyToFirstRow(1));\n        assertTrue(equals(expectedResult, boc.box));\n        \n        Candy[][] expectedResultAlt = getShallowCopy(expectedResult);\n        \n        expectedResult[0][2] = expectedResult[2][2];\n        expectedResult[2][2] = null;\n        \n        expectedResultAlt[0][2] = expectedResultAlt[3][2];\n        expectedResultAlt[3][2] = null;\n        \n        assertTrue(boc.moveCandyToFirstRow(2));\n        assertTrue(\n                equals(expectedResult, boc.box) ||\n                equals(expectedResultAlt, boc.box));\n    }\n\n}',
           },
         ],
+        dataFiles: [],
       },
       {
         name: 'Part B — 1 test(s)',
@@ -5895,6 +6818,7 @@ export const CSA_UNITS: CsaUnit[] = [
             text: 'import static org.junit.jupiter.api.Assertions.*;\n\nimport org.junit.jupiter.api.BeforeEach;\nimport org.junit.jupiter.api.DisplayName;\nimport org.junit.jupiter.api.Test;\nimport org.junit.jupiter.api.TestMethodOrder;\nimport org.junit.jupiter.api.MethodOrderer.OrderAnnotation;\nimport org.junit.jupiter.api.Order;\n\n\n@TestMethodOrder(OrderAnnotation.class)\n@DisplayName("BoxOfCandy Test")\npublic class BoxOfCandyTest\n{\n  \n    private static Candy[][] getShallowCopy(Candy[][] box)\n    {\n        Candy[][] shallowCopy = new Candy[box.length][box[0].length];\n        \n        for(int r = 0; r < shallowCopy.length; r++)\n            for(int c = 0; c < shallowCopy[0].length; c++)\n                shallowCopy[r][c] = box[r][c];\n        \n        return shallowCopy;\n    }\n    \n    // references must be to exact same objects\n    public static boolean equals(Candy[][] one, Candy[][] two)\n    {\n        if(one.length != two.length || one[0].length != two[0].length)\n            return false;\n        \n        for(int r = 0; r < one.length; r++)\n            for(int c = 0; c < one[0].length; c++)\n                if(one[r][c] != two[r][c])\n                    return false;\n        \n        return true;\n    }\n   \n    \n    @Test\n    @Order(1)\n    @DisplayName("Test 2: testRemoveNextFlavor")\n    public void testRemoveNextFlavor()\n    {\n        BoxOfCandy boc = new BoxOfCandy();\n        boc.box = new Candy[3][5];\n        boc.box[0][0] = new Candy("lime");\n        boc.box[0][1] = new Candy("lime");\n        boc.box[0][3] = new Candy("lemon");\n        boc.box[1][0] = new Candy("orange");\n        boc.box[1][3] = new Candy("lime");\n        boc.box[1][4] = new Candy("lime");\n        boc.box[2][0] = new Candy("cherry");\n        boc.box[2][2] = new Candy("lemon");\n        boc.box[2][4] = new Candy("orange");\n        \n        Candy[][] expectedBox = getShallowCopy(boc.box);\n        Candy expectedResult = expectedBox[2][0];\n        expectedBox[2][0] = null;\n        \n        assertTrue(boc.removeNextByFlavor("cherry") == expectedResult); // == intentional\n        assertTrue(equals(expectedBox, boc.box));\n        \n        expectedResult = expectedBox[1][3];\n        expectedBox[1][3] = null;\n        \n        assertTrue(boc.removeNextByFlavor("lime") == expectedResult);\n        assertTrue(equals(expectedBox, boc.box));\n        \n        expectedResult = null;\n        \n        assertTrue(boc.removeNextByFlavor("grape") == expectedResult);\n        assertTrue(equals(expectedBox, boc.box));\n    }\n}',
           },
         ],
+        dataFiles: [],
       },
     ],
   },

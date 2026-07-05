@@ -251,7 +251,9 @@ export function App(): React.JSX.Element {
   };
 
   const addFile = (name: string, text = ''): void => {
-    const fileName = name.endsWith('.java') ? name : `${name}.java`;
+    // Keep an explicit extension (e.g. a `.txt` data file); only bare
+    // names from the "+" prompt get the `.java` default.
+    const fileName = name.includes('.') ? name : `${name}.java`;
     if (fileName === activeFileRef.current || inactiveFilesRef.current.has(fileName)) {
       switchToFile(fileName);
       return;
@@ -273,7 +275,7 @@ export function App(): React.JSX.Element {
     refreshTabs();
   };
 
-  const loadLevelFiles = (files: CsaLevelFile[]): void => {
+  const loadLevelFiles = (files: CsaLevelFile[], dataFiles: CsaLevelFile[] = []): void => {
     // Switch to Main.java first: otherwise a non-Main file left active
     // from the previous level is the live editor (not in the inactive
     // map), survives the clear below, and its stale content shadows the
@@ -289,16 +291,37 @@ export function App(): React.JSX.Element {
         addFile(file.path, file.text);
       }
     }
+    // Data files (.txt read by the program) are editable tabs too; they
+    // are written to the VFS before each run and skipped by the compiler.
+    for (const file of dataFiles) {
+      addFile(file.path, file.text);
+    }
     const firstFile = files[0]?.path;
     switchToFile(mainFile || firstFile === undefined ? 'Main.java' : firstFile);
   };
 
-  const collectSources = (): { path: string; text: string }[] => {
-    const sources = [{ path: activeFileRef.current, text: getSource(editor()) }];
+  /** Every open tab as `{ path, text }` (the active tab reads live). */
+  const allOpenFiles = (): { path: string; text: string }[] => {
+    const files = [{ path: activeFileRef.current, text: getSource(editor()) }];
     for (const [name, state] of inactiveFilesRef.current) {
-      sources.push({ path: name, text: state.doc.toString() });
+      files.push({ path: name, text: state.doc.toString() });
     }
-    return sources;
+    return files;
+  };
+
+  /** Compiler inputs: only Java tabs (data files aren't Java source). */
+  const collectSources = (): { path: string; text: string }[] => {
+    return allOpenFiles().filter((file) => file.path.endsWith('.java'));
+  };
+
+  /** Write the non-Java tabs (data files) into the VFS so the program can
+   * read them via File/Scanner, reflecting any edits the student made. */
+  const writeDataFiles = async (session: JvmWorkerSession): Promise<void> => {
+    for (const file of allOpenFiles()) {
+      if (!file.path.endsWith('.java')) {
+        await session.writeFile(file.path, file.text);
+      }
+    }
   };
 
   const reportDiagnostics = (diagnostics: Diagnostic[]): void => {
@@ -339,7 +362,7 @@ export function App(): React.JSX.Element {
     if (!level) {
       return;
     }
-    loadLevelFiles(level.files);
+    loadLevelFiles(level.files, level.dataFiles);
     validationFilesRef.current = level.validationFiles;
     setTestResults([]);
     if (level.view === 'neighborhood') {
@@ -418,6 +441,7 @@ export function App(): React.JSX.Element {
     neighborhoodVizRef.current?.stop();
     try {
       const session = await sessionRef.current;
+      await writeDataFiles(session);
       const neighborhood = isNeighborhoodProgram();
       const theater = !neighborhood && isTheaterProgram();
       if (neighborhood) {
@@ -429,8 +453,9 @@ export function App(): React.JSX.Element {
       } else {
         setView('none');
       }
-      append(`$ javac ${allFileNames().join(' ')}\n`);
-      const compiled = await session.compile(collectSources());
+      const sources = collectSources();
+      append(`$ javac ${sources.map((file) => file.path).join(' ')}\n`);
+      const compiled = await session.compile(sources);
       reportDiagnostics(compiled.diagnostics);
       if (compiled.success) {
         append('$ java Main\n');
@@ -484,6 +509,7 @@ export function App(): React.JSX.Element {
     setTestResults([]);
     try {
       const session = await sessionRef.current;
+      await writeDataFiles(session);
       const sources = [...collectSources(), ...validationFilesRef.current];
       append(`$ javac ${sources.map((source) => source.path).join(' ')}\n`);
       const compiled = await session.compile(sources);
@@ -564,8 +590,10 @@ export function App(): React.JSX.Element {
     clearConsole();
     try {
       const session = await sessionRef.current;
-      append(`$ javac ${allFileNames().join(' ')}\n`);
-      const compiled = await session.compile(collectSources());
+      await writeDataFiles(session);
+      const sources = collectSources();
+      append(`$ javac ${sources.map((file) => file.path).join(' ')}\n`);
+      const compiled = await session.compile(sources);
       reportDiagnostics(compiled.diagnostics);
       if (compiled.success) {
         append('$ java Main (debugger attached)\n');
