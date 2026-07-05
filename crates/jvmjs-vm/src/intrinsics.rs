@@ -226,6 +226,7 @@ pub fn invoke_special(
 /// `Ok(Some(value))` for a result, or `Err` if the member is not an
 /// intrinsic the VM knows.
 #[allow(clippy::too_many_arguments)] // one boundary call from the dispatch loop
+#[allow(clippy::too_many_lines)] // one intrinsic-dispatch matrix
 pub fn invoke_virtual(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
@@ -299,7 +300,23 @@ pub fn invoke_virtual(
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
-        (HeapObject::Exception { .. }, "printStackTrace") => Ok(None),
+        (
+            HeapObject::Exception {
+                class_name,
+                message,
+            },
+            "printStackTrace",
+        ) => {
+            // Real Java writes the trace to System.err. jvmjs keeps no frame
+            // line info, so emit the exception's header line (the part
+            // students actually read).
+            let header = match message {
+                Some(message) => format!("{class_name}: {message}\n"),
+                None => format!("{class_name}\n"),
+            };
+            console.stderr(header.as_bytes());
+            Ok(None)
+        }
         (
             HeapObject::Exception {
                 class_name,

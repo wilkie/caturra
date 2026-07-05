@@ -343,8 +343,11 @@ impl ConsoleIo for JsConsole<'_> {
     }
 
     fn stdout(&mut self, bytes: &[u8]) {
+        // While capturing (SystemOutTestRunner), standard out is redirected to
+        // the buffer only — not echoed to the page, matching System.setOut.
         if let Some(buf) = &mut self.capture {
             buf.extend_from_slice(bytes);
+            return;
         }
         let text = JsValue::from_str(&String::from_utf8_lossy(bytes));
         let _ = self.stdout.call1(&JsValue::NULL, &text);

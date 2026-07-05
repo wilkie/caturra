@@ -3170,17 +3170,19 @@ fn constructor_params_match(descriptor: &str, class_names: &[String]) -> bool {
             .all(|(desc, class_name)| class_matches_descriptor(class_name, desc))
 }
 
-/// Whether a `Class` (by name) is acceptable for a parameter descriptor.
+/// Whether a `Class` (by name) matches a parameter descriptor. Strict, like
+/// real reflection: a primitive `Class` matches only its primitive descriptor
+/// (no wrapper boxing) — `int.class` matches `(int)`, not `(Integer)`.
 fn class_matches_descriptor(class_name: &str, desc: &str) -> bool {
     match class_name {
-        "int" | "java/lang/Integer" => desc == "I" || desc == "Ljava/lang/Integer;",
-        "long" | "java/lang/Long" => desc == "J" || desc == "Ljava/lang/Long;",
-        "double" | "java/lang/Double" => desc == "D" || desc == "Ljava/lang/Double;",
-        "float" | "java/lang/Float" => desc == "F" || desc == "Ljava/lang/Float;",
-        "boolean" | "java/lang/Boolean" => desc == "Z" || desc == "Ljava/lang/Boolean;",
-        "char" | "java/lang/Character" => desc == "C" || desc == "Ljava/lang/Character;",
-        "short" | "java/lang/Short" => desc == "S" || desc == "Ljava/lang/Short;",
-        "byte" | "java/lang/Byte" => desc == "B" || desc == "Ljava/lang/Byte;",
+        "int" => desc == "I",
+        "long" => desc == "J",
+        "double" => desc == "D",
+        "float" => desc == "F",
+        "boolean" => desc == "Z",
+        "char" => desc == "C",
+        "short" => desc == "S",
+        "byte" => desc == "B",
         _ => desc == format!("L{class_name};"),
     }
 }

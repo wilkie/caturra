@@ -471,8 +471,8 @@ fn easymock_partial_mock_record_replay_verify() {
 #[test]
 fn system_out_test_runner_captures_printed_lines() {
     // org.code.validation SystemOutTestRunner: runs the student main and
-    // returns the lines it printed (capture tees to stdout, so the printed
-    // text still appears).
+    // returns the lines it printed. Capture redirects (System.setOut
+    // semantics), so the student's own output does not reach the console.
     let out = run_stdout(
         r#"
         import org.code.validation.*;
@@ -493,7 +493,7 @@ fn system_out_test_runner_captures_printed_lines() {
         "#,
         "Checker",
     );
-    assert_eq!(out, "first\nsecond\ncount=2\nhas=true\n");
+    assert_eq!(out, "count=2\nhas=true\n");
 }
 
 #[test]

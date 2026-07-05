@@ -43,8 +43,9 @@ pub struct BufferedConsole {
     stderr: Vec<u8>,
     input: Vec<String>,
     next_input: usize,
-    /// Byte offset into `stdout` where the active capture began.
-    capture_from: Option<usize>,
+    /// When `Some`, standard out is redirected here instead of `stdout`
+    /// (`System.setOut` semantics for `SystemOutTestRunner`).
+    capture: Option<Vec<u8>>,
 }
 
 impl BufferedConsole {
@@ -77,7 +78,11 @@ impl BufferedConsole {
 
 impl ConsoleIo for BufferedConsole {
     fn stdout(&mut self, bytes: &[u8]) {
-        self.stdout.extend_from_slice(bytes);
+        if let Some(buf) = &mut self.capture {
+            buf.extend_from_slice(bytes);
+        } else {
+            self.stdout.extend_from_slice(bytes);
+        }
     }
 
     fn stderr(&mut self, bytes: &[u8]) {
@@ -85,12 +90,14 @@ impl ConsoleIo for BufferedConsole {
     }
 
     fn begin_capture(&mut self) {
-        self.capture_from = Some(self.stdout.len());
+        self.capture = Some(Vec::new());
     }
 
     fn take_capture(&mut self) -> String {
-        let from = self.capture_from.take().unwrap_or(self.stdout.len());
-        String::from_utf8_lossy(&self.stdout[from..]).into_owned()
+        self.capture
+            .take()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
     }
 
     fn read_line(&mut self) -> Option<String> {
