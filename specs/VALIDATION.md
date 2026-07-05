@@ -24,11 +24,18 @@ internals). When `@Test` methods are found, `compile()` injects a synthetic
 prints `__VTEST\t<PASS|FAIL>\t<name>\t<message>` per test. The playground's
 **Test** button runs it and renders per-test results.
 
-**Still future:** the reflection-based structural validators (Attributes lesson,
-`AttributesHelper`) need actual `java.lang.reflect` — items 1-3 below. Those
-validators are also not available as plaintext in the corpus. Where they are
-still unrunnable, the picker strips the reflection helper so the student program
-compiles.
+**Structural reflection (2026-07-04):** the `AttributesHelper` surface now
+compiles _and runs_. `obj.getClass()` yields a `Class` intrinsic; `Class`
+exposes `getSimpleName`/`getName`/`getSuperclass`/`getDeclaredFields`, and
+`Field` exposes `getName`/`getType`/`getModifiers`/`toString` (canonical
+`<modifiers> <type> <Class>.<name>`), all read from the loaded `ClassFile`
+metadata — no new execution machinery. `Arrays.toString(Field[])` renders them.
+This covers `AttributesHelper` (Attributes lesson) verbatim; it is student-facing
+(the runner calls `printAttributes`), not a hidden validator.
+
+**Still future:** `Field.get`/`set` and `Method.invoke`/`Constructor.newInstance`
+for the reflection-based _validators_ (which also aren't plaintext in the corpus).
+The picker still strips any helper needing that surface.
 
 ## How the real system does it (from `javabuilder`)
 
