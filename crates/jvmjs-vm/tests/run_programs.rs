@@ -520,6 +520,34 @@ fn structural_reflection_prints_field_signatures() {
 }
 
 #[test]
+fn structural_reflection_prints_constructor_signatures() {
+    // Class.getDeclaredConstructors + canonical Constructor.toString,
+    // the ConstructorsHelper surface.
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.*;
+        import java.util.*;
+        public class Main {
+            public static void main(String[] args) {
+                Constructor[] cs = new Dessert().getClass().getDeclaredConstructors();
+                System.out.println(Arrays.toString(cs));
+            }
+        }
+        class Dessert {
+            private String flavor;
+            public Dessert() { flavor = "vanilla"; }
+            public Dessert(String f, int n) { flavor = f; }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "[public Dessert(), public Dessert(java.lang.String,int)]\n"
+    );
+}
+
+#[test]
 fn junit_validation_runner_reports_pass_and_fail() {
     // A JUnit validator with a passing and a failing test; the injected
     // __ValidationRunner runs each and reports per-test outcomes.

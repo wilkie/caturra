@@ -1027,6 +1027,7 @@ impl MethodTable {
 
     /// Resolve a source-level type, mapping class names (including
     /// array elements) to ids.
+    #[allow(clippy::too_many_lines)]
     fn resolve_type(&self, ty: &TypeRef) -> Option<JType> {
         match ty {
             TypeRef::Named(name) => {
@@ -1078,6 +1079,7 @@ impl MethodTable {
                     "PrintWriter" => Some(JType::Writer),
                     "Class" => Some(JType::Class),
                     "Field" => Some(JType::Field),
+                    "Constructor" => Some(JType::Constructor),
                     other => {
                         let internal = if name.contains('.') {
                             name.replace('.', "/")
@@ -1136,6 +1138,7 @@ impl MethodTable {
                     JType::Str => ElemType::Str,
                     JType::Object(id) => ElemType::Object(id),
                     JType::Field => ElemType::Field,
+                    JType::Constructor => ElemType::Constructor,
                     _ => return None,
                 };
                 Some(JType::Array { elem, dims })
@@ -1442,7 +1445,9 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::Byte => "java/lang/Byte",
         ElemType::Char => "java/lang/Character",
         ElemType::Boolean => "java/lang/Boolean",
-        ElemType::Str | ElemType::Object(_) | ElemType::Field => "java/lang/Object",
+        ElemType::Str | ElemType::Object(_) | ElemType::Field | ElemType::Constructor => {
+            "java/lang/Object"
+        }
     }
 }
 
@@ -1460,6 +1465,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Str => String::from("String"),
         ElemType::Object(id) => table.class_name(id).to_owned(),
         ElemType::Field => String::from("Field"),
+        ElemType::Constructor => String::from("Constructor"),
     }
 }
 
@@ -1589,6 +1595,8 @@ enum ElemType {
     Object(ClassId),
     /// `java.lang.reflect.Field` (element of `getDeclaredFields()`).
     Field,
+    /// `java.lang.reflect.Constructor` (element of `getDeclaredConstructors()`).
+    Constructor,
 }
 
 impl ElemType {
@@ -1605,6 +1613,7 @@ impl ElemType {
             ElemType::Str => String::from("Ljava/lang/String;"),
             ElemType::Object(id) => format!("L{};", table.class_name(id)),
             ElemType::Field => String::from("Ljava/lang/reflect/Field;"),
+            ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
         }
     }
 
@@ -1621,6 +1630,7 @@ impl ElemType {
             ElemType::Str => JType::Str,
             ElemType::Object(id) => JType::Object(id),
             ElemType::Field => JType::Field,
+            ElemType::Constructor => JType::Constructor,
         }
     }
 }
@@ -1658,6 +1668,8 @@ enum JType {
     Class,
     /// `java.lang.reflect.Field` (reflection intrinsic).
     Field,
+    /// `java.lang.reflect.Constructor` (reflection intrinsic).
+    Constructor,
     /// A library throwable; the id indexes the shared exception table
     /// (`jvmjs_classfile::exceptions`), 0 = `Throwable` itself.
     Exception(u8),
@@ -1724,6 +1736,7 @@ impl JType {
             JType::Scanner => String::from("Scanner"),
             JType::Class => String::from("Class"),
             JType::Field => String::from("Field"),
+            JType::Constructor => String::from("Constructor"),
             JType::Exception(id) => exception_internal(id)
                 .rsplit('/')
                 .next()
@@ -1825,6 +1838,7 @@ impl JType {
             JType::Scanner => String::from("Ljava/util/Scanner;"),
             JType::Class => String::from("Ljava/lang/Class;"),
             JType::Field => String::from("Ljava/lang/reflect/Field;"),
+            JType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
@@ -1864,6 +1878,7 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
         TypeRef::Named(name) if name == "String" => Some(JType::Str),
         TypeRef::Named(name) if name == "Class" => Some(JType::Class),
         TypeRef::Named(name) if name == "Field" => Some(JType::Field),
+        TypeRef::Named(name) if name == "Constructor" => Some(JType::Constructor),
         TypeRef::Array(inner) => {
             let mut dims: u8 = 1;
             let mut current = inner.as_ref();
@@ -1878,6 +1893,7 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
                 TypeRef::Char => ElemType::Char,
                 TypeRef::Named(name) if name == "String" => ElemType::Str,
                 TypeRef::Named(name) if name == "Field" => ElemType::Field,
+                TypeRef::Named(name) if name == "Constructor" => ElemType::Constructor,
                 _ => return None,
             };
             Some(JType::Array { elem, dims })
@@ -2153,6 +2169,8 @@ fn method_descriptor(
                     out.push_str("Ljava/lang/Class;");
                 } else if simple == "Field" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/reflect/Field;");
+                } else if simple == "Constructor" && !table.has_class(simple) {
+                    out.push_str("Ljava/lang/reflect/Constructor;");
                 } else if name == crate::parser::TYPEVAR_SENTINEL
                     || name == "Object"
                     || name == "java.lang.Object"
@@ -2338,6 +2356,8 @@ enum BRet {
     Class,
     /// `Field[]` (`Class.getDeclaredFields`).
     FieldArray,
+    /// `Constructor[]` (`Class.getDeclaredConstructors`).
+    ConstructorArray,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -3458,6 +3478,25 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         BRet::FieldArray,
         "()[Ljava/lang/reflect/Field;",
     ),
+    bm(
+        "getDeclaredConstructors",
+        &[],
+        BRet::ConstructorArray,
+        "()[Ljava/lang/reflect/Constructor;",
+    ),
+    bm(
+        "getConstructors",
+        &[],
+        BRet::ConstructorArray,
+        "()[Ljava/lang/reflect/Constructor;",
+    ),
+];
+
+/// `java.lang.reflect.Constructor` methods.
+const CONSTRUCTOR_METHODS: &[BuiltinMethod] = &[
+    bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getModifiers", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
 /// `java.lang.reflect.Field` methods.
@@ -3482,6 +3521,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Str => Some(("java/lang/String", STRING_METHODS)),
         JType::Class => Some(("java/lang/Class", CLASS_METHODS)),
         JType::Field => Some(("java/lang/reflect/Field", FIELD_METHODS)),
+        JType::Constructor => Some(("java/lang/reflect/Constructor", CONSTRUCTOR_METHODS)),
         JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
         JType::File => Some(("java/io/File", FILE_METHODS)),
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
@@ -3652,6 +3692,10 @@ fn bret_type(ret: BRet, elem: Option<ElemType>) -> Option<JType> {
         BRet::Class => Some(JType::Class),
         BRet::FieldArray => Some(JType::Array {
             elem: ElemType::Field,
+            dims: 1,
+        }),
+        BRet::ConstructorArray => Some(JType::Array {
+            elem: ElemType::Constructor,
             dims: 1,
         }),
     }
@@ -5698,6 +5742,7 @@ impl BodyGen<'_> {
             | JType::List(_)
             | JType::Class
             | JType::Field
+            | JType::Constructor
             | JType::Exception(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
             }
@@ -6732,7 +6777,8 @@ impl BodyGen<'_> {
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Class
-            | JType::Field => Some(String::from("(Ljava/lang/Object;)V")),
+            | JType::Field
+            | JType::Constructor => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
             JType::Long => Some(String::from("(J)V")),
@@ -7436,6 +7482,11 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            ElemType::Constructor => {
+                let class = intern_class(self.pool, "java/lang/reflect/Constructor");
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             prim => {
                 let atype = match prim {
                     ElemType::Int => op::T_INT,
@@ -7446,7 +7497,10 @@ impl BodyGen<'_> {
                     ElemType::Byte => op::T_BYTE,
                     ElemType::Boolean => op::T_BOOLEAN,
                     ElemType::Char => op::T_CHAR,
-                    ElemType::Str | ElemType::Object(_) | ElemType::Field => unreachable!(),
+                    ElemType::Str
+                    | ElemType::Object(_)
+                    | ElemType::Field
+                    | ElemType::Constructor => unreachable!(),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
                 self.code.bytes.push(atype);
@@ -8649,7 +8703,8 @@ impl BodyGen<'_> {
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Class
-            | JType::Field => "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+            | JType::Field
+            | JType::Constructor => "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
             JType::Int | JType::Short | JType::Byte => "(I)Ljava/lang/StringBuilder;",
             JType::Long => "(J)Ljava/lang/StringBuilder;",
             JType::Float => "(F)Ljava/lang/StringBuilder;",
@@ -8788,7 +8843,11 @@ impl BodyGen<'_> {
         let internal = wrapper_internal(elem);
         let prim = elem.base_type();
         let method = match elem {
-            ElemType::Int | ElemType::Str | ElemType::Object(_) | ElemType::Field => "intValue",
+            ElemType::Int
+            | ElemType::Str
+            | ElemType::Object(_)
+            | ElemType::Field
+            | ElemType::Constructor => "intValue",
             ElemType::Double => "doubleValue",
             ElemType::Long => "longValue",
             ElemType::Float => "floatValue",

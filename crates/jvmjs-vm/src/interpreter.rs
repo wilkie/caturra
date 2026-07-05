@@ -399,6 +399,11 @@ impl<'run> Interpreter<'run> {
                     descriptor,
                     access,
                 }) => intrinsics::field_to_string(declaring, name, descriptor, *access),
+                Some(crate::value::HeapObject::Constructor {
+                    declaring,
+                    descriptor,
+                    access,
+                }) => intrinsics::constructor_to_string(declaring, descriptor, *access),
                 Some(crate::value::HeapObject::Class { name }) => format!("class {name}"),
                 Some(crate::value::HeapObject::Scanner { .. }) => String::from("Scanner"),
                 Some(crate::value::HeapObject::File(path)) => format!("File({path})"),
@@ -2209,7 +2214,11 @@ impl<'run> Interpreter<'run> {
         };
         let is_reflect = matches!(
             self.heap.get(receiver),
-            Some(crate::value::HeapObject::Class { .. } | crate::value::HeapObject::Field { .. })
+            Some(
+                crate::value::HeapObject::Class { .. }
+                    | crate::value::HeapObject::Field { .. }
+                    | crate::value::HeapObject::Constructor { .. }
+            )
         );
         let result = if let Some(instance_class) = instance_class {
             match self.user_virtual_dispatch(
@@ -2247,6 +2256,7 @@ impl<'run> Interpreter<'run> {
     /// `java.lang.Class` / `java.lang.reflect.Field` methods — the
     /// structural, read-only reflection the curriculum uses. Reads the
     /// loaded [`ClassFile`] metadata; performs no invocation.
+    #[allow(clippy::too_many_lines)]
     fn reflect_virtual(
         &mut self,
         receiver: HeapRef,
@@ -2315,6 +2325,49 @@ impl<'run> Interpreter<'run> {
                         let array = self.heap.alloc(HeapObject::RefArray(refs));
                         Ok(Some(JValue::Ref(Some(array))))
                     }
+                    "getDeclaredConstructors" | "getConstructors" => {
+                        let public_only = method == "getConstructors";
+                        let ctors: Vec<(String, u16)> = self
+                            .classes
+                            .get(&name)
+                            .map(|cf| {
+                                cf.methods
+                                    .iter()
+                                    .filter(|m| {
+                                        cf.constant_pool.get_utf8(m.name_index) == Some("<init>")
+                                    })
+                                    .filter(|m| {
+                                        !public_only
+                                            || m.access_flags.contains(
+                                                jvmjs_classfile::MethodAccessFlags::PUBLIC,
+                                            )
+                                    })
+                                    .map(|m| {
+                                        (
+                                            cf.constant_pool
+                                                .get_utf8(m.descriptor_index)
+                                                .unwrap_or_default()
+                                                .to_owned(),
+                                            m.access_flags.0,
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let simple = simple_class_name(&name).to_owned();
+                        let refs: Vec<JValue> = ctors
+                            .into_iter()
+                            .map(|(descriptor, access)| {
+                                JValue::Ref(Some(self.heap.alloc(HeapObject::Constructor {
+                                    declaring: simple.clone(),
+                                    descriptor,
+                                    access,
+                                })))
+                            })
+                            .collect();
+                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        Ok(Some(JValue::Ref(Some(array))))
+                    }
                     other => Err(VmError::UnknownIntrinsic(format!("Class.{other}"))),
                 }
             }
@@ -2340,6 +2393,24 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
                     other => Err(VmError::UnknownIntrinsic(format!("Field.{other}"))),
+                }
+            }
+            Some(HeapObject::Constructor {
+                declaring,
+                descriptor,
+                access,
+            }) => {
+                let (declaring, descriptor, access) =
+                    (declaring.clone(), descriptor.clone(), *access);
+                match method {
+                    "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&declaring))))),
+                    "getModifiers" => Ok(Some(JValue::Int(i32::from(access)))),
+                    "toString" => {
+                        let text =
+                            intrinsics::constructor_to_string(&declaring, &descriptor, access);
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
+                    }
+                    other => Err(VmError::UnknownIntrinsic(format!("Constructor.{other}"))),
                 }
             }
             _ => Err(VmError::UnknownIntrinsic(format!("reflect.{method}"))),

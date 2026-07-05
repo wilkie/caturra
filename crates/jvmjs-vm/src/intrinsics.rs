@@ -1444,6 +1444,11 @@ fn display_jvalue(heap: &Heap, value: JValue) -> String {
                 descriptor,
                 access,
             }) => field_to_string(declaring, name, descriptor, *access),
+            Some(HeapObject::Constructor {
+                declaring,
+                descriptor,
+                access,
+            }) => constructor_to_string(declaring, descriptor, *access),
             Some(HeapObject::Class { name }) => format!("class {name}"),
             _ => String::from("<object>"),
         },
@@ -1850,6 +1855,58 @@ pub fn field_to_string(declaring: &str, name: &str, descriptor: &str, access: u1
     out.push_str(declaring);
     out.push('.');
     out.push_str(name);
+    out
+}
+
+/// The Java type names of a method descriptor's parameters:
+/// `(Ljava/lang/String;I)V` -> `["java.lang.String", "int"]`.
+#[must_use]
+pub fn param_type_names(descriptor: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let inner = match (descriptor.find('('), descriptor.find(')')) {
+        (Some(open), Some(close)) if open < close => &descriptor[open + 1..close],
+        _ => return names,
+    };
+    let bytes = inner.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let start = i;
+        while i < bytes.len() && bytes[i] == b'[' {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'L' {
+            while i < bytes.len() && bytes[i] != b';' {
+                i += 1;
+            }
+            i += 1; // consume ';'
+        } else {
+            i += 1; // a single primitive char
+        }
+        names.push(type_name_of_descriptor(&inner[start..i]));
+    }
+    names
+}
+
+/// Java's canonical `Constructor.toString()`:
+/// `<modifiers> <DeclaringClass>(<param types>)`.
+#[must_use]
+pub fn constructor_to_string(declaring: &str, descriptor: &str, access: u16) -> String {
+    use jvmjs_classfile::MethodAccessFlags as M;
+    let mut out = String::new();
+    for (flag, word) in [
+        (M::PUBLIC, "public"),
+        (M::PRIVATE, "private"),
+        (M::PROTECTED, "protected"),
+    ] {
+        if access & flag != 0 {
+            out.push_str(word);
+            out.push(' ');
+        }
+    }
+    out.push_str(declaring);
+    out.push('(');
+    out.push_str(&param_type_names(descriptor).join(","));
+    out.push(')');
     out
 }
 

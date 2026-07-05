@@ -105,6 +105,14 @@ pub enum HeapObject {
         /// Raw `FieldAccessFlags` bits.
         access: u16,
     },
+    /// A `java.lang.reflect.Constructor` from `getDeclaredConstructors()`.
+    Constructor {
+        declaring: String,
+        /// The `<init>` method descriptor, e.g. `(Ljava/lang/String;I)V`.
+        descriptor: String,
+        /// Raw `MethodAccessFlags` bits.
+        access: u16,
+    },
 }
 
 /// The per-run object heap.
