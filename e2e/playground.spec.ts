@@ -237,6 +237,22 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('1 / 1 tests passed');
   });
 
+  test('Solve then Test passes a Unit 4 reflection validator', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 4' });
+    await page
+      .getByTestId('level-select')
+      .selectOption({ label: 'Practice: Using Static Variables and Methods (a)' });
+    const solve = page.getByTestId('solve');
+    if ((await solve.count()) === 0) {
+      test.skip(true, 'no local overlay (validators/solutions not generated)');
+    }
+    await solve.click();
+    await page.getByTestId('test').click();
+    await expect(page.getByTestId('test-results').locator('.test-fail')).toHaveCount(0);
+    await expect(page.getByTestId('test-results').locator('.test-pass').first()).toBeVisible();
+  });
+
   test('Solve then Test passes a Unit 3 array validator', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });
