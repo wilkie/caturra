@@ -107,34 +107,27 @@ test.describe('playground', () => {
     await expect(consoleOutput).toContainText('Hello, World!');
   });
 
-  test('loads a neighborhood level and animates it on the canvas', async ({ page }) => {
+  test('loads a Unit 1 neighborhood level and animates it on the canvas', async ({ page }) => {
     await page.goto('/');
-    // The picker offers several levels; choosing one shows its grid.
-    const picker = page.getByTestId('neighborhood-level');
-    await expect(picker.locator('option')).toHaveCount(4); // placeholder + 3 levels
-    await picker.selectOption({ label: 'Traffic Maze' });
+    // Pick a real multi-file lesson level; its extra class opens as a tab.
+    await page
+      .getByTestId('neighborhood-level')
+      .selectOption({ label: 'Practice: Writing Methods' });
     await expect(page.getByTestId('viz')).toBeVisible();
-    await expect(page.getByTestId('neighborhood-canvas')).toBeVisible();
+    await expect(page.getByTestId('file-tabs')).toContainText('PainterPlus.java');
 
     await page.getByTestId('run').click();
-    // The starter drives east to the bucket, then paints a yellow line
-    // south down the road, ending at (3, 6).
+    // The PainterPlus drives to (3, 0), turns right, and stops at (3, 2).
     const handle = await page.waitForFunction(() => {
       const state = (
         window as unknown as { playground: PlaygroundHooks }
       ).playground.neighborhoodState();
       const painter = state.painters[0];
-      return painter?.x === 3 && painter.y === 6 ? state : null;
+      return painter?.x === 3 && painter.y === 2 ? state : null;
     });
-    const state = (await handle.jsonValue()) as {
-      colors: (string | null)[][];
-      painters: { dir: string }[];
-    };
-    expect(state.colors[0][3]).toBe('yellow');
-    expect(state.colors[5][3]).toBe('yellow');
+    const state = (await handle.jsonValue()) as { painters: { dir: string }[] };
     expect(state.painters[0].dir).toBe('south');
   });
-
   test('renders a theater scene on the stage', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('theater-level').selectOption({ label: 'Shapes' });

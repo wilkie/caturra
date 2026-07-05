@@ -20,150 +20,7 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
-
-interface NeighborhoodLevel {
-  name: string;
-  grid: string;
-  starter: string;
-}
-
-/** A fully open size×size grid (a paintable sandbox). */
-function openGrid(size: number): string {
-  const row = Array.from({ length: size }, () => '1,0').join(' ');
-  return `${Array.from({ length: size }, () => row).join('\n')}\n`;
-}
-
-// Real / real-style Code.org neighborhood levels. Each grid is the
-// `tileType,paintCount` text the bundled World reads; each starter is a
-// runnable program in the style of the level.
-const NEIGHBORHOOD_LEVELS: NeighborhoodLevel[] = [
-  {
-    name: 'Traffic Maze',
-    // CSA U1L9: a 10×10 road maze with two paint buckets.
-    grid: `1,0 1,0 1,0 1,6 0,0 0,0 1,0 1,0 1,0 0,0
-0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
-0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
-0,0 0,0 0,0 1,0 1,0 1,0 1,0 0,0 0,0 0,0
-0,0 0,0 0,0 1,0 0,0 0,0 1,0 1,0 1,0 0,0
-0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
-0,0 0,0 0,0 1,0 0,0 0,0 1,0 0,0 0,0 0,0
-0,0 0,0 0,0 1,0 1,0 1,0 1,6 0,0 0,0 0,0
-0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0
-0,0 0,0 0,0 1,0 0,0 0,0 0,0 0,0 0,0 0,0
-`,
-    starter: `import org.code.neighborhood.*;
-
-public class Main {
-  public static void main(String[] args) {
-    Painter painter = new Painter(0, 0, "east", 0);
-
-    // Drive east until reaching the paint bucket.
-    while (!painter.isOnBucket() && painter.canMove()) {
-      painter.move();
-    }
-
-    // Collect all the paint from the bucket.
-    while (painter.isOnBucket()) {
-      painter.takePaint();
-    }
-
-    // Turn to face south and paint a line down the road.
-    painter.turnLeft();
-    painter.turnLeft();
-    painter.turnLeft();
-    while (painter.hasPaint() && painter.canMove()) {
-      painter.paint("yellow");
-      painter.move();
-    }
-    painter.paint("yellow");
-  }
-}
-`,
-  },
-  {
-    name: 'Paint Studio',
-    grid: openGrid(10),
-    starter: `import org.code.neighborhood.*;
-
-public class Main {
-  public static void main(String[] args) {
-    Painter painter = new Painter(0, 0, "east", 200);
-    String[] colors = {"red", "orange", "yellow", "green", "blue", "purple"};
-
-    // Paint the whole grid in rainbow rows, snaking back and forth.
-    boolean facingEast = true;
-    for (int row = 0; row < 10; row++) {
-      String color = colors[row % colors.length];
-      painter.paint(color);
-      while (painter.canMove()) {
-        painter.move();
-        painter.paint(color);
-      }
-      if (row == 9) {
-        break;
-      }
-      // Drop down one row and reverse direction.
-      turnDown(painter, facingEast);
-      facingEast = !facingEast;
-    }
-  }
-
-  static void turnDown(Painter painter, boolean facingEast) {
-    if (facingEast) {
-      painter.turnLeft();
-      painter.turnLeft();
-      painter.turnLeft();
-      painter.move();
-      painter.turnLeft();
-      painter.turnLeft();
-      painter.turnLeft();
-    } else {
-      painter.turnLeft();
-      painter.move();
-      painter.turnLeft();
-    }
-  }
-}
-`,
-  },
-  {
-    name: 'Border Painter',
-    grid: openGrid(8),
-    starter: `import org.code.neighborhood.*;
-
-// A Painter that can turn right and paint a straight side.
-class BorderPainter extends Painter {
-  public BorderPainter() {
-    super(0, 0, "east", 100);
-  }
-
-  public void turnRight() {
-    turnLeft();
-    turnLeft();
-    turnLeft();
-  }
-
-  public void paintSide(String color, int length) {
-    for (int i = 0; i < length; i++) {
-      paint(color);
-      move();
-    }
-  }
-}
-
-public class Main {
-  public static void main(String[] args) {
-    BorderPainter painter = new BorderPainter();
-    for (int side = 0; side < 4; side++) {
-      painter.paintSide("teal", 7);
-      painter.turnRight();
-    }
-    painter.paint("teal");
-  }
-}
-`,
-  },
-];
+import { NEIGHBORHOOD_LEVELS, type NeighborhoodLevelFile } from './neighborhood-levels.js';
 
 interface TheaterLevel {
   name: string;
@@ -373,14 +230,39 @@ addFileEl.addEventListener('click', () => {
 });
 renderTabs();
 
-// Level picker: populate from NEIGHBORHOOD_LEVELS. Picking a level swaps
-// in its starter program and shows its grid, so Run animates over the
-// real maze.
-for (const [index, level] of NEIGHBORHOOD_LEVELS.entries()) {
-  const option = document.createElement('option');
-  option.value = String(index);
-  option.textContent = level.name;
-  neighborhoodLevelEl.appendChild(option);
+/** Load a level's files into the editor: Main.java plus a tab per class. */
+function loadLevelFiles(files: NeighborhoodLevelFile[]): void {
+  for (const name of [...inactiveFiles.keys()]) {
+    removeFile(name);
+  }
+  switchToFile('Main.java');
+  const mainFile = files.find((file) => file.path === 'Main.java');
+  setSource(editor, mainFile?.text ?? '');
+  for (const file of files) {
+    if (file.path !== 'Main.java') {
+      addFile(file.path, file.text);
+    }
+  }
+  switchToFile('Main.java');
+}
+
+// Level picker: the CSA Unit 1 progression, grouped by lesson. Picking a
+// level loads its files and shows its grid, so Run animates the maze.
+{
+  let lastLesson = '';
+  let group: HTMLOptGroupElement | null = null;
+  for (const [index, level] of NEIGHBORHOOD_LEVELS.entries()) {
+    if (level.lesson !== lastLesson) {
+      group = document.createElement('optgroup');
+      group.label = level.lesson;
+      neighborhoodLevelEl.appendChild(group);
+      lastLesson = level.lesson;
+    }
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = level.name;
+    (group ?? neighborhoodLevelEl).appendChild(option);
+  }
 }
 neighborhoodLevelEl.addEventListener('change', () => {
   const level = NEIGHBORHOOD_LEVELS[Number(neighborhoodLevelEl.value)];
@@ -388,7 +270,7 @@ neighborhoodLevelEl.addEventListener('change', () => {
     return;
   }
   currentNeighborhoodGrid = level.grid;
-  setSource(editor, level.starter);
+  loadLevelFiles(level.files);
   theaterVizEl.hidden = true;
   vizEl.hidden = false;
   neighborhoodViz.load(level.grid, '');
