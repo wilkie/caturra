@@ -37,7 +37,7 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
-import { CSA_UNITS, type CsaLevel, type CsaLevelFile } from './csa-levels.js';
+import { CSA_UNITS, type CsaLevel, type CsaLevelFile } from './levels.js';
 
 // Stable automation hooks (Playwright drives the editor through these
 // rather than through CodeMirror's contenteditable internals).

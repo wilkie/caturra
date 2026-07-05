@@ -26,3 +26,6 @@ coverage/
 # Other artifacts used in development
 javabuilder/
 artifacts/
+
+# Teacher-authored validators generated locally; never committed.
+apps/playground/src/csa-validators.local.ts
