@@ -240,19 +240,26 @@ function loadLevelFiles(files: CsaLevelFile[]): void {
   }
   switchToFile('Main.java');
   const mainFile = files.find((file) => file.path === 'Main.java');
+  // A level with no runnable Main (e.g. an FRQ: classes to implement,
+  // checked by the Test button) leaves Main.java empty and opens the
+  // first student file instead.
   setSource(editor, mainFile?.text ?? '');
   for (const file of files) {
     if (file.path !== 'Main.java') {
       addFile(file.path, file.text);
     }
   }
-  switchToFile('Main.java');
+  const firstFile = files[0]?.path;
+  switchToFile(mainFile || firstFile === undefined ? 'Main.java' : firstFile);
 }
 
 // Unit picker → level picker. Choosing a unit populates the level
 // dropdown (grouped by lesson); choosing a level loads its files and, for
 // neighborhood levels, shows its grid.
 let currentUnitLevels: CsaLevel[] = [];
+// Teacher-authored validator files for the loaded level; the Test button
+// compiles them alongside the student's editor tabs.
+let currentValidationFiles: CsaLevelFile[] = [];
 
 for (const [index, unit] of CSA_UNITS.entries()) {
   const option = document.createElement('option');
@@ -300,6 +307,8 @@ levelSelectEl.addEventListener('change', () => {
     return;
   }
   loadLevelFiles(level.files);
+  currentValidationFiles = level.validationFiles;
+  renderTestResults([]);
   theaterVizEl.hidden = true;
   if (level.view === 'neighborhood') {
     currentNeighborhoodGrid = level.grid;
@@ -324,6 +333,8 @@ theaterLevelEl.addEventListener('change', () => {
     return;
   }
   setSource(editor, level.starter);
+  currentValidationFiles = [];
+  renderTestResults([]);
   vizEl.hidden = true;
   theaterVizEl.hidden = false;
   theaterViz.reset();
@@ -480,8 +491,10 @@ async function testProgram(): Promise<void> {
   renderTestResults([]);
   try {
     const session = await sessionReady;
-    append(`$ javac ${allFileNames().join(' ')}\n`);
-    const compiled = await session.compile(collectSources());
+    // Student files plus the level's teacher-authored validator files.
+    const sources = [...collectSources(), ...currentValidationFiles];
+    append(`$ javac ${sources.map((source) => source.path).join(' ')}\n`);
+    const compiled = await session.compile(sources);
     reportDiagnostics(compiled.diagnostics);
     if (!compiled.success) {
       return;

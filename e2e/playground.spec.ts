@@ -170,6 +170,36 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('loads an FRQ level and tests it against the corpus validator', async ({ page }) => {
+    await page.goto('/');
+    // Pick the AP FRQ unit and its first BoxOfCandy level.
+    const unit = page.getByTestId('unit-select');
+    await unit.selectOption({ label: 'AP FRQ Practice' });
+    const level = page.getByTestId('level-select');
+    await level.selectOption({ index: 1 });
+    // The level's student classes are loaded as tabs; its validator is hidden.
+    await expect(page.getByTestId('file-tabs')).toContainText('BoxOfCandy.java');
+    await expect(page.getByTestId('file-tabs')).toContainText('Candy.java');
+    // Provide a minimal (unimplemented) BoxOfCandy so it compiles; the
+    // teacher validator then runs and reports the test as failing.
+    await page.evaluate(() => {
+      (window as unknown as { playground: PlaygroundHooks }).playground.setFile(
+        'BoxOfCandy.java',
+        [
+          'public class BoxOfCandy {',
+          '  private Candy[][] box;',
+          '  public boolean moveCandyToFirstRow(int col) { return false; }',
+          '  public Candy removeNextByFlavor(String flavor) { return null; }',
+          '}',
+        ].join('\n'),
+      );
+    });
+    await page.getByTestId('test').click();
+    const results = page.getByTestId('test-results');
+    await expect(results).toBeVisible();
+    await expect(results.locator('.test-fail')).toContainText('MoveCandyToFirstRow');
+  });
+
   test('runs a JUnit validator via the Test button', async ({ page }) => {
     await page.goto('/');
     await setSource(
