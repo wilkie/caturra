@@ -170,6 +170,31 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('runs an Attributes level using reflection (AttributesHelper)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });
+    await page.getByTestId('level-select').selectOption({ label: 'Practice: The Food Truck (a)' });
+    // The level bundles the reflection helper and the classes to complete.
+    await expect(page.getByTestId('file-tabs')).toContainText('AttributesHelper.java');
+    await page.evaluate(() => {
+      const pg = (window as unknown as { playground: PlaygroundHooks }).playground;
+      // Complete the exercise: declare a field, then print attributes.
+      pg.setFile(
+        'Dessert.java',
+        'public class Dessert { private String flavor; private double price; }',
+      );
+      pg.setFile(
+        'Main.java',
+        'public class Main { public static void main(String[] args) { AttributesHelper.printAttributes(new Dessert()); } }',
+      );
+    });
+    await page.getByTestId('run').click();
+    const console = page.getByTestId('console');
+    await expect(console).toContainText('Dessert Class Attributes');
+    await expect(console).toContainText('private String flavor');
+    await expect(console).toContainText('private double price');
+  });
+
   test('loads an FRQ level and tests it against the corpus validator', async ({ page }) => {
     await page.goto('/');
     // Pick the AP FRQ unit and its first BoxOfCandy level.
