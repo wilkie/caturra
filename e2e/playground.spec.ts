@@ -109,10 +109,10 @@ test.describe('playground', () => {
 
   test('loads a Unit 1 neighborhood level and animates it on the canvas', async ({ page }) => {
     await page.goto('/');
-    // A real multi-file lesson level whose starting code already moves the
-    // painter; its extra class opens as a tab.
+    // Choose the unit, then a real multi-file lesson level from it.
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 1' });
     await page
-      .getByTestId('neighborhood-level')
+      .getByTestId('level-select')
       .selectOption({ label: 'Investigate and Modify: Debugging' });
     await expect(page.getByTestId('viz')).toBeVisible();
     await expect(page.getByTestId('file-tabs')).toContainText('PainterPlus.java');
@@ -128,6 +128,20 @@ test.describe('playground', () => {
     });
     const state = (await handle.jsonValue()) as { painters: unknown[] };
     expect(state.painters.length).toBeGreaterThan(0);
+  });
+
+  test('loads a Unit 2 console level and runs it', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });
+    // A console unit: the level dropdown fills, the neighborhood canvas stays hidden.
+    const levelSelect = page.getByTestId('level-select');
+    await expect(levelSelect.locator('option')).not.toHaveCount(1);
+    // Pick the first real level (skip the placeholder) and run it.
+    const firstLevel = await levelSelect.locator('optgroup option').first().getAttribute('value');
+    await levelSelect.selectOption(firstLevel);
+    await expect(page.getByTestId('viz')).toBeHidden();
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('$ java Main');
   });
   test('renders a theater scene on the stage', async ({ page }) => {
     await page.goto('/');

@@ -20,7 +20,7 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
-import { NEIGHBORHOOD_LEVELS, type NeighborhoodLevelFile } from './neighborhood-levels.js';
+import { CSA_UNITS, type CsaLevel, type CsaLevelFile } from './csa-levels.js';
 
 interface TheaterLevel {
   name: string;
@@ -130,14 +130,15 @@ const watchExpressions: string[] = [];
 const fileTabsEl = mustGet('#file-tabs', HTMLDivElement);
 const addFileEl = mustGet('#add-file', HTMLButtonElement);
 const vizEl = mustGet('#viz', HTMLDivElement);
-const neighborhoodLevelEl = mustGet('#neighborhood-level', HTMLSelectElement);
+const unitSelectEl = mustGet('#unit-select', HTMLSelectElement);
+const levelSelectEl = mustGet('#level-select', HTMLSelectElement);
 const neighborhoodViz = new NeighborhoodViz(mustGet('#neighborhood-canvas', HTMLCanvasElement));
 const theaterVizEl = mustGet('#theater-viz', HTMLDivElement);
 const theaterLevelEl = mustGet('#theater-level', HTMLSelectElement);
 const theaterViz = new TheaterViz(mustGet('#theater-canvas', HTMLCanvasElement));
 
 /** Grid seeded on the next neighborhood run (a picked level's maze). */
-let currentNeighborhoodGrid = NEIGHBORHOOD_LEVELS[0]?.grid ?? '';
+let currentNeighborhoodGrid = '';
 
 const editor = createEditor(sourceEl, DEFAULT_PROGRAM);
 
@@ -231,7 +232,7 @@ addFileEl.addEventListener('click', () => {
 renderTabs();
 
 /** Load a level's files into the editor: Main.java plus a tab per class. */
-function loadLevelFiles(files: NeighborhoodLevelFile[]): void {
+function loadLevelFiles(files: CsaLevelFile[]): void {
   for (const name of [...inactiveFiles.keys()]) {
     removeFile(name);
   }
@@ -246,34 +247,65 @@ function loadLevelFiles(files: NeighborhoodLevelFile[]): void {
   switchToFile('Main.java');
 }
 
-// Level picker: the CSA Unit 1 progression, grouped by lesson. Picking a
-// level loads its files and shows its grid, so Run animates the maze.
-{
+// Unit picker → level picker. Choosing a unit populates the level
+// dropdown (grouped by lesson); choosing a level loads its files and, for
+// neighborhood levels, shows its grid.
+let currentUnitLevels: CsaLevel[] = [];
+
+for (const [index, unit] of CSA_UNITS.entries()) {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = unit.name;
+  unitSelectEl.appendChild(option);
+}
+
+function populateLevels(levels: CsaLevel[]): void {
+  levelSelectEl.textContent = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  placeholder.textContent = 'Level…';
+  levelSelectEl.appendChild(placeholder);
   let lastLesson = '';
   let group: HTMLOptGroupElement | null = null;
-  for (const [index, level] of NEIGHBORHOOD_LEVELS.entries()) {
+  for (const [index, level] of levels.entries()) {
     if (level.lesson !== lastLesson) {
       group = document.createElement('optgroup');
       group.label = level.lesson;
-      neighborhoodLevelEl.appendChild(group);
+      levelSelectEl.appendChild(group);
       lastLesson = level.lesson;
     }
     const option = document.createElement('option');
     option.value = String(index);
     option.textContent = level.name;
-    (group ?? neighborhoodLevelEl).appendChild(option);
+    (group ?? levelSelectEl).appendChild(option);
   }
 }
-neighborhoodLevelEl.addEventListener('change', () => {
-  const level = NEIGHBORHOOD_LEVELS[Number(neighborhoodLevelEl.value)];
+
+unitSelectEl.addEventListener('change', () => {
+  const unit = CSA_UNITS[Number(unitSelectEl.value)];
+  if (!unit) {
+    return;
+  }
+  currentUnitLevels = unit.levels;
+  populateLevels(unit.levels);
+});
+
+levelSelectEl.addEventListener('change', () => {
+  const level = currentUnitLevels[Number(levelSelectEl.value)];
   if (!level) {
     return;
   }
-  currentNeighborhoodGrid = level.grid;
   loadLevelFiles(level.files);
   theaterVizEl.hidden = true;
-  vizEl.hidden = false;
-  neighborhoodViz.load(level.grid, '');
+  if (level.view === 'neighborhood') {
+    currentNeighborhoodGrid = level.grid;
+    vizEl.hidden = false;
+    neighborhoodViz.load(level.grid, '');
+  } else {
+    vizEl.hidden = true;
+  }
 });
 
 // Theater picker: choosing an example loads its program and shows a

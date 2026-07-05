@@ -24,12 +24,20 @@
           <button id="run" data-testid="run" disabled>Compile &amp; Run</button>
           <button id="debug" data-testid="debug" disabled>Debug</button>
           <select
-            id="neighborhood-level"
-            data-testid="neighborhood-level"
-            title="Load a Neighborhood level"
-            aria-label="Load a Neighborhood level"
+            id="unit-select"
+            data-testid="unit-select"
+            title="Choose a CSA unit"
+            aria-label="Choose a CSA unit"
           >
-            <option value="" disabled selected>Neighborhood…</option>
+            <option value="" disabled selected>Unit…</option>
+          </select>
+          <select
+            id="level-select"
+            data-testid="level-select"
+            title="Load a level"
+            aria-label="Load a level"
+          >
+            <option value="" disabled selected>Level…</option>
           </select>
           <select
             id="theater-level"

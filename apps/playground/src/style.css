@@ -254,3 +254,9 @@ label {
   align-self: start;
   max-width: 100%;
 }
+
+/* The hidden attribute must win over the flex display above. */
+#viz[hidden],
+#theater-viz[hidden] {
+  display: none;
+}
