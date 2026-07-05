@@ -257,6 +257,14 @@ fn validate_import(
     {
         return;
     }
+    // `java.lang.reflect.*` — the structural reflection subset used by
+    // student helpers like `AttributesHelper` (Class/Field intrinsics).
+    if import.path.first().map(String::as_str) == Some("java")
+        && import.path.get(1).map(String::as_str) == Some("lang")
+        && import.path.get(2).map(String::as_str) == Some("reflect")
+    {
+        return;
+    }
 
     let package = if import.wildcard {
         import.path.join(".")

@@ -310,6 +310,39 @@ mod tests {
     }
 
     #[test]
+    fn structural_reflection_compiles() {
+        // The `AttributesHelper` surface: getClass / getSimpleName /
+        // getSuperclass / getDeclaredFields + Arrays.toString(Field[]).
+        let result = compile(&[
+            SourceFile {
+                path: String::from("Dog.java"),
+                text: String::from("public class Dog { private String name; private int age; }"),
+            },
+            SourceFile {
+                path: String::from("Main.java"),
+                text: String::from(
+                    r#"
+                    import java.lang.reflect.*;
+                    import java.util.*;
+                    public class Main {
+                        public static void main(String[] args) {
+                            Object o = new Dog();
+                            Class c = o.getClass();
+                            String n = c.getSimpleName();
+                            Class sup = c.getSuperclass();
+                            Field[] fields = c.getDeclaredFields();
+                            System.out.println(n + " extends " + sup.getSimpleName());
+                            System.out.println(Arrays.toString(fields));
+                        }
+                    }
+                    "#,
+                ),
+            },
+        ]);
+        assert!(result.success(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
     fn hello_world_compiles_to_a_class() {
         let result = compile(&[SourceFile {
             path: String::from("Main.java"),
