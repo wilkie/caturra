@@ -132,6 +132,7 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
         return_type: TypeRef::Void,
         params,
         body,
+        annotations: Vec::new(),
         span: zero,
     });
 }

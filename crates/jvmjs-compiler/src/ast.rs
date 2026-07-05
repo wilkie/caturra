@@ -19,6 +19,9 @@ pub struct ImportDecl {
     /// segment is `*` for wildcard imports... represented separately).
     pub path: Vec<String>,
     pub wildcard: bool,
+    /// `import static X.Y.*` / `import static X.Y.member` — brings static
+    /// members into scope unqualified (used for `JUnit` `Assertions`).
+    pub is_static: bool,
     pub span: SourceSpan,
 }
 
@@ -96,7 +99,17 @@ pub struct MethodDecl {
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
+    /// Retained annotations (`@Test`, `@Order(1)`, `@BeforeEach`, …) with
+    /// an optional integer argument — enough for the `JUnit` test runner.
+    pub annotations: Vec<Annotation>,
     pub span: SourceSpan,
+}
+
+/// A retained annotation on a method (name plus an optional int arg).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotation {
+    pub name: String,
+    pub int_arg: Option<i32>,
 }
 
 /// A method parameter.

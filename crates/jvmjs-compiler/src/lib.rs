@@ -66,6 +66,20 @@ const NEIGHBORHOOD_LIB: &str = include_str!("stdlib/neighborhood.java");
 /// `org.code.media`, injected when either package is imported.
 const THEATER_LIB: &str = include_str!("stdlib/theater.java");
 
+/// Bundled `org.junit.jupiter.api.Assertions` subset, injected when a
+/// source imports `org.junit` (the validation "Test" mode).
+const JUNIT_LIB: &str = include_str!("stdlib/junit.java");
+
+/// Whether any unit imports something under the given prefix path
+/// (`["org","junit"]` matches `import static org.junit.jupiter....`).
+fn imports_prefix(units: &[(String, ast::CompilationUnit)], prefix: &[&str]) -> bool {
+    units.iter().any(|(_, unit)| {
+        unit.imports.iter().any(|import| {
+            import.path.len() >= prefix.len() && import.path[..prefix.len()] == *prefix
+        })
+    })
+}
+
 /// Whether any unit imports a class from the given package path
 /// (matches both `import pkg.*` and `import pkg.Class`).
 fn imports_package(units: &[(String, ast::CompilationUnit)], package: &[&str]) -> bool {
@@ -128,6 +142,12 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<theater>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<theater>"), unit));
+    }
+    if imports_prefix(&units, &["org", "junit"]) {
+        let (tokens, _) = lexer::lex("<junit>", JUNIT_LIB);
+        let (unit, mut errs) = parser::parse("<junit>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<junit>"), unit));
     }
 
     // Import validation and enforcement (after all units parse, since

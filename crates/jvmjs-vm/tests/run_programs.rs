@@ -491,6 +491,35 @@ fn neighborhood_painter_subclass_and_walls() {
 }
 
 #[test]
+fn junit_validator_static_import_and_relaxed_access() {
+    // The validation "Test" mode: `import static Assertions.*` makes
+    // assertX unqualified, org.junit relaxes private access so a validator
+    // can read internals, and assertions throw on failure.
+    let out = run_stdout(
+        r#"
+        import static org.junit.jupiter.api.Assertions.*;
+        class Box { private int n = 3; }
+        public class Main {
+            public static void main(String[] args) {
+                Box b = new Box();
+                assertEquals(3, b.n);
+                assertTrue(b.n > 0);
+                System.out.println("assertions passed");
+                try {
+                    assertEquals(9, b.n);
+                    System.out.println("no throw");
+                } catch (RuntimeException e) {
+                    System.out.println("caught: " + e.getMessage());
+                }
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "assertions passed\ncaught: expected 9 but was 3\n");
+}
+
+#[test]
 fn codeorg_console_patterns() {
     let out = run_stdout(
         r#"

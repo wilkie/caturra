@@ -248,6 +248,16 @@ fn validate_import(
     enabled: &mut HashSet<&'static str>,
     error: &mut impl FnMut(String, SourceSpan),
 ) {
+    // JUnit (`org.junit.*`) is accepted wholesale for the validation
+    // "Test" mode: annotations are retained but never resolved as types,
+    // and `Assertions` is provided by the bundled test library. Static
+    // imports (`import static ...Assertions.*`) come through here too.
+    if import.path.first().map(String::as_str) == Some("org")
+        && import.path.get(1).map(String::as_str) == Some("junit")
+    {
+        return;
+    }
+
     let package = if import.wildcard {
         import.path.join(".")
     } else {

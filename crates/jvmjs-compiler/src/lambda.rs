@@ -630,6 +630,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         return_type: sam.ret.clone(),
         params: method_params,
         body: method_body,
+        annotations: Vec::new(),
         span,
     };
 

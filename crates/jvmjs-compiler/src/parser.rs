@@ -7,9 +7,9 @@
 //! problem, not just the first.
 
 use crate::ast::{
-    AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, ImportDecl,
-    InitBlock, LambdaBody, LambdaParam, Literal, LocalDeclarator, MethodDecl, Param, Stmt,
-    SwitchArm, TypeRef, UnaryOp,
+    Annotation, AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl,
+    ImportDecl, InitBlock, LambdaBody, LambdaParam, Literal, LocalDeclarator, MethodDecl, Param,
+    Stmt, SwitchArm, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -27,6 +27,7 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
         diagnostics: Vec::new(),
         anon_classes: Vec::new(),
         anon_counter: 0,
+        pending_annotations: Vec::new(),
     };
     let unit = parser.compilation_unit();
     (unit, parser.diagnostics)
@@ -143,6 +144,7 @@ struct Parser<'a> {
     /// Synthesized anonymous-class declarations, hoisted to top level.
     anon_classes: Vec<ClassDecl>,
     anon_counter: usize,
+    pending_annotations: Vec<Annotation>,
 }
 
 impl Parser<'_> {
@@ -344,6 +346,7 @@ impl Parser<'_> {
         if !self.eat_keyword(Keyword::Import) {
             return Err(Abort);
         }
+        let is_static = self.eat_keyword(Keyword::Static);
         let mut path = Vec::new();
         let mut wildcard = false;
         loop {
@@ -370,6 +373,7 @@ impl Parser<'_> {
         Ok(ImportDecl {
             path,
             wildcard,
+            is_static,
             span,
         })
     }
@@ -379,6 +383,7 @@ impl Parser<'_> {
     /// for now.
     fn modifiers(&mut self) -> Modifiers {
         let mut modifiers = Modifiers::default();
+        self.pending_annotations.clear();
         loop {
             match self.peek() {
                 Some(TokenKind::Keyword(Keyword::Public)) => {
@@ -415,15 +420,19 @@ impl Parser<'_> {
     /// this lets annotated code compile.
     fn skip_annotation(&mut self) {
         self.pos += 1; // '@'
-        // The annotation name (possibly dotted).
-        while matches!(self.peek(), Some(TokenKind::Identifier(_))) {
+        let mut name = String::new();
+        while let Some(TokenKind::Identifier(segment)) = self.peek() {
+            name.clone_from(segment);
             self.pos += 1;
             if !self.eat_symbol(".") {
                 break;
             }
         }
-        // Optional `( ... )` with balanced parens.
+        let mut int_arg = None;
         if self.at_symbol("(") {
+            if let Some(TokenKind::IntLiteral(value)) = self.peek_at(1) {
+                int_arg = i32::try_from(*value).ok();
+            }
             let mut depth = 0usize;
             loop {
                 match self.peek() {
@@ -440,6 +449,9 @@ impl Parser<'_> {
                 }
                 self.pos += 1;
             }
+        }
+        if !name.is_empty() {
+            self.pending_annotations.push(Annotation { name, int_arg });
         }
     }
 
@@ -675,6 +687,7 @@ impl Parser<'_> {
     fn member(&mut self, class_name: &str) -> Parsed<Member> {
         let start = self.here();
         let modifiers = self.modifiers();
+        let annotations = std::mem::take(&mut self.pending_annotations);
 
         // Nested type declaration: `class`/`interface`/`enum`.
         if matches!(
@@ -721,6 +734,7 @@ impl Parser<'_> {
                 return_type: TypeRef::Void,
                 params,
                 body: body.unwrap_or_default(),
+                annotations: annotations.clone(),
                 span: SourceSpan {
                     start: start.start,
                     end: name_span.end,
@@ -782,6 +796,7 @@ impl Parser<'_> {
             return_type: member_type,
             params,
             body: body.unwrap_or_default(),
+            annotations,
             span: SourceSpan {
                 start: start.start,
                 end: name_span.end,
@@ -2666,6 +2681,7 @@ fn desugar_enum(
             return_type: TypeRef::Void,
             params: lead_params(),
             body: store_stmts(),
+            annotations: Vec::new(),
             span: zero,
         });
     }
@@ -2723,6 +2739,7 @@ fn desugar_enum(
                 value: Some(values_body),
                 span: zero,
             }],
+            annotations: Vec::new(),
             span: zero,
         });
     }
@@ -2792,6 +2809,7 @@ fn desugar_enum(
                 is_varargs: false,
             }],
             body: vec![for_each, throw],
+            annotations: Vec::new(),
             span: zero,
         });
     }
@@ -3121,6 +3139,7 @@ fn simple_return_method(
             value: Some(value),
             span,
         }],
+        annotations: Vec::new(),
         span,
     }
 }

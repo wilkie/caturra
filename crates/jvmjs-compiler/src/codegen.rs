@@ -163,6 +163,7 @@ fn emit_class(
             return_type: TypeRef::Void,
             params: Vec::new(),
             body: Vec::new(),
+            annotations: Vec::new(),
             span: decl.span,
         };
         let compiled = emit_method(
@@ -401,6 +402,13 @@ struct MethodTable {
     /// The synthetic `java.lang.Object` top type (every reference type
     /// is a subtype). Type parameters erase to it.
     object_id: ClassId,
+    /// Class names brought in by `import static X.*` (e.g. `JUnit`
+    /// `Assertions`) — unqualified calls fall back to their statics.
+    static_imports: Vec<String>,
+    /// Validation ("Test") mode: private-access checks are relaxed so a
+    /// `JUnit` validator can reach the student's internals. Set when a
+    /// source imports `org.junit`.
+    relax_access: bool,
 }
 
 /// Outcome of static overload resolution (JLS §15.12.2, without boxing
@@ -421,10 +429,30 @@ impl MethodTable {
     fn build(units: &[(String, CompilationUnit)], diagnostics: &mut Vec<Diagnostic>) -> Self {
         // Pass 1: class names get ids so member types can refer to any
         // class regardless of declaration order.
+        // Static imports (`import static X.*`) and validation mode.
+        let mut static_imports = Vec::new();
+        let mut relax_access = false;
+        for (_, unit) in units {
+            for import in &unit.imports {
+                if import.path.first().map(String::as_str) == Some("org")
+                    && import.path.get(1).map(String::as_str) == Some("junit")
+                {
+                    relax_access = true;
+                }
+                if import.is_static
+                    && import.wildcard
+                    && let Some(class) = import.path.last()
+                {
+                    static_imports.push(class.clone());
+                }
+            }
+        }
         let mut table = Self {
             class_names: Vec::new(),
             classes: std::collections::HashMap::new(),
             object_id: ClassId(0),
+            static_imports,
+            relax_access,
         };
         // The synthetic top type: `Object`. It carries the universal
         // methods; user classes are registered as its subtypes.
@@ -5039,7 +5067,7 @@ impl BodyGen<'_> {
             return None;
         };
         let field = field.clone();
-        if field.is_private && owner != self.current_class_id {
+        if field.is_private && owner != self.current_class_id && !self.table.relax_access {
             self.error(
                 span,
                 format!(
@@ -5243,7 +5271,7 @@ impl BodyGen<'_> {
                 return JType::Error;
             }
         };
-        if sig.is_private && class_id != self.current_class_id {
+        if sig.is_private && class_id != self.current_class_id && !self.table.relax_access {
             self.error(
                 span,
                 format!("{class_name}() has private access in {class_name}"),
@@ -5894,7 +5922,7 @@ impl BodyGen<'_> {
                 return None;
             }
         };
-        if sig.is_private && class_id != self.current_class_id {
+        if sig.is_private && class_id != self.current_class_id && !self.table.relax_access {
             self.error(
                 span,
                 format!("{method}() has private access in {class_name}"),
@@ -6412,10 +6440,20 @@ impl BodyGen<'_> {
         // Peek resolution to decide static vs instance dispatch.
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         let table = self.table;
-        let is_instance = matches!(
-            table.resolve(self.current_class, method, &arg_types),
-            Resolution::Found(sig) if !sig.is_static
-        );
+        let own = table.resolve(self.current_class, method, &arg_types);
+        let is_instance = matches!(&own, Resolution::Found(sig) if !sig.is_static);
+        // Unqualified call to a `import static X.*` member (JUnit
+        // `assertTrue(...)` → `Assertions.assertTrue(...)`).
+        if !matches!(own, Resolution::Found(_)) {
+            for class in self.table.static_imports.clone() {
+                if matches!(
+                    self.table.resolve(&class, method, &arg_types),
+                    Resolution::Found(sig) if sig.is_static
+                ) {
+                    return self.static_call(&class, method, args, span);
+                }
+            }
+        }
         if is_instance {
             if self.in_static {
                 self.error(
