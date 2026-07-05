@@ -330,9 +330,10 @@ struct JsConsole<'a> {
     stdout: &'a js_sys::Function,
     stderr: &'a js_sys::Function,
     stdin: Option<&'a js_sys::Function>,
-    /// Buffer for an active `SystemOutTestRunner` capture (the JS console
-    /// streams, so capture needs its own buffer). `None` when not capturing.
-    capture: Option<Vec<u8>>,
+    /// Per-call captured messages for an active `SystemOutTestRunner` run
+    /// (the JS console streams, so capture needs its own buffer). `None`
+    /// when not capturing.
+    capture: Option<Vec<String>>,
 }
 
 impl ConsoleIo for JsConsole<'_> {
@@ -343,12 +344,6 @@ impl ConsoleIo for JsConsole<'_> {
     }
 
     fn stdout(&mut self, bytes: &[u8]) {
-        // While capturing (SystemOutTestRunner), standard out is redirected to
-        // the buffer only — not echoed to the page, matching System.setOut.
-        if let Some(buf) = &mut self.capture {
-            buf.extend_from_slice(bytes);
-            return;
-        }
         let text = JsValue::from_str(&String::from_utf8_lossy(bytes));
         let _ = self.stdout.call1(&JsValue::NULL, &text);
     }
@@ -367,11 +362,18 @@ impl ConsoleIo for JsConsole<'_> {
         self.capture = Some(Vec::new());
     }
 
-    fn take_capture(&mut self) -> String {
-        self.capture
-            .take()
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default()
+    fn capturing(&self) -> bool {
+        self.capture.is_some()
+    }
+
+    fn capture_message(&mut self, text: &str) {
+        if let Some(messages) = &mut self.capture {
+            messages.push(text.to_owned());
+        }
+    }
+
+    fn take_capture(&mut self) -> Vec<String> {
+        self.capture.take().unwrap_or_default()
     }
 }
 

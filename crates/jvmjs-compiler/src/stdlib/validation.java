@@ -118,19 +118,19 @@ class ValidationHelper {
 }
 
 class SystemOutTestRunner {
-  // Run the student's main and return the lines it printed to System.out,
-  // in order (blank lines dropped, matching javabuilder's tracker).
+  // Run the student's main and return one entry per System.out print/println
+  // call, in order (blank messages dropped, matching javabuilder's tracker).
   public static java.util.ArrayList<String> run() {
     System.__captureStart();
     Main.main(new String[] {});
-    String out = System.__captureEnd();
-    java.util.ArrayList<String> lines = new java.util.ArrayList<String>();
-    for (String line : out.split("\n")) {
-      if (line.length() > 0) {
-        lines.add(line);
+    String[] messages = System.__captureEnd();
+    java.util.ArrayList<String> result = new java.util.ArrayList<String>();
+    for (String message : messages) {
+      if (message.length() > 0) {
+        result.add(message);
       }
     }
-    return lines;
+    return result;
   }
 }
 

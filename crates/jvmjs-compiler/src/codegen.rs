@@ -3529,9 +3529,9 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
     bm("currentTimeMillis", &[], BRet::Long, "()J"),
     bm("nanoTime", &[], BRet::Long, "()J"),
     // Internal standard-out capture, used only by the bundled
-    // SystemOutTestRunner (org.code.validation).
+    // SystemOutTestRunner (org.code.validation): one String per print/println.
     bm("__captureStart", &[], BRet::Void, "()V"),
-    bm("__captureEnd", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("__captureEnd", &[], BRet::StrArray, "()[Ljava/lang/String;"),
 ];
 
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[

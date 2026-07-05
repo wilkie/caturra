@@ -272,14 +272,21 @@ pub fn invoke_virtual(
         }
         (HeapObject::PrintStream(stream), "print" | "println") => {
             let stream = *stream;
-            let mut text = print_argument_text(heap, descriptor, args)?;
-            if method == "println" {
-                text.push('\n');
-            }
-            let bytes = text.as_bytes();
-            match stream {
-                StdStream::Out => console.stdout(bytes),
-                StdStream::Err => console.stderr(bytes),
+            let text = print_argument_text(heap, descriptor, args)?;
+            // While `SystemOutTestRunner` is capturing, each print/println call
+            // on `System.out` is one message (the argument, without the
+            // println newline) — matching javabuilder's per-call messages.
+            if stream == StdStream::Out && console.capturing() {
+                console.capture_message(&text);
+            } else {
+                let mut out = text;
+                if method == "println" {
+                    out.push('\n');
+                }
+                match stream {
+                    StdStream::Out => console.stdout(out.as_bytes()),
+                    StdStream::Err => console.stderr(out.as_bytes()),
+                }
             }
             Ok(None)
         }
@@ -1810,8 +1817,14 @@ pub fn invoke_static(
                 Ok(None)
             }
             "__captureEnd" => {
-                let text = console.take_capture();
-                Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+                let messages = console.take_capture();
+                let refs: Vec<JValue> = messages
+                    .iter()
+                    .map(|m| JValue::Ref(Some(heap.alloc_string(m))))
+                    .collect();
+                Ok(Some(JValue::Ref(Some(
+                    heap.alloc(HeapObject::RefArray(refs)),
+                ))))
             }
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },

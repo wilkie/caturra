@@ -23,15 +23,25 @@ pub trait ConsoleIo {
     /// Returns `None` at end of input.
     fn read_line(&mut self) -> Option<String>;
 
-    /// Start capturing standard-out text (for `SystemOutTestRunner`, which
-    /// runs the student's `main` and inspects what it printed). Output is
-    /// still delivered normally. Default: no capture.
+    /// Start capturing standard-out messages (for `SystemOutTestRunner`,
+    /// which runs the student's `main` and inspects what it printed). While
+    /// capturing, standard out is redirected here (`System.setOut` semantics)
+    /// — one message per `print`/`println` call, matching javabuilder's
+    /// per-call `SYSTEM_OUT` messages. Default: no capture.
     fn begin_capture(&mut self) {}
 
-    /// Stop capturing and return the text written to standard out since
-    /// [`begin_capture`](ConsoleIo::begin_capture).
-    fn take_capture(&mut self) -> String {
-        String::new()
+    /// Whether a capture is active (a `print`/`println` should be recorded as
+    /// a message rather than written out).
+    fn capturing(&self) -> bool {
+        false
+    }
+
+    /// Record one `print`/`println` call's text as a captured message.
+    fn capture_message(&mut self, _text: &str) {}
+
+    /// Stop capturing and return the recorded messages, in order.
+    fn take_capture(&mut self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -43,9 +53,9 @@ pub struct BufferedConsole {
     stderr: Vec<u8>,
     input: Vec<String>,
     next_input: usize,
-    /// When `Some`, standard out is redirected here instead of `stdout`
+    /// When `Some`, standard out is redirected into these per-call messages
     /// (`System.setOut` semantics for `SystemOutTestRunner`).
-    capture: Option<Vec<u8>>,
+    capture: Option<Vec<String>>,
 }
 
 impl BufferedConsole {
@@ -78,11 +88,7 @@ impl BufferedConsole {
 
 impl ConsoleIo for BufferedConsole {
     fn stdout(&mut self, bytes: &[u8]) {
-        if let Some(buf) = &mut self.capture {
-            buf.extend_from_slice(bytes);
-        } else {
-            self.stdout.extend_from_slice(bytes);
-        }
+        self.stdout.extend_from_slice(bytes);
     }
 
     fn stderr(&mut self, bytes: &[u8]) {
@@ -93,11 +99,18 @@ impl ConsoleIo for BufferedConsole {
         self.capture = Some(Vec::new());
     }
 
-    fn take_capture(&mut self) -> String {
-        self.capture
-            .take()
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default()
+    fn capturing(&self) -> bool {
+        self.capture.is_some()
+    }
+
+    fn capture_message(&mut self, text: &str) {
+        if let Some(messages) = &mut self.capture {
+            messages.push(text.to_owned());
+        }
+    }
+
+    fn take_capture(&mut self) -> Vec<String> {
+        self.capture.take().unwrap_or_default()
     }
 
     fn read_line(&mut self) -> Option<String> {
