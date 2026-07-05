@@ -2304,6 +2304,32 @@ export const CSA_UNITS: CsaUnit[] = [
         validationFiles: [],
       },
       {
+        name: 'Predict and Run: Variables',
+        lesson: 'Lesson 8: Variables',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    int score = 125;\n    double temperature = 89.3;\n    boolean status = true;\n    String helloGreeting = "Hello World";\n    String welcomeGreeting = new String("Welcome to Java");\n\n    System.out.println("score: " + score);\n    System.out.println("temperature: " + temperature);\n    System.out.println("status: " + status);\n    System.out.println("helloGreeting: " + helloGreeting);\n    System.out.println("welcomeGreeting: " + welcomeGreeting);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n\n\n\n    \n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
+        name: 'Investigate and Modify: Variables',
+        lesson: 'Lesson 8: Variables',
+        view: 'console',
+        grid: '',
+        files: [
+          {
+            path: 'Main.java',
+            text: 'public class Main {\n  public static void main(String[] args) {\n\n    int score = 125;\n    double temperature = 89.3;\n    boolean status = true;\n    String helloGreeting = "Hello World";\n    String welcomeGreeting = new String("Welcome to Java");\n\n    System.out.println("score: " + score);\n    System.out.println("temperature: " + temperature);\n    System.out.println("status: " + status);\n    System.out.println("helloGreeting: " + helloGreeting);\n    System.out.println("welcomeGreeting: " + welcomeGreeting);\n\n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n\n\n\n    \n    \n  }\n}',
+          },
+        ],
+        validationFiles: [],
+      },
+      {
         name: 'Predict and Run: Accessor Methods',
         lesson: 'Lesson 9: Accessor Methods',
         view: 'console',
