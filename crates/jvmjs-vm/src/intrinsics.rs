@@ -128,8 +128,9 @@ pub fn invoke_special(
         ("<init>", "(Ljava/lang/String;)V") => {
             let text = string_arg(heap, &args[0])?;
             match heap.get_mut(receiver) {
-                // `new String(String)`: a fresh copy with the same chars.
-                Some(HeapObject::JavaString(units)) => {
+                // `new String(String)` / `new StringBuilder(String)`: seed
+                // with a fresh copy of the chars (both store UTF-16 units).
+                Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
                     *units = text.encode_utf16().collect();
                     Ok(())
                 }
@@ -308,6 +309,21 @@ pub fn invoke_virtual(
             let units = units.clone();
             let text = heap.alloc(HeapObject::JavaString(units));
             Ok(Some(JValue::Ref(Some(text))))
+        }
+        (HeapObject::StringBuilder(units), "length") => Ok(Some(JValue::Int(
+            i32::try_from(units.len()).unwrap_or(i32::MAX),
+        ))),
+        (HeapObject::StringBuilder(units), "charAt") => {
+            let index = match args.first() {
+                Some(JValue::Int(i)) => usize::try_from(*i).unwrap_or(usize::MAX),
+                _ => usize::MAX,
+            };
+            match units.get(index) {
+                Some(unit) => Ok(Some(JValue::Int(i32::from(*unit)))),
+                None => Err(VmError::UncaughtException(format!(
+                    "java.lang.StringIndexOutOfBoundsException: index {index}"
+                ))),
+            }
         }
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),

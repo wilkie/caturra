@@ -5758,6 +5758,864 @@ export const CSA_UNITS: CsaUnit[] = [
     ],
   },
   {
+    name: 'CSA 2025 Unit 5',
+    levels: [
+      {
+        name: 'Predict and Run: 2D Arrays',
+        lesson: 'Lesson 1: Two-Dimensional (2D) Arrays',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    int[][] augustGrades = { {85, 90, 78},\n                             {92, 87, 80},\n                             {76, 89, 97} };\n\n    Teacher msHamilton = new Teacher(augustGrades);\n\n    System.out.println(\"\\nPrint First Row:\");\n    System.out.println(msHamilton.getStudentGrades(0));\n\n    System.out.println(\"\\nPrint Second Row:\");\n    System.out.println(msHamilton.getStudentGrades(1));\n\n    System.out.println(\"\\nPrint Third Row:\");\n    System.out.println(msHamilton.getStudentGrades(2));\n  }\n}" },
+          { path: 'Teacher.java', text: "public class Teacher {\n\n  private int[][] weeklyGrades;\n\n  public Teacher(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int[][] getWeeklyGrades() {\n    return weeklyGrades;\n  }\n\n  public void setWeeklyGrades(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int getGrade(int row, int col) {\n    return weeklyGrades[row][col];\n  }\n\n  public void setGrade(int row, int col, int newValue) {\n    weeklyGrades[row][col] = newValue;\n  }\n\n  public String getStudentGrades(int week) {\n    String result = \"\";\n    \n    for (int index = 0; index < weeklyGrades[week].length; index++) {\n      result += weeklyGrades[week][index] + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Skill Building: Creating 2D Arrays (a)',
+        lesson: 'Lesson 1: Two-Dimensional (2D) Arrays',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a SocialMedia object\n    SocialMedia analyst = new SocialMedia();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 2D array to store the array returned from calling the\n     * setupData() method, then print the contents of the 2D array using the\n     * dataToString() method in the SocialMedia class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'SocialMedia.java', text: "/*\n * Manages data about users on social media services\n */\npublic class SocialMedia {\n\n  private int[][] numUsers;    // The 2D array containing the number of users for each service\n\n  /*\n   * Uses the setupData() method to initialize the 2D array numUsers\n   */\n  public SocialMedia() {\n    this.numUsers = setupData();\n  }\n\n  /*\n   * Returns the 2D array containing the number\n   * of users for each social media service\n   */\n  public int[][] getNumUsers() {\n    return numUsers;\n  }\n\n  /*\n   * Declares, initializes, and returns a 2D int array\n   */\n  public int[][] setupData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create and return a 2D array that has 3 columns and 4 rows.\n     * -----------------------------------------------------------------------------\n     */\n\n        \n    return null;\n  }\n\n  /*\n   * Returns a String containing the contents of the 2D array data\n   */\n  public String dataToString(int[][] data) {\n    String result = \"\";\n\n    for (int row = 0; row < data.length; row++) {\n      for (int col = 0; col < data[0].length; col++) {\n        result += data[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Skill Building: Creating 2D Arrays (b)',
+        lesson: 'Lesson 1: Two-Dimensional (2D) Arrays',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a CarAccidents object\n    CarAccidents safety = new CarAccidents();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 2D array to store the array returned from calling the\n     * setupData() method, then print the contents of the 2D array using the\n     * dataToString() method in the CarAccidents class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'CarAccidents.java', text: "/*\n * Manages data about car accidents\n */\npublic class CarAccidents {\n\n  private int[][] accidents;    // The 2D array containing the number of major car accidents\n\n  /*\n   * Uses the setupData() method to initialize the 2D array accidents\n   */\n  public CarAccidents() {\n    this.accidents = setupData();\n  }\n\n  /*\n   * Returns the 2D array containing the number of major car accidents\n   */\n  public int[][] getAccidents() {\n    return accidents;\n  }\n\n  /*\n   * Declares, initializes, and returns a 2D int array\n   */\n  public int[][] setupData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create and return a 2D array that has 5 columns and 3 rows.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    return null;\n  }\n\n  /*\n   * Returns a String containing the contents of the 2D array data\n   */\n  public String dataToString(int[][] data) {\n    String result = \"\";\n\n    for (int row = 0; row < data.length; row++) {\n      for (int col = 0; col < data[0].length; col++) {\n        result += data[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Skill Building: Creating 2D Arrays (c)',
+        lesson: 'Lesson 1: Two-Dimensional (2D) Arrays',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Teacher object\n    Teacher msCook = new Teacher();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 2D array to store the array returned from calling the\n     * setupData() method, then print the contents of the 2D array using the\n     * dataToString() method in the Teacher class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Teacher.java', text: "/*\n * Manages data about student test scores\n */\npublic class Teacher {\n\n  private int[][] scores;    // The 2D array containing test scores\n\n  /*\n   * Uses the setupData() method to initialize the 2D array scores\n   */\n  public Teacher() {\n    this.scores = setupData();\n  }\n\n  /*\n   * Returns the 2D array containing the test scores\n   */\n  public int[][] getScores() {\n    return scores;\n  }\n\n  /*\n   * Declares, initializes, and returns a 2D int array\n   */\n  public int[][] setupData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create and return a 2D array that has 3 columns and 5 rows.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    return null;\n  }\n\n  /*\n   * Returns a String containing the contents of the 2D array data\n   */\n  public String dataToString(int[][] data) {\n    String result = \"\";\n\n    for (int row = 0; row < data.length; row++) {\n      for (int col = 0; col < data[0].length; col++) {\n        result += data[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Skill Building: Creating 2D Arrays (d)',
+        lesson: 'Lesson 1: Two-Dimensional (2D) Arrays',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Researcher object\n    Researcher data = new Researcher();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 2D array to store the array returned from calling the\n     * setupData() method, then print the contents of the 2D array using the\n     * dataToString() method in the Researcher class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Researcher.java', text: "/*\n * Manages data from the World Happiness Report\n */\npublic class Researcher {\n\n  private double[][] happiness;    // The 2D array containing the data from the World Happiness Report\n\n  /*\n   * Uses the setupData() method to initialize the 2D array happiness\n   */\n  public Researcher() {\n    this.happiness = setupData();\n  }\n\n  /*\n   * Returns the 2D array containing World Happiness Report data\n   */\n  public double[][] getHappiness() {\n    return happiness;\n  }\n\n  /*\n   * Declares, initializes, and returns a 2D double array\n   */\n  public double[][] setupData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create and return a 2D array that has 4 columns and 6 rows.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    return null;\n  }\n\n  /*\n   * Returns a String containing the contents of the 2D array data\n   */\n  public String dataToString(double[][] data) {\n    String result = \"\";\n\n    for (int row = 0; row < data.length; row++) {\n      for (int col = 0; col < data[0].length; col++) {\n        result += data[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Skill Building: Using Initializer Lists (a)',
+        lesson: 'Lesson 1: Two-Dimensional (2D) Arrays',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Researcher object\n    Researcher analyst = new Researcher();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 2D array to store the array returned from calling the\n     * setupData() method, then print the contents of the 2D array using the\n     * dataToString() method in the Researcher class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Researcher.java', text: "/*\n * Manages data about the cost of living in countries\n */\npublic class Researcher {\n\n  private double[][] livingCost;    // The 2D array containing the cost of living index for each country\n\n  /*\n   * Uses the setupData() method to initialize the 2D array happiness\n   */\n  public Researcher() {\n    this.livingCost = setupData();\n  }\n\n  /*\n   * Returns the 2D array containing the cost\n   * of living index for each country\n   */\n  public double[][] getLivingCost() {\n    return livingCost;\n  }\n\n  /*\n   * Declares, initializes, and returns a 2D double array\n   */\n  public double[][] setupData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create and return a 2D array containing the values for each country.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    return null;\n  }\n\n  /*\n   * Returns a String containing the contents of the 2D array data\n   */\n  public String dataToString(double[][] data) {\n    String result = \"\";\n\n    for (int row = 0; row < data.length; row++) {\n      for (int col = 0; col < data[0].length; col++) {\n        result += String.format(\"%-8.2f\", data[row][col]);\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Skill Building: Using Initializer Lists (b)',
+        lesson: 'Lesson 1: Two-Dimensional (2D) Arrays',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates an Owner object\n    Owner foodTruck = new Owner();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create a 2D array to store the array returned from calling the\n     * setupData() method, then print the contents of the 2D array using the\n     * dataToString() method in the Owner class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Owner.java', text: "/*\n * Manages data about the inventory for each food truck\n */\npublic class Owner {\n\n  private int[][] inventories;    // The 2D array containing the inventory for each food truck\n\n  /*\n   * Uses the setupData() method to initialize the 2D array happiness\n   */\n  public Owner() {\n    this.inventories = setupData();\n  }\n\n  /*\n   * Returns the 2D array containing\n   * inventories for each food truck\n   */\n  public int[][] getInventories() {\n    return inventories;\n  }\n\n  /*\n   * Declares, initializes, and returns a 2D int array\n   */\n  public int[][] setupData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Create and return a 2D array containing the values for each food truck.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    return null;\n  }\n\n  /*\n   * Returns a String containing the contents of the 2D array data\n   */\n  public String dataToString(int[][] data) {\n    String result = \"\";\n\n    for (int row = 0; row < data.length; row++) {\n      for (int col = 0; col < data[0].length; col++) {\n        result += String.format(\"%-4d\", data[row][col]);\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: 2D Array Elements',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Teacher.java', text: "/*\n * Represents a teacher\n */\npublic class Teacher {\n\n  private int[][] weeklyGrades;\n\n  public Teacher(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int[][] getWeeklyGrades() {\n    return weeklyGrades;\n  }\n\n  public void setWeeklyGrades(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int getGrade(int row, int col) {\n    return weeklyGrades[row][col];\n  }\n\n  public void setGrade(int row, int col, int newValue) {\n    weeklyGrades[row][col] = newValue;\n  }\n\n  public String getStudentGrades(int week) {\n    String result = \"\";\n    \n    for (int index = 0; index < weeklyGrades[week].length; index++) {\n      result += weeklyGrades[week][index] + \"\\n\";\n    }\n\n    return result;\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: 2D Array Elements #1',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    int[][] augustGrades = { {85, 90, 78}, \n                             {92, 87, 80}, \n                             {76, 89, 97} };\n\n    Teacher msHamilton = new Teacher(augustGrades);\n\n    int currentStudent = msHamilton.getGrade(1, 1);\n    System.out.println(currentStudent);\n\n    msHamilton.setGrade(1, 1, 100);\n\n    currentStudent = msHamilton.getGrade(1, 1);\n    System.out.println(currentStudent);\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n  }\n}" },
+          { path: 'Teacher.java', text: "/*\n * Represents a teacher\n */\npublic class Teacher {\n\n  private int[][] weeklyGrades;\n\n  public Teacher(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int[][] getWeeklyGrades() {\n    return weeklyGrades;\n  }\n\n  public void setWeeklyGrades(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int getGrade(int row, int col) {\n    return weeklyGrades[row][col];\n  }\n\n  public void setGrade(int row, int col, int newValue) {\n    weeklyGrades[row][col] = newValue;\n  }\n\n  public String getStudentGrades(int week) {\n    String result = \"\";\n    \n    for (int index = 0; index < weeklyGrades[week].length; index++) {\n      result += weeklyGrades[week][index] + \"\\n\";\n    }\n\n    return result;\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: 2D Array Elements #2',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Teacher.java', text: "/*\n * Represents a teacher\n */\npublic class Teacher {\n\n  private int[][] weeklyGrades;\n\n  public Teacher(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int[][] getWeeklyGrades() {\n    return weeklyGrades;\n  }\n\n  public void setWeeklyGrades(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int getGrade(int row, int col) {\n    return weeklyGrades[row][col];\n  }\n\n  public void setGrade(int row, int col, int newValue) {\n    weeklyGrades[row][col] = newValue;\n  }\n\n  public String getStudentGrades(int week) {\n    String result = \"\";\n    \n    for (int index = 0; index < weeklyGrades[week].length; index++) {\n      result += weeklyGrades[week][index] + \"\\n\";\n    }\n\n    return result;\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: 2D Array Elements #3',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    int[][] augustGrades = { {85, 90, 78}, {92, 87, 80}, {76, 89, 97} };\n\n    Teacher msHamilton = new Teacher(augustGrades);\n\n    int currentStudent = msHamilton.getGrade(1, 1);\n    System.out.println(currentStudent);\n\n    msHamilton.setGrade(1, 1, 100);\n\n    currentStudent = msHamilton.getGrade(1, 1);\n    System.out.println(currentStudent);\n\n    System.out.println(\"\\nPrint First Row:\");\n    System.out.println(msHamilton.getStudentGrades(0));\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n\n\n    \n    \n  }\n}" },
+          { path: 'Teacher.java', text: "/*\n * Represents a teacher\n */\npublic class Teacher {\n\n  private int[][] weeklyGrades;\n\n  public Teacher(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int[][] getWeeklyGrades() {\n    return weeklyGrades;\n  }\n\n  public void setWeeklyGrades(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  public int getGrade(int row, int col) {\n    return weeklyGrades[row][col];\n  }\n\n  public void setGrade(int row, int col, int newValue) {\n    weeklyGrades[row][col] = newValue;\n  }\n\n  public String getStudentGrades(int week) {\n    String result = \"\";\n    \n    for (int index = 0; index < weeklyGrades[week].length; index++) {\n      result += weeklyGrades[week][index] + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Elements (a)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of letters that make up a password\n    String[][] password = { {\"a\", \"l\", \"g\"},\n                            {\"o\", \"r\", \"i\"},\n                            {\"t\", \"h\", \"m\"} };\n\n    // Calls the Encryption object\n    Encryption encrypt = new Encryption(password);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the swapLetters() method, then print the updated 2D array using\n     * the passwordToString() method in the Encryption class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Encryption.java', text: "/*\n * Encrypts a password that is organized in a 2D array\n */\npublic class Encryption {\n\n  private String[][] letters;     // The 2D array of letters that make up the password\n\n  /*\n   * Initializes letters to the 2D array of letters\n   */\n  public Encryption(String[][] letters) {\n    this.letters = letters;\n  }\n\n  /*\n   * Returns the 2D array of letters\n   */\n  public String[][] getLetters() {\n    return letters;\n  }\n\n  /*\n   * Swaps the letter at row 0 column 0 with the letter at\n   * row 2 column 2 and swaps the letter at row 0 column 2\n   * with the letter at row 2 column 0\n   */\n  public void swapLetters() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Modify the 2D array letters by swapping the letter at [0, 0] with the\n     * letter at [2, 2], and swapping the letter at [0, 2] with the letter at [2, 0].\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n  }\n\n  /*\n   * Returns a String containing each letter in letters\n   */\n  public String passwordToString() {\n    String result = \"\";\n\n    for (int row = 0; row < letters.length; row++) {\n      for (int col = 0; col < letters[0].length; col++) {\n        result += letters[row][col];\n      }\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Elements (b)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of integers to represent a board\n    int[][] numbers = { {5, 9, 3, 1},\n                        {7, 2, 8, 6},\n                        {4, 0, 1, 9},\n                        {3, 5, 2, 8} };\n\n    // Creates a Game object\n    Game boardGame = new Game(numbers);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcScore() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Game.java', text: "/*\n * Represents a board game\n */\npublic class Game {\n\n  private int[][] board;    // The 2D array of integers that represent the board\n\n  /*\n   * Initializes board to the specified 2D array of integers\n   */\n  public Game(int[][] board) {\n    this.board = board;\n  }\n\n  /*\n   * Returns the 2D array board\n   */\n  public int[][] getBoard() {\n    return board;\n  }\n\n  /*\n   * Calculates and returns the sum of all four corners of the board\n   */\n  public int calcScore() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the sum of the four corners of the board.\n     * -----------------------------------------------------------------------------\n     */\n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Elements (c)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the number of views each day of the week\n    int[][] views = { {235, 189, 75, 212, 325},\n                      {417, 352, 287, 457, 316},\n                      {197, 428, 0, 208, 201},\n                      {270, 297, 174, 199, 167},\n                      {117, 241, 308, 155, 278} };\n\n    // Creates a Video object\n    Video content = new Video(views);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the fillMissingData() method and print the updated 2D array using\n     * the viewsToString() method in the Video class.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Video.java', text: "/*\n * Represents a video on a streaming video service\n */\npublic class Video {\n\n  private int[][] dailyViews;       // The 2D array containing the number of views each day of the week\n\n  /*\n   * Initializes dailyViews to the specified 2D array of views\n   */\n  public Video(int[][] dailyViews) {\n    this.dailyViews = dailyViews;\n  }\n\n  /*\n   * Returns the 2D array dailyViews\n   */\n  public int[][] getDailyViews() {\n    return dailyViews;\n  }\n\n  /*\n   * Replaces the center element in dailyViews with the\n   * average of the element above and below the center\n   * element and to the left and right of the center\n   */\n  public void fillMissingData() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Set the middle element to the average of the elements above and below the\n     * middle element and the elements to the left and right of the middle element.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n  }\n\n  /*\n   * Returns a String containing the values in dailyViews\n   */\n  public String viewsToString() {\n    String result = \"\";\n\n    for (int row = 0; row < dailyViews.length; row++) {\n      result += \"Week \" + (row + 1) + \": \";\n      \n      for (int col = 0; col < dailyViews[0].length; col++) {\n        result += String.format(\"%-4d\", dailyViews[row][col]);\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Elements (d)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the number of floors for each land plot\n    int[][] floors = {{1, 2, 2},\n                      {2, 5, 1},\n                      {3, 1, 2}};\n\n    // Creates a Community object\n    Community downtown = new Community(floors);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the swapFloors() method, and print the updated 2D array using the\n     * landToString() method in the Community class. Then call the setCommunityCenter()\n     * method and print the updated 2D array using the landToString() method.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Community.java', text: "/*\n * Represents a community\n */\npublic class Community {\n\n  private int[][] landPlots;     // The 2D array containing the number of floors at each land plot\n\n  /*\n   * Initializes landPlots to the specified 2D array of land plots\n   */\n  public Community(int[][] landPlots) {\n    this.landPlots = landPlots;\n  }\n\n  /*\n   * Returns the 2D array of land plots\n   */\n  public int[][] getLandPlots() {\n    return landPlots;\n  }\n\n  /*\n   * Swaps the values in the first and last positions of\n   * the first row in the 2D array landPlots\n   */\n  public void swapFloors() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Swap the first and last elements of the first row in landPlots.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n  }\n\n  /*\n   * Gets the sum of the first building in the first row and\n   * the last building in the last row and assigns the result\n   * to the center position of the 2D array landPlots\n   */\n  public void setCommunityCenter() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Set the center element in landPlots to the sum of the first element in\n     * the first row and the last element in the last row.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n  }\n\n  /*\n   * Returns a String containing the number of floors for each\n   * land plot in the 2D array landPlots\n   */\n  public String landToString() {\n    String result = \"\";\n\n    for (int row = 0; row < landPlots.length; row++) {\n      for (int col = 0; col < landPlots[0].length; col++) {\n        result += String.format(\"%-4d\", landPlots[row][col]);\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Creating and Using 2D Arrays (a)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of Pet objects\n    Pet[][] pets = { {new Pet(\"Dog\", 2), new Pet(\"Dog\", 5), new Pet(\"Dog\", 8)},\n                     {new Pet(\"Hamster\", 1), new Pet(\"Hamster\", 2), new Pet(\"Hamster\", 3)},\n                     {new Pet(\"Bird\", 5), new Pet(\"Bird\", 7), new Pet(\"Bird\", 12)} };\n\n    // Creates an Adoption object\n    Adoption petAdoptions = new Adoption(pets);\n\n    // Prints the Adoption object\n    System.out.println(petAdoptions);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the reversePets() method, then print the Adoption object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Adoption.java', text: "/*\n * Represents a pet adoption center\n */\npublic class Adoption {\n\n  private Pet[][] pets;      // The 2D array of Pet objects\n\n  /*\n   * Initializes pets to the specified 2D array of Pet objects\n   */\n  public Adoption(Pet[][] pets) {\n    this.pets = pets;\n  }\n\n  /*\n   * Returns the 2D array of Pet objects\n   */\n  public Pet[][] getPets() {\n    return pets;\n  }\n\n  /*\n   * Reverses the row located at index by swapping the first\n   * and last elements in the row\n   */\n  public void reversePets(int index) {\n    /* ----------------------------------------- TO DO -----------------------------------------\n     * \u2705 Reverse the row located at the parameter index by swapping the first and last elements.\n     * -----------------------------------------------------------------------------------------\n     */\n\n\n    \n  }\n\n  /*\n   * Returns a String containing the information for\n   * each Pet object in the 2D array pets\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (int row = 0; row < pets.length; row++) {\n      for (int col = 0; col < pets[0].length; col++) {\n        result += pets[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Pet.java', text: "/*\n * Represents a pet\n */\npublic class Pet {\n\n  private String type;    // The type of a pet\n  private int age;       // The age of a pet\n\n  /*\n   * Sets type and age to the specified values\n   */\n  public Pet(String type, int age) {\n    this.type = type;\n    this.age = age;\n  }\n\n  /*\n   * Returns the type of the pet\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Returns the age of the pet\n   */\n  public int getAge() {\n    return age;\n  }\n\n  /*\n   * Returns a String containing the type\n   * and age of the pet\n   */\n  public String toString() {\n    return type + \": \" + age;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Creating and Using 2D Arrays (b)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of daily profits\n    double[][] profits = { {234.50, 1567.80, -350.25, 890.10},\n                           {2345.67, -1200.00, 450.50, 1234.56} };\n\n    // Creates an Owner object\n    Owner foodTruck = new Owner(profits);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcDifference() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Owner.java', text: "/*\n * Represents an owner of a food truck\n */\npublic class Owner {\n\n  private double[][] profits;     // The 2D array containing the daily profits each week\n\n  /*\n   * Initializes profits to the specified 2D array of daily profits\n   */\n  public Owner(double[][] profits) {\n    this.profits = profits;\n  }\n\n  /*\n   * Returns the 2D array of daily profits\n   */\n  public double[][] getProfits() {\n    return profits;\n  }\n\n  /*\n   * Returns the difference between the total profits the\n   * first week and the total profits the second week\n   */\n  public double calcDifference() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate the sum of the elements in the first row and the sum of the\n     * elements in the second row, and return the difference between the two.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Creating and Using 2D Arrays (c)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the costt of living index for multiple countries\n    double[][] values = { {70.22, 84.12, 74.13},\n                          {24.43, 66.47, 77.03},\n                          {70.13, 30.71, 69.65} };\n\n    // Creates a Research object\n    Research analyst = new Research(values);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverage() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Research.java', text: "/*\n * Analyzes data about the cost of living in different countries\n */\npublic class Research {\n\n  private double[][] costOfLiving;     // The 2D array containing the cost of living index for multiple countries\n\n  /*\n   * Initializes costOfLiving to the specified 2D array containing\n   * the cost of living index for multiple countries\n   */\n  public Research(double[][] costOfLiving) {\n    this.costOfLiving = costOfLiving;\n  }\n\n  /*\n   * Returns the costOfLiving 2D array\n   */\n  public double[][] getCostOfLiving() {\n    return costOfLiving;\n  }\n\n  /*\n   * Calculates and return the average of the column\n   * at the parameter columnIndex\n   */\n  public double calcAverage(int columnIndex) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Add each element in the column columnIndex, divide by the length \n     *    of the column, and return the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    return -1;\n  }\n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Creating and Using 2D Arrays (d)',
+        lesson: 'Lesson 2: 2D Array Elements',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of weekly tasks\n    String[][] weeklyTasks = { {\"Read chapter in a textbook and take notes\", \"Complete a math worksheet\"},\n                               {\"Write research paper\", \"Participate in a group presentation\"},\n                               {\"Create flashcards to study for test\", \"Work on a coding project\"} };\n\n    // Creates a Student object\n    Student maria = new Student(weeklyTasks);\n\n    // Prints the Student object\n    System.out.println(maria);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the swapWeeks() method, then print the updated Student object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Student.java', text: "/*\n * Represents a student\n */\npublic class Student {\n\n  private String[][] tasks;   // The 2D array of weekly tasks\n\n  /*\n   * Initializes tasks to the specified 2D array of weekly tasks\n   */\n  public Student(String[][] tasks) {\n    this.tasks = tasks;\n  }\n\n  /*\n   * Returns the 2D array of weekly tasks\n   */\n  public String[][] getTasks() {\n    return tasks;\n  }\n\n  /*\n   * Swaps the first and last rows of tasks\n   */\n  public void swapWeeks() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Swap the first and last rows of the 2D array tasks.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n  }\n\n  /*\n   * Returns a String containing each task in tasks\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (int row = 0; row < tasks.length; row++) {\n      result += \"Week \" + (row + 1) + \": \";\n      \n      for (int col = 0; col < tasks[0].length; col++) {\n        result += tasks[row][col] + \", \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Nested Loops and 2D Arrays',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    int[][] weeklyGrades = { {85, 90, 78, 91}, {92, 87, 80, 95}, {76, 89, 97, 93} };\n\n    Teacher msMitchell = new Teacher(weeklyGrades);\n\n    System.out.println(msMitchell.getGrades());\n    \n  }\n}" },
+          { path: 'Teacher.java', text: "/*\n * Represents a teacher that manages weekly grades for students\n */\npublic class Teacher {\n\n  private int[][] weeklyGrades;    // Stores the weekly grades for the teacher's students\n\n  /*\n   * Constructor to create a Teacher object with\n   * the specified 2D array of weekly student grades\n   */\n  public Teacher(int[][] weeklyGrades) {\n    this.weeklyGrades = weeklyGrades;\n  }\n\n  /*\n   * Returns the 2D array of weekly student grades\n   */\n  public int[][] getWeeklyGrades() {\n    return weeklyGrades;\n  }\n\n  /*\n   * Returns a String containing the values in the weeklyGrades array\n   */\n  public String getGrades() {\n    String result = \"\";\n    \n    for (int row = 0; row < weeklyGrades.length; row++) {\n      for (int col = 0; col < weeklyGrades[0].length; col++) {\n        result += weeklyGrades[row][col] + \" \";\n      }\n      result += \"\\n\";\n  }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (a) #1',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of number of ratings received for several movies\n    int[][] dailyRatings = { {43, 68, 112, 29},\n                             {85, 76, 91, 54},\n                             {39, 121, 72, 93},\n                             {56, 81, 98, 65} };\n\n    // Creates a Streaming object\n    Streaming movies = new Streaming(dailyRatings);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcTotalRatings() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Streaming.java', text: "/*\n * Represents a movie streaming platform\n */\npublic class Streaming {\n\n  private int[][] ratings;      // The 2D array of the number of ratings received for several movies\n\n  /*\n   * Initializes ratings to the specified 2D array of the number of ratings received\n   */\n  public Streaming(int[][] ratings) {\n    this.ratings = ratings;\n  }\n\n  /*\n   * Returns the 2D array ratings\n   */\n  public int[][] getRatings() {\n    return ratings;\n  }\n\n  /*\n   * Returns the total ratings received\n   */\n  public int calcTotalRatings() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array ratings in row-major order. Calculate and return\n     * the sum of all the values in ratings.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (b) #1',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of the sales for multiple departments each day\n    double[][] salesData = { {1500.50, 1600.75, 1200.25, 1400.90, 1700.25, 1800.50, 1900.75},\n                             {1000.25, 900.50, 1100.75, 1200.90, 1000.25, 800.75, 900.50},\n                             {800.90, 700.25, 600.50, 500.75, 400.25, 300.90, 200.50},\n                             {2000.75, 1900.50, 1800.25, 1700.90, 2000.50, 2100.75, 2200.25},\n                             {3500.25, 3200.90, 2800.50, 3100.75, 4000.25, 4200.50, 4500.75} };\n\n    // Creates a Store object\n    Store deptStore = new Store(salesData);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcTotalSales() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Store.java', text: "/*\n * Represents a department store\n */\npublic class Store {\n\n  private double[][] sales;       // The 2D array containing the sales for each department in a week\n\n  /*\n   * Initializes sales to the specified 2D array of sales\n   */\n  public Store(double[][] sales) {\n    this.sales = sales;\n  }\n\n  /*\n   * Returns the 2D array sales\n   */\n  public double[][] getSales() {\n    return sales;\n  }\n\n  /*\n   * Returns the total sales\n   */\n  public double calcTotalSales() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array sales in row-major order. Calculate and return\n     * the sum of all the values in sales.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (c) #1',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of points scored by several teams\n    int[][] pointsData = { {85, 90, 75, 80, 95, 88, 92},\n                           {70, 75, 80, 85, 90, 95, 100},\n                           {95, 85, 90, 87, 92, 80, 85},\n                           {80, 85, 75, 78, 87, 90, 92},\n                           {90, 95, 85, 88, 93, 80, 85} };\n\n    // Creates a League object\n    League sports = new League(pointsData);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcTotalScores() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n \n  }\n}" },
+          { path: 'League.java', text: "/*\n * Represents a sports league\n */\npublic class League {\n\n  private int[][] points;     // The total points scored by all teams\n\n  /*\n   * Initializes points to the specified 2D array of points\n   */\n  public League(int[][] points) {\n    this.points = points;\n  }\n\n  /*\n   * Returns the 2D array points\n   */\n  public int[][] getPoints() {\n    return points;\n  }\n\n  /*\n   * Returns the total points scored by all teams\n   */\n  public int calcTotalScores() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array points in row-major order. Calculate and return\n     * the sum of all the values in points.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (d) #1',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the number of vehicles\n    int[][] trafficData = { {500, 700, 650, 750, 800, 850, 900},\n                            {350, 450, 550, 650, 750, 850, 950},\n                            {800, 750, 700, 650, 600, 550, 500},\n                            {600, 550, 700, 750, 800, 650, 600},\n                            {900, 850, 800, 750, 700, 650, 600},\n                            {450, 550, 650, 750, 850, 950, 1050} };\n\n    // Creates a Traffic object\n    Traffic city = new Traffic(trafficData);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcTotalVehicles() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Traffic.java', text: "/*\n * Analyzes traffic data\n */\npublic class Traffic {\n\n  private int[][] vehicles;    // The 2D array containing the number of vehicles\n\n  /*\n   * Initializes vehicles to the specified 2D array of vehicles\n   */\n  public Traffic(int[][] vehicles) {\n    this.vehicles = vehicles;\n  }\n\n  /*\n   * Returns the 2D array vehicles\n   */\n  public int[][] getVehicles() {\n    return vehicles;\n  }\n\n  /*\n   * Returns the total number of vehicles that passed\n   * through all intersections\n   */\n  public int calcTotalVehicles() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array vehicles in row-major order. Calculate and return\n     * the sum of all the values in vehicles.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (a) #2',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of student test scores\n    int[][] testScores = { {85, 90, 80, 70},\n                           {90, 80, 75, 85},\n                           {70, 75, 80, 90},\n                           {80, 90, 85, 75},\n                           {75, 70, 80, 85} };\n\n    // Creates a Teacher object\n    Teacher msSanchez = new Teacher(testScores);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageScores() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n  }\n}" },
+          { path: 'Teacher.java', text: "/*\n * Represents a teacher\n */\npublic class Teacher {\n\n  private int[][] testScores;    // The 2D array of test scores for several students\n\n  /*\n   * Initializes testScores to the specified 2D array of test scores\n   */\n  public Teacher(int[][] testScores) {\n    this.testScores = testScores;\n  }\n\n  /*\n   * Returns the 2D array testScores\n   */\n  public int[][] getTestScores() {\n    return testScores;\n  }\n\n  /*\n   * Returns the average of all test scores\n   */\n  public double calcAverageScores() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array testScores in row-major order. Calculate and return\n     * the average of all the values in testScores by dividing the total by the\n     * number of rows times the number of columns.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (b) #2',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of customer satisfaction ratings for several products\n    int[][] ratingsData = { {4, 5, 3, 4, 5, 4, 5, 3, 5, 4, 5, 3, 5, 4, 5, 3, 4, 5, 4, 5},\n                            {3, 4, 5, 4, 3, 4, 5, 4, 3, 4, 5, 4, 3, 4, 5, 4, 3, 4, 5, 4},\n                            {5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4},\n                            {4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5},\n                            {3, 4, 3, 4, 3, 4, 3, 4, 3, 4, 3, 4, 3, 4, 3, 4, 3, 4, 3, 4} };\n\n    // Creates a Product object\n    Product electronics = new Product(ratingsData);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageRating() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Product.java', text: "/*\n * Represents a product\n */\npublic class Product {\n\n  private int[][] ratings;    // The 2D array of customer satisfaction ratings\n\n  /*\n   * Initializes ratings to the specified 2D array of customer satisfaction ratings\n   */\n  public Product(int[][] ratings) {\n    this.ratings = ratings;\n  }\n\n  /*\n   * Returns the 2D array ratings\n   */\n  public int[][] getRatings() {\n    return ratings;\n  }\n\n  /*\n   * Returns the average of all customer satisfaction ratings\n   */\n  public double calcAverageRating() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array ratings in row-major order. Calculate and return\n     * the average of all the values in ratings by dividing the total by the\n     * number of rows times the number of columns.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (c) #2',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the performance metrics for several employees\n    int[][] performanceData = { {8, 7, 9, 6, 8, 7, 9},\n                                {9, 9, 8, 8, 7, 7, 9},\n                                {7, 8, 6, 7, 9, 8, 7},\n                                {6, 7, 8, 8, 7, 6, 9},\n                                {9, 8, 7, 6, 9, 8, 7},\n                                {7, 6, 9, 8, 7, 8, 9} };\n\n    // Creates a Manager object\n    Manager julie = new Manager(performanceData);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageMetric() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Manager.java', text: "/*\n * Represents a manager\n */\npublic class Manager {\n\n  private int[][] performance;    // The 2D array of performance metrics for several employees\n\n  /*\n   * Initializes performance to the specified 2D array performance metrics\n   */\n  public Manager(int[][] performance) {\n    this.performance = performance;\n  }\n\n  /*\n   * Returns the 2D array performance\n   */\n  public int[][] getPerformance() {\n    return performance;\n  }\n\n  /*\n   * Returns the average of all performance metrics\n   */\n  public double calcAverageMetric() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array performance in row-major order. Calculate and return\n     * the average of all the values in performance by dividing the total by the\n     * number of rows times the number of columns.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Traversing 2D Arrays (d) #2',
+        lesson: 'Lesson 3: Row-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the AQI values for a city\n    double[][] aqiValues = { {49.1, 52.3, 45.6, 60.2, 63.4, 56.8, 54.7},\n                             {58.2, 62.4, 70.1, 66.5, 58.7, 51.9, 59.0},\n                             {63.7, 70.3, 69.8, 67.6, 64.9, 63.2, 65.1},\n                             {60.0, 59.2, 61.3, 62.8, 59.3, 60.5, 57.8},\n                             {56.1, 63.5, 59.9, 53.2, 50.6, 46.8, 55.3} };\n\n    // Creates a City object\n    City home = new City(aqiValues);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverageAQI() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'City.java', text: "/*\n * Analyzes data about air quality in a city\n */\npublic class City {\n\n  private double[][] airQuality;    // The 2D array of AQI values for each day\n\n  /*\n   * Initializes airQuality to the specified 2D array of AQI values\n   */\n  public City(double[][] airQuality) {\n    this.airQuality = airQuality;\n  }\n\n  /*\n   * Returns the 2D array airQuality\n   */\n  public double[][] getAirQuality() {\n    return airQuality;\n  }\n\n  /*\n   * Returns the average of all AQI values\n   */\n  public double calcAverageAQI() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array airQuality in row-major order. Calculate and return\n     * the average of all the values in airQuality by dividing the total by the\n     * number of rows times the number of columns.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Column-Major Traversal',
+        lesson: 'Lesson 4: Column-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    String[][] alphabet = {{\"A\", \"B\", \"C\"},\n                           {\"D\", \"E\", \"F\"},\n                           {\"G\", \"H\", \"I\"}};\n\n    for (int col = 0; col < alphabet[0].length; col++) {\n      for (int row = 0; row < alphabet.length; row++) {\n        System.out.print(alphabet[row][col] + \" \");\n      }\n\n      System.out.println();\n    }\n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Column-Major Traversal (a) #1',
+        lesson: 'Lesson 4: Column-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of dates\n    String[] dates = {\"March 29th\", \"March 30th\", \"March 31st\", \"April 1st\", \"April 2nd\"};\n\n    // Creates a 2D array containing the daily temperatures for several cities\n    double[][] cityTemps = {{37.27, 40.66, 53.53, 52.36, 48.87},\n                            {62.2, 61.47, 60.31, 62.42, 62.38},\n                            {81.5, 80.04, 81.61, 85.91, 85.69},\n                            {56.41, 48.6, 51.67, 48.72, 52.65}};\n\n    // Creates a Temperatures object\n    Temperatures cities = new Temperatures(dates, cityTemps);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the compareConsecutiveCities() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Temperatures.java', text: "/*\n * Analyzes temperature data for several cities and dates\n */\npublic class Temperatures {\n\n  private String[] dates;         // The 1D array of dates\n  private double[][] cityTemps;   // The 2D array of temperatures for several cities\n\n  /*\n   * Initializes dates to the specified 1D array containing the dates\n   * for each column of cityTemps and initializes cityTemps to the\n   * specified 2D array of temperatures for several cities\n   */\n  public Temperatures(String[] dates, double[][] cityTemps) {\n    this.dates = dates;\n    this.cityTemps = cityTemps;\n  }\n\n  /*\n   * Returns the 1D array of dates\n   */\n  public String[] getDates() {\n    return dates;\n  }\n\n  /*\n   * Returns the 2D array of temperatures\n   */\n  public double[][] getCityTemps() {\n    return cityTemps;\n  }\n\n  /*\n   * Compares consecutive city temperatures for each day in cityTemps\n   */\n  public String compareConsecutiveCities() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the cityTemps array in column-major order.\n     *  Compare the temperature of each city with the next city in the same column.\n     *  Return a String containing comparisons for each day.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return \"\";\n  }\n\n  /*\n   * Returns the date for a given column\n   */\n  public String getDate(int column) {\n    if (column < dates.length) {\n      return dates[column];\n    }\n    else {\n      return \"Unknown\";\n    }\n  }\n}\n" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Column-Major Traversal (b) #1',
+        lesson: 'Lesson 4: Column-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of dog breeds\n    String[] breeds = {\"Beagle\", \"Dalmation\", \"Golden Retriever\", \"Pug\"};\n\n    // Creates a 2D array with the minimum and maximum heights of each breed\n    int[][] heights = {{13, 15}, {19, 23}, {22, 24}, {10, 12}};\n\n    // Creates a DogData object\n    DogData familyDog = new DogData(breeds, heights);\n\n    // Calls the findHeight() method and prints the result\n    System.out.println(familyDog.findHeight(20));\n    \n  }\n}" },
+          { path: 'DogData.java', text: "/*\n * Analyzes data about dog breeds\n */\npublic class DogData {\n\n  private String[] breeds;  // The 1D array of dog breeds\n  private int[][] data;     // The 2D array of data to analyze\n\n  /*\n   * Initializes breeds to the specified 1D array of dog breeds,\n   * and initializes data to the specified 2D array of dog data\n   */\n  public DogData(String[] breeds, int[][] data) {\n    this.breeds = breeds;\n    this.data = data;\n  }\n\n  /*\n   * Returns a String containing the dog breed that has a minimum height and\n   * the dog breed that has a maximum height less than or equal to maxHeight\n   */\n  public String findHeight(int maxHeight) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return a String containing the dog breed that has a minimum height and\n     * the dog breed that has a maximum height less than or equal to maxHeight.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return \"\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Column-Major Traversal (a) #2',
+        lesson: 'Lesson 4: Column-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of visitors to several exhibits each day\n    int[][] visitorData = { {120, 125, 130, 135, 140, 150, 155},\n                            {100, 95, 105, 110, 115, 120, 130},\n                            {70, 80, 85, 90, 95, 100, 110},\n                            {50, 60, 70, 80, 90, 100, 110},\n                            {200, 220, 240, 260, 280, 300, 320}};\n\n    // Creates a Museum object\n    Museum history = new Museum(visitorData);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the allExhibitsAbove(int dayIndex, int target) \n     * method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Museum.java', text: "/*\n * Represents a museum\n */\npublic class Museum {\n\n  private int[][] visitors;    // The 2D array of visitors to a museum\n\n  /*\n   * Initializes visitors to the specified 2D\n   * array of visitors to the museum\n   */\n  public Museum(int[][] visitors) {\n    this.visitors = visitors;\n  }\n\n  /*\n   * Returns the 2D array visitors\n   */\n  public int[][] getVisitors() {\n    return visitors;\n  }\n\n  /*\n   * Determines if all exhibits on a given day had more than the target number of visitors\n   */\n  public boolean allExhibitsAbove(int dayIndex, int target) {\n      /* ----------------------------------- TO DO -----------------------------------\n       * \u2705 Loop through the column at dayIndex and check if all exhibits had more \n       * than target visitors. If any exhibit had fewer visitors, return false. Otherwise,\n       * return true.\n       * -----------------------------------------------------------------------------\n       */\n\n\n    \n      return false;\n  }\n\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Column-Major Traversal (b) #2',
+        lesson: 'Lesson 4: Column-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of seats on a plane\n    boolean[][] seats = { {false, false, false},\n                          {false, true, true},\n                          {true, false, false},\n                          {true, true, true},\n                          {true, false, true},\n                          {false, true, true} };\n\n    // Creates a Plane object\n    Plane toSeattle = new Plane(seats);\n\n    // Prints the Plane object\n    System.out.println(toSeattle);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the upgradeMiddleSeat() method and print the updated Plane object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Plane.java', text: "/*\n * Represents a plane\n */\npublic class Plane {\n\n  private boolean[][] seats;    // The 2D array of seats on a plane\n\n  /*\n   * Initializes seats to the specified 2D array of seats\n   */\n  public Plane(boolean[][] seats) {\n    this.seats = seats;\n  }\n\n  /*\n   * Returns the 2D array of seats\n   */\n  public boolean[][] getSeats() {\n    return seats;\n  }\n\n  /*\n   * Upgrades the first occupied middle seat to a\n   * window seat if one is available\n   */\n  public void upgradeMiddleSeat() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Find the first occupied middle seat (column 1) and upgrade it to the first\n     * available window seat.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n  }\n\n  /*\n   * Returns the row with the first available window seat\n   */\n  public int getAvailableWindowSeat() {\n    int availableSeat = -1;\n    \n    for (int row = 0; row < seats.length; row++) {\n      if (!seats[row][0]) {\n        return row;\n      }\n    }\n\n    return availableSeat;\n  }\n\n  /*\n   * Returns a String containing the status of each seat on the plane\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (int row = 0; row < seats.length; row++) {\n      result += \"Row #\" + (row + 1) + \": \";\n      \n      for (int col = 0; col < seats[0].length; col++) {\n        if (col == 0) {\n          result += \"[W] \";\n        }\n        else if (col == 1) {\n          result += \"[M] \";\n        }\n        else {\n          result += \"[A] \";\n        }\n\n        result += String.format(\"%-6s\", seats[row][col]);\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Column-Major Traversal (c)',
+        lesson: 'Lesson 4: Column-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of reactions for several posts\n    int[][] reactions = { {10, 5, 8, 12},\n                          {3, 6, 9, 7},\n                          {2, 1, 4, 5} };\n\n    // Creates a SocialMedia object\n    SocialMedia app = new SocialMedia(reactions);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findHighest() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'SocialMedia.java', text: "/*\n * Represents a social media app\n */\npublic class SocialMedia {\n\n  private int[][] reactions;      // The 2D array containing the number of reactions\n\n  /*\n   * Initializes reactions to the 2D array containing the number of reactions\n   */\n  public SocialMedia(int[][] reactions) {\n    this.reactions = reactions;\n  }\n\n  /*\n   * Returns the 2D array reactions\n   */\n  public int[][] getReactions() {\n    return reactions;\n  }\n\n  /*\n   * Returns the location of the post with the highest total engagement\n   */\n  public int findHighest() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array reactions in column-major order and find the sum\n     * of each column. Return the column index of the column that has the largest\n     * number of reactions.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Column-Major Traversal (d)',
+        lesson: 'Lesson 4: Column-Major Traversal',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the daily energy consumption for several apartments\n    double[][] energyConsumption = { {10.5, 8.2, 7.1, 12.0, 9.3, 11.1, 13.2},\n                                     {5.3, 6.0, 7.9, 8.1, 9.2, 10.0, 11.6},\n                                     {9.1, 11.0, 8.4, 7.3, 10.2, 12.1, 6.5},\n                                     {8.9, 7.5, 6.6, 5.8, 9.1, 10.5, 11.9} };\n\n    // Creates an Energy object\n    Energy apts = new Energy(energyConsumption);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findMinEnergy() and findMaxEnergy() methods and print the results.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n\n  }\n}" },
+          { path: 'Energy.java', text: "/*\n * Analyzes data about energy consumption\n */\npublic class Energy {\n\n  private double[][] dailyEnergy;     // The 2D array of energy consumption for several apartments\n\n  /*\n   * Initializes dailyEnergy to the specified 2D array\n   * of energy consumption for several apartments\n   */\n  public Energy(double[][] dailyEnergy) {\n    this.dailyEnergy = dailyEnergy;\n  }\n\n  /*\n   * Returns the 2D array dailyEnergy\n   */\n  public double[][] getDailyEnergy() {\n    return dailyEnergy;\n  }\n\n  /*\n   * Returns the day with the lowest total energy consumption\n   */\n  public int findMinEnergy() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array dailyEnergy and find the sum of each column. Return\n     * the column index that has the lowest total energy consumption.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n\n  /*\n   * Returns the day with the highest total energy consumption\n   */\n  public int findMaxEnergy() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array dailyEnergy and find the sum of each column. Return\n     * the column index that has the highest total energy consumption.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Enhanced For Loops and Objects',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Numbers.java', text: "public class Numbers {\n\n  public static String getValuesEnhanced(int[][] numbers) {\n    String result = \"\";\n    \n    for (int[] row : numbers) {\n      for (int value : row) {\n        result += value + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static String getValuesRegular(int[][] numbers) {\n    String result = \"\";\n    \n    for (int row = 0; row < numbers.length; row++) {\n      for (int col = 0; col < numbers[0].length; col++) {\n        result += numbers[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static void changeValues(int[][] numbers) {\n    for (int[] row : numbers) {\n      for (int value : row) {\n        value *= 2;\n      }\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Enhanced For Loops #1',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Numbers.java', text: "public class Numbers {\n\n  public static String getValuesEnhanced(int[][] numbers) {\n    String result = \"\";\n    \n    for (int[] row : numbers) {\n      for (int value : row) {\n        result += value + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static String getValuesRegular(int[][] numbers) {\n    String result = \"\";\n    \n    for (int row = 0; row < numbers.length; row++) {\n      for (int col = 0; col < numbers[0].length; col++) {\n        result += numbers[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static void changeValues(int[][] numbers) {\n    for (int[] row : numbers) {\n      for (int value : row) {\n        value *= 2;\n      }\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Enhanced For Loops #2',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Numbers.java', text: "public class Numbers {\n\n  public static String getValuesEnhanced(int[][] numbers) {\n    String result = \"\";\n    \n    for (int[] row : numbers) {\n      for (int value : row) {\n        result += value + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static String getValuesRegular(int[][] numbers) {\n    String result = \"\";\n    \n    for (int row = 0; row < numbers.length; row++) {\n      for (int col = 0; col < numbers[0].length; col++) {\n        result += numbers[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static void changeValues(int[][] numbers) {\n    for (int[] row : numbers) {\n      for (int value : row) {\n        value *= 2;\n      }\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Enhanced For Loops #3',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Numbers.java', text: "public class Numbers {\n\n  public static String getValuesEnhanced(int[][] numbers) {\n    String result = \"\";\n    \n    for (int[] row : numbers) {\n      for (int value : row) {\n        result += value + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static String getValuesRegular(int[][] numbers) {\n    String result = \"\";\n    \n    for (int row = 0; row < numbers.length; row++) {\n      for (int col = 0; col < numbers[0].length; col++) {\n        result += numbers[row][col] + \" \";\n      }\n\n      result += \"\\n\";\n    }\n\n    return result;\n  }\n\n  public static void changeValues(int[][] numbers) {\n    for (int[] row : numbers) {\n      for (int value : row) {\n        value *= 2;\n      }\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Enhanced For Loops and 2D Arrays (a) #1',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the number of times books have been borred\n    int[][] bookBorrowCount = { {3, 5, 2}, {1, 4, 6}, {2, 5, 3} };\n\n    // Creates a Library object\n    Library library = new Library(bookBorrowCount);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getMostBorrowed() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Library.java', text: "/*\n * Represents a library\n */\npublic class Library {\n\n  private int[][] bookCount;      // The 2D array containing the number of times books have been borrowed\n\n  /*\n   * Initializes bookCount to the specified 2D array containing\n   * the number of times books have been borrowed\n   */\n  public Library(int[][] bookCount) {\n    this.bookCount = bookCount;\n  }\n\n  /*\n   * Returns the 2D array bookCount\n   */\n  public int[][] getBookCount() {\n    return bookCount;\n  }\n\n  /*\n   * Returns the most number of times a book has been borrowed\n   */\n  public int getMostBorrowed() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Find and return the value in the 2D array bookCount that is the highest.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Enhanced For Loops and 2D Arrays (b) #1',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the number of animals spotted on each tour\n    int[][] animalCount = {{3, 5, 2}, {1, 4, 6}, {2, 5, 3}, {6, 2, 1}};\n\n    // Creates a WildlifeTour object\n    WildlifeTour wildlifeTour = new WildlifeTour(animalCount);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getTotalAnimals() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'WildlifeTour.java', text: "/*\n * Represents a wildlife tour at a park\n */\npublic class WildlifeTour {\n  \n  private int[][] animalCount;     // The 2D array containing the number of animals spotted during several tours\n\n  /*\n   * Initializes animalCount to the specified 2D array containing\n   * the number of animals spotted during several tours\n   */\n  public WildlifeTour(int[][] animalCount) {\n    this.animalCount = animalCount;\n  }\n\n  /*\n   * Returns the 2D array animalCount\n   */\n  public int[][] getAnimalCount() {\n    return animalCount;\n  }\n\n  /*\n   * Returns the total number of animals spotted during all tours\n   */\n  public int getTotalAnimals() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the total of all values in the 2D array animalCount.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Enhanced For Loops and 2D Arrays (c)',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the costs of customer orders\n    double[][] orderCost = {{25.5, 15.25, 12.75}, {18.5, 20.0, 16.75}, {14.25, 21.5, 19.75}};\n\n    // Creates a Restaurant object\n    Restaurant restaurant = new Restaurant(orderCost);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getHighestCost() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Restaurant.java', text: "/*\n * Represents a restaurant\n */\npublic class Restaurant {\n  \n  private double[][] orders;     // The 2D array containing the cost of several customer orders\n\n  /*\n   * Initializes orders to the specified 2D array containing\n   * the cost of several customer orders\n   */\n  public Restaurant(double[][] orders) {\n    this.orders = orders;\n  }\n\n  /*\n   * Returns the 2D array orders\n   */\n  public double[][] getOrders() {\n    return orders;\n  }\n\n  /*\n   * Returns the largest customer order\n   */\n  public double getHighestCost() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array orders to find and return the largest customer order.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Enhanced For Loops and 2D Arrays (d)',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the activity points for several students\n    int[][] activityPoints = {{3, 5, 2}, {1, 4, 6}, {2, 5, 3}, {6, 2, 1}};\n\n    // Creates a School object\n    School school = new School(activityPoints);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getHighestActivity() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'School.java', text: "/*\n * Represents a school\n */\npublic class School {\n  \n  private int[][] activityPoints;   // The 2D array containing the activity points for several students\n\n  /*\n   * Initializes activityPoints to the specified 2D array\n   * containing the activity points for several students\n   */\n  public School(int[][] activityPoints) {\n      this.activityPoints = activityPoints;\n  }\n\n  /*\n   * Returns the 2D array activityPoints\n   */\n  public int[][] getActivityPoints() {\n    return activityPoints;\n  }\n\n  /*\n   * Returns the row index for the student that has the\n   * highest total activity points\n   */\n  public int getHighestActivity() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array activityPoints to calculate the total activity\n     * points for each student (row). Return the row index that has the\n     * largest total activity points.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Enhanced For Loops and 2D Arrays (a) #2',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing each food truck inventory\n    int[][] inventories = {{25, 17, 22}, {18, 12, 15}, {21, 19, 27}, {30, 10, 23}};\n\n    // Creates an Owner object\n    Owner jessie = new Owner(inventories);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the hasMinimum() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Owner.java', text: "/*\n * Represents an owner of a food truck business\n */\npublic class Owner {\n\n  private int[][] inventories;   // The 2D array of dessert inventories\n\n  /*\n   * Initializes inventories to the specified 2D\n   * array of dessert inventories\n   */\n  public Owner(int[][] inventories) {\n    this.inventories = inventories;\n  }\n\n  /*\n   * Returns the 2D array inventories\n   */\n  public int[][] getInventories() {\n    return inventories;\n  }\n\n  /*\n   * Returns true if any food truck has a quantity of\n   * desserts that are more than minValue\n   */\n  public boolean hasMinimum(int minValue) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the inventories array and return true if any food truck has a\n     * quantity of desserts more than minValue. Otherwise, return false.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return false;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Enhanced For Loops and 2D Arrays (b) #2',
+        lesson: 'Lesson 5: Enhanced For Loops',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing the daily temperatures for several cities\n    double[][] cityTemps = {{37.27, 40.66, 53.53, 52.36, 48.87},\n                            {62.2, 61.47, 60.31, 62.42, 62.38},\n                            {81.5, 80.04, 81.61, 85.91, 85.69},\n                            {56.41, 48.6, 51.67, 48.72, 52.65}};\n\n    // Creates a Temperatures object\n    Temperatures cities = new Temperatures(cityTemps);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the calcAverage() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Temperatures.java', text: "/*\n * Analyzes data about daily temperatures in cities\n */\npublic class Temperatures {\n\n  private double[][] dailyTemps;  // The 2D array of daily temperatures\n\n  /*\n   * Initializes dailyTemps to the specified\n   * 2D array of daily temperatures\n   */\n  public Temperatures(double[][] dailyTemps) {\n    this.dailyTemps = dailyTemps;\n  }\n\n  /*\n   * Returns the 2D array dailyTemps\n   */\n  public double[][] getDailyTemps() {\n    return dailyTemps;\n  }\n\n  /*\n   * Returns the overall average of all temperatures\n   */\n  public double calcAverage() {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calculate and return the overall average temperature.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: The indexOf() Method',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'PhraseFinder.java', text: "/*\n * Analyzes phrases and sentences\n */\npublic class PhraseFinder {\n\n  public static String countPhrases(String[][] sentences, String targetPhrase) {\n    String result = \"\";\n    \n    for (int row = 0; row < sentences.length; row++) {\n      int phraseCount = 0;\n      \n      for (int col = 0; col < sentences[0].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1) {\n          phraseCount++;\n        }\n      }\n\n      result += \"Row #\" + row + \": \" + phraseCount + \" times\\n\";\n    }\n\n    return result;\n  }\n\n  public static String findLongestString(String[][] sentences, String targetPhrase) {\n    int longestLength = 0;\n    int longestRow = -1;\n    int longestCol = -1;\n    \n    for (int row = 0; row < sentences.length; row++) {\n      for (int col = 0; col < sentences[row].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1 && currentPhrase.length() > longestLength) {\n          longestLength = currentPhrase.length();\n          longestRow = row;\n          longestCol = col;\n        }\n      }\n    }\n\n    if (longestRow == -1 && longestCol == -1) {\n      return \"No string containing the target phrase was found.\";\n    } else {\n      return \"The longest string containing the target phrase is \\\"\" + sentences[longestRow][longestCol] +\n             \"\\\" at row #\" + longestRow + \" and col #\" + longestCol + \".\";\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: The indexOf() Method #1',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'PhraseFinder.java', text: "/*\n * Analyzes phrases and sentences\n */\npublic class PhraseFinder {\n\n  public static String countPhrases(String[][] sentences, String targetPhrase) {\n    String result = \"\";\n    \n    for (int row = 0; row < sentences.length; row++) {\n      int phraseCount = 0;\n      \n      for (int col = 0; col < sentences[0].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1) {\n          phraseCount++;\n        }\n      }\n\n      result += \"Row #\" + row + \": \" + phraseCount + \" times\\n\";\n    }\n\n    return result;\n  }\n\n  public static String findLongestString(String[][] sentences, String targetPhrase) {\n    int longestLength = 0;\n    int longestRow = -1;\n    int longestCol = -1;\n    \n    for (int row = 0; row < sentences.length; row++) {\n      for (int col = 0; col < sentences[row].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1 && currentPhrase.length() > longestLength) {\n          longestLength = currentPhrase.length();\n          longestRow = row;\n          longestCol = col;\n        }\n      }\n    }\n\n    if (longestRow == -1 && longestCol == -1) {\n      return \"No string containing the target phrase was found.\";\n    } else {\n      return \"The longest string containing the target phrase is \\\"\" + sentences[longestRow][longestCol] +\n             \"\\\" at row #\" + longestRow + \" and col #\" + longestCol + \".\";\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: The indexOf() Method #2',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'PhraseFinder.java', text: "/*\n * Analyzes phrases and sentences\n */\npublic class PhraseFinder {\n\n  public static String countPhrases(String[][] sentences, String targetPhrase) {\n    String result = \"\";\n    \n    for (int row = 0; row < sentences.length; row++) {\n      int phraseCount = 0;\n      \n      for (int col = 0; col < sentences[0].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1) {\n          phraseCount++;\n        }\n      }\n\n      result += \"Row #\" + row + \": \" + phraseCount + \" times\\n\";\n    }\n\n    return result;\n  }\n\n  public static String findLongestString(String[][] sentences, String targetPhrase) {\n    int longestLength = 0;\n    int longestRow = -1;\n    int longestCol = -1;\n    \n    for (int row = 0; row < sentences.length; row++) {\n      for (int col = 0; col < sentences[row].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1 && currentPhrase.length() > longestLength) {\n          longestLength = currentPhrase.length();\n          longestRow = row;\n          longestCol = col;\n        }\n      }\n    }\n\n    if (longestRow == -1 && longestCol == -1) {\n      return \"No string containing the target phrase was found.\";\n    } else {\n      return \"The longest string containing the target phrase is \\\"\" + sentences[longestRow][longestCol] +\n             \"\\\" at row #\" + longestRow + \" and col #\" + longestCol + \".\";\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: The indexOf() Method #3',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'PhraseFinder.java', text: "/*\n * Analyzes phrases and sentences\n */\npublic class PhraseFinder {\n\n  public static String countPhrases(String[][] sentences, String targetPhrase) {\n    String result = \"\";\n    \n    for (int row = 0; row < sentences.length; row++) {\n      int phraseCount = 0;\n      \n      for (int col = 0; col < sentences[0].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1) {\n          phraseCount++;\n        }\n      }\n\n      result += \"Row #\" + row + \": \" + phraseCount + \" times\\n\";\n    }\n\n    return result;\n  }\n\n  public static String findLongestString(String[][] sentences, String targetPhrase) {\n    int longestLength = 0;\n    int longestRow = -1;\n    int longestCol = -1;\n    \n    for (int row = 0; row < sentences.length; row++) {\n      for (int col = 0; col < sentences[row].length; col++) {\n        String currentPhrase = sentences[row][col];\n        int location = currentPhrase.indexOf(targetPhrase);\n\n        if (location != -1 && currentPhrase.length() > longestLength) {\n          longestLength = currentPhrase.length();\n          longestRow = row;\n          longestCol = col;\n        }\n      }\n    }\n\n    if (longestRow == -1 && longestCol == -1) {\n      return \"No string containing the target phrase was found.\";\n    } else {\n      return \"The longest string containing the target phrase is \\\"\" + sentences[longestRow][longestCol] +\n             \"\\\" at row #\" + longestRow + \" and col #\" + longestCol + \".\";\n    }\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Skill Building: The indexOf() Method (a)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Reads the data from the text files into 1D arrays for each week\n    String[] weekOneReviews = FileReader.toStringArray(\"weekOne.txt\");\n    String[] weekTwoReviews = FileReader.toStringArray(\"weekTwo.txt\");\n    String[] weekThreeReviews = FileReader.toStringArray(\"weekThree.txt\");\n\n    // Creates a 2D array of reviews submitted each week\n    String[][] productReviews = {weekOneReviews, weekTwoReviews, weekThreeReviews};\n\n    // Creates a Review object\n    Review review = new Review(productReviews);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the countTimes() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'FileReader.java', text: "import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println(\"File not found.\");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}" },
+          { path: 'Review.java', text: "/*\n * Analyzes customer reviews\n */\npublic class Review {\n  \n  private String[][] productReviews;     // The 2D array containing the reviews submitted each week\n\n  /*\n   * Initializes productReviews to the specified 2D array\n   * containing the reviews submitted each week\n   */\n  public Review(String[][] productReviews) {\n    this.productReviews = productReviews;\n  }\n\n  /*\n   * Returns the 2D array of product reviews\n   */\n  public String[][] getProductReviews() {\n    return productReviews;\n  }\n\n  /*\n   * Counts and returns the number of times the\n   * targetWord appears in all product reviews\n   */\n  public int countTimes(String targetWord) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array productReviews and count the number of times\n     * targetWord appears in each review.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+          { path: 'weekOne.txt', text: "Love it! So easy to use.\nMeh, it's okay. Could be better.\nWorks great! Highly recommend.\nDisappointed. Doesn't work as advertised.\nExactly what I needed. Thanks!" },
+          { path: 'weekThree.txt', text: "Perfect! Exactly what I was looking for.\nMeh. Average quality, average price.\nAmazing product! So happy with my purchase.\nDoesn't work at all. Don't waste your time.\nNot bad, but could be better." },
+          { path: 'weekTwo.txt', text: "Terrible quality. Broke after a few uses.\nSo glad I bought this. Game changer!\nNot impressed. Wouldn't buy again.\nGreat product for the price.\nAvoid! Waste of money." },
+        ],
+      },
+      {
+        name: 'Skill Building: The indexOf() Method (b)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates 1D arrays from the data in the text files\n    String[] firstEssay = FileReader.toStringArray(\"firstEssay.txt\");\n    String[] secondEssay = FileReader.toStringArray(\"secondEssay.txt\");\n    String[] thirdEssay = FileReader.toStringArray(\"thirdEssay.txt\");\n\n    // Creates a 2D array containing the student essays\n    String[][] essays = {firstEssay, secondEssay, thirdEssay};\n\n    // Creates a Teacher object\n    Teacher msSmith = new Teacher(essays);\n\n    // Creates a 1D array of phrases\n    String[] phrasesToFind = {\"popular\", \"learn new things\", \"benefits\"};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findPhrases() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n  }\n}" },
+          { path: 'FileReader.java', text: "import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println(\"File not found.\");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}" },
+          { path: 'Teacher.java', text: "/*\n * Represents a teacher\n */\npublic class Teacher {\n  \n  private String[][] studentEssays;    // The 2D array of student essays submitted each week\n\n  /*\n   * Initializes studentEssays to the 2D array of\n   * student essays submitted each week\n   */\n  public Teacher(String[][] studentEssays) {\n    this.studentEssays = studentEssays;\n  }\n\n  /*\n   * Returns the 2D array studentEssays\n   */\n  public String[][] getStudentEssays() {\n    return studentEssays;\n  }\n\n  /*\n   * Returns the student essay that contains any of\n   * the phrases in the parameter targetPhrases\n   */\n  public String findPhrases(String[] targetPhrases) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array studentEssays. For each phrase in studentEssays,\n     * check if any of the target phrases can be found. If so, use the essayToString()\n     * method to return the 1D array containing the student essay as a String.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return \"\";\n  }\n\n  /*\n   * Returns a String containing the phrases that\n   * make up a student essay\n   */\n  public String essayToString(String[] essay) {\n    String result = \"\";\n\n    for (int index = 0; index < essay.length; index++) {\n      result += essay[index] + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+          { path: 'firstEssay.txt', text: "The benefits of reading are numerous and varied.\nReading can improve our cognitive abilities, including critical thinking and problem-solving skills.\nIt can also increase our vocabulary, enhance our creativity, and reduce stress.\nBy making reading a regular part of our lives, we can enjoy these benefits and more." },
+          { path: 'secondEssay.txt', text: "Basketball was invented in 1891 by James Naismith, a Canadian physical education instructor.\nIt was initially played with a soccer ball and two peach baskets for hoops.\nThe game quickly gained popularity and was introduced to the Olympics in 1936.\nToday, basketball is one of the most popular sports in the world, with millions of fans and players worldwide." },
+          { path: 'thirdEssay.txt', text: "Reading is a great way to learn new things and broaden our horizons.\nIt can improve our cognitive abilities, including critical thinking and problem-solving skills.\nIt can also increase our vocabulary, enhance our creativity, and reduce stress.\nBy making reading a regular part of our lives, we can enjoy these benefits and more." },
+        ],
+      },
+      {
+        name: 'Skill Building: The indexOf() Method (c)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates several 1D arrays containing the emails from the text files\n    String[] firstWeek = FileReader.toStringArray(\"weekOne.txt\");\n    String[] secondWeek = FileReader.toStringArray(\"weekTwo.txt\");\n    String[] thirdWeek = FileReader.toStringArray(\"weekThree.txt\");\n\n    // Creates a 2D array of emails sent for several weeks\n    String[][] customerEmails = {firstWeek, secondWeek, thirdWeek};\n\n    // Creates an Email object\n    Email email = new Email(customerEmails);\n\n    // Creates a 1D array of keywords to search for\n    String[] keywords = {\"order\", \"confirmation\"};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findEmail() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n  }\n}" },
+          { path: 'Email.java', text: "/*\n * Represents an email provider\n */\npublic class Email {\n  \n  private String[][] customerEmails;   // The 2D array containing emails sent over several weeks\n\n  /*\n   * Initializes customerEmails to the 2D array containing\n   * emails sent over several weeks\n   */\n  public Email(String[][] customerEmails) {\n    this.customerEmails = customerEmails;\n  }\n\n  /*\n   * Returns the 2D array customerEmails\n   */\n  public String[][] getCustomerEmails() {\n    return customerEmails;\n  }\n\n  /*\n   * Returns the email that contains a keyword in the 1D array keywords\n   */\n  public String findEmail(String[] keywords) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array of customer emails. Then go through each keyword\n     * in the 1D array keywords and check if any email contains any of the keywords.\n     * Return the email that contains any of the keywords.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return \"\";\n  }\n  \n}" },
+          { path: 'FileReader.java', text: "import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println(\"File not found.\");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+          { path: 'weekOne.txt', text: "Important: Your order confirmation\nThank you for your purchase\nOrder #1234\nShipping information\nDelivery estimate" },
+          { path: 'weekThree.txt', text: "New feature: Product recommendations\nCheck out our latest products\nLimited time offer\nSave on your next purchase\nExclusive discount code" },
+          { path: 'weekTwo.txt', text: "Reminder: Upcoming appointment\nDon't forget to bring your ID\nLocation and time\nWhat to expect\nCancel or reschedule" },
+        ],
+      },
+      {
+        name: 'Skill Building: The indexOf() Method (d)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates 1D arrays for the search results\n    String[] pancakesResults = FileReader.toStringArray(\"pancakes.txt\");\n    String[] coffeeResults = FileReader.toStringArray(\"coffee.txt\");\n    String[] yogaResults = FileReader.toStringArray(\"yoga.txt\");\n\n    // Creates a 2D array of all the search results\n    String[][] searchResults = {pancakesResults, coffeeResults, yogaResults};\n\n    // Creates a Results object\n    Results searches = new Results(searchResults);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findSearchResult() method and print the results.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'FileReader.java', text: "import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println(\"File not found.\");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}" },
+          { path: 'Results.java', text: "/*\n * Represents search results\n */\npublic class Results {\n  \n  private String[][] searchResults;     // The 2D array of search results on several pages\n\n  /*\n   * Initializes searchResults to the 2D array of search results\n   */\n  public Results(String[][] searchResults) {\n    this.searchResults = searchResults;\n  }\n\n  /*\n   * Returns the 2D array of search results\n   */\n  public String[][] getSearchResults() {\n    return searchResults;\n  }\n\n  /*\n   * Returns the search results that contains the query\n   */\n  public String findSearchResult(String query) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array searchResults. If the result contains the query,\n     * return the result. If no results are found, return a String letting the\n     * user know that no results were found.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n\n    return \"\";\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+          { path: 'coffee.txt', text: "Best coffee shops in town\nFind the perfect coffee shop for studying, working, or just hanging out\nHow to brew the perfect cup of coffee at home\nCoffee vs. tea: which is better for your health?\n10 creative coffee drink recipes to try at home" },
+          { path: 'pancakes.txt', text: "How to make pancakes\nLearn the secret to fluffy pancakes with this easy recipe\nPancake mix vs. homemade pancakes: which is better?\nGluten-free pancake recipes\nTop 10 pancake toppings to try" },
+          { path: 'yoga.txt', text: "Yoga for beginners\nLearn the basics of yoga with these easy poses\nThe benefits of yoga for mental health\nHow to find the right yoga class for you\nThe best yoga mats for home practice" },
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Algorithms (a)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of sentences\n    String[][] sentences = { {\"The\", \"quick\", \"brown\", \"fox\", \"jumps\", \"over\", \"the\", \"lazy\", \"dog\"},\n                             {\"She\", \"sells\", \"seashells\", \"by\", \"the\", \"seashore\"},\n                             {\"The\", \"cat\", \"in\", \"the\", \"hat\", \"went\", \"to\", \"the\", \"mat\"},\n                             {\"To\", \"be\", \"or\", \"not\", \"to\", \"be\", \"that\", \"is\", \"the\", \"question\"} };\n\n    // Creates a TextProcessor object\n    TextProcessor document = new TextProcessor(sentences);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the countNumWords() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    \n    \n  }\n}" },
+          { path: 'TextProcessor.java', text: "/*\n * Analyzes document text\n */\npublic class TextProcessor {\n  \n  private String[][] documentText;     // The 2D array containing the sentences of a document\n\n  /*\n   * Initializes documentText to the specified 2D array\n   * containing the sentences of a document\n   */\n  public TextProcessor(String[][] documentText) {\n    this.documentText = documentText;\n  }\n\n  /*\n   * Returns the 2D array documentText\n   */\n  public String[][] getDocumentText() {\n    return documentText;\n  }\n\n  /*\n   * Returns the number of words in the document text that have the\n   * same length as targetLength and start with the letter startsWith\n   */\n  public int countNumWords(int targetLength, String startsWith) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Traverse the 2D array documentText. Count and return the number of\n     * words in documentText that have the same length as targetLength and where\n     * the location of startsWith is at index 0 in the String.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Algorithms (b)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array containing sentences by an author\n    String[][] writings = {{\"I\", \"know\", \"why\", \"the\", \"caged\", \"bird\", \"sings\"},\n                           {\"You\", \"may\", \"write\", \"me\", \"down\", \"in\", \"history\"},\n                           {\"I\", \"mean\", \"precisely\", \"the\", \"opposite\", \"of\", \"that\"}};\n\n    // Creates a Literature object\n    Literature author = new Literature(writings);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the countNumWords() method and prints the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n    \n    \n  }\n}" },
+          { path: 'Literature.java', text: "/*\n * Represents a literary work\n */\npublic class Literature {\n\n  private String[][] authorWritings;    // The 2D array containing sentences from multiple works\n\n  /*\n   * Initializes writings to the specified 2D array\n   * containing sentences from multiple works\n   */\n  public Literature(String[][] authorWritings) {\n    this.authorWritings = authorWritings;\n  }\n\n  /*\n   * Returns the 2D array authorWritings\n   */\n  public String[][] getAuthorWritings() {\n    return authorWritings;\n  }\n\n  /*\n   * Returns the number of words that start with targetLetter\n   */\n  public int countNumWords(String targetLetter) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Counts and returns the number of words in authorWritings that start\n     * with the parameter targetLetter.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Algorithms (c)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of paragraphs\n    String[][] phrases = { {\"Bonjour!\", \"Comment allez-vous?\", \"Je m'appelle Jacques.\"},\n                           {\"Hola!\", \"C\u00f3mo est\u00e1s?\", \"Mi nombre es Maria.\"},\n                           {\"Hello!\", \"How are you?\", \"My name is John.\"} };\n\n    // Creates a Translator object\n    Translator text = new Translator(phrases);\n\n    // Creates a 1D array of target words\n    String[] targetWords = {\"Comment\", \"John\"};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the findSentences() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Translator.java', text: "/*\n * Handles translating phrases\n */\npublic class Translator {\n\n  private String[][] phrases;   // The 2D array of phrases to translate\n\n  /*\n   * Initializes phrases to the specified2D array of phrases\n   */\n  public Translator(String[][] phrases) {\n    this.phrases = phrases;\n  }\n\n  /*\n   * Returns the 2D array phrases\n   */\n  public String[][] getPhrases() {\n    return phrases;\n  }\n\n  /*\n   * Returns a String containing the sentences that\n   * contain at least one of the words in targetWords\n   */\n  public String findSentences(String[] targetWords) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Write the findSentences() method to find and return the sentences that \n     *    contain at least one of the words in the parameter targetWords.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n    return \"\";\n  }\n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: 2D Array Algorithms (d)',
+        lesson: 'Lesson 7: 2D Array Algorithms',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 2D array of social media posts\n    String[][] socialMediaPosts = {{\"Check out our new #product!\", \"Get it now and receive a 10% #discount!\"},\n                                   {\"Just posted a new #blog article!\", \"Learn how to save #money with our tips and tricks.\"},\n                                   {\"#HappyFriday everyone!\", \"What are your plans for the #weekend?\"}};\n\n    // Creates a Marketing object\n    Marketing campaign = new Marketing(socialMediaPosts);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the countNumTimes() and calcPercentage() methods and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Marketing.java', text: "/*\n * Analyzes social media posts\n */\npublic class Marketing {\n\n  private String[][] socialMediaPosts;    // The 2D array of posts made for several weeks\n\n  /*\n   * Initializes socialMediaPosts to the specified 2D array\n   * containing posts made for several weeks\n   */\n  public Marketing(String[][] socialMediaPosts) {\n    this.socialMediaPosts = socialMediaPosts;\n  }\n\n  /*\n   * Returns the 2D array socialMediaPosts\n   */\n  public String[][] getSocialMediaPosts() {\n    return socialMediaPosts;\n  }\n\n  /*\n   * Returns the number of occurrences of targetLetter in socialMediaPosts\n   */\n  public int countNumTimes(String targetLetter) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Count the number of times targetLetter can be found in all posts.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n\n    return -1;\n  }\n\n  /*\n   * Calculates and returns the percentage of targetLetter\n   * compared to the total length of all posts\n   */\n  public double calcPercentage(int numTimes) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Find the total length of all posts, then divide numTimes by the total\n     * length. Return the result of this times 100 to get the percentage.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'CSA 2023 Console Sandbox_2025',
+        lesson: 'Sandbox: Console',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'With Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: "1,0 1,10 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n",
+        files: [
+          { path: 'Main.java', text: "import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'No Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: "1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n",
+        files: [
+          { path: 'Main.java', text: "import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+    ],
+  },
+  {
     name: 'AP FRQ Practice',
     levels: [
       {

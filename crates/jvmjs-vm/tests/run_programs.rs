@@ -410,6 +410,51 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn string_builder_and_format_argument() {
+    // First-class StringBuilder (append chaining, toString, length) plus the
+    // fix for String.format(...) used directly as a method argument.
+    let out = run_stdout(
+        r#"
+        public class Main {
+            public static void main(String[] a) {
+                StringBuilder sb = new StringBuilder("start");
+                sb.append(":").append(1).append(true);
+                System.out.println(sb.toString());
+                System.out.println(sb.length());
+                StringBuilder r = new StringBuilder();
+                for (int i = 0; i < 3; i++) {
+                    r.append(String.format("v%d,", i));
+                }
+                System.out.println(r);
+                System.out.println("x" + String.format("%.2f", 3.14159) + "y");
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "start:1true\n11\nv0,v1,v2,\nx3.14y\n");
+}
+
+#[test]
+fn user_object_default_equals_is_identity() {
+    // A class with no equals override uses Object identity equality.
+    let out = run_stdout(
+        r#"
+        public class Main {
+            public static void main(String[] a) {
+                Main x = new Main();
+                Main y = new Main();
+                System.out.println(x.equals(x));
+                System.out.println(x.equals(y));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
 fn reflection_array_class_literal() {
     // int[].class carries the JVM array descriptor, so getMethod matches a
     // method declared with an int[] parameter.

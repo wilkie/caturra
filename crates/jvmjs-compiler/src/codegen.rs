@@ -1075,6 +1075,7 @@ impl MethodTable {
                 }
                 match simple {
                     "Scanner" => Some(JType::Scanner),
+                    "StringBuilder" => Some(JType::StringBuilder),
                     "File" => Some(JType::File),
                     "PrintWriter" => Some(JType::Writer),
                     "Class" => Some(JType::Class),
@@ -1709,6 +1710,8 @@ enum JType {
     Byte,
     /// `java.util.Scanner` (intrinsic).
     Scanner,
+    /// `java.lang.StringBuilder` (intrinsic).
+    StringBuilder,
     /// `java.lang.Class` (reflection intrinsic; from `obj.getClass()`).
     Class,
     /// `java.lang.reflect.Field` (reflection intrinsic).
@@ -1781,6 +1784,7 @@ impl JType {
             JType::Short => String::from("short"),
             JType::Byte => String::from("byte"),
             JType::Scanner => String::from("Scanner"),
+            JType::StringBuilder => String::from("StringBuilder"),
             JType::Class => String::from("Class"),
             JType::Field => String::from("Field"),
             JType::Method => String::from("Method"),
@@ -1887,6 +1891,7 @@ impl JType {
             JType::Short => String::from("S"),
             JType::Byte => String::from("B"),
             JType::Scanner => String::from("Ljava/util/Scanner;"),
+            JType::StringBuilder => String::from("Ljava/lang/StringBuilder;"),
             JType::Class => String::from("Ljava/lang/Class;"),
             JType::Field => String::from("Ljava/lang/reflect/Field;"),
             JType::Method => String::from("Ljava/lang/reflect/Method;"),
@@ -2432,6 +2437,8 @@ enum BRet {
     Field,
     /// A single `java.lang.reflect.Method` (`Class.getMethod`).
     Method,
+    /// `java.lang.StringBuilder` (`StringBuilder.append`, for chaining).
+    Builder,
     /// `java.lang.Object` (`Constructor.newInstance`).
     Object,
 }
@@ -3736,11 +3743,68 @@ const METHOD_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+/// `java.lang.StringBuilder` methods (`append` returns the builder for
+/// chaining; the VM stores UTF-16 units).
+const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "append",
+        &[S],
+        BRet::Builder,
+        "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
+        &[I],
+        BRet::Builder,
+        "(I)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
+        &[L],
+        BRet::Builder,
+        "(J)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
+        &[D],
+        BRet::Builder,
+        "(D)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
+        &[F],
+        BRet::Builder,
+        "(F)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
+        &[Z],
+        BRet::Builder,
+        "(Z)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
+        &[C],
+        BRet::Builder,
+        "(C)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
+        &[BParam::Object],
+        BRet::Builder,
+        "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("length", &[], BRet::Int, "()I"),
+    bm("charAt", &[I], BRet::Char, "(I)C"),
+];
+
 /// `java.util.Arrays` static methods.
 /// The intrinsic method table and JVM class for a receiver type.
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match ty {
         JType::Str => Some(("java/lang/String", STRING_METHODS)),
+        JType::StringBuilder => Some(("java/lang/StringBuilder", STRINGBUILDER_METHODS)),
         JType::Class => Some(("java/lang/Class", CLASS_METHODS)),
         JType::Field => Some(("java/lang/reflect/Field", FIELD_METHODS)),
         JType::Method => Some(("java/lang/reflect/Method", METHOD_METHODS)),
@@ -3933,6 +3997,7 @@ fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<J
         BRet::Constructor => Some(JType::Constructor),
         BRet::Field => Some(JType::Field),
         BRet::Method => Some(JType::Method),
+        BRet::Builder => Some(JType::StringBuilder),
         BRet::Object => Some(JType::Object(table.object_id)),
     }
 }
@@ -5481,6 +5546,7 @@ impl BodyGen<'_> {
         }
         match class {
             "Object" => JType::Object(self.table.object_id),
+            "StringBuilder" => JType::StringBuilder,
             "Scanner" => JType::Scanner,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
@@ -5553,6 +5619,7 @@ impl BodyGen<'_> {
         if self.table.class_id(class_name).is_none() {
             match class_name {
                 "Object" if args.is_empty() => return self.new_bare_object(),
+                "StringBuilder" => return self.new_string_builder(args, span),
                 "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
                 "ArrayList" => return self.new_array_list(type_args, args, span),
@@ -5740,6 +5807,31 @@ impl BodyGen<'_> {
         let arg_width = u16::from(descriptor != "()V");
         self.code.drop_stack(1 + arg_width);
         JType::Str
+    }
+
+    /// `new StringBuilder()` or `new StringBuilder(String)`.
+    fn new_string_builder(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let class_index = intern_class(self.pool, "java/lang/StringBuilder");
+        self.code.push_op_u16(op::NEW, class_index, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [] => "()V",
+            [arg] => {
+                let ty = self.expr(arg);
+                if ty != JType::Str && ty != JType::Error {
+                    self.error(span, "new StringBuilder(...) takes a String");
+                }
+                "(Ljava/lang/String;)V"
+            }
+            _ => {
+                self.error(span, "new StringBuilder(...) takes at most one argument");
+                "()V"
+            }
+        };
+        let init = intern_method_ref(self.pool, "java/lang/StringBuilder", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(u16::from(!args.is_empty()));
+        JType::StringBuilder
     }
 
     /// `new Object()` — an identity-only object (NEW + the no-op `<init>`).
@@ -6029,6 +6121,7 @@ impl BodyGen<'_> {
             JType::TypeVar => self.table.object_id,
             JType::Error => return None,
             JType::Str
+            | JType::StringBuilder
             | JType::Scanner
             | JType::File
             | JType::Writer
@@ -6431,6 +6524,17 @@ impl BodyGen<'_> {
             let method_ref = intern_method_ref(
                 self.pool,
                 "java/io/File",
+                "toString",
+                "()Ljava/lang/String;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return JType::Str;
+        }
+        if ty == JType::StringBuilder {
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/lang/StringBuilder",
                 "toString",
                 "()Ljava/lang/String;",
             );
@@ -7115,6 +7219,7 @@ impl BodyGen<'_> {
         match ty {
             // Reached only if not already coerced; treat as Object.
             JType::Generic { .. }
+            | JType::StringBuilder
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Class
@@ -7324,6 +7429,12 @@ impl BodyGen<'_> {
                     {
                         let short = self.strip_package_prefix(path);
                         let path = short.as_deref().unwrap_or(path);
+                        // `String.format` is variadic and special-cased in the
+                        // emission path (not in the static table); it returns
+                        // String. Mirror that here so it can be an argument.
+                        if path[0] == "String" && method == "format" {
+                            return JType::Str;
+                        }
                         // Intrinsic static (Math.abs, ...).
                         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                         let (_, methods) = builtin_static_table(&path[0]).expect("checked above");
@@ -9168,6 +9279,7 @@ impl BodyGen<'_> {
         let ty = self.coerce_to_string_for_output(ty);
         let descriptor = match ty {
             JType::Generic { .. }
+            | JType::StringBuilder
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Class

@@ -129,6 +129,37 @@ class Assertions {
     if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
     for (int i = 0; i < expected.length; i++) if (expected[i] != actual[i]) throw new RuntimeException(message + " ==> arrays first differed at element [" + i + "]");
   }
+  // 2D array overloads: compare row by row (each row via the 1D form).
+  public static void assertArrayEquals(int[][] expected, int[][] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
+  public static void assertArrayEquals(int[][] expected, int[][] actual, String message) {
+    if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
+    for (int i = 0; i < expected.length; i++) assertArrayEquals(expected[i], actual[i], message);
+  }
+  public static void assertArrayEquals(double[][] expected, double[][] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
+  public static void assertArrayEquals(double[][] expected, double[][] actual, String message) {
+    if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
+    for (int i = 0; i < expected.length; i++) assertArrayEquals(expected[i], actual[i], message);
+  }
+  public static void assertArrayEquals(long[][] expected, long[][] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
+  public static void assertArrayEquals(long[][] expected, long[][] actual, String message) {
+    if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
+    for (int i = 0; i < expected.length; i++) assertArrayEquals(expected[i], actual[i], message);
+  }
+  public static void assertArrayEquals(boolean[][] expected, boolean[][] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
+  public static void assertArrayEquals(boolean[][] expected, boolean[][] actual, String message) {
+    if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
+    for (int i = 0; i < expected.length; i++) assertArrayEquals(expected[i], actual[i], message);
+  }
+  public static void assertArrayEquals(char[][] expected, char[][] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
+  public static void assertArrayEquals(char[][] expected, char[][] actual, String message) {
+    if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
+    for (int i = 0; i < expected.length; i++) assertArrayEquals(expected[i], actual[i], message);
+  }
+  public static void assertArrayEquals(Object[][] expected, Object[][] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
+  public static void assertArrayEquals(Object[][] expected, Object[][] actual, String message) {
+    if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
+    for (int i = 0; i < expected.length; i++) assertArrayEquals(expected[i], actual[i], message);
+  }
   public static void assertNull(Object value) {
     if (value != null) throw new RuntimeException("expected null but was " + value);
   }

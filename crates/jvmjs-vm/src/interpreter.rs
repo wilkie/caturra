@@ -2077,6 +2077,17 @@ impl<'run> Interpreter<'run> {
                 });
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
             }
+            // Object.equals(Object): reference identity when not overridden.
+            if method_name == "equals" && descriptor == "(Ljava/lang/Object;)Z" {
+                let equal = matches!(args.first(), Some(JValue::Ref(Some(r))) if *r == receiver);
+                return Ok(UserDispatch::Value(Some(JValue::Int(i32::from(equal)))));
+            }
+            // Object.hashCode(): identity hash.
+            if method_name == "hashCode" && descriptor == "()I" {
+                return Ok(UserDispatch::Value(Some(JValue::Int(i32::from_ne_bytes(
+                    receiver.to_ne_bytes(),
+                )))));
+            }
             return Err(VmError::UnknownIntrinsic(format!(
                 "{instance_class}.{method_name}{descriptor}"
             )));
