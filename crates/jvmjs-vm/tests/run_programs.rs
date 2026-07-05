@@ -410,6 +410,51 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn neighborhood_validation_counts_painter_actions() {
+    // org.code.validation: NeighborhoodTestRunner.run() invokes the student's
+    // Main, then reports the recorded action log — including query methods
+    // (isOnBucket) that the visual stream omits.
+    let grid = "1,3 1,0 1,0\n1,0 1,0 1,0\n1,0 1,0 1,0\n";
+    let out = run_neighborhood(
+        r#"
+        import org.code.neighborhood.*;
+        import org.code.validation.*;
+        public class Main {
+            public static void main(String[] args) {
+                Painter p = new Painter(0, 0, "east", 0);
+                while (p.isOnBucket()) {
+                    p.takePaint();
+                }
+                p.move();
+            }
+        }
+        class Checker {
+            public static void main(String[] args) {
+                NeighborhoodLog log = NeighborhoodTestRunner.run();
+                PainterLog[] logs = log.getPainterLogs();
+                PainterLog pl = logs[0];
+                System.out.println("painters=" + logs.length);
+                System.out.println("bucketChecks=" + pl.actionCount(NeighborhoodActionType.IS_ON_BUCKET));
+                System.out.println("takes=" + pl.actionCount(NeighborhoodActionType.TAKE_PAINT));
+                System.out.println("moveOnce=" + pl.didActionExactly(NeighborhoodActionType.MOVE, 1));
+                System.out.println("takesAtLeast2=" + pl.didActionAtLeast(NeighborhoodActionType.TAKE_PAINT, 2));
+            }
+        }
+        "#,
+        "Checker",
+        grid,
+    );
+    assert_eq!(
+        out,
+        "painters=1\n\
+         bucketChecks=4\n\
+         takes=3\n\
+         moveOnce=true\n\
+         takesAtLeast2=true\n"
+    );
+}
+
+#[test]
 fn neighborhood_emits_javabuilder_message_stream() {
     // The bundled Painter emits the same NEIGHBORHOOD ClientMessages the
     // real javabuilder marshals to the frontend renderer.

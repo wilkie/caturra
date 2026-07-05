@@ -1091,7 +1091,12 @@ impl MethodTable {
                 }
             }
             TypeRef::Generic { base, args } => {
-                let simple = crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                let mut simple =
+                    crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                // `List<E>` is the interface form of the ArrayList jvmjs models.
+                if simple == "List" && !self.has_class("List") {
+                    simple = "ArrayList";
+                }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
                 } else if let Some(id) = self.class_id(base) {
@@ -2123,6 +2128,7 @@ fn emit_method(
     )
 }
 
+#[allow(clippy::too_many_lines)] // one type-descriptor matcher
 fn method_descriptor(
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
@@ -2152,7 +2158,11 @@ fn method_descriptor(
                 push_type(path, diagnostics, table, out, inner, span);
             }
             TypeRef::Generic { base, .. } => {
-                let simple = crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                let mut simple =
+                    crate::imports::canonical_library_class(base).unwrap_or(base.as_str());
+                if simple == "List" && !table.has_class("List") {
+                    simple = "ArrayList";
+                }
                 if simple == "ArrayList" {
                     out.push_str("Ljava/util/ArrayList;");
                 } else {

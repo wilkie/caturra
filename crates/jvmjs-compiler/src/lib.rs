@@ -79,6 +79,10 @@ const JUNIT_LIB: &str = include_str!("stdlib/junit.java");
 /// imports `java.util` — element concatenation coerces each via `toString`.
 const ARRAYS_LIB: &str = include_str!("stdlib/arrays.java");
 
+/// Bundled `org.code.validation` (the neighborhood test harness), injected
+/// when a source imports it. Reads the action log recorded by `__NbhdWorld`.
+const VALIDATION_LIB: &str = include_str!("stdlib/validation.java");
+
 /// A discovered `@Test` method for the synthetic validation runner.
 struct TestCase {
     method: String,
@@ -86,9 +90,11 @@ struct TestCase {
     order: i32,
 }
 
-/// A test class: its `@BeforeEach` setup methods and ordered `@Test`s.
+/// A test class: its `@BeforeAll`/`@BeforeEach` setup methods and ordered
+/// `@Test`s.
 struct TestClass {
     name: String,
+    before_all: Vec<String>,
     before_each: Vec<String>,
     tests: Vec<TestCase>,
 }
@@ -100,6 +106,12 @@ fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
     for (_, unit) in units {
         for class in &unit.classes {
             let has = |m: &ast::MethodDecl, n: &str| m.annotations.iter().any(|a| a.name == n);
+            let before_all: Vec<String> = class
+                .methods
+                .iter()
+                .filter(|m| has(m, "BeforeAll"))
+                .map(|m| m.name.clone())
+                .collect();
             let before_each: Vec<String> = class
                 .methods
                 .iter()
@@ -134,6 +146,7 @@ fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
             if !tests.is_empty() {
                 classes.push(TestClass {
                     name: class.name.clone(),
+                    before_all,
                     before_each,
                     tests,
                 });
@@ -151,6 +164,13 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
         "public class __ValidationRunner {\n  public static void main(String[] args) {\n",
     );
     for class in classes {
+        // `@BeforeAll` runs once (static); tolerate failure so per-test
+        // errors are still reported individually.
+        for setup in &class.before_all {
+            src.push_str("    try {\n");
+            let _ = writeln!(src, "      {}.{setup}();", class.name);
+            src.push_str("    } catch (Throwable __e) {}\n");
+        }
         for test in &class.tests {
             let name = test
                 .display
@@ -243,6 +263,14 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<neighborhood>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<neighborhood>"), unit));
+    }
+    // org.code.validation (neighborhood test harness): runs the student's main
+    // and reports the recorded action log. Depends on __NbhdWorld above.
+    if imports_package(&units, &["org", "code", "validation"]) {
+        let (tokens, _) = lexer::lex("<validation-lib>", VALIDATION_LIB);
+        let (unit, mut errs) = parser::parse("<validation-lib>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<validation-lib>"), unit));
     }
     if imports_package(&units, &["org", "code", "theater"])
         || imports_package(&units, &["org", "code", "media"])

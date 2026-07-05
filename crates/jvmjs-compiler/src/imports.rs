@@ -18,6 +18,7 @@ use crate::diagnostics::{Diagnostic, SourceSpan};
 const JAVA_UTIL: &[&str] = &[
     "Scanner",
     "ArrayList",
+    "List",
     "InputMismatchException",
     "NoSuchElementException",
     "IllegalFormatException",
@@ -78,7 +79,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "LinkedList",
             "ArrayDeque",
             "Stack",
-            "List",
             "Map",
             "Set",
             "Queue",
@@ -129,6 +129,7 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
 const REQUIRES_IMPORT: &[&str] = &[
     "Scanner",
     "ArrayList",
+    "List",
     "File",
     "PrintWriter",
     "InputMismatchException",
@@ -194,6 +195,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         // Bundled clean-room library (auto-injected in `compile`); the
         // classes resolve like user classes, the import just validates.
         "org.code.neighborhood" => Some(ORG_CODE_NEIGHBORHOOD),
+        "org.code.validation" => Some(ORG_CODE_VALIDATION),
         "org.code.theater" => Some(ORG_CODE_THEATER),
         "org.code.media" => Some(ORG_CODE_MEDIA),
         _ => None,
@@ -202,6 +204,16 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
 
 /// The public class of the bundled neighborhood library.
 static ORG_CODE_NEIGHBORHOOD: &[&str] = &["Painter"];
+
+/// Public classes of the bundled validation library (neighborhood harness).
+static ORG_CODE_VALIDATION: &[&str] = &[
+    "NeighborhoodTestRunner",
+    "NeighborhoodLog",
+    "PainterLog",
+    "PainterEvent",
+    "Position",
+    "NeighborhoodActionType",
+];
 
 /// Public classes of the bundled theater/media library.
 static ORG_CODE_THEATER: &[&str] = &["Scene", "Theater", "Instrument"];

@@ -92,6 +92,26 @@ class __NbhdWorld {
       writer.println("{\"type\":\"NEIGHBORHOOD\",\"value\":\"" + value + "\",\"detail\":" + detail + "}");
     } catch (Exception e) {}
   }
+  // In-memory action log read by org.code.validation (NeighborhoodTestRunner):
+  // every painter action, including query methods (isOnBucket/canMove) that
+  // the visual stream omits. Parallel arrays avoid needing java.util.Map.
+  static int logCap = 200000;
+  static String[] logId = new String[logCap];
+  static String[] logType = new String[logCap];
+  static int[] logX = new int[logCap];
+  static int[] logY = new int[logCap];
+  static String[] logDir = new String[logCap];
+  static int[] logPaint = new int[logCap];
+  static String[] logColor = new String[logCap];
+  static int logCount = 0;
+  static void logAction(String id, String type, int x, int y, String dir, int paint, String color) {
+    if (logCount >= logCap) return;
+    logId[logCount] = id; logType[logCount] = type;
+    logX[logCount] = x; logY[logCount] = y; logDir[logCount] = dir;
+    logPaint[logCount] = paint; logColor[logCount] = color;
+    logCount++;
+  }
+  static void resetLog() { logCount = 0; }
   static __NbhdGrid getGrid() {
     if (grid == null) grid = load();
     return grid;
@@ -146,11 +166,16 @@ class Painter {
     this.id = "painter-" + lastId; lastId++;
     __NbhdWorld.emit("INITIALIZE_PAINTER", "{" + __idf() + ",\"direction\":\"" + this.direction.getDirectionString()
         + "\",\"x\":\"" + x + "\",\"y\":\"" + y + "\",\"paint\":\"" + remainingPaint + "\"}");
+    __log("INITIALIZE_PAINTER", null);
   }
   private String __idf() { return "\"id\":\"" + id + "\""; }
+  private void __log(String type, String color) {
+    __NbhdWorld.logAction(id, type, x, y, direction.getDirectionString(), remainingPaint, color);
+  }
   public void turnLeft() {
     direction = direction.turnLeft();
     __NbhdWorld.emit("TURN_LEFT", "{" + __idf() + ",\"direction\":\"" + direction.getDirectionString() + "\"}");
+    __log("TURN_LEFT", null);
   }
   public void move() {
     if (isValidMovement(direction)) {
@@ -162,12 +187,14 @@ class Painter {
       throw new RuntimeException("Invalid move");
     }
     __NbhdWorld.emit("MOVE", "{" + __idf() + ",\"direction\":\"" + direction.getDirectionString() + "\"}");
+    __log("MOVE", null);
   }
   public void paint(String color) {
     if (hasPaint()) {
       grid.getSquare(x, y).setColor(color);
       remainingPaint--;
       __NbhdWorld.emit("PAINT", "{" + __idf() + ",\"color\":\"" + color + "\"}");
+      __log("PAINT", color);
     } else {
       System.out.println("There is no more paint in the painter's bucket");
     }
@@ -175,6 +202,7 @@ class Painter {
   public void scrapePaint() {
     grid.getSquare(x, y).removePaint();
     __NbhdWorld.emit("REMOVE_PAINT", "{" + __idf() + "}");
+    __log("REMOVE_PAINT", null);
   }
   public int getMyPaint() { return remainingPaint; }
   public void hidePainter() { __NbhdWorld.emit("HIDE_PAINTER", "{" + __idf() + "}"); }
@@ -184,15 +212,16 @@ class Painter {
       grid.getSquare(x, y).collectPaint();
       remainingPaint++;
       __NbhdWorld.emit("TAKE_PAINT", "{" + __idf() + "}");
+      __log("TAKE_PAINT", null);
     } else {
       System.out.println("There is no paint to collect here");
     }
   }
-  public boolean isOnPaint() { return grid.getSquare(x, y).hasColor(); }
-  public boolean isOnBucket() { return grid.getSquare(x, y).containsPaint(); }
+  public boolean isOnPaint() { __log("IS_ON_PAINT", null); return grid.getSquare(x, y).hasColor(); }
+  public boolean isOnBucket() { __log("IS_ON_BUCKET", null); return grid.getSquare(x, y).containsPaint(); }
   public boolean hasPaint() { if (hasInfinitePaint) return true; return remainingPaint > 0; }
-  public boolean canMove(String d) { return isValidMovement(__NbhdDir.fromString(d)); }
-  public boolean canMove() { return isValidMovement(direction); }
+  public boolean canMove(String d) { __log("CAN_MOVE", null); return isValidMovement(__NbhdDir.fromString(d)); }
+  public boolean canMove() { __log("CAN_MOVE", null); return isValidMovement(direction); }
   public String getColor() { return grid.getSquare(x, y).getColor(); }
   public boolean isFacingNorth() { return direction.isNorth(); }
   public boolean isFacingEast() { return direction.isEast(); }
