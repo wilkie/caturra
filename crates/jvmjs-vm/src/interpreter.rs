@@ -952,6 +952,10 @@ impl<'run> Interpreter<'run> {
                                         target == "java/util/ArrayList"
                                             || target == "java/util/List"
                                     }
+                                    // Boxed wrapper: `x instanceof Integer`.
+                                    Some(crate::value::HeapObject::Boxed {
+                                        class_name, ..
+                                    }) => *class_name == target,
                                     _ => false,
                                 },
                             };
@@ -2135,6 +2139,19 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
         frame: &mut Frame<'run>,
     ) -> Result<Option<Frame<'run>>, VmError> {
+        // `Type.class` literal (compiler-lowered): a `Class` handle for any
+        // type name, including primitives — never throws.
+        if class_name == "java/lang/Class" && method_name == "__forType" {
+            let name = match args.first() {
+                Some(JValue::Ref(Some(reference))) => {
+                    self.heap.string_text(*reference).unwrap_or_default()
+                }
+                _ => String::new(),
+            };
+            let reference = self.heap.alloc(crate::value::HeapObject::Class { name });
+            frame.stack.push(JValue::Ref(Some(reference)));
+            return Ok(None);
+        }
         // `Class.forName(name)` — a reflection handle for a loaded class.
         // Needs the class table, which the intrinsic layer lacks.
         if class_name == "java/lang/Class" && method_name == "forName" {
@@ -2242,6 +2259,24 @@ impl<'run> Interpreter<'run> {
                     | crate::value::HeapObject::Constructor { .. }
             )
         );
+        // `Constructor.newInstance` runs a constructor (a frame), so it can't
+        // go through the value-returning reflect path.
+        if method_name == "newInstance"
+            && matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::Constructor { .. })
+            )
+        {
+            return self.reflect_new_instance(receiver, &args, frame);
+        }
+        // `getClass()` on any object (library intrinsics included, e.g. a
+        // String or a boxed Integer from a reflective `Object[]`).
+        if method_name == "getClass" && descriptor == "()Ljava/lang/Class;" {
+            let name = self.object_class_name(receiver);
+            let reference = self.heap.alloc(crate::value::HeapObject::Class { name });
+            frame.stack.push(JValue::Ref(Some(reference)));
+            return Ok(None);
+        }
         let result = if let Some(instance_class) = instance_class {
             match self.user_virtual_dispatch(
                 receiver,
@@ -2278,6 +2313,113 @@ impl<'run> Interpreter<'run> {
     /// `java.lang.Class` / `java.lang.reflect.Field` methods — the
     /// structural, read-only reflection the curriculum uses. Reads the
     /// loaded [`ClassFile`] metadata; performs no invocation.
+    /// The binary class name behind any heap object, for `getClass()`.
+    fn object_class_name(&self, receiver: HeapRef) -> String {
+        use crate::value::HeapObject;
+        match self.heap.get(receiver) {
+            Some(
+                HeapObject::Instance { class_name, .. } | HeapObject::Boxed { class_name, .. },
+            ) => class_name.clone(),
+            Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
+            Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
+            Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
+            _ => String::from("java/lang/Object"),
+        }
+    }
+
+    /// The `Class` names inside a `Class[]` argument (for `getConstructor`).
+    fn class_array_names(&self, arg: Option<&JValue>) -> Vec<String> {
+        let Some(JValue::Ref(Some(reference))) = arg else {
+            return Vec::new();
+        };
+        let Some(crate::value::HeapObject::RefArray(elems)) = self.heap.get(*reference) else {
+            return Vec::new();
+        };
+        elems
+            .iter()
+            .filter_map(|v| {
+                let JValue::Ref(Some(cr)) = v else {
+                    return None;
+                };
+                match self.heap.get(*cr) {
+                    Some(crate::value::HeapObject::Class { name }) => Some(name.clone()),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// `Constructor.newInstance(Object[])`: allocate an instance of the
+    /// declaring class and run its `<init>` with the (unboxed) arguments.
+    /// The new object is left on the caller's stack so it survives the void
+    /// `<init>` return.
+    fn reflect_new_instance(
+        &mut self,
+        receiver: HeapRef,
+        args: &[JValue],
+        frame: &mut Frame<'run>,
+    ) -> Result<Option<Frame<'run>>, VmError> {
+        use crate::value::HeapObject;
+        let (declaring, descriptor) = match self.heap.get(receiver) {
+            Some(HeapObject::Constructor {
+                declaring,
+                descriptor,
+                ..
+            }) => (declaring.clone(), descriptor.clone()),
+            _ => return Ok(None),
+        };
+        let initargs: Vec<JValue> = match args.first() {
+            Some(JValue::Ref(Some(r))) => match self.heap.get(*r) {
+                Some(HeapObject::RefArray(elems)) => elems.clone(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        let param_descs = parse_descriptor_params(&descriptor);
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let target = classes.get(&declaring).ok_or_else(|| {
+            VmError::UncaughtException(format!("java.lang.InstantiationException: {declaring}"))
+        })?;
+        let ctor = target
+            .methods
+            .iter()
+            .find(|m| {
+                target.constant_pool.get_utf8(m.name_index) == Some("<init>")
+                    && target.constant_pool.get_utf8(m.descriptor_index)
+                        == Some(descriptor.as_str())
+            })
+            .ok_or_else(|| {
+                VmError::UncaughtException(format!(
+                    "java.lang.NoSuchMethodException: {declaring}.<init>"
+                ))
+            })?;
+        let object = self.new_instance(&declaring);
+        let instance = self.heap.alloc(object);
+        let mut locals = vec![JValue::Ref(Some(instance))];
+        for (arg, desc) in initargs.iter().zip(&param_descs) {
+            locals.push(self.unbox_for(*arg, desc));
+            if desc == "J" || desc == "D" {
+                locals.push(JValue::Int(0)); // wide slot padding
+            }
+        }
+        // Leave the new object on the caller's stack; the void `<init>` frame
+        // returns nothing, so this becomes newInstance's result.
+        frame.stack.push(JValue::Ref(Some(instance)));
+        Ok(Some(self.make_frame(target, ctor, locals)?))
+    }
+
+    /// Unbox `value` when the target parameter descriptor is a primitive.
+    fn unbox_for(&self, value: JValue, param_desc: &str) -> JValue {
+        if matches!(param_desc, "I" | "S" | "B" | "C" | "Z" | "J" | "D" | "F")
+            && let JValue::Ref(Some(reference)) = value
+            && let Some(crate::value::HeapObject::Boxed { value: inner, .. }) =
+                self.heap.get(reference)
+        {
+            return *inner;
+        }
+        value
+    }
+
     /// Whether `sub` is `sup` or a (transitive) subclass of it, walking the
     /// loaded class-file superclass chain (stops at the first library class).
     fn class_is_subtype(&self, sub: &str, sup: &str) -> bool {
@@ -2425,6 +2567,41 @@ impl<'run> Interpreter<'run> {
                             .collect();
                         let array = self.heap.alloc(HeapObject::RefArray(refs));
                         Ok(Some(JValue::Ref(Some(array))))
+                    }
+                    "getConstructor" | "getDeclaredConstructor" => {
+                        // args[0] is a Class[] of parameter types.
+                        let param_class_names = self.class_array_names(args.first());
+                        let found = self.classes.get(&name).and_then(|cf| {
+                            cf.methods
+                                .iter()
+                                .filter(|m| {
+                                    cf.constant_pool.get_utf8(m.name_index) == Some("<init>")
+                                })
+                                .find_map(|m| {
+                                    let desc = cf
+                                        .constant_pool
+                                        .get_utf8(m.descriptor_index)
+                                        .unwrap_or_default();
+                                    constructor_params_match(desc, &param_class_names)
+                                        .then(|| (desc.to_owned(), m.access_flags.0))
+                                })
+                        });
+                        match found {
+                            Some((descriptor, access)) => {
+                                let declaring = simple_class_name(&name).to_owned();
+                                Ok(Some(JValue::Ref(Some(self.heap.alloc(
+                                    HeapObject::Constructor {
+                                        declaring,
+                                        descriptor,
+                                        access,
+                                    },
+                                )))))
+                            }
+                            None => Err(VmError::UncaughtException(format!(
+                                "java.lang.NoSuchMethodException: {}.<init>()",
+                                simple_class_name(&name)
+                            ))),
+                        }
                     }
                     other => Err(VmError::UnknownIntrinsic(format!("Class.{other}"))),
                 }
@@ -2947,6 +3124,65 @@ impl Frame<'_> {
 /// jvmjs is a flat namespace, so this is usually a no-op.
 fn simple_class_name(name: &str) -> &str {
     name.rsplit(['/', '.']).next().unwrap_or(name)
+}
+
+/// Parse the parameter descriptors from a method descriptor, e.g.
+/// `(Ljava/lang/String;I)V` -> `["Ljava/lang/String;", "I"]`.
+fn parse_descriptor_params(descriptor: &str) -> Vec<String> {
+    let mut params = Vec::new();
+    let inner = descriptor
+        .strip_prefix('(')
+        .and_then(|s| s.split(')').next())
+        .unwrap_or("");
+    let mut chars = inner.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        let mut param = String::new();
+        while chars.peek() == Some(&'[') {
+            param.push(chars.next().unwrap());
+        }
+        match chars.next() {
+            Some('L') => {
+                param.push('L');
+                for ch in chars.by_ref() {
+                    param.push(ch);
+                    if ch == ';' {
+                        break;
+                    }
+                }
+            }
+            Some(prim) => param.push(prim),
+            None => break,
+        }
+        let _ = c;
+        params.push(param);
+    }
+    params
+}
+
+/// Whether a `<init>` descriptor's parameters match the given `Class[]` names
+/// (with wrapper/primitive boxing equivalence, as `getConstructor` allows).
+fn constructor_params_match(descriptor: &str, class_names: &[String]) -> bool {
+    let params = parse_descriptor_params(descriptor);
+    params.len() == class_names.len()
+        && params
+            .iter()
+            .zip(class_names)
+            .all(|(desc, class_name)| class_matches_descriptor(class_name, desc))
+}
+
+/// Whether a `Class` (by name) is acceptable for a parameter descriptor.
+fn class_matches_descriptor(class_name: &str, desc: &str) -> bool {
+    match class_name {
+        "int" | "java/lang/Integer" => desc == "I" || desc == "Ljava/lang/Integer;",
+        "long" | "java/lang/Long" => desc == "J" || desc == "Ljava/lang/Long;",
+        "double" | "java/lang/Double" => desc == "D" || desc == "Ljava/lang/Double;",
+        "float" | "java/lang/Float" => desc == "F" || desc == "Ljava/lang/Float;",
+        "boolean" | "java/lang/Boolean" => desc == "Z" || desc == "Ljava/lang/Boolean;",
+        "char" | "java/lang/Character" => desc == "C" || desc == "Ljava/lang/Character;",
+        "short" | "java/lang/Short" => desc == "S" || desc == "Ljava/lang/Short;",
+        "byte" | "java/lang/Byte" => desc == "B" || desc == "Ljava/lang/Byte;",
+        _ => desc == format!("L{class_name};"),
+    }
 }
 
 fn render_array(items: impl Iterator<Item = String>) -> String {

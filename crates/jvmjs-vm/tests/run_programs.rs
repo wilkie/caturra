@@ -469,6 +469,44 @@ fn easymock_partial_mock_record_replay_verify() {
 }
 
 #[test]
+fn class_reflection_get_constructor_and_new_instance() {
+    // Reflective instantiation: class literals (incl. `int.class`), a
+    // `Class<?>[]` built from arg types, getConstructor (with boxing), and
+    // newInstance — the surface the Unit 2 ConstructorsHelper uses.
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        import java.lang.reflect.*;
+        public class Main {
+            public static void main(String[] a) throws Exception {
+                Object[] initargs = { "Seahawks", 8 };
+                Class<?>[] ptypes = new Class<?>[initargs.length];
+                for (int i = 0; i < initargs.length; i++) {
+                    if (initargs[i] instanceof Integer) {
+                        ptypes[i] = int.class;
+                    } else {
+                        ptypes[i] = initargs[i].getClass();
+                    }
+                }
+                Constructor<?> ctor = Team.class.getConstructor(ptypes);
+                Team t = (Team) ctor.newInstance(initargs);
+                System.out.println(t.getName() + " " + t.getWins());
+            }
+        }
+        class Team {
+            private String name; private int wins;
+            public Team() {}
+            public Team(String name, int wins) { this.name = name; this.wins = wins; }
+            public String getName() { return name; }
+            public int getWins() { return wins; }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "Seahawks 8\n");
+}
+
+#[test]
 fn class_reflection_forname_and_assignable() {
     // Class.forName + isAssignableFrom (the reflection the neighborhood
     // subclass validators use).

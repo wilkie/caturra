@@ -299,14 +299,15 @@ pub fn invoke_virtual(
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
+        (HeapObject::Exception { .. }, "printStackTrace") => Ok(None),
         (
             HeapObject::Exception {
                 class_name,
                 message,
             },
-            "getMessage" | "toString",
+            "getMessage" | "toString" | "getLocalizedMessage",
         ) => {
-            let rendered = if method == "getMessage" {
+            let rendered = if method == "getMessage" || method == "getLocalizedMessage" {
                 match message {
                     Some(message) => message.clone(),
                     None => return Ok(Some(JValue::NULL)),

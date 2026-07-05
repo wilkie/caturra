@@ -1099,6 +1099,15 @@ impl MethodTable {
                 }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
+                } else if !self.has_class(base)
+                    && matches!(simple, "Class" | "Constructor" | "Field")
+                {
+                    // `Class<?>` / `Constructor<?>` erase to the raw reflection type.
+                    Some(match simple {
+                        "Constructor" => JType::Constructor,
+                        "Field" => JType::Field,
+                        _ => JType::Class,
+                    })
                 } else if let Some(id) = self.class_id(base) {
                     // A single-type-parameter user class tracks its
                     // argument (`Box<String>`); otherwise it is raw.
@@ -1144,6 +1153,7 @@ impl MethodTable {
                     JType::Object(id) => ElemType::Object(id),
                     JType::Field => ElemType::Field,
                     JType::Constructor => ElemType::Constructor,
+                    JType::Class => ElemType::Class,
                     _ => return None,
                 };
                 Some(JType::Array { elem, dims })
@@ -1450,9 +1460,11 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::Byte => "java/lang/Byte",
         ElemType::Char => "java/lang/Character",
         ElemType::Boolean => "java/lang/Boolean",
-        ElemType::Str | ElemType::Object(_) | ElemType::Field | ElemType::Constructor => {
-            "java/lang/Object"
-        }
+        ElemType::Str
+        | ElemType::Object(_)
+        | ElemType::Field
+        | ElemType::Constructor
+        | ElemType::Class => "java/lang/Object",
     }
 }
 
@@ -1471,6 +1483,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Object(id) => table.class_name(id).to_owned(),
         ElemType::Field => String::from("Field"),
         ElemType::Constructor => String::from("Constructor"),
+        ElemType::Class => String::from("Class"),
     }
 }
 
@@ -1513,6 +1526,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Char => Some(ElemType::Char),
         JType::Str => Some(ElemType::Str),
         JType::Object(id) => Some(ElemType::Object(id)),
+        JType::Class => Some(ElemType::Class),
         _ => None,
     }
 }
@@ -1590,6 +1604,16 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Array { elem: ElemType::Object(sup), dims: d2 },
             ) if d1 == d2 && sup == table.object_id
         )
+        // Autoboxing a primitive to the top `Object` type (`Object o = 5;`,
+        // or a primitive in an `Object...` varargs).
+        || matches!(
+            (from, to),
+            (
+                JType::Int | JType::Long | JType::Double | JType::Float
+                    | JType::Short | JType::Byte | JType::Char | JType::Boolean,
+                JType::Object(id),
+            ) if id == table.object_id
+        )
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -1611,6 +1635,8 @@ enum ElemType {
     Field,
     /// `java.lang.reflect.Constructor` (element of `getDeclaredConstructors()`).
     Constructor,
+    /// `java.lang.Class` (element of a `Class[]`, e.g. `getConstructor` args).
+    Class,
 }
 
 impl ElemType {
@@ -1628,6 +1654,7 @@ impl ElemType {
             ElemType::Object(id) => format!("L{};", table.class_name(id)),
             ElemType::Field => String::from("Ljava/lang/reflect/Field;"),
             ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
+            ElemType::Class => String::from("Ljava/lang/Class;"),
         }
     }
 
@@ -1645,6 +1672,7 @@ impl ElemType {
             ElemType::Object(id) => JType::Object(id),
             ElemType::Field => JType::Field,
             ElemType::Constructor => JType::Constructor,
+            ElemType::Class => JType::Class,
         }
     }
 }
@@ -2168,6 +2196,12 @@ fn method_descriptor(
                 }
                 if simple == "ArrayList" {
                     out.push_str("Ljava/util/ArrayList;");
+                } else if !table.has_class(base) && simple == "Class" {
+                    out.push_str("Ljava/lang/Class;");
+                } else if !table.has_class(base) && simple == "Constructor" {
+                    out.push_str("Ljava/lang/reflect/Constructor;");
+                } else if !table.has_class(base) && simple == "Field" {
+                    out.push_str("Ljava/lang/reflect/Field;");
                 } else {
                     diagnostics.push(Diagnostic::error(
                         path,
@@ -2353,6 +2387,8 @@ enum BParam {
     Elem,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
     Class,
+    /// Any reference array (`getConstructor(Class[])`, `newInstance(Object[])`).
+    RefArray,
 }
 
 /// The return of an intrinsic method.
@@ -2380,6 +2416,10 @@ enum BRet {
     FieldArray,
     /// `Constructor[]` (`Class.getDeclaredConstructors`).
     ConstructorArray,
+    /// A single `java.lang.reflect.Constructor` (`Class.getConstructor`).
+    Constructor,
+    /// `java.lang.Object` (`Constructor.newInstance`).
+    Object,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -3090,6 +3130,18 @@ const EXCEPTION_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
     },
+    BuiltinMethod {
+        name: "printStackTrace",
+        params: &[],
+        ret: BRet::Void,
+        descriptor: "()V",
+    },
+    BuiltinMethod {
+        name: "getLocalizedMessage",
+        params: &[],
+        ret: BRet::Str,
+        descriptor: "()Ljava/lang/String;",
+    },
 ];
 
 const MATH_METHODS: &[BuiltinMethod] = &[
@@ -3518,6 +3570,18 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         BRet::ConstructorArray,
         "()[Ljava/lang/reflect/Constructor;",
     ),
+    bm(
+        "getConstructor",
+        &[BParam::RefArray],
+        BRet::Constructor,
+        "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+    ),
+    bm(
+        "getDeclaredConstructor",
+        &[BParam::RefArray],
+        BRet::Constructor,
+        "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+    ),
 ];
 
 /// `java.lang.reflect.Constructor` methods.
@@ -3525,6 +3589,12 @@ const CONSTRUCTOR_METHODS: &[BuiltinMethod] = &[
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "newInstance",
+        &[BParam::RefArray],
+        BRet::Object,
+        "([Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
 ];
 
 /// `java.lang.reflect.Field` methods.
@@ -3652,12 +3722,16 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
         BParam::SelfList => elem.map_or(JType::Error, JType::List),
         BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
         BParam::Class => JType::Class,
+        BParam::RefArray => JType::Error,
     }
 }
 
 /// Whether an argument type satisfies a builtin parameter (widening).
 fn bparam_matches(param: BParam, arg: JType, elem: Option<ElemType>, table: &MethodTable) -> bool {
-    widens(arg, bparam_type(param, elem), table)
+    match param {
+        BParam::RefArray => matches!(arg, JType::Array { .. }),
+        other => widens(arg, bparam_type(other, elem), table),
+    }
 }
 
 /// Overload selection for intrinsic methods: applicable-by-widening
@@ -3691,7 +3765,7 @@ fn pick_builtin<'m>(
     applicable.first().copied()
 }
 
-fn bret_type(ret: BRet, elem: Option<ElemType>) -> Option<JType> {
+fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
         BRet::Int => Some(JType::Int),
@@ -3721,6 +3795,8 @@ fn bret_type(ret: BRet, elem: Option<ElemType>) -> Option<JType> {
             elem: ElemType::Constructor,
             dims: 1,
         }),
+        BRet::Constructor => Some(JType::Constructor),
+        BRet::Object => Some(JType::Object(table.object_id)),
     }
 }
 
@@ -5908,7 +5984,7 @@ impl BodyGen<'_> {
             args_width += param_ty.width();
         }
         let method_ref = intern_method_ref(self.pool, class, chosen.name, chosen.descriptor);
-        let ret = bret_type(chosen.ret, elem);
+        let ret = bret_type(chosen.ret, elem, self.table);
         let ret_width = ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
@@ -6049,7 +6125,7 @@ impl BodyGen<'_> {
             args_width += param_ty.width();
         }
         let method_ref = intern_method_ref(self.pool, jvm_class, chosen.name, chosen.descriptor);
-        let ret = bret_type(chosen.ret, None);
+        let ret = bret_type(chosen.ret, None, self.table);
         let ret_width = ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
@@ -6995,6 +7071,11 @@ impl BodyGen<'_> {
             | Expr::Lambda { .. }
             | Expr::MethodRef { .. } => JType::Error,
             Expr::Index { array, .. } => self.type_of(array).element_type().unwrap_or(JType::Error),
+            Expr::Field { object, name, .. }
+                if name == "class" && matches!(object.as_ref(), Expr::Name { .. }) =>
+            {
+                JType::Class
+            }
             Expr::Field { object, name, .. } => match self.type_of(object) {
                 JType::Array { .. } if name == "length" => JType::Int,
                 JType::Object(id) => {
@@ -7048,7 +7129,7 @@ impl BodyGen<'_> {
                         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                         let (_, methods) = builtin_static_table(&path[0]).expect("checked above");
                         return pick_builtin(methods, method, &arg_types, None, self.table)
-                            .and_then(|m| bret_type(m.ret, None))
+                            .and_then(|m| bret_type(m.ret, None, self.table))
                             .unwrap_or(JType::Error);
                     }
                     Some(other) => match self.type_of(other) {
@@ -7068,7 +7149,7 @@ impl BodyGen<'_> {
                             let (_, methods) = builtin_instance_table(receiver_ty)
                                 .expect("matched builtin receivers");
                             return pick_builtin(methods, method, &arg_types, elem, self.table)
-                                .and_then(|m| bret_type(m.ret, elem))
+                                .and_then(|m| bret_type(m.ret, elem, self.table))
                                 .unwrap_or(JType::Error);
                         }
                         _ => return JType::Error,
@@ -7314,15 +7395,21 @@ impl BodyGen<'_> {
             self.error(span, "unknown type in instanceof");
             return JType::Error;
         };
-        let JType::Object(target_id) = target else {
-            self.error(
-                span,
-                format!(
-                    "instanceof needs a class type, got {}",
-                    target.describe(self.table)
-                ),
-            );
-            return JType::Error;
+        let class_name = match target {
+            JType::Object(id) => self.table.class_name(id).to_owned(),
+            // `x instanceof Integer` / `String` — wrapper and String tests.
+            JType::Boxed(elem) => wrapper_internal(elem).to_owned(),
+            JType::Str => String::from("java/lang/String"),
+            other => {
+                self.error(
+                    span,
+                    format!(
+                        "instanceof needs a class type, got {}",
+                        other.describe(self.table)
+                    ),
+                );
+                return JType::Error;
+            }
         };
         if !value_ty.is_reference() && value_ty != JType::Error {
             self.error(
@@ -7334,7 +7421,6 @@ impl BodyGen<'_> {
             );
             return JType::Error;
         }
-        let class_name = self.table.class_name(target_id).to_owned();
         let class_index = intern_class(self.pool, &class_name);
         self.code.push_op_u16(op::INSTANCEOF, class_index, 1);
         self.code.drop_stack(1);
@@ -7403,7 +7489,46 @@ impl BodyGen<'_> {
     }
 
     /// Field access on a value: only `.length` on arrays exists so far.
+    /// Emit a `Type.class` literal: push the type's canonical name and turn it
+    /// into a `Class` handle via the `Class.__forType` intrinsic.
+    fn class_literal(&mut self, type_name: &str) -> JType {
+        let canonical = match type_name {
+            "int" | "double" | "boolean" | "char" | "long" | "float" | "short" | "byte" => {
+                type_name.to_owned()
+            }
+            "String" => String::from("java/lang/String"),
+            "Object" => String::from("java/lang/Object"),
+            "Integer" | "Double" | "Boolean" | "Character" | "Long" | "Float" | "Short"
+            | "Byte" => {
+                format!("java/lang/{type_name}")
+            }
+            other => self.table.class_id(other).map_or_else(
+                || other.to_owned(),
+                |id| self.table.class_name(id).to_owned(),
+            ),
+        };
+        let utf8 = self.pool.intern_utf8(&canonical);
+        let index = self.pool.intern(Constant::String { string_index: utf8 });
+        self.code.push_ldc(index);
+        let method_ref = intern_method_ref(
+            self.pool,
+            "java/lang/Class",
+            "__forType",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(1);
+        JType::Class
+    }
+
     fn field(&mut self, object: &Expr, name: &str, span: SourceSpan) -> JType {
+        // `Type.class` class literal — the object is a type name, not a value,
+        // so intercept before evaluating it.
+        if name == "class"
+            && let Expr::Name { path, .. } = object
+        {
+            return self.class_literal(path.last().map_or("", String::as_str));
+        }
         let object_ty = self.expr(object);
         if object_ty == JType::Error {
             return JType::Error;
@@ -7554,6 +7679,11 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            ElemType::Class => {
+                let class = intern_class(self.pool, "java/lang/Class");
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             prim => {
                 let atype = match prim {
                     ElemType::Int => op::T_INT,
@@ -7567,7 +7697,8 @@ impl BodyGen<'_> {
                     ElemType::Str
                     | ElemType::Object(_)
                     | ElemType::Field
-                    | ElemType::Constructor => unreachable!(),
+                    | ElemType::Constructor
+                    | ElemType::Class => unreachable!(),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
                 self.code.bytes.push(atype);
@@ -8914,7 +9045,8 @@ impl BodyGen<'_> {
             | ElemType::Str
             | ElemType::Object(_)
             | ElemType::Field
-            | ElemType::Constructor => "intValue",
+            | ElemType::Constructor
+            | ElemType::Class => "intValue",
             ElemType::Double => "doubleValue",
             ElemType::Long => "longValue",
             ElemType::Float => "floatValue",

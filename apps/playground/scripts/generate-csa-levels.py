@@ -127,12 +127,44 @@ def validation_files(key):
 
 
 def solution_files(key):
-    # The complete (teacher) solution from the level's solution/ dir — not
-    # committed; loaded locally by the Solve button to exercise validators.
-    return [
-        (os.path.basename(j), open(j, errors="ignore").read())
-        for j in sorted(glob.glob(os.path.join(ART, key, "solution", "*.java")))
-    ]
+    # The complete (teacher) solution — not committed; loaded by the Solve
+    # button to exercise validators. Built as the start sources with the
+    # student's answer files (those carrying a "TO DO" marker) replaced by the
+    # solution versions. Some solution/ dirs strip untouched helper files
+    # (e.g. ConstructorsHelper), so starting from start/ keeps them intact.
+    def read(base):
+        out = {}
+        for j in sorted(glob.glob(os.path.join(ART, key, base, "*.java"))):
+            out[os.path.basename(j)] = open(j, errors="ignore").read()
+        t = template_of(key)
+        if t:
+            for j in sorted(glob.glob(os.path.join(ART, t, base, "*.java"))):
+                out.setdefault(os.path.basename(j), open(j, errors="ignore").read())
+        return out
+
+    start = read("start")
+    solution = read("solution")
+    if not solution:
+        return []
+    # Prefer the solution (the completed answers), but if the solution's copy
+    # of a file has FEWER method declarations than start's, it's a stripped
+    # helper (some solution/ dirs drop untouched helpers like ConstructorsHelper
+    # down to a stub) — keep start's full version. Bug-fix/syntax levels change
+    # bodies, not method counts, so those still take the solution.
+    def method_count(text):
+        return len(re.findall(r"\b(?:public|private|protected)\b[^;=\n{]*\(", text))
+
+    merged = dict(solution)
+    for name, text in start.items():
+        # `*Helper` files are teacher-provided (students don't edit them), so
+        # start/ is authoritative — some solution/ copies are stale/buggy.
+        if (
+            name not in solution
+            or name.endswith("Helper.java")
+            or method_count(text) > method_count(solution[name])
+        ):
+            merged[name] = text
+    return list(merged.items())
 
 
 def grid_of(pj):

@@ -35,6 +35,21 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
 
 /// The friendly message for statement-starting keywords jvmjs doesn't
 /// support yet; `None` when the keyword can begin a real statement.
+/// The source spelling of a primitive type keyword (for `int.class`).
+fn primitive_type_name(keyword: Keyword) -> Option<&'static str> {
+    Some(match keyword {
+        Keyword::Int => "int",
+        Keyword::Double => "double",
+        Keyword::Boolean => "boolean",
+        Keyword::Char => "char",
+        Keyword::Long => "long",
+        Keyword::Float => "float",
+        Keyword::Short => "short",
+        Keyword::Byte => "byte",
+        _ => return None,
+    })
+}
+
 fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
     match keyword {
         Keyword::Else => Some("'else' without a matching 'if'"),
@@ -979,7 +994,21 @@ impl Parser<'_> {
                     let mut args = Vec::new();
                     if !self.at_symbol(">") {
                         loop {
-                            args.push(self.type_ref()?);
+                            if self.at_symbol("?") {
+                                // Wildcard `?` / `? extends T` / `? super T` —
+                                // generics erase, so track it as Object.
+                                self.pos += 1;
+                                if matches!(
+                                    self.peek(),
+                                    Some(TokenKind::Keyword(Keyword::Extends | Keyword::Super))
+                                ) {
+                                    self.pos += 1;
+                                    let _ = self.type_ref()?;
+                                }
+                                args.push(TypeRef::Named(String::from("Object")));
+                            } else {
+                                args.push(self.type_ref()?);
+                            }
                             if !self.eat_symbol(",") {
                                 break;
                             }
@@ -1591,11 +1620,21 @@ impl Parser<'_> {
                 // Only type names, commas, dots, and nested `<>` appear
                 // in a type-argument list; anything else means this was
                 // a comparison expression.
-                TokenKind::Identifier(_) | TokenKind::Symbol("," | ".") => {}
+                // ...plus wildcards (`Class<?>`, `List<? extends T>`).
+                TokenKind::Identifier(_)
+                | TokenKind::Symbol("," | "." | "?")
+                | TokenKind::Keyword(Keyword::Extends | Keyword::Super) => {}
                 _ => return false,
             }
             if depth <= 0 {
-                return matches!(self.peek_at(offset + 1), Some(TokenKind::Identifier(_)));
+                // Allow a generic array type before the name: `Class<?>[] xs`.
+                let mut next = offset + 1;
+                while matches!(self.peek_at(next), Some(TokenKind::Symbol("[")))
+                    && matches!(self.peek_at(next + 1), Some(TokenKind::Symbol("]")))
+                {
+                    next += 2;
+                }
+                return matches!(self.peek_at(next), Some(TokenKind::Identifier(_)));
             }
             offset += 1;
         }
@@ -2304,7 +2343,19 @@ impl Parser<'_> {
             self.pos += 1;
             if !self.at_symbol(">") {
                 loop {
-                    type_args.push(self.type_ref()?);
+                    if self.at_symbol("?") {
+                        self.pos += 1;
+                        if matches!(
+                            self.peek(),
+                            Some(TokenKind::Keyword(Keyword::Extends | Keyword::Super))
+                        ) {
+                            self.pos += 1;
+                            let _ = self.type_ref()?;
+                        }
+                        type_args.push(TypeRef::Named(String::from("Object")));
+                    } else {
+                        type_args.push(self.type_ref()?);
+                    }
                     if !self.eat_symbol(",") {
                         break;
                     }
@@ -2335,7 +2386,9 @@ impl Parser<'_> {
                 span,
             });
         }
-        if !type_args.is_empty() {
+        // A generic array like `new Class<?>[n]` — the type arguments erase,
+        // so keep going into the array dimensions.
+        if !type_args.is_empty() && !self.at_symbol("[") {
             self.error_at(start, "expected '(' after the generic type");
             return Err(Abort);
         }
@@ -2436,6 +2489,7 @@ impl Parser<'_> {
         Ok(args)
     }
 
+    #[allow(clippy::too_many_lines)] // one grammar production
     fn primary_expression(&mut self) -> Parsed<Expr> {
         let span = self.here();
         match self.peek() {
@@ -2531,6 +2585,33 @@ impl Parser<'_> {
                         end: method_span.end,
                     },
                 })
+            }
+            Some(TokenKind::Keyword(kw)) if primitive_type_name(*kw).is_some() => {
+                // `int.class` / `double.class` — a primitive class literal.
+                let name = primitive_type_name(*kw).expect("checked");
+                let start = self.here();
+                self.pos += 1;
+                if self.eat_symbol(".")
+                    && matches!(self.peek(), Some(TokenKind::Keyword(Keyword::Class)))
+                {
+                    let end = self.here().end;
+                    self.pos += 1;
+                    let span = SourceSpan {
+                        start: start.start,
+                        end,
+                    };
+                    Ok(Expr::Field {
+                        object: Box::new(Expr::Name {
+                            path: vec![String::from(name)],
+                            span,
+                        }),
+                        name: String::from("class"),
+                        span,
+                    })
+                } else {
+                    self.error_at(start, "expected '.class' after a primitive type");
+                    Err(Abort)
+                }
             }
             _ => {
                 self.error_here("expected an expression");
