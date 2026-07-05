@@ -217,6 +217,26 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).not.toContainText('error:');
   });
 
+  test('Solve then Test passes a corpus validator (with the local overlay)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });
+    await page
+      .getByTestId('level-select')
+      .selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    const solve = page.getByTestId('solve');
+    if ((await solve.count()) === 0) {
+      test.skip(true, 'no local overlay (validators/solutions not generated)');
+    }
+    await solve.click();
+    await page.getByTestId('test').click();
+    // The MusicSurvey validator (Arrays.toString of Respondent[]) passes
+    // against the loaded solution.
+    await expect(page.getByTestId('test-results').locator('.test-pass')).toContainText(
+      'Reverse the elements',
+    );
+    await expect(page.getByTestId('console')).toContainText('1 / 1 tests passed');
+  });
+
   test('the Solve button loads the level solution (when the overlay is present)', async ({
     page,
   }) => {

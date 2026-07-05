@@ -491,6 +491,32 @@ fn neighborhood_painter_subclass_and_walls() {
 }
 
 #[test]
+fn arrays_tostring_calls_element_tostring() {
+    // Arrays.toString on a user-object array must call each element's
+    // toString (not print addresses), so equal-content arrays compare equal.
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class Main {
+            public static void main(String[] args) {
+                Point[] a = { new Point(1, 2), new Point(3, 4) };
+                Point[] b = { new Point(1, 2), new Point(3, 4) };
+                System.out.println(Arrays.toString(a));
+                System.out.println(Arrays.toString(a).equals(Arrays.toString(b)));
+            }
+        }
+        class Point {
+            private int x, y;
+            public Point(int x, int y) { this.x = x; this.y = y; }
+            public String toString() { return "(" + x + ", " + y + ")"; }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "[(1, 2), (3, 4)]\ntrue\n");
+}
+
+#[test]
 fn structural_reflection_prints_field_signatures() {
     // The AttributesHelper surface end to end: getClass, getSuperclass,
     // getDeclaredFields, canonical Field.toString via Arrays.toString.

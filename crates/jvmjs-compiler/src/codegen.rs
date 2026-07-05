@@ -1576,6 +1576,15 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Array { elem: ElemType::Object(sup), dims: d2 },
             ) if d1 == d2 && table.is_subtype(sub, sup)
         )
+        // Any reference array widens to `Object[]` (e.g. `String[]`,
+        // `Field[]` -> `Object[]` for `Arrays.toString`).
+        || matches!(
+            (from, to),
+            (
+                JType::Array { elem: ElemType::Str | ElemType::Field | ElemType::Constructor, dims: d1 },
+                JType::Array { elem: ElemType::Object(sup), dims: d2 },
+            ) if d1 == d2 && sup == table.object_id
+        )
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -2329,8 +2338,6 @@ enum BParam {
     SelfList,
     /// The list's element type (autoboxed at the boundary).
     Elem,
-    /// Any array (e.g. `Arrays.toString(Object[])` — accepts `Field[]`).
-    AnyArray,
 }
 
 /// The return of an intrinsic method.
@@ -3508,13 +3515,6 @@ const FIELD_METHODS: &[BuiltinMethod] = &[
 ];
 
 /// `java.util.Arrays` static methods.
-const ARRAYS_METHODS: &[BuiltinMethod] = &[bm(
-    "toString",
-    &[BParam::AnyArray],
-    BRet::Str,
-    "([Ljava/lang/Object;)Ljava/lang/String;",
-)];
-
 /// The intrinsic method table and JVM class for a receiver type.
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match ty {
@@ -3545,7 +3545,6 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Short" => Some(("java/lang/Short", SHORT_METHODS)),
         "Byte" => Some(("java/lang/Byte", BYTE_METHODS)),
         "System" => Some(("java/lang/System", SYSTEM_METHODS)),
-        "Arrays" => Some(("java/util/Arrays", ARRAYS_METHODS)),
         _ => None,
     }
 }
@@ -3623,18 +3622,12 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
         },
         BParam::SelfList => elem.map_or(JType::Error, JType::List),
         BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
-        // Matched structurally in `pick_builtin`, not by widening.
-        BParam::AnyArray => JType::Error,
     }
 }
 
-/// Whether an argument type satisfies a builtin parameter. Most params
-/// widen by type; `AnyArray` accepts any array (covariance-free).
+/// Whether an argument type satisfies a builtin parameter (widening).
 fn bparam_matches(param: BParam, arg: JType, elem: Option<ElemType>, table: &MethodTable) -> bool {
-    match param {
-        BParam::AnyArray => matches!(arg, JType::Array { .. }),
-        other => widens(arg, bparam_type(other, elem), table),
-    }
+    widens(arg, bparam_type(param, elem), table)
 }
 
 /// Overload selection for intrinsic methods: applicable-by-widening
@@ -9153,6 +9146,18 @@ impl BodyGen<'_> {
                     dims: d2,
                 },
             ) if d1 == d2 && self.table.is_subtype(sub, sup) => {}
+            // Any reference array widens to `Object[]` (`String[]`,
+            // `Field[]` -> `Object[]` for `Arrays.toString`).
+            (
+                JType::Array {
+                    elem: ElemType::Str | ElemType::Field | ElemType::Constructor,
+                    dims: d1,
+                },
+                JType::Array {
+                    elem: ElemType::Object(sup),
+                    dims: d2,
+                },
+            ) if d1 == d2 && sup == self.table.object_id => {}
             // Any reference stores into a type variable; a type variable
             // reads out as Object.
             (from, JType::TypeVar) if from.is_reference() => {}

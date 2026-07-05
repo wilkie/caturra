@@ -1789,46 +1789,8 @@ pub fn invoke_static(
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),
-        "java/util/Arrays" => arrays_static(heap, method, args),
         _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
     }
-}
-
-/// `java.util.Arrays` static methods (currently `toString`).
-fn arrays_static(
-    heap: &mut Heap,
-    method: &str,
-    args: &[JValue],
-) -> Result<Option<JValue>, VmError> {
-    match method {
-        "toString" => {
-            let rendered = match args.first() {
-                Some(JValue::Ref(Some(reference))) => array_to_string(heap, *reference),
-                _ => String::from("null"),
-            };
-            Ok(Some(JValue::Ref(Some(heap.alloc_string(&rendered)))))
-        }
-        _ => Err(VmError::UnknownIntrinsic(format!("Arrays.{method}"))),
-    }
-}
-
-/// `Arrays.toString`: `[e0, e1, ...]` over any array kind.
-fn array_to_string(heap: &Heap, reference: HeapRef) -> String {
-    let elems: Vec<String> = match heap.get(reference) {
-        Some(HeapObject::RefArray(values)) => {
-            values.iter().map(|v| display_jvalue(heap, *v)).collect()
-        }
-        Some(HeapObject::IntArray(values)) => values.iter().map(i32::to_string).collect(),
-        Some(HeapObject::DoubleArray(values)) => {
-            values.iter().map(|v| java_double_to_string(*v)).collect()
-        }
-        Some(HeapObject::LongArray(values)) => values.iter().map(i64::to_string).collect(),
-        Some(HeapObject::FloatArray(values)) => values.iter().map(f32::to_string).collect(),
-        Some(HeapObject::ShortArray(values)) => values.iter().map(i16::to_string).collect(),
-        Some(HeapObject::ByteArray(values)) => values.iter().map(i8::to_string).collect(),
-        _ => return String::from("null"),
-    };
-    format!("[{}]", elems.join(", "))
 }
 
 /// The Java type name for a field descriptor: `I` -> `int`,

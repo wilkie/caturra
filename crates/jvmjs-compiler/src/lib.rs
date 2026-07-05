@@ -75,6 +75,10 @@ const THEATER_LIB: &str = include_str!("stdlib/theater.java");
 /// source imports `org.junit` (the validation "Test" mode).
 const JUNIT_LIB: &str = include_str!("stdlib/junit.java");
 
+/// Bundled `java.util.Arrays` subset (`toString`), injected when a source
+/// imports `java.util` — element concatenation coerces each via `toString`.
+const ARRAYS_LIB: &str = include_str!("stdlib/arrays.java");
+
 /// A discovered `@Test` method for the synthetic validation runner.
 struct TestCase {
     method: String,
@@ -249,6 +253,16 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         units.push((String::from("<theater>"), unit));
     }
     let mut validation_entry = None;
+    if sources.iter().any(|s| s.text.contains("Arrays."))
+        && !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "Arrays"))
+    {
+        let (tokens, _) = lexer::lex("<arrays>", ARRAYS_LIB);
+        let (unit, mut errs) = parser::parse("<arrays>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<arrays>"), unit));
+    }
     if imports_prefix(&units, &["org", "junit"]) {
         let (tokens, _) = lexer::lex("<junit>", JUNIT_LIB);
         let (unit, mut errs) = parser::parse("<junit>", tokens);
