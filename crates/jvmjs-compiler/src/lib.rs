@@ -16,6 +16,7 @@ pub mod lexer;
 pub mod parser;
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use jvmjs_classfile::ClassFile;
 
@@ -46,6 +47,10 @@ pub struct CompiledClass {
 pub struct Compilation {
     pub classes: Vec<CompiledClass>,
     pub diagnostics: Vec<Diagnostic>,
+    /// Entry class for a validation ("Test") run — set when `JUnit` `@Test`
+    /// methods were found and a synthetic runner was injected. Run this
+    /// class's `main` instead of the student's to execute the tests.
+    pub validation_entry: Option<String>,
 }
 
 impl Compilation {
@@ -69,6 +74,106 @@ const THEATER_LIB: &str = include_str!("stdlib/theater.java");
 /// Bundled `org.junit.jupiter.api.Assertions` subset, injected when a
 /// source imports `org.junit` (the validation "Test" mode).
 const JUNIT_LIB: &str = include_str!("stdlib/junit.java");
+
+/// A discovered `@Test` method for the synthetic validation runner.
+struct TestCase {
+    method: String,
+    display: String,
+    order: i32,
+}
+
+/// A test class: its `@BeforeEach` setup methods and ordered `@Test`s.
+struct TestClass {
+    name: String,
+    before_each: Vec<String>,
+    tests: Vec<TestCase>,
+}
+
+/// Collect `JUnit` `@Test` methods (with `@Order`/`@DisplayName`/`@BeforeEach`)
+/// from the user's classes.
+fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
+    let mut classes = Vec::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            let has = |m: &ast::MethodDecl, n: &str| m.annotations.iter().any(|a| a.name == n);
+            let before_each: Vec<String> = class
+                .methods
+                .iter()
+                .filter(|m| has(m, "BeforeEach"))
+                .map(|m| m.name.clone())
+                .collect();
+            let mut tests: Vec<TestCase> = class
+                .methods
+                .iter()
+                .filter(|m| has(m, "Test"))
+                .map(|m| {
+                    let order = m
+                        .annotations
+                        .iter()
+                        .find(|a| a.name == "Order")
+                        .and_then(|a| a.int_arg)
+                        .unwrap_or(i32::MAX);
+                    let display = m
+                        .annotations
+                        .iter()
+                        .find(|a| a.name == "DisplayName")
+                        .and_then(|a| a.str_arg.clone())
+                        .unwrap_or_else(|| m.name.clone());
+                    TestCase {
+                        method: m.name.clone(),
+                        display,
+                        order,
+                    }
+                })
+                .collect();
+            tests.sort_by_key(|t| t.order);
+            if !tests.is_empty() {
+                classes.push(TestClass {
+                    name: class.name.clone(),
+                    before_each,
+                    tests,
+                });
+            }
+        }
+    }
+    classes
+}
+
+/// Generate a runner `main` that instantiates each test class, runs its
+/// `@BeforeEach` setup and each `@Test`, and prints one
+/// `__VTEST\t<PASS|FAIL>\t<name>\t<message>` line per test.
+fn validation_runner_source(classes: &[TestClass]) -> String {
+    let mut src = String::from(
+        "public class __ValidationRunner {\n  public static void main(String[] args) {\n",
+    );
+    for class in classes {
+        for test in &class.tests {
+            let name = test
+                .display
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace(['\t', '\n', '\r'], " ");
+            src.push_str("    try {\n");
+            let _ = writeln!(src, "      {0} __t = new {0}();", class.name);
+            for setup in &class.before_each {
+                let _ = writeln!(src, "      __t.{setup}();");
+            }
+            let _ = writeln!(src, "      __t.{}();", test.method);
+            let _ = writeln!(
+                src,
+                "      System.out.println(\"__VTEST\\tPASS\\t{name}\\t\");"
+            );
+            src.push_str("    } catch (Throwable __e) {\n");
+            let _ = writeln!(
+                src,
+                "      System.out.println(\"__VTEST\\tFAIL\\t{name}\\t\" + __e.getMessage());"
+            );
+            src.push_str("    }\n");
+        }
+    }
+    src.push_str("  }\n}\n");
+    src
+}
 
 /// Whether any unit imports something under the given prefix path
 /// (`["org","junit"]` matches `import static org.junit.jupiter....`).
@@ -143,11 +248,22 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<theater>"), unit));
     }
+    let mut validation_entry = None;
     if imports_prefix(&units, &["org", "junit"]) {
         let (tokens, _) = lexer::lex("<junit>", JUNIT_LIB);
         let (unit, mut errs) = parser::parse("<junit>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<junit>"), unit));
+        // Synthesize a runner that executes the discovered @Test methods.
+        let tests = collect_tests(&units);
+        if !tests.is_empty() {
+            let source = validation_runner_source(&tests);
+            let (tokens, _) = lexer::lex("<validation>", &source);
+            let (unit, mut errs) = parser::parse("<validation>", tokens);
+            compilation.diagnostics.append(&mut errs);
+            units.push((String::from("<validation>"), unit));
+            validation_entry = Some(String::from("__ValidationRunner"));
+        }
     }
 
     // Import validation and enforcement (after all units parse, since
@@ -167,6 +283,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
 
     if compilation.success() {
         compilation.classes = classes;
+        compilation.validation_entry = validation_entry;
     }
     compilation
 }

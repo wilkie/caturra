@@ -429,9 +429,12 @@ impl Parser<'_> {
             }
         }
         let mut int_arg = None;
+        let mut str_arg = None;
         if self.at_symbol("(") {
-            if let Some(TokenKind::IntLiteral(value)) = self.peek_at(1) {
-                int_arg = i32::try_from(*value).ok();
+            match self.peek_at(1) {
+                Some(TokenKind::IntLiteral(value)) => int_arg = i32::try_from(*value).ok(),
+                Some(TokenKind::StringLiteral(text)) => str_arg = Some(text.clone()),
+                _ => {}
             }
             let mut depth = 0usize;
             loop {
@@ -451,7 +454,11 @@ impl Parser<'_> {
             }
         }
         if !name.is_empty() {
-            self.pending_annotations.push(Annotation { name, int_arg });
+            self.pending_annotations.push(Annotation {
+                name,
+                int_arg,
+                str_arg,
+            });
         }
     }
 

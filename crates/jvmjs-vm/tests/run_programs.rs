@@ -491,6 +491,53 @@ fn neighborhood_painter_subclass_and_walls() {
 }
 
 #[test]
+fn junit_validation_runner_reports_pass_and_fail() {
+    // A JUnit validator with a passing and a failing test; the injected
+    // __ValidationRunner runs each and reports per-test outcomes.
+    let compilation = jvmjs_compiler::compile(&[
+        jvmjs_compiler::SourceFile {
+            path: "Counter.java".into(),
+            text: "public class Counter { private int count = 0;                    public void increment() { count += 2; }                    public int getCount() { return count; } }"
+                .into(),
+        },
+        jvmjs_compiler::SourceFile {
+            path: "CounterTest.java".into(),
+            text: r#"
+                import static org.junit.jupiter.api.Assertions.*;
+                import org.junit.jupiter.api.Test;
+                import org.junit.jupiter.api.Order;
+                import org.junit.jupiter.api.DisplayName;
+                public class CounterTest {
+                    @Test @Order(1) @DisplayName("starts at zero")
+                    public void a() { assertEquals(0, new Counter().getCount()); }
+                    @Test @Order(2) @DisplayName("increments by one")
+                    public void b() { Counter c = new Counter(); c.increment(); assertEquals(1, c.getCount()); }
+                }
+            "#
+            .into(),
+        },
+    ]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let entry = compilation
+        .validation_entry
+        .clone()
+        .expect("validation entry");
+    assert_eq!(entry, "__ValidationRunner");
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    vm.run_main(&entry, &[]).expect("run");
+    assert_eq!(
+        console.stdout_text(),
+        "__VTEST\tPASS\tstarts at zero\t\n\
+         __VTEST\tFAIL\tincrements by one\texpected 1 but was 2\n"
+    );
+}
+
+#[test]
 fn junit_validator_static_import_and_relaxed_access() {
     // The validation "Test" mode: `import static Assertions.*` makes
     // assertX unqualified, org.junit relaxes private access so a validator

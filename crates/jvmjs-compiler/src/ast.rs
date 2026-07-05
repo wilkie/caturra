@@ -110,6 +110,7 @@ pub struct MethodDecl {
 pub struct Annotation {
     pub name: String,
     pub int_arg: Option<i32>,
+    pub str_arg: Option<String>,
 }
 
 /// A method parameter.
