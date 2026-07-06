@@ -38,6 +38,7 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
+import { SwingViz } from './swing.js';
 import {
   CSA_UNITS,
   levelHasSolution,
@@ -138,6 +139,71 @@ public class Main {
   },
 ];
 
+interface SwingLevel {
+  name: string;
+  starter: string;
+}
+
+// Swing examples: each starter builds a javax.swing component tree that
+// renders as accessible DOM (real <button>/<input>/<label> elements with
+// keyboard navigation and screen-reader names). Interactivity is Phase 2.
+const SWING_LEVELS: SwingLevel[] = [
+  {
+    name: 'Sign-up form',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Sign Up");
+    frame.setLayout(new GridLayout(3, 2));
+
+    // setLabelFor ties each label to its field, so a screen reader
+    // announces "Name, edit text" when the field is focused.
+    JLabel nameLabel = new JLabel("Name:");
+    JTextField nameField = new JTextField(12);
+    nameLabel.setLabelFor(nameField);
+
+    JLabel emailLabel = new JLabel("Email:");
+    JTextField emailField = new JTextField(12);
+    emailLabel.setLabelFor(emailField);
+
+    JCheckBox subscribe = new JCheckBox("Email me updates", true);
+    JButton submit = new JButton("Submit");
+
+    frame.add(nameLabel);
+    frame.add(nameField);
+    frame.add(emailLabel);
+    frame.add(emailField);
+    frame.add(subscribe);
+    frame.add(submit);
+
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
+    name: 'Button panel',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Calculator");
+    JPanel keypad = new JPanel(new GridLayout(4, 3));
+    String[] keys = {"7","8","9","4","5","6","1","2","3","0",".","="};
+    for (String key : keys) {
+      keypad.add(new JButton(key));
+    }
+    frame.add(keypad);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+];
+
 const DEFAULT_PROGRAM = `public class Main {
     public static void main(String[] args) {
         System.out.println("Hello, World!");
@@ -189,8 +255,9 @@ export function App(): React.JSX.Element {
   const [unitIndex, setUnitIndex] = useState('');
   const [levelValue, setLevelValue] = useState('');
   const [theaterValue, setTheaterValue] = useState('');
+  const [swingValue, setSwingValue] = useState('');
   const [levels, setLevels] = useState<CsaLevelMeta[]>([]);
-  const [view, setView] = useState<'none' | 'neighborhood' | 'theater'>('none');
+  const [view, setView] = useState<'none' | 'neighborhood' | 'theater' | 'swing'>('none');
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [hasSolution, setHasSolution] = useState(false);
   const [debugBar, setDebugBar] = useState(false);
@@ -202,9 +269,11 @@ export function App(): React.JSX.Element {
   const sourceElRef = useRef<HTMLDivElement>(null);
   const neighborhoodCanvasRef = useRef<HTMLCanvasElement>(null);
   const theaterCanvasRef = useRef<HTMLCanvasElement>(null);
+  const swingMountRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<EditorView | null>(null);
   const neighborhoodVizRef = useRef<NeighborhoodViz | null>(null);
   const theaterVizRef = useRef<TheaterViz | null>(null);
+  const swingVizRef = useRef<SwingViz | null>(null);
   const sessionRef = useRef<Promise<JvmWorkerSession>>(JvmWorkerSession.create());
   const inactiveFilesRef = useRef(new Map<string, EditorState>());
   const fileSquigglesRef = useRef(new Map<string, SourceSquiggle[]>());
@@ -417,6 +486,21 @@ export function App(): React.JSX.Element {
     theaterVizRef.current?.reset();
   };
 
+  const onSwingChange = (value: string): void => {
+    setSwingValue(value);
+    const level = SWING_LEVELS[Number(value)];
+    if (!level) {
+      return;
+    }
+    setSource(editor(), level.starter);
+    validationFilesRef.current = [];
+    solutionFilesRef.current = [];
+    setHasSolution(false);
+    setTestResults([]);
+    setView('swing');
+    swingVizRef.current?.clear();
+  };
+
   // ----- Neighborhood / theater rendering -----
   const isNeighborhoodProgram = (): boolean =>
     collectSources().some((source) => source.text.includes('org.code.neighborhood'));
@@ -424,6 +508,10 @@ export function App(): React.JSX.Element {
     collectSources().some(
       (source) =>
         source.text.includes('org.code.theater') || source.text.includes('org.code.media'),
+    );
+  const isSwingProgram = (): boolean =>
+    collectSources().some(
+      (source) => source.text.includes('javax.swing') || source.text.includes('java.awt'),
     );
 
   const renderNeighborhood = async (): Promise<void> => {
@@ -463,6 +551,22 @@ export function App(): React.JSX.Element {
     void theaterVizRef.current?.play(log);
   };
 
+  const renderSwing = async (): Promise<void> => {
+    const session = await sessionRef.current;
+    let json = '';
+    try {
+      json = await session.readTextFile('swing.json');
+    } catch {
+      // No frame was shown — nothing to render.
+    }
+    if (json.trim() === '') {
+      setView('none');
+      return;
+    }
+    setView('swing');
+    swingVizRef.current?.render(json);
+  };
+
   // ----- Run / Test / Stop -----
   const runProgram = async (): Promise<void> => {
     stopRequestedRef.current = false;
@@ -474,11 +578,15 @@ export function App(): React.JSX.Element {
       await writeDataFiles(session);
       const neighborhood = isNeighborhoodProgram();
       const theater = !neighborhood && isTheaterProgram();
+      const swing = !neighborhood && !theater && isSwingProgram();
       if (neighborhood) {
         await session.writeFile('grid.txt', currentGridRef.current);
         await session.remove('neighborhood.jsonl').catch(() => undefined);
       } else if (theater) {
         await session.remove('theater.log').catch(() => undefined);
+        setView('none');
+      } else if (swing) {
+        await session.remove('swing.json').catch(() => undefined);
         setView('none');
       } else {
         setView('none');
@@ -509,6 +617,8 @@ export function App(): React.JSX.Element {
             await renderNeighborhood();
           } else if (theater) {
             await renderTheater();
+          } else if (swing) {
+            await renderSwing();
           }
         }
       }
@@ -695,8 +805,10 @@ export function App(): React.JSX.Element {
       ? new NeighborhoodViz(neighborhoodCanvasRef.current)
       : null;
     const thViz = theaterCanvasRef.current ? new TheaterViz(theaterCanvasRef.current) : null;
+    const swViz = swingMountRef.current ? new SwingViz(swingMountRef.current) : null;
     neighborhoodVizRef.current = nbViz;
     theaterVizRef.current = thViz;
+    swingVizRef.current = swViz;
 
     window.playground = {
       setSource: (text) => {
@@ -921,6 +1033,19 @@ export function App(): React.JSX.Element {
                 </option>
               ))}
             </PickerSelect>
+            <PickerSelect
+              id="swing-level"
+              label="Load a Swing example"
+              placeholder="Swing…"
+              value={swingValue}
+              onChange={onSwingChange}
+            >
+              {SWING_LEVELS.map((level, index) => (
+                <option key={level.name} value={index}>
+                  {level.name}
+                </option>
+              ))}
+            </PickerSelect>
           </Box>
         </Paper>
 
@@ -1041,6 +1166,12 @@ export function App(): React.JSX.Element {
           <Box id="theater-viz" data-testid="theater-viz" hidden={view !== 'theater'}>
             <Typography variant="subtitle2">Theater</Typography>
             <canvas id="theater-canvas" data-testid="theater-canvas" ref={theaterCanvasRef} />
+          </Box>
+          <Box id="swing-viz" data-testid="swing-viz" hidden={view !== 'swing'}>
+            <Typography variant="subtitle2" id="swing-heading">
+              Swing UI
+            </Typography>
+            <div id="swing-root" data-testid="swing-root" ref={swingMountRef} />
           </Box>
 
           <Box

@@ -368,6 +368,90 @@ fn theater_image_pixel_manipulation() {
     );
 }
 
+/// Compile a Swing program (the bundled `javax.swing` / `java.awt` library
+/// is auto-injected), run it, and return `swing.json` — the component tree
+/// `frame.setVisible(true)` serializes for the accessible-DOM renderer.
+fn run_swing(source: &str, main: &str) -> String {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{main}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "compile failed: {:?}",
+        compilation.diagnostics
+    );
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    let result = vm.run_main(main, &[]);
+    assert!(
+        matches!(result, Ok(ExitStatus::Completed)),
+        "{result:?}; stderr: {}",
+        console.stderr_text()
+    );
+    vfs.read_file("swing.json")
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default()
+}
+
+#[test]
+fn swing_serializes_an_accessible_component_tree() {
+    // A labelled form: the label associates with the field (setLabelFor),
+    // and a grid layout holds the widgets. Construction order fixes the ids
+    // (frame c0, then each widget), so `for` points at the field's id.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Sign Up");
+                frame.setLayout(new GridLayout(2, 2));
+                JLabel nameLabel = new JLabel("Name:");
+                JTextField nameField = new JTextField(12);
+                nameLabel.setLabelFor(nameField);
+                JCheckBox subscribe = new JCheckBox("Email me", true);
+                JButton submit = new JButton("Submit");
+                submit.setEnabled(false);
+                frame.add(nameLabel);
+                frame.add(nameField);
+                frame.add(subscribe);
+                frame.add(submit);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    // Root frame carries its title and grid layout.
+    assert!(json.contains(r#""type":"frame""#), "no frame: {json}");
+    assert!(json.contains(r#""title":"Sign Up""#), "no title: {json}");
+    assert!(json.contains(r#""layout":"grid 2 2""#), "no layout: {json}");
+    // The label associates with the text field's id (c2: frame=c0, label=c1,
+    // field=c2), which is what the DOM renders as `<label for>`.
+    assert!(
+        json.contains(r#""type":"textfield","text":"","columns":12,"id":"c2""#),
+        "no field: {json}"
+    );
+    assert!(
+        json.contains(r#""type":"label","text":"Name:","for":"c2""#),
+        "no label association: {json}"
+    );
+    // Checkbox selection and disabled button survive serialization.
+    assert!(
+        json.contains(r#""type":"checkbox","text":"Email me","selected":true"#),
+        "no checkbox: {json}"
+    );
+    assert!(
+        json.contains(r#""type":"button","text":"Submit","id":"c4","enabled":false"#),
+        "no disabled button: {json}"
+    );
+}
+
 #[test]
 fn neighborhood_painter_simulation() {
     // A 4x4 grid: a wall at (2,1) and a one-unit paint bucket at (1,2).
@@ -3026,8 +3110,10 @@ fn stage6_compile_errors_match_javac_wording() {
             "java.util.HashMap is not supported by caturra (the class library covers the AP CS A subset)",
         ),
         (
-            "import java.awt.*; class M { }",
-            "package java.awt is not supported by caturra",
+            // java.awt / javax.swing are modeled now; their event (listener)
+            // subpackage is still Phase 2 and reports an honest message.
+            "import java.awt.event.*; class M { }",
+            "package java.awt.event is not supported by caturra",
         ),
         (
             "class M { static void f() { java.util.NotReal x = null; } }",

@@ -231,9 +231,93 @@ label {
   max-width: 100%;
 }
 
+/* ----- Swing (accessible DOM) ----- */
+
+#swing-viz {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.swing-window {
+  align-self: start;
+  max-width: 100%;
+  border: 1px solid light-dark(#c9c9bd, #5a5145);
+  border-radius: 6px;
+  background: light-dark(#f3f3ee, #2b2b2b);
+  overflow: hidden;
+}
+
+.swing-titlebar {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: light-dark(#dcdcd2, #3a3a3a);
+  border-bottom: 1px solid light-dark(#c9c9bd, #5a5145);
+}
+
+.swing-content,
+.swing-panel {
+  padding: 0.6rem;
+}
+
+.swing-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  opacity: 1;
+}
+
+.swing-button {
+  padding: 0.3rem 0.9rem;
+  font: inherit;
+  border-radius: 4px;
+  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
+  background: light-dark(#ffffff, #4a4a4a);
+  color: inherit;
+  cursor: pointer;
+}
+
+.swing-button:hover:not(:disabled) {
+  background: light-dark(#eef0ff, #565676);
+}
+
+.swing-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.swing-textfield {
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+  border-radius: 4px;
+  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
+  background: light-dark(#ffffff, #333333);
+  color: inherit;
+}
+
+.swing-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  opacity: 1;
+  cursor: pointer;
+}
+
+/* A clear keyboard-focus ring for every interactive widget. */
+.swing-button:focus-visible,
+.swing-textfield:focus-visible,
+.swing-checkbox input:focus-visible {
+  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline-offset: 1px;
+}
+
 /* The hidden attribute must win over the flex display above. */
 #viz[hidden],
-#theater-viz[hidden] {
+#theater-viz[hidden],
+#swing-viz[hidden] {
   display: none;
 }
 

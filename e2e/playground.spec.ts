@@ -1140,6 +1140,86 @@ test.describe('playground', () => {
   });
 });
 
+test.describe('swing (accessible DOM)', () => {
+  test('renders the component tree as native, named, accessible controls', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Sign-up form' });
+    await expect(page.getByTestId('swing-viz')).toBeVisible();
+    await page.getByTestId('run').click();
+
+    // The rendered UI is real HTML, so we can assert on the accessibility
+    // tree a screen reader would see — roles and accessible names, not pixels.
+    const root = page.getByTestId('swing-root');
+    await expect(root.getByRole('button', { name: 'Submit' })).toBeVisible();
+
+    // The window is a named region landmark (JFrame title).
+    await expect(page.getByRole('region', { name: 'Sign Up' })).toBeVisible();
+
+    // setLabelFor gives each text field an accessible name via <label for>.
+    await expect(root.getByRole('textbox', { name: 'Name:' })).toBeVisible();
+    await expect(root.getByRole('textbox', { name: 'Email:' })).toBeVisible();
+
+    // The checkbox takes its name from its wrapping label and starts checked.
+    await expect(root.getByRole('checkbox', { name: 'Email me updates' })).toBeChecked();
+  });
+
+  test('controls are keyboard navigable in the order components were added', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Sign-up form' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // Start in the first field, then Tab through: labels are not focusable,
+    // so focus lands on field → field → checkbox → button, matching add order.
+    const nameField = root.getByRole('textbox', { name: 'Name:' });
+    await nameField.focus();
+    await expect(nameField).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(root.getByRole('textbox', { name: 'Email:' })).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(root.getByRole('checkbox', { name: 'Email me updates' })).toBeFocused();
+
+    await page.keyboard.press('Tab');
+    await expect(root.getByRole('button', { name: 'Submit' })).toBeFocused();
+  });
+
+  test('a disabled button renders as a disabled control (not focusable)', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'import javax.swing.*;',
+        'public class Main {',
+        '  public static void main(String[] args) {',
+        '    JFrame frame = new JFrame("Demo");',
+        '    JButton go = new JButton("Go");',
+        '    go.setEnabled(false);',
+        '    frame.add(go);',
+        '    frame.setVisible(true);',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('swing-viz')).toBeVisible();
+    await expect(page.getByTestId('swing-root').getByRole('button', { name: 'Go' })).toBeDisabled();
+  });
+
+  test('Swing widget text has sufficient contrast in dark mode', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Sign-up form' });
+    await page.getByTestId('run').click();
+    await expect(
+      page.getByTestId('swing-root').getByRole('button', { name: 'Submit' }),
+    ).toBeVisible();
+    const button = await colorPair(page, '.swing-button');
+    expect(contrastRatio(button.color, button.bg)).toBeGreaterThan(4);
+  });
+});
+
 test.describe('playground in dark mode', () => {
   test.use({ colorScheme: 'dark' });
 

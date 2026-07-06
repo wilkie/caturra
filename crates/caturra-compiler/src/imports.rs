@@ -111,14 +111,15 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
 /// Real JDK packages we don't model at all (for wildcard/unknown-class
 /// imports of them, an honest message beats "does not exist").
 const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
-    "java.awt",
+    // `java.awt.event` (listeners) is Phase 2 of the Swing support; the
+    // widget packages themselves (`java.awt`, `javax.swing`) are modeled.
+    "java.awt.event",
     "java.net",
     "java.nio",
     "java.time",
     "java.text",
     "java.math",
     "java.sql",
-    "javax.swing",
     "java.util.function",
     "java.util.stream",
     "java.util.regex",
@@ -198,6 +199,8 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "org.code.validation" => Some(ORG_CODE_VALIDATION),
         "org.code.theater" => Some(ORG_CODE_THEATER),
         "org.code.media" => Some(ORG_CODE_MEDIA),
+        "javax.swing" => Some(JAVAX_SWING),
+        "java.awt" => Some(JAVA_AWT),
         _ => None,
     }
 }
@@ -215,6 +218,28 @@ static ORG_CODE_VALIDATION: &[&str] = &[
     "Position",
     "NeighborhoodActionType",
     "ValidationHelper",
+];
+
+/// Public classes of the bundled accessible-DOM Swing library. The widgets
+/// resolve like user classes (auto-injected in `compile`); the import just
+/// validates and is what gates the injection.
+static JAVAX_SWING: &[&str] = &[
+    "JFrame",
+    "JPanel",
+    "JLabel",
+    "JButton",
+    "JTextField",
+    "JCheckBox",
+];
+static JAVA_AWT: &[&str] = &[
+    "Color",
+    "Dimension",
+    "LayoutManager",
+    "FlowLayout",
+    "GridLayout",
+    "BorderLayout",
+    "Container",
+    "Component",
 ];
 
 /// Public classes of the bundled theater/media library.

@@ -72,6 +72,11 @@ const NEIGHBORHOOD_LIB: &str = include_str!("stdlib/neighborhood.java");
 /// `org.code.media`, injected when either package is imported.
 const THEATER_LIB: &str = include_str!("stdlib/theater.java");
 
+/// Bundled clean-room `javax.swing` / `java.awt` subset, injected when
+/// either package is imported. The component tree serializes to the VFS
+/// file `swing.json`, which the playground renders as accessible DOM.
+const SWING_LIB: &str = include_str!("stdlib/swing.java");
+
 /// Bundled `org.junit.jupiter.api.Assertions` subset, injected when a
 /// source imports `org.junit` (the validation "Test" mode).
 const JUNIT_LIB: &str = include_str!("stdlib/junit.java");
@@ -353,6 +358,14 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<theater>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<theater>"), unit));
+    }
+    // javax.swing / java.awt (accessible DOM Swing): the component tree
+    // serializes to `swing.json` on `setVisible(true)`.
+    if imports_package(&units, &["javax", "swing"]) || imports_package(&units, &["java", "awt"]) {
+        let (tokens, _) = lexer::lex("<swing>", SWING_LIB);
+        let (unit, mut errs) = parser::parse("<swing>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<swing>"), unit));
     }
     let mut validation_entry = None;
     if sources.iter().any(|s| s.text.contains("Arrays."))
