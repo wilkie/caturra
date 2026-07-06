@@ -1169,6 +1169,9 @@ impl MethodTable {
                     JType::Field => ElemType::Field,
                     JType::Constructor => ElemType::Constructor,
                     JType::Class => ElemType::Class,
+                    // A wrapper array (`Integer[]`) stores its primitives
+                    // directly, like the corresponding primitive array.
+                    JType::Boxed(elem) => elem,
                     _ => return None,
                 };
                 Some(JType::Array { elem, dims })
@@ -1565,6 +1568,8 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Str => Some(ElemType::Str),
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
+        // A wrapper array element stores its primitive (`Integer[]` -> `int[]`).
+        JType::Boxed(elem) => Some(elem),
         _ => None,
     }
 }
@@ -2216,6 +2221,40 @@ fn emit_method(
 }
 
 #[allow(clippy::too_many_lines)] // one type-descriptor matcher
+/// The return type of a wrapper instance method (`intValue`, `compareTo`, …),
+/// mirroring `boxed_instance_call` for `type_of`.
+fn boxed_method_return(method: &str) -> Option<JType> {
+    Some(match method {
+        "intValue" | "hashCode" | "compareTo" => JType::Int,
+        "shortValue" => JType::Short,
+        "byteValue" => JType::Byte,
+        "longValue" => JType::Long,
+        "doubleValue" => JType::Double,
+        "floatValue" => JType::Float,
+        "charValue" => JType::Char,
+        "booleanValue" | "equals" => JType::Boolean,
+        "toString" => JType::Str,
+        _ => return None,
+    })
+}
+
+/// The primitive descriptor char for a wrapper class name (`Integer` → `I`),
+/// for wrapper arrays which store their primitives directly.
+fn wrapper_primitive_char(name: &str) -> Option<char> {
+    match crate::imports::canonical_library_class(name).unwrap_or(name) {
+        "Integer" => Some('I'),
+        "Double" => Some('D'),
+        "Long" => Some('J'),
+        "Float" => Some('F'),
+        "Short" => Some('S'),
+        "Byte" => Some('B'),
+        "Character" => Some('C'),
+        "Boolean" => Some('Z'),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one descriptor builder with a type-mapping matrix
 fn method_descriptor(
     path: &str,
     diagnostics: &mut Vec<Diagnostic>,
@@ -2242,7 +2281,16 @@ fn method_descriptor(
             TypeRef::Char => out.push('C'),
             TypeRef::Array(inner) => {
                 out.push('[');
-                push_type(path, diagnostics, table, out, inner, span);
+                // A wrapper array (`Integer[]`) stores its primitives directly,
+                // like the corresponding primitive array (matches resolve_type).
+                if let TypeRef::Named(name) = inner.as_ref()
+                    && !table.has_class(name)
+                    && let Some(prim) = wrapper_primitive_char(name)
+                {
+                    out.push(prim);
+                } else {
+                    push_type(path, diagnostics, table, out, inner, span);
+                }
             }
             TypeRef::Generic { base, .. } => {
                 let mut simple =
@@ -5623,8 +5671,12 @@ impl BodyGen<'_> {
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
             "ArrayList" => match type_args {
-                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Error, JType::List),
-                _ => JType::Error,
+                // A diamond `new ArrayList<>(...)` gets its element from the
+                // context — `Null` (assignable to any List), matching what
+                // `new_array_list` returns, so a nested `new C(new ArrayList<>(x))`
+                // does not read as an `Error` argument.
+                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::List),
+                _ => JType::Null,
             },
             _ => JType::Error,
         }
@@ -6225,6 +6277,29 @@ impl BodyGen<'_> {
             // Arrays are Objects: `equals`/`hashCode`/`toString`/`getClass`.
             JType::Array { .. } => {
                 return self.array_object_call(method, args, span);
+            }
+            // A wrapper method on a primitive receiver (`someInt.intValue()`,
+            // `x.compareTo(y)`) — autobox and dispatch on the wrapper.
+            JType::Int
+            | JType::Double
+            | JType::Long
+            | JType::Float
+            | JType::Short
+            | JType::Byte
+            | JType::Char
+            | JType::Boolean => {
+                if let Some(elem) = elem_type_of(receiver_ty) {
+                    self.emit_box(elem);
+                    return self.boxed_instance_call(elem, method, args, span);
+                }
+                self.error(
+                    span,
+                    format!(
+                        "cannot call methods on {}",
+                        receiver_ty.describe(self.table)
+                    ),
+                );
+                return None;
             }
             other => {
                 self.error(
@@ -7624,6 +7699,19 @@ impl BodyGen<'_> {
                     }
                     Some(other) => match self.type_of(other) {
                         JType::Object(id) => self.table.class_name(id).to_owned(),
+                        // A wrapper method on a primitive/boxed receiver
+                        // (`someInt.intValue()`) — autoboxed at emission.
+                        JType::Int
+                        | JType::Double
+                        | JType::Long
+                        | JType::Float
+                        | JType::Short
+                        | JType::Byte
+                        | JType::Char
+                        | JType::Boolean
+                        | JType::Boxed(_) => {
+                            return boxed_method_return(method).unwrap_or(JType::Error);
+                        }
                         receiver_ty @ (JType::Str
                         | JType::Scanner
                         | JType::File

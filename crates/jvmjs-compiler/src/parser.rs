@@ -1517,13 +1517,37 @@ impl Parser<'_> {
     fn return_statement(&mut self) -> Parsed<Stmt> {
         let span = self.here();
         self.pos += 1; // 'return'
-        let value = if self.at_symbol(";") {
-            None
-        } else {
-            Some(self.expression()?)
-        };
+        if self.at_symbol(";") {
+            self.expect_symbol(";", "to end the return statement")?;
+            return Ok(Stmt::Return { value: None, span });
+        }
+        let expr = self.expression()?;
+        // `return x += y;` — an assignment expression. jvmjs models assignment
+        // as a statement, so lower it to `x += y; return x;`.
+        if let Some(op) = self.assignment_operator()
+            && let Some(target) = assignment_target(&expr)
+        {
+            self.pos += 1;
+            let rhs = self.expression()?;
+            self.expect_symbol(";", "to end the return statement")?;
+            return Ok(Stmt::Block(vec![
+                Stmt::Assign {
+                    target,
+                    op,
+                    value: rhs,
+                    span,
+                },
+                Stmt::Return {
+                    value: Some(expr),
+                    span,
+                },
+            ]));
+        }
         self.expect_symbol(";", "to end the return statement")?;
-        Ok(Stmt::Return { value, span })
+        Ok(Stmt::Return {
+            value: Some(expr),
+            span,
+        })
     }
 
     fn break_or_continue(&mut self) -> Parsed<Stmt> {

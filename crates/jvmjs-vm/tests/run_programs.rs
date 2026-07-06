@@ -410,6 +410,39 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn wrapper_array_and_return_assignment_and_nested_copy() {
+    // Integer[] with .intValue(); `return x += y`; a copy-constructed list
+    // nested as a constructor argument.
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class Main {
+            static int sum(Integer[] xs) {
+                int s = 0;
+                for (int i = 0; i < xs.length; i++) s += xs[i].intValue();
+                return s += 0;
+            }
+            public static void main(String[] a) {
+                Integer[] xs = {new Integer(2), new Integer(3), new Integer(5)};
+                System.out.println(sum(xs));
+                ArrayList<String> src = new ArrayList<String>();
+                src.add("a"); src.add("b");
+                Box box = new Box(new ArrayList<>(src));
+                System.out.println(box.get());
+            }
+        }
+        class Box {
+            private ArrayList<String> items;
+            public Box(ArrayList<String> items) { this.items = items; }
+            public ArrayList<String> get() { return items; }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "10\n[a, b]\n");
+}
+
+#[test]
 fn arraylist_copy_and_aslist_varargs() {
     // ArrayList copy constructor (independent list), Arrays.asList varargs,
     // Collections.reverse over any element type.
