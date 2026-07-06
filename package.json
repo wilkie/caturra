@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "lint": "eslint . && prettier --check .",
     "lint:fix": "eslint --fix . && prettier --write .",
-    "lint:rust": "cargo clippy --workspace --all-targets && cargo fmt --check"
+    "lint:rust": "cargo clippy --workspace --all-targets && cargo fmt --check",
+    "deploy:pages": "bash scripts/deploy-pages.sh"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

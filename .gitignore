@@ -27,5 +27,9 @@ coverage/
 javabuilder/
 artifacts/
 
-# Teacher-authored validators generated locally; never committed.
+# Complete teacher solutions (Solve button) generated locally; never committed
+# and never shipped to the hosted build. Validators (csa-validators.ts) ARE
+# committed so the hosted Test button works.
+apps/playground/src/csa-solutions.local.ts
+# Old combined overlay (validators+solutions), superseded by the split above.
 apps/playground/src/csa-overlay.local.ts

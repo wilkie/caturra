@@ -5,3 +5,7 @@ pnpm-lock.yaml
 packages/core/src/wasm/generated/
 e2e/test-results/
 e2e/playwright-report/
+# Auto-generated CSA level data (multi-MB; emitted by generate-csa-levels.py).
+apps/playground/src/csa-levels.ts
+apps/playground/src/csa-validators.ts
+apps/playground/src/csa-solutions.local.ts

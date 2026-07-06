@@ -9,6 +9,9 @@ const isolationHeaders = {
 };
 
 export default defineConfig({
+  // `/` for dev, CI, and local preview; the GitHub Pages build sets
+  // VITE_BASE=/caturra/ (project pages serve under the repo path).
+  base: process.env.VITE_BASE ?? '/',
   plugins: [react()],
   server: {
     port: 5173,

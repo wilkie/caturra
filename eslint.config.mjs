@@ -8,6 +8,7 @@ export default tseslint.config(
       'target/',
       '**/dist/',
       '**/coverage/',
+      'javabuilder/',
       'packages/core/src/wasm/generated/',
       'e2e/test-results/',
       'e2e/playwright-report/',
@@ -25,8 +26,8 @@ export default tseslint.config(
     },
   },
   {
-    // Config files at the root aren't part of a tsconfig project.
-    files: ['*.mjs', '*.js', '**/*.config.ts', 'playwright.config.ts'],
+    // Config files and standalone scripts aren't part of a tsconfig project.
+    files: ['**/*.mjs', '**/*.js', '**/*.config.ts', 'playwright.config.ts'],
     extends: [tseslint.configs.disableTypeChecked],
   },
   prettier,

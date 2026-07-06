@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>caturra playground</title>
     <link rel="stylesheet" href="/src/style.css" />
+    <script>
+      // Cross-origin isolation for SharedArrayBuffer (blocking stdin) on static
+      // hosts like GitHub Pages, which can't send COOP/COEP headers. The dev and
+      // preview servers set the headers directly, so skip the worker on
+      // localhost. See apps/playground/public/coi-serviceworker.js.
+      if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+        const s = document.createElement('script');
+        s.src = '%BASE_URL%coi-serviceworker.js';
+        document.head.appendChild(s);
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
