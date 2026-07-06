@@ -559,6 +559,27 @@ fn reflection_method_get_and_invoke() {
 }
 
 #[test]
+fn reflection_call_result_in_string_concat() {
+    // A reflection method call as a nested argument inside a string concat used
+    // to leave a malformed stack (type_of did not type reflection receivers).
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.*;
+        public class Main {
+            private static int total = 5;
+            public static void main(String[] args) throws Exception {
+                Field f = Main.class.getDeclaredField("total");
+                System.out.println("static=" + Modifier.isStatic(f.getModifiers()));
+                System.out.println("name=" + f.getName() + " type=" + f.getType().getName());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "static=true\nname=total type=int\n");
+}
+
+#[test]
 fn reflection_method_array_and_void_invoke_statement() {
     // getDeclaredMethods() -> Method[], getReturnType/getName qualified,
     // getParameterTypes, and invoke of a void method as a bare statement.

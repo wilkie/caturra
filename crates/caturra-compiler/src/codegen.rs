@@ -7759,11 +7759,17 @@ impl BodyGen<'_> {
                             return boxed_method_return(method).unwrap_or(JType::Error);
                         }
                         receiver_ty @ (JType::Str
+                        | JType::StringBuilder
                         | JType::Scanner
                         | JType::File
                         | JType::Writer
                         | JType::List(_)
-                        | JType::Exception(_)) => {
+                        | JType::Exception(_)
+                        | JType::Class
+                        | JType::Field
+                        | JType::Method
+                        | JType::Type
+                        | JType::Constructor) => {
                             let elem = match receiver_ty {
                                 JType::List(elem) => Some(elem),
                                 _ => None,
