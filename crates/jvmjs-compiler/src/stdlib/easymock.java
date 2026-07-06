@@ -17,13 +17,16 @@ class __EMockEngine {
   boolean recording = true;
   String[] exMethod = new String[512];
   int[] exReturn = new int[512];
+  Object[] exReturnObj = new Object[512];
   int[] exCount = new int[512];
   int exN = 0;
 
+  // Record/replay a primitive-returning mocked call.
   int consume(String method) {
     if (recording) {
       exMethod[exN] = method;
       exReturn[exN] = 0;
+      exReturnObj[exN] = null;
       exCount[exN] = 1;
       __EMock.current = this;
       __EMock.currentIndex = exN;
@@ -34,6 +37,28 @@ class __EMockEngine {
       if (exMethod[i].equals(method) && exCount[i] > 0) {
         exCount[i]--;
         return exReturn[i];
+      }
+    }
+    throw new RuntimeException("unexpected call to mocked method " + method + "()");
+  }
+
+  // Record/replay a reference-returning mocked call (the recorded value comes
+  // from andReturn(Object)).
+  Object consumeObj(String method) {
+    if (recording) {
+      exMethod[exN] = method;
+      exReturn[exN] = 0;
+      exReturnObj[exN] = null;
+      exCount[exN] = 1;
+      __EMock.current = this;
+      __EMock.currentIndex = exN;
+      exN++;
+      return null;
+    }
+    for (int i = 0; i < exN; i++) {
+      if (exMethod[i].equals(method) && exCount[i] > 0) {
+        exCount[i]--;
+        return exReturnObj[i];
       }
     }
     throw new RuntimeException("unexpected call to mocked method " + method + "()");
@@ -79,6 +104,7 @@ class __EMockSetter {
   }
 
   __EMockSetter andReturn(Object v) {
+    engine.exReturnObj[index] = v;
     return this;
   }
 

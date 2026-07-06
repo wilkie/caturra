@@ -1946,6 +1946,65 @@ impl Parser<'_> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per prefix operator
+    /// If a reference-cast type `(T)` begins at the current `(` — a
+    /// (possibly dotted) name, optional generic arguments, optional `[]` — return
+    /// the offset (from `self.pos`) of the token just past the closing `)`. Pure
+    /// lookahead: it consumes nothing and never allocates, so `unary` can use it
+    /// to disambiguate a cast from a parenthesized expression.
+    fn scan_cast_type(&self) -> Option<usize> {
+        // self.pos is at `(`.
+        let mut i = 1;
+        // A dotted name: Ident ('.' Ident)*.
+        if !matches!(self.peek_at(i), Some(TokenKind::Identifier(_))) {
+            return None;
+        }
+        i += 1;
+        while matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == ".") {
+            i += 1;
+            if !matches!(self.peek_at(i), Some(TokenKind::Identifier(_))) {
+                return None;
+            }
+            i += 1;
+        }
+        // Optional generic arguments, balanced across `<` … `>` (and `>>`).
+        if matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == "<") {
+            let mut depth: i32 = 0;
+            loop {
+                match self.peek_at(i)? {
+                    TokenKind::Symbol(s) => {
+                        let opens = s.chars().filter(|c| *c == '<').count();
+                        let closes = s.chars().filter(|c| *c == '>').count();
+                        let allowed =
+                            opens > 0 || closes > 0 || matches!(*s, "," | "." | "?" | "[" | "]");
+                        if !allowed {
+                            return None;
+                        }
+                        depth += i32::try_from(opens).ok()?;
+                        depth -= i32::try_from(closes).ok()?;
+                        i += 1;
+                        if depth <= 0 {
+                            break;
+                        }
+                    }
+                    TokenKind::Identifier(_) | TokenKind::Keyword(_) => i += 1,
+                    _ => return None,
+                }
+            }
+        }
+        // Optional array dimensions.
+        while matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == "[")
+            && matches!(self.peek_at(i + 1), Some(TokenKind::Symbol(s)) if *s == "]")
+        {
+            i += 2;
+        }
+        if matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == ")") {
+            Some(i + 1)
+        } else {
+            None
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per prefix/cast form
     fn unary(&mut self) -> Parsed<Expr> {
         let start = self.here();
         if self.eat_symbol("~") {
@@ -2058,14 +2117,14 @@ impl Parser<'_> {
                 span,
             });
         }
-        // Class cast: `(Shape) x`. `(name)` followed by a token that
-        // can only start an operand is a cast, not a parenthesized
-        // expression (`(a) - b` stays arithmetic).
+        // Class cast: `(Shape) x`, `(java.util.ArrayList) x`, or
+        // `(ArrayList<Object>) x`. A `(type)` followed by a token that can
+        // only start an operand is a cast, not a parenthesized expression
+        // (`(a) - b` stays arithmetic).
         if self.at_symbol("(")
-            && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
-            && matches!(self.peek_at(2), Some(TokenKind::Symbol(")")))
+            && let Some(after) = self.scan_cast_type()
             && matches!(
-                self.peek_at(3),
+                self.peek_at(after),
                 Some(
                     TokenKind::Identifier(_)
                         | TokenKind::Keyword(Keyword::New | Keyword::This)

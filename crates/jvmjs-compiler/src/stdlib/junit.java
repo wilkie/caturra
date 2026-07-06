@@ -32,9 +32,29 @@ class Assertions {
     boolean same = expected == null ? actual == null : expected.equals(actual);
     if (!same) throw new RuntimeException("expected " + expected + " but was " + actual);
   }
+  // Value-equality for assertEquals: two lists are equal when their elements
+  // are pairwise equal via each element's own equals (JUnit / AbstractList
+  // semantics), which for user objects dispatches their equals override.
+  static boolean __objEquals(Object expected, Object actual) {
+    if (expected == null) return actual == null;
+    if (expected instanceof java.util.ArrayList<Object> && actual instanceof java.util.ArrayList<Object>) {
+      java.util.ArrayList<Object> a = (java.util.ArrayList<Object>) expected;
+      java.util.ArrayList<Object> b = (java.util.ArrayList<Object>) actual;
+      if (a.size() != b.size()) return false;
+      // Compare element-by-element via each element's own equals. No null
+      // check on the element: jvmjs stores primitives unboxed, so `get(i)` may
+      // be a bare int (a null check would verify-fail); equals handles it.
+      for (int i = 0; i < a.size(); i++) {
+        if (!a.get(i).equals(b.get(i))) return false;
+      }
+      return true;
+    }
+    return expected.equals(actual);
+  }
+
   public static void assertEquals(Object expected, Object actual) {
-    boolean same = expected == null ? actual == null : expected.equals(actual);
-    if (!same) throw new RuntimeException("expected " + expected + " but was " + actual);
+    if (!__objEquals(expected, actual))
+      throw new RuntimeException("expected " + expected + " but was " + actual);
   }
   // The `message` overloads (JUnit's assertX(expected, actual, message)) —
   // validators pass a message explaining the failure to the student.
@@ -60,8 +80,7 @@ class Assertions {
       throw new RuntimeException(message + " ==> expected: <" + expected + "> but was: <" + actual + ">");
   }
   public static void assertEquals(Object expected, Object actual, String message) {
-    boolean same = expected == null ? actual == null : expected.equals(actual);
-    if (!same)
+    if (!__objEquals(expected, actual))
       throw new RuntimeException(message + " ==> expected: <" + expected + "> but was: <" + actual + ">");
   }
   public static void assertNotEquals(int unexpected, int actual) {

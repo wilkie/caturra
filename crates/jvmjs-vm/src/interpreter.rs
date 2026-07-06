@@ -2184,6 +2184,24 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
         }
+        // `Collections.sort(list)` — natural-ordering sort. Done natively
+        // because jvmjs stores unboxed primitives in a list, so a bundled Java
+        // version could not compare them (`get` yields a bare `int`, not a
+        // `Comparable`). Strings compare by UTF-16 code units (Java semantics).
+        if class_name == "Collections" && method_name == "sort" {
+            if let Some(JValue::Ref(Some(reference))) = args.first()
+                && let Some(crate::value::HeapObject::ArrayList(items)) = self.heap.get(*reference)
+            {
+                let mut items = items.clone();
+                items.sort_by(|a, b| self.compare_values(a, b));
+                if let Some(crate::value::HeapObject::ArrayList(slot)) =
+                    self.heap.get_mut(*reference)
+                {
+                    *slot = items;
+                }
+            }
+            return Ok(None);
+        }
         // `Class.forName(name)` — a reflection handle for a loaded class.
         // Needs the class table, which the intrinsic layer lacks.
         if class_name == "java/lang/Class" && method_name == "forName" {
@@ -2266,10 +2284,13 @@ impl<'run> Interpreter<'run> {
         }
         args.reverse();
 
-        let JValue::Ref(receiver) = frame.pop()? else {
-            return Err(malformed(String::from(
-                "invokevirtual receiver is not a reference",
-            )));
+        let receiver = match frame.pop()? {
+            JValue::Ref(receiver) => receiver,
+            // An unboxed primitive used as an Object receiver — e.g. `get()`
+            // from an `ArrayList<Object>` (jvmjs stores primitives unboxed)
+            // followed by `.equals(...)`/`.toString()`. Box it and dispatch on
+            // the wrapper.
+            primitive => Some(self.box_primitive_value(primitive)),
         };
         let Some(receiver) = receiver else {
             return Err(VmError::UncaughtException(format!(
@@ -2539,6 +2560,50 @@ impl<'run> Interpreter<'run> {
         // yields `null` (the caller's bytecode always expects one value back).
         new_frame.box_return_as = Some(ret_desc);
         Ok(Some(new_frame))
+    }
+
+    /// Box an unboxed primitive value into its wrapper on the heap, so it can
+    /// be an `Object` receiver. Int-family values box as `Integer` (their exact
+    /// wrapper is not recoverable from the erased value, but the wrapped value
+    /// compares and prints correctly for the reflective/collection paths).
+    fn box_primitive_value(&mut self, value: JValue) -> HeapRef {
+        let class_name = match value {
+            JValue::Long(_) => "java/lang/Long",
+            JValue::Double(_) => "java/lang/Double",
+            JValue::Float(_) => "java/lang/Float",
+            _ => "java/lang/Integer",
+        };
+        self.heap.alloc(crate::value::HeapObject::Boxed {
+            class_name: String::from(class_name),
+            value,
+        })
+    }
+
+    /// Natural-ordering comparison of two list elements for `Collections.sort`:
+    /// numbers by value, strings by UTF-16 code units, wrappers by their
+    /// primitive. Incomparable pairs are treated as equal (stable no-op).
+    fn compare_values(&self, a: &JValue, b: &JValue) -> std::cmp::Ordering {
+        use crate::value::HeapObject;
+        use std::cmp::Ordering;
+        match (a, b) {
+            (JValue::Int(x), JValue::Int(y)) => x.cmp(y),
+            (JValue::Long(x), JValue::Long(y)) => x.cmp(y),
+            (JValue::Double(x), JValue::Double(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+            (JValue::Float(x), JValue::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+            (JValue::Ref(Some(ra)), JValue::Ref(Some(rb))) => {
+                match (self.heap.get(*ra), self.heap.get(*rb)) {
+                    (Some(HeapObject::JavaString(sa)), Some(HeapObject::JavaString(sb))) => {
+                        sa.cmp(sb)
+                    }
+                    (
+                        Some(HeapObject::Boxed { value: va, .. }),
+                        Some(HeapObject::Boxed { value: vb, .. }),
+                    ) => self.compare_values(&va.clone(), &vb.clone()),
+                    _ => Ordering::Equal,
+                }
+            }
+            _ => Ordering::Equal,
+        }
     }
 
     /// Unbox `value` when the target parameter descriptor is a primitive.

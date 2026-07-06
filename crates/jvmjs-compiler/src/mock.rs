@@ -330,8 +330,8 @@ fn mock_body(key: &str, ret: &TypeRef) -> String {
         TypeRef::Char => format!("return (char) __e.consume(\"{key}\");"),
         TypeRef::Long => format!("return (long) __e.consume(\"{key}\");"),
         TypeRef::Double | TypeRef::Float => format!("__e.consume(\"{key}\"); return 0;"),
-        // Reference return: count the call, return null.
-        _ => format!("__e.consume(\"{key}\"); return null;"),
+        // Reference return: hand back the recorded andReturn(Object) value.
+        _ => format!("return ({}) __e.consumeObj(\"{key}\");", type_src(ret)),
     }
 }
 

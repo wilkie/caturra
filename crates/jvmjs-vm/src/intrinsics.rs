@@ -1767,15 +1767,26 @@ fn boxed_virtual(
             _ => 0,
         }))),
         "equals" => {
-            // Equal iff the other operand is a wrapper of the same class
-            // and value.
-            let equal = matches!(args.first(), Some(JValue::Ref(Some(other)))
-            if match heap.get(*other) {
-                Some(HeapObject::Boxed { class_name: other_class, value: other_value }) => {
-                    other_class == class_name && values_bit_equal(value, *other_value)
-                }
+            // Equal iff the other operand is a wrapper of the same class and
+            // value, or a raw unboxed primitive of equal value (jvmjs stores
+            // primitives unboxed, so an `Object` arg may arrive unboxed — Java
+            // would autobox it, `Integer.equals(5)` is true).
+            let equal = match args.first() {
+                Some(JValue::Ref(Some(other))) => match heap.get(*other) {
+                    Some(HeapObject::Boxed {
+                        class_name: other_class,
+                        value: other_value,
+                    }) => other_class == class_name && values_bit_equal(value, *other_value),
+                    _ => false,
+                },
+                Some(
+                    other @ (JValue::Int(_)
+                    | JValue::Long(_)
+                    | JValue::Double(_)
+                    | JValue::Float(_)),
+                ) => values_bit_equal(value, *other),
                 _ => false,
-            });
+            };
             Ok(Some(JValue::Int(i32::from(equal))))
         }
         "compareTo" => {

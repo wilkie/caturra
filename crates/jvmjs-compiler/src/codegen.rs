@@ -7276,7 +7276,7 @@ impl BodyGen<'_> {
         // `Collections.reverse/swap` are generic over the list element type;
         // emit the (uniform-at-runtime) list argument(s) and call the bundle,
         // bypassing invariant List<elem> parameter matching.
-        if class == "Collections" && (method == "reverse" || method == "swap") {
+        if class == "Collections" && (method == "reverse" || method == "swap" || method == "sort") {
             return self.emit_collections_call(method, args, span);
         }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
@@ -7367,7 +7367,7 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> Option<Option<JType>> {
         let (descriptor, want) = match method {
-            "reverse" => ("(Ljava/util/ArrayList;)V", 1usize),
+            "reverse" | "sort" => ("(Ljava/util/ArrayList;)V", 1usize),
             "swap" => ("(Ljava/util/ArrayList;II)V", 3usize),
             _ => unreachable!("caller checked method"),
         };
@@ -8023,6 +8023,8 @@ impl BodyGen<'_> {
             // `x instanceof Integer` / `String` — wrapper and String tests.
             JType::Boxed(elem) => wrapper_internal(elem).to_owned(),
             JType::Str => String::from("java/lang/String"),
+            // `x instanceof ArrayList<…>` — a runtime list check.
+            JType::List(_) => String::from("java/util/ArrayList"),
             // `type instanceof ParameterizedType` — a runtime check on the
             // reflect Type's kind (the VM inspects the value).
             JType::Type => match ty {
@@ -8823,6 +8825,17 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
             }
             return JType::Str;
+        }
+        // Casting a reference (commonly an erased Object) to a List: a runtime
+        // checkcast to java/util/ArrayList.
+        if let JType::List(_) = target
+            && source.is_reference()
+        {
+            if !matches!(source, JType::List(_)) {
+                let class_index = intern_class(self.pool, "java/util/ArrayList");
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return target;
         }
         // Reference casts between class/interface types.
         if let JType::Object(target_id) = target {

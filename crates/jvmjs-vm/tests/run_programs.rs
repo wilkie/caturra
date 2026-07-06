@@ -671,11 +671,62 @@ fn array_object_methods_reference_semantics() {
 }
 
 #[test]
+fn sort_arrays_and_collections_and_list_equals() {
+    // Arrays.sort(int[]/String[]), Collections.sort(list), a generic downcast,
+    // and list equality dispatching a user equals override.
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class Main {
+            public static void main(String[] args) {
+                int[] xs = {3, 1, 2};
+                Arrays.sort(xs);
+                System.out.println(Arrays.toString(xs));
+                ArrayList<String> ws = new ArrayList<String>();
+                ws.add("pear"); ws.add("fig"); ws.add("kiwi");
+                Collections.sort(ws);
+                System.out.println(ws);
+                Object o = ws;
+                ArrayList<String> back = (ArrayList<String>) o;
+                System.out.println(back.get(0));
+                ArrayList<P> a = new ArrayList<P>();
+                a.add(new P("x")); a.add(new P("y"));
+                ArrayList<P> b = new ArrayList<P>();
+                b.add(new P("x")); b.add(new P("y"));
+                System.out.println(a.equals(b) + " " + __eq(a, b));
+            }
+            static boolean __eq(Object x, Object y) {
+                if (x instanceof ArrayList<Object> && y instanceof ArrayList<Object>) {
+                    ArrayList<Object> p = (ArrayList<Object>) x;
+                    ArrayList<Object> q = (ArrayList<Object>) y;
+                    if (p.size() != q.size()) return false;
+                    for (int i = 0; i < p.size(); i++)
+                        if (!p.get(i).equals(q.get(i))) return false;
+                    return true;
+                }
+                return x.equals(y);
+            }
+        }
+        class P {
+            private String name;
+            public P(String n) { name = n; }
+            public boolean equals(Object o) {
+                if (!(o instanceof P)) return false;
+                return name.equals(((P) o).name);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "[1, 2, 3]\n[fig, kiwi, pear]\nfig\nfalse true\n");
+}
+
+#[test]
 fn easymock_full_mock_records_and_replays() {
     // createMock(T.class): a full mock of a class with no no-arg constructor,
     // recording a sequence of return values then replaying them.
     let out = run_stdout(
-        r#"
+        r"
         import static org.easymock.EasyMock.*;
         public class Main {
             public static void main(String[] args) {
@@ -692,7 +743,7 @@ fn easymock_full_mock_records_and_replays() {
             public Soda(int q) { quantity = q; }
             public int getQuantity() { return quantity; }
         }
-        "#,
+        ",
         "Main",
     );
     assert_eq!(out, "5\n");

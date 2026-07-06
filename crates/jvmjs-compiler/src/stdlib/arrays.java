@@ -47,6 +47,48 @@ class Arrays {
     for (int i = 1; i < a.length; i++) s = s + ", " + a[i];
     return s + "]";
   }
+  // In-place ascending sort (insertion sort — stable, small inputs).
+  public static void sort(int[] a) {
+    for (int i = 1; i < a.length; i++) {
+      int key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(double[] a) {
+    for (int i = 1; i < a.length; i++) {
+      double key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(long[] a) {
+    for (int i = 1; i < a.length; i++) {
+      long key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(char[] a) {
+    for (int i = 1; i < a.length; i++) {
+      char key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(String[] a) {
+    for (int i = 1; i < a.length; i++) {
+      String key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j].compareTo(key) > 0) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+
   // A List view of the array (a reference array widens to Object[]).
   public static java.util.ArrayList<Object> asList(Object[] a) {
     java.util.ArrayList<Object> list = new java.util.ArrayList<Object>();
