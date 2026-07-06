@@ -7007,6 +7007,20 @@ export const CSA_UNITS: CsaUnit[] = [
         ],
       },
       {
+        name: 'Practice: The Integer Class (b)',
+        lesson: 'Lesson 3: Integer and Double Objects',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n    Integer[] arr = {new Integer(1), new Integer(3), new Integer(2)};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize an int array that stores the array returned from\n     * calling the convertArray() method\n     * -----------------------------------------------------------------------------\n     */\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Use the arrayToString() method in the Data class to print the new array.\n     * -----------------------------------------------------------------------------\n     */\n    \n    \n    \n  }\n}" },
+          { path: 'Data.java', text: "/*\n * Reads and processes data\n */\npublic class Data {\n\n  /*\n   * Returns an int array containing the\n   * unboxed values from a Integer array\n   */\n  public static int[] convertArray(Integer[] arr) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return an int array containing the unboxed values from the parameter arr\n     * -----------------------------------------------------------------------------\n     */\n\n    return new int[]{};\n  }\n\n  /*\n   * Returns an array of ints as a String\n   */\n  public static String arrayToString(int[] numbers) {\n    String retString = \"\";\n    \n    for (int index = 0; index < numbers.length; index++) {\n      retString += numbers[index] + \" \";\n    }\n\n    return retString;\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
         name: 'Practice: The Integer Class (c)',
         lesson: 'Lesson 3: Integer and Double Objects',
         view: 'console',
@@ -7047,6 +7061,20 @@ export const CSA_UNITS: CsaUnit[] = [
         files: [
           { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate an Double object using the new keyword. Declare and initialize\n     * an double variable that stores the value returned from calling the getDouble()\n     * method. Print the value stored in the double variable.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n    \n    \n  }\n}" },
           { path: 'Data.java', text: "/*\n * Reads and processes data\n */\npublic class Data {\n\n  /*\n   * Returns a primitive double value of number\n   */\n  public static double getDouble(Double number) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return the primitive double value of number.\n     * -----------------------------------------------------------------------------\n     */\n\n    return -1;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: The Double Class (b)',
+        lesson: 'Lesson 3: Integer and Double Objects',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Double objects\n    Double[] arr = {new Double(1.0), new Double(3.14), new Double(-.5)};\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Declare and initialize an double array that stores the array returned from\n     * calling the convertArray() method. Use the arrayToString() method in the Data\n     * class to print the new array.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n    \n    \n    \n  }\n}" },
+          { path: 'Data.java', text: "/*\n * Reads and processes data\n */\npublic class Data {\n\n  /*\n   * Returns an double array containing the unboxed values from a Double array\n   */\n  public static double[] convertArray(Double[] arr) {\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Return an double array containing the unboxed values from the parameter arr\n     * -----------------------------------------------------------------------------\n     */\n\n    return null;\n  }\n\n  /*\n   * Returns an array of doubles as a String\n   */\n  public static String arrayToString(double[] numbers) {\n    String retString = \"\";\n    \n    for (int index = 0; index < numbers.length; index++) {\n      retString += numbers[index] + \" \";\n    }\n\n    return retString;\n  }\n  \n}" },
         ],
         validationFiles: [],
         solutionFiles: [],
@@ -8117,6 +8145,406 @@ export const CSA_UNITS: CsaUnit[] = [
         files: [
           { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n\n\n    \n    \n    \n    \n  }\n}" },
           { path: 'FileReader.java', text: "import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static ArrayList<String> toStringList(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    return temp;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static ArrayList<Integer> toIntList(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    ArrayList<Integer> data = new ArrayList<Integer>();\n\n    for (int index = 0; index < temp.size(); index++) {\n      String currentValue = temp.get(index);\n      data.add(Integer.parseInt(currentValue));\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  public static ArrayList<Double> toDoubleList(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    ArrayList<Double> data = new ArrayList<Double>();\n\n    for (int index = 0; index < temp.size(); index++) {\n      String currentValue = temp.get(index);\n      data.add(Double.parseDouble(currentValue));\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println(\"File not found.\");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'CSA 2023 Console Sandbox_2025',
+        lesson: 'Sandbox: Console',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n\n\n\n\n    \n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'With Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: "1,0 1,10 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n",
+        files: [
+          { path: 'Main.java', text: "import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'No Paint Bucket',
+        lesson: 'Sandbox: The Neighborhood',
+        view: 'neighborhood',
+        grid: "1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n1,0 1,0 1,0 1,0 1,0 1,0 1,0 1,0\n",
+        files: [
+          { path: 'Main.java', text: "import org.code.neighborhood.Painter;\n\npublic class Main {\n  public static void main(String[] args) {\n\n\n\n\n  }\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+    ],
+  },
+  {
+    name: 'CSA 2025 Unit 7',
+    levels: [
+      {
+        name: 'Predict and Run: Object References as Parameters',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "public class Course {\n\n  private String name;\n  private boolean status;\n\n  public Course(String name, boolean status) {\n    this.name = name;\n    this.status = status;\n  }\n\n  public void setStatus(boolean newStatus) {\n    status = newStatus;\n  }\n\n  public String toString() {\n    String text = name + \": \";\n\n    if (status) {\n      text = text + \"Enrolled\";\n    }\n    else {\n      text = text + \"Dropped\";\n    }\n\n    return text;\n  }\n  \n}" },
+          { path: 'Student.java', text: "public class Student {\n\n  private String name;\n  private Course newCourse;\n\n  public Student(String name, Course newCourse) {\n    this.name = name;\n    this.newCourse = newCourse;\n  }\n\n  public void dropCourse(Course theCourse) {\n    theCourse.setStatus(false);\n  }\n\n  public String toString() {\n    return name + \"\\n\" + newCourse;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Object References as Parameters #1',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "public class Course {\n\n  private String name;\n  private boolean status;\n\n  public Course(String name, boolean status) {\n    this.name = name;\n    this.status = status;\n  }\n\n  public void setStatus(boolean newStatus) {\n    status = newStatus;\n  }\n\n  public String toString() {\n    String text = name + \": \";\n\n    if (status) {\n      text = text + \"Enrolled\";\n    }\n    else {\n      text = text + \"Dropped\";\n    }\n\n    return text;\n  }\n  \n}" },
+          { path: 'Student.java', text: "public class Student {\n\n  private String name;\n  private Course newCourse;\n\n  public Student(String name, Course newCourse) {\n    this.name = name;\n    this.newCourse = newCourse;\n  }\n\n  public void dropCourse(Course theCourse) {\n    theCourse.setStatus(false);\n  }\n\n  public String toString() {\n    return name + \"\\n\" + newCourse;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Object References as Parameters #2',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "public class Course {\n\n  private String name;\n  private boolean status;\n\n  public Course(String name, boolean status) {\n    this.name = name;\n    this.status = status;\n  }\n\n  public void setStatus(boolean newStatus) {\n    status = newStatus;\n  }\n\n  public String toString() {\n    String text = name + \": \";\n\n    if (status) {\n      text = text + \"Enrolled\";\n    }\n    else {\n      text = text + \"Dropped\";\n    }\n\n    return text;\n  }\n  \n}" },
+          { path: 'Student.java', text: "public class Student {\n\n  private String name;\n  private Course newCourse;\n\n  public Student(String name, Course newCourse) {\n    this.name = name;\n    this.newCourse = newCourse;\n  }\n\n  public void dropCourse(Course theCourse) {\n    theCourse.setStatus(false);\n  }\n\n  public String toString() {\n    return name + \"\\n\" + newCourse;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Object References as Parameters #3',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Course.java', text: "public class Course {\n\n  private String name;\n  private boolean status;\n\n  public Course(String name, boolean status) {\n    this.name = name;\n    this.status = status;\n  }\n\n  public void setStatus(boolean newStatus) {\n    status = newStatus;\n  }\n\n  public String toString() {\n    String text = name + \": \";\n\n    if (status) {\n      text = text + \"Enrolled\";\n    }\n    else {\n      text = text + \"Dropped\";\n    }\n\n    return text;\n  }\n  \n}" },
+          { path: 'Student.java', text: "public class Student {\n\n  private String name;\n  private Course newCourse;\n\n  public Student(String name, Course newCourse) {\n    this.name = name;\n    this.newCourse = newCourse;\n  }\n\n  public void dropCourse(Course theCourse) {\n    theCourse.setStatus(false);\n  }\n\n  public String toString() {\n    return name + \"\\n\" + newCourse;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Object References as Parameters (a) #1',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates several ClubMember objects\n    ClubMember naomi = new ClubMember(\"Naomi\", 10);\n    ClubMember dominic = new ClubMember(\"Dominic\", 15);\n    ClubMember ariana = new ClubMember(\"Ariana\", 12);\n\n    // Creates a 1D array of ClubMember objects\n    ClubMember[] members = {naomi, dominic, ariana};\n\n    // Creates a ClubSponsor object\n    ClubSponsor sponsor = new ClubSponsor(\"Ms. Easley\", members);\n\n    // Prints the ClubSponsor object\n    System.out.println(sponsor);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the addServiceHours() method, then print the updated ClubSponsor object.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n    \n  }\n}" },
+          { path: 'ClubMember.java', text: "/*\n * Represents a member of a school club\n */\npublic class ClubMember {\n\n  private String name;        // The name of a club member\n  private int serviceHours;   // The number of community service hours\n\n  /*\n   * Sets name and serviceHours to the specified values\n   */\n  public ClubMember(String name, int serviceHours) {\n    this.name = name;\n    this.serviceHours = serviceHours;\n  }\n\n  /*\n   * Returns the name of the club member\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the number of community service hours\n   */\n  public int getServiceHours() {\n    return serviceHours;\n  }\n\n  /*\n   * Updates the number of community service hours\n   * to the newServiceHours\n   */\n  public void setServiceHours(int newServiceHours) {\n    serviceHours = newServiceHours;\n  }\n\n  /*\n   * Returns a String containing information about the club member\n   */\n  public String toString() {\n    return name + \": \" + serviceHours + \" community service hours\";\n  }\n  \n}" },
+          { path: 'ClubSponsor.java', text: "/*\n * Represents a sponsor of a school club\n */\npublic class ClubSponsor {\n\n  private String sponsor;         // The name of a club sponsor\n  private ClubMember[] members;   // The 1D array containing the club members\n\n  /*\n   * Sets sponsor to the specified name of a club sponsor and\n   * initializes members to the specified 1D array of members\n   */\n  public ClubSponsor(String sponsor, ClubMember[] members) {\n    this.sponsor = sponsor;\n    this.members = members;\n  }\n\n  /*\n   * Returns the name of the club sponsor\n   */\n  public String getSponsor() {\n    return sponsor;\n  }\n\n  /*\n   * Returns the 1D array of club members\n   */\n  public ClubMember[] getMembers() {\n    return members;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the addServiceHours() method to add a specified number of hours to\n   * a club member. The method should have a parameter for a ClubMember object and\n   * the number of hours to add, and it should add the hours to the ClubMember\n   * object's current service hours.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /*\n   * Returns a String containing information about the club sponsor\n   */\n  public String toString() {\n    String text = \"Club Sponsor: \" + sponsor + \"\\n\";\n\n    for (ClubMember student : members) {\n      text = text + student + \"\\n\";\n    }\n\n    return text;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Object References as Parameters (b) #1',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "import java.util.ArrayList;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates several Song objects\n    Song firstSong = new Song(\"Let It Go\", \"Disney\");\n    Song secondSong = new Song(\"Happy\", \"Pharrell Williams\");\n    Song thirdSong = new Song(\"Count On Me\", \"Bruno Mars\");\n    Song fourthSong = new Song(\"Hakuna Matata\", \"Disney\");\n    Song fifthSong = new Song(\"Can't Stop the Feeling\", \"Justin Timberlake\");\n\n    // Creates a User object\n    User natalia = new User();\n\n    // Adds songs to the user's listening history\n    natalia.addSong(firstSong);\n    natalia.addSong(secondSong);\n    natalia.addSong(thirdSong);\n    natalia.addSong(fourthSong);\n    natalia.addSong(fifthSong);\n\n    // Likes some of the songs\n    natalia.likeSong(secondSong);\n    natalia.likeSong(thirdSong);\n    natalia.likeSong(fifthSong);\n\n    // Creates a Playlist object\n    Playlist nataliaPlaylist = new Playlist();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Calls the createPlaylist() method and prints the results using the\n     * playlistToString() method.\n     * -----------------------------------------------------------------------------\n     */\n\n    \n\n\n    \n    \n  }\n}" },
+          { path: 'Playlist.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a playlist on a music streaming app\n */\npublic class Playlist {\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the createPlaylist() method that takes a User object as a parameter\n   * and returns an ArrayList containing the songs the user liked in their\n   * listening history.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /*\n   * Returns a String containing each song in the playlist\n   */\n  public String playlistToString(ArrayList<Song> playlist) {\n    String result = \"\";\n\n    for (Song song : playlist) {\n      result += song + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Song.java', text: "/*\n * Represents a song on a music streaming app\n */\npublic class Song {\n\n  private String title;      // The title of a song\n  private String artist;     // The name of the artist of a song\n  private boolean isLiked;   // Whether or not a user liked a song\n\n  /*\n   * Sets title and artist to the specified values\n   * and isLiked to false\n   */\n  public Song(String title, String artist) {\n    this.title = title;\n    this.artist = artist;\n    this.isLiked = false;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the artist of the song\n   */\n  public String getArtist() {\n    return artist;\n  }\n\n  /*\n   * Returns true if a user liked the song, otherwise false\n   */\n  public boolean getIsLiked() {\n    return isLiked;\n  }\n\n  /*\n   * Sets isLiked to newStatus\n   */\n  public void setIsLiked(boolean newStatus) {\n    this.isLiked = newStatus;\n  }\n\n  /*\n   * Returns a String containing the song's information\n   */\n  public String toString() {\n    String result = artist + \" by \" + artist;\n\n    if (isLiked) {\n      result += \" (Liked)\";\n    }\n    else {\n      result += \" (Not Liked)\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'User.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a user on a music streaming app\n */\npublic class User {\n\n  private ArrayList<Song> listeningHistory;    // The list of songs a user has listened to\n\n  /*\n   * Initializes listeningHistory to an empty list\n   */\n  public User() {\n    this.listeningHistory = new ArrayList<Song>();\n  }\n\n  /*\n   * Returns the user's listening history\n   */\n  public ArrayList<Song> getListeningHistory() {\n    return listeningHistory;\n  }\n\n  /*\n   * Adds a song to the user's listening history\n   */\n  public void addSong(Song newSong) {\n    listeningHistory.add(newSong);\n  }\n\n  /*\n   * Sets the Song status to true if the user liked the song\n   */\n  public void likeSong(Song song) {\n    song.setIsLiked(true);\n  }\n\n  /*\n   * Returns a String containing each song in the user's listening history\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (Song item : listeningHistory) {\n      result += item + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Object References as Parameters (a) #2',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Reservation object\n    Reservation vacation = new Reservation(\"March 15\", 4);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate a Guest object and print the object. Then call either the\n     * changeCheckIn() or changeNumNights() methods and print the updated Guest\n     * object. Print the Reservation object to confirm it was not modified.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Guest.java', text: "/*\n * Represents a guest at a hotel\n */\npublic class Guest {\n\n  private String name;                // The name of a guest\n  private Reservation reservation;    // The reservation for a guest\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the Guest constructor with a parameter for the name of a guest and a\n   * parameter for a Reservation object. Instantiate the reservation object to a new\n   * Reservation object using the values assigned to the parameter's instance variables.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n\n  /*\n   * Returns the name of the guest\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the reservation\n   */\n  public Reservation getReservation() {\n    return reservation;\n  }\n\n  /*\n   * Changes the reservation's check-in date\n   */\n  public void changeCheckIn(String newCheckIn) {\n    reservation.setCheckInDate(newCheckIn);\n  }\n\n  /*\n   * Changes the reservation's number of nights\n   */\n  public void changeNumNights(int newNumNights) {\n    reservation.setNumNights(newNumNights);\n  }\n\n  /*\n   * Returns a String containing the guest's name and reservation information\n   */\n  public String toString() {\n    return name + \"\\n\" + reservation;\n  }\n  \n}" },
+          { path: 'Reservation.java', text: "/*\n * Represents a hotel reservation\n */\npublic class Reservation {\n  \n  private String checkInDate;     // The check-in date for a reservation\n  private int numNights;          // The number of nights for a reservation\n\n  /*\n   * Sets checkInDate and numNights to the specified values\n   */\n  public Reservation(String checkInDate, int numNights) {\n    this.checkInDate = checkInDate;\n    this.numNights = numNights;\n  }\n\n  /*\n   * Returns the checkInDate for the reservation\n   */\n  public String getCheckInDate() {\n    return checkInDate;\n  }\n\n  /*\n   * Returns the number of nights for the reservation\n   */\n  public int getNumNights() {\n    return numNights;\n  }\n\n  /*\n   * Changes the check-in date for the reservation to newDate\n   */\n  public void setCheckInDate(String newDate) {\n    checkInDate = newDate;\n  }\n\n  /*\n   * Sets the number of nights for the reservation to newNumNights\n   */\n  public void setNumNights(int newNumNights) {\n    numNights = newNumNights;\n  }\n\n  /*\n   * Returns a String containing the reservation information\n   */\n  public String toString() {\n    return \"Check in: \" + checkInDate + \"\\nNumber of Nights: \" + numNights;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Object References as Parameters (b) #2',
+        lesson: 'Lesson 2: Object References as Parameters',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a Brand object\n    Brand gibson = new Brand(\"Gibson\", 575.99);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Instantiate an Instrument object and print the object. Then call the\n     * changePrice() method and print the updated Instrument object. Print the\n     * Brand object to confirm it was not modified.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'Brand.java', text: "/*\n * Represents a brand of an instrument\n */\npublic class Brand {\n  \n  private String name;     // The name of a brand\n  private double price;    // The price of a brand\n\n  /*\n   * Sets name and price to the specified values\n   */\n  public Brand(String name, double price) {\n    this.name = name;\n    this.price = price;\n  }\n\n  /*\n   * Returns the name of the brand\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the price of the brand\n   */\n  public double getPrice() {\n    return price;\n  }\n\n  /*\n   * Sets the price to newPrice\n   */\n  public void setPrice(double newPrice) {\n    price = newPrice;\n  }\n\n  /*\n   * Returns a String containing the brand's information\n   */\n  public String toString() {\n    return name + \" - $\" + price;\n  }\n  \n}" },
+          { path: 'Instrument.java', text: "/*\n * Represents an instrument in a music store\n */\npublic class Instrument {\n      \n  private Brand brand;    // The Brand of an instrument\n  private String type;    // The type of an instrument\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the Instrument constructor with a parameter for a Brand object and\n   * the type of an instrument. Instantiate the brand object to a new Brand object\n   * using the values assigned to the parameter's instance variables.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n\n  \n\n  /*\n   * Returns the instrument's brand\n   */\n  public Brand getBrand() {\n    return brand;\n  }\n  \n  /*\n   * Returns the type of the instrument\n   */\n  public String getType() {\n    return type;\n  }\n\n  /*\n   * Changes the price of the instrument\n   */\n  public void changePrice(double newPrice) {\n    brand.setPrice(newPrice);\n  }\n\n  /*\n   * Returns a String containing the brand information and type\n   */\n  public String toString() {\n    return type + \"\\n\" + brand;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Predict and Run: Overloaded Methods',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'MusicPlayer.java', text: "/*\n * Represents a music player\n */\npublic class MusicPlayer {\n\n  /*\n   * Returns a String containing the text \"Now playing: \"\n   * and the song's information\n   */\n  public String play(Song song) {\n    return \"Now playing: \" + song;\n  }\n\n  /* \n   * Returns a String containig each song in playlist\n   */\n  public String play(Playlist playlist) {\n    String result = \"First up: \" + playlist.getSong(0) + \"\\n\";\n\n    for (int index = 1; index < playlist.getNumSongs(); index++) {\n      result += \"Next up: \" + playlist.getSong(index) + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Playlist.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a playlist of songs\n */\npublic class Playlist {\n\n  private ArrayList<Song> songs;    // The list of Song objects\n\n  /*\n   * Initializes songs to an empty list\n   */\n  public Playlist() {\n    this.songs = new ArrayList<Song>();\n  }\n\n  /*\n   * Returns the list of songs\n   */\n  public ArrayList<Song> getSongs() {\n    return songs;\n  }\n\n  /*\n   * Returns the number of songs in the playlist\n   */\n  public int getNumSongs() {\n    return songs.size();\n  }\n\n  /*\n   * Returns the song at the specified index\n   */\n  public Song getSong(int index) {\n    return songs.get(index);\n  }\n\n  /*\n   * Adds a song to the list of songs\n   */\n  public void addSong(Song newSong) {\n    songs.add(new Song(newSong.getTitle(), newSong.getArtist()));\n  }\n\n  /*\n   * Returns a String containing each song in the playlist\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (Song song : songs) {\n      result += song + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Song.java', text: "/*\n * Represents a song\n */\npublic class Song {\n\n  private String title;     // The title of a song\n  private String artist;    // The name of the artist of a song\n\n  /*\n   * Sets title and artist to the specified values\n   */\n  public Song(String title, String artist) {\n    this.title = title;\n    this.artist = artist;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the artist of the song\n   */\n  public String getArtist() {\n    return artist;\n  }\n\n  /*\n   * Returns a String containing the song information\n   */\n  public String toString() {\n    return title + \" by \" + artist;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Overloaded Methods #1',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'MusicPlayer.java', text: "/*\n * Represents a music player\n */\npublic class MusicPlayer {\n\n  /*\n   * Returns a String containing the text \"Now playing: \"\n   * and the song's information\n   */\n  public String play(Song song) {\n    return \"Now playing: \" + song;\n  }\n\n  /* \n   * Returns a String containig each song in playlist\n   */\n  public String play(Playlist playlist) {\n    String result = \"First up: \" + playlist.getSong(0) + \"\\n\";\n\n    for (int index = 1; index < playlist.getNumSongs(); index++) {\n      result += \"Next up: \" + playlist.getSong(index) + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Playlist.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a playlist of songs\n */\npublic class Playlist {\n\n  private ArrayList<Song> songs;    // The list of Song objects\n\n  /*\n   * Initializes songs to an empty list\n   */\n  public Playlist() {\n    this.songs = new ArrayList<Song>();\n  }\n\n  /*\n   * Returns the list of songs\n   */\n  public ArrayList<Song> getSongs() {\n    return songs;\n  }\n\n  /*\n   * Returns the number of songs in the playlist\n   */\n  public int getNumSongs() {\n    return songs.size();\n  }\n\n  /*\n   * Returns the song at the specified index\n   */\n  public Song getSong(int index) {\n    return songs.get(index);\n  }\n\n  /*\n   * Adds a song to the list of songs\n   */\n  public void addSong(Song newSong) {\n    songs.add(new Song(newSong.getTitle(), newSong.getArtist()));\n  }\n\n  /*\n   * Returns a String containing each song in the playlist\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (Song song : songs) {\n      result += song + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Song.java', text: "/*\n * Represents a song\n */\npublic class Song {\n\n  private String title;     // The title of a song\n  private String artist;    // The name of the artist of a song\n\n  /*\n   * Sets title and artist to the specified values\n   */\n  public Song(String title, String artist) {\n    this.title = title;\n    this.artist = artist;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the artist of the song\n   */\n  public String getArtist() {\n    return artist;\n  }\n\n  /*\n   * Returns a String containing the song information\n   */\n  public String toString() {\n    return title + \" by \" + artist;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Overloaded Methods #2',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'MusicPlayer.java', text: "/*\n * Represents a music player\n */\npublic class MusicPlayer {\n\n  /*\n   * Returns a String containing the text \"Now playing: \"\n   * and the song's information\n   */\n  public String play(Song song) {\n    return \"Now playing: \" + song;\n  }\n\n  /* \n   * Returns a String containig each song in playlist\n   */\n  public String play(Playlist playlist) {\n    String result = \"First up: \" + playlist.getSong(0) + \"\\n\";\n\n    for (int index = 1; index < playlist.getNumSongs(); index++) {\n      result += \"Next up: \" + playlist.getSong(index) + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Playlist.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a playlist of songs\n */\npublic class Playlist {\n\n  private ArrayList<Song> songs;    // The list of Song objects\n\n  /*\n   * Initializes songs to an empty list\n   */\n  public Playlist() {\n    this.songs = new ArrayList<Song>();\n  }\n\n  /*\n   * Returns the list of songs\n   */\n  public ArrayList<Song> getSongs() {\n    return songs;\n  }\n\n  /*\n   * Returns the number of songs in the playlist\n   */\n  public int getNumSongs() {\n    return songs.size();\n  }\n\n  /*\n   * Returns the song at the specified index\n   */\n  public Song getSong(int index) {\n    return songs.get(index);\n  }\n\n  /*\n   * Adds a song to the list of songs\n   */\n  public void addSong(Song newSong) {\n    songs.add(new Song(newSong.getTitle(), newSong.getArtist()));\n  }\n\n  /*\n   * Returns a String containing each song in the playlist\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (Song song : songs) {\n      result += song + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Song.java', text: "/*\n * Represents a song\n */\npublic class Song {\n\n  private String title;     // The title of a song\n  private String artist;    // The name of the artist of a song\n\n  /*\n   * Sets title and artist to the specified values\n   */\n  public Song(String title, String artist) {\n    this.title = title;\n    this.artist = artist;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the artist of the song\n   */\n  public String getArtist() {\n    return artist;\n  }\n\n  /*\n   * Returns a String containing the song information\n   */\n  public String toString() {\n    return title + \" by \" + artist;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Overloaded Methods #3',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'MusicPlayer.java', text: "/*\n * Represents a music player\n */\npublic class MusicPlayer {\n\n  /*\n   * Returns a String containing the text \"Now playing: \"\n   * and the song's information\n   */\n  public String play(Song song) {\n    return \"Now playing: \" + song;\n  }\n\n  /* \n   * Returns a String containig each song in playlist\n   */\n  public String play(Playlist playlist) {\n    String result = \"First up: \" + playlist.getSong(0) + \"\\n\";\n\n    for (int index = 1; index < playlist.getNumSongs(); index++) {\n      result += \"Next up: \" + playlist.getSong(index) + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Playlist.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a playlist of songs\n */\npublic class Playlist {\n\n  private ArrayList<Song> songs;    // The list of Song objects\n\n  /*\n   * Initializes songs to an empty list\n   */\n  public Playlist() {\n    this.songs = new ArrayList<Song>();\n  }\n\n  /*\n   * Returns the list of songs\n   */\n  public ArrayList<Song> getSongs() {\n    return songs;\n  }\n\n  /*\n   * Returns the number of songs in the playlist\n   */\n  public int getNumSongs() {\n    return songs.size();\n  }\n\n  /*\n   * Returns the song at the specified index\n   */\n  public Song getSong(int index) {\n    return songs.get(index);\n  }\n\n  /*\n   * Adds a song to the list of songs\n   */\n  public void addSong(Song newSong) {\n    songs.add(new Song(newSong.getTitle(), newSong.getArtist()));\n  }\n\n  /*\n   * Returns a String containing each song in the playlist\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (Song song : songs) {\n      result += song + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Song.java', text: "/*\n * Represents a song\n */\npublic class Song {\n\n  private String title;     // The title of a song\n  private String artist;    // The name of the artist of a song\n\n  /*\n   * Sets title and artist to the specified values\n   */\n  public Song(String title, String artist) {\n    this.title = title;\n    this.artist = artist;\n  }\n\n  /*\n   * Returns the title of the song\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the artist of the song\n   */\n  public String getArtist() {\n    return artist;\n  }\n\n  /*\n   * Returns a String containing the song information\n   */\n  public String toString() {\n    return title + \" by \" + artist;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overloaded Methods (a)',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n    \n    // Create a VideoPlatform object\n    VideoPlatform myPlatform = new VideoPlatform();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call both versions of the createAccount() method and print the User objects.\n     * -----------------------------------------------------------------------------\n     */\n  \n\n    \n    \n  }\n}" },
+          { path: 'User.java', text: "/*\n * Represents a User\n */\npublic class User {\n  \n  private String username; // username\n  private String password; // password\n  private String email;    // email\n\n  public User(String username, String password, String email) {\n    this.username = username;\n    this.password = password;\n    this.email = email;\n  }\n\n  public User(String username, String password) {\n    this(username, password, \"\");\n  }\n\n  /*\n   * Returns a String containing the user's information\n   */\n  public String toString() {\n    return \"username: \" + username + \" email: \" + email;\n  }\n\n}" },
+          { path: 'VideoPlatform.java', text: "/*\n * Represents a video platform\n */\npublic class VideoPlatform {\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the createAccount() method. The method should take a username,\n   * password, and email address as parameters, and should return a new User object.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the createAccount() method. The method should take a username and\n   * password as parameters, and should return a new User object.\n   * -----------------------------------------------------------------------------\n   */\n\n\n  \n\n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overloaded Methods (b)',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "import java.util.ArrayList;\n\npublic class Main {\n  public static void main(String[] args) {\n    \n    ArrayList<Product> products = new ArrayList<Product>();\n    products.add(new Product(\"1\", \"AP CSA textbook\"));\n    products.add(new Product(\"20\", \"running shoes\"));\n    products.add(new Product(\"10\", \"smartphone\"));\n\n    // Create a ShoppingPlatform object\n    ShoppingPlatform myPlatform = new ShoppingPlatform(products);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call both versions of the search() method and print the Product objects\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n\n    \n    \n  }\n}" },
+          { path: 'Product.java', text: "/*\n * Represents a Product\n */\npublic class Product {\n  \n  private String ID;   // ID\n  private String name; // name\n\n  public Product(String ID, String name) {\n    this.ID = ID;\n    this.name = name;\n  }\n\n  /*\n   * Returns the ID\n   */\n  public String getID() {\n    return ID;\n  }\n\n  /*\n   * Returns the name\n   */\n  public String getName() {\n    return name;\n  }\n  \n  /*\n   * Returns a String containing the products's information\n   */\n  public String toString() {\n    return \"ID: \" + ID + \" name: \" + name;\n  }\n\n}" },
+          { path: 'ShoppingPlatform.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a video platform\n */\npublic class ShoppingPlatform {\n  \n  private ArrayList<Product> products; // list of products\n\n  public ShoppingPlatform(ArrayList<Product> products) {\n    this.products = products;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the search() method. The method should take a product name and ID\n   * as parameters, and return a Product. If no product is found, return null.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n\n\n\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the search() method. The method should take a product ID\n   * as parameter, and return a Product. If no product is found, return null.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n\n  \n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overloaded Methods (c)',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n    \n    // Creates a Platform object\n    Platform myPlatform = new Platform();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call both versions of the createUser() method and print the User objects\n     * -----------------------------------------------------------------------------\n     */\n    \n   \n\n\n    \n  }\n}" },
+          { path: 'Platform.java', text: "/*\n * Represents a platform\n */\npublic class Platform {\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the createUser() method. The method should take a username,\n   * password, and email address as parameters, and should return a new User object.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n\n\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the createUser() method. The method should take a username and\n   * password as parameters, and should return a new User object.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n\n  \n\n}" },
+          { path: 'User.java', text: "/*\n * Represents a User\n */\npublic class User {\n  \n  private String username; // username\n  private String password; // password\n  private String email;    // email\n\n  public User(String username, String password, String email) {\n    this.username = username;\n    this.password = password;\n    this.email = email;\n  }\n\n  public User(String username, String password) {\n    this(username, password, \"\");\n  }\n\n  /*\n   * Returns a String containing the User's information\n   */\n  public String toString() {\n    return \"username: \" + username + \" email: \" + email;\n  }\n\n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Overloaded Methods (d)',
+        lesson: 'Lesson 3: Overloaded Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n    \n    // Creates a League object\n    League myLeague = new League();\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call both versions of the createGame() method and print the Game objects\n     * -----------------------------------------------------------------------------\n     */\n \n\n\n\n\n    \n  }\n}" },
+          { path: 'Game.java', text: "/*\n * Represents a Game\n */\npublic class Game {\n  \n  private String ID;   // ID\n  private String date; // date\n  private String time; // time\n  private String name; // name\n\n  public Game(String ID, String date, String time, String name) {\n    this.ID = ID;\n    this.date = date;\n    this.time = time;\n    this.name = name;\n  }\n\n  public Game(String ID, String date, String time) {\n    this(ID, date, time, \"\");\n  }\n\n  /*\n   * Returns a String containing the game's information\n   */\n  public String toString() {\n    return \"ID: \" + ID + \" date: \" + date + \" time: \" + time + \" name: \" + name;\n  }\n\n}" },
+          { path: 'League.java', text: "/*\n * Represents a league\n */\npublic class League {\n  \n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the createGame() method. The method should take a game ID,\n   * date, time, and team name as parameters, and should return a new Game object.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the createGame() method. The method should take a game ID,\n   * date, and time as parameters, and should return a new Game object.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n\n  \n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Private Methods #1',
+        lesson: 'Lesson 4: Private Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Recipe.java', text: "public class Recipe {\n\n  private String name;\n  private String diet;\n\n  public Recipe(String name, String diet) {\n    this.name = name;\n    this.diet = diet;\n  }\n\n  public String getName() {\n    return name;\n  }\n\n  public String getDiet() {\n    return diet;\n  }\n\n  public String toString() {\n    return name + \" (\" + diet + \")\";\n  }\n  \n}" },
+          { path: 'RecipeBlog.java', text: "import java.util.ArrayList;\n\npublic class RecipeBlog {\n  \n  private ArrayList<Recipe> recipeList;\n  \n  public RecipeBlog(ArrayList<Recipe> recipeList) {\n    this.recipeList = recipeList;\n  }\n  \n  public String getRecommendedRecipes(String dietaryPreference) {\n    ArrayList<Recipe> filteredRecipes = filterByDiet(recipeList, dietaryPreference);\n    return recipesToString(filteredRecipes);\n  }\n\n  private ArrayList<Recipe> filterByDiet(ArrayList<Recipe> recipes, String dietaryPreference) {\n    ArrayList<Recipe> filteredRecipes = new ArrayList<Recipe>();\n    \n    for (Recipe recipe : recipes) {\n      if (recipe.getDiet().equals(dietaryPreference)) {\n        filteredRecipes.add(recipe);\n      }\n    }\n    \n    return filteredRecipes;\n  }\n\n  public String recipesToString(ArrayList<Recipe> recipes) {\n    String result = \"\";\n\n    for (Recipe recipe : recipes) {\n      result += recipe + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Private Methods #2',
+        lesson: 'Lesson 4: Private Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Recipe.java', text: "public class Recipe {\n\n  private String name;\n  private String diet;\n\n  public Recipe(String name, String diet) {\n    this.name = name;\n    this.diet = diet;\n  }\n\n  public String getName() {\n    return name;\n  }\n\n  public String getDiet() {\n    return diet;\n  }\n\n  public String toString() {\n    return name + \" (\" + diet + \")\";\n  }\n  \n}" },
+          { path: 'RecipeBlog.java', text: "import java.util.ArrayList;\n\npublic class RecipeBlog {\n  \n  private ArrayList<Recipe> recipeList;\n  \n  public RecipeBlog(ArrayList<Recipe> recipeList) {\n    this.recipeList = recipeList;\n  }\n  \n  public String getRecommendedRecipes(String dietaryPreference) {\n    ArrayList<Recipe> filteredRecipes = filterByDiet(recipeList, dietaryPreference);\n    return recipesToString(filteredRecipes);\n  }\n\n  private ArrayList<Recipe> filterByDiet(ArrayList<Recipe> recipes, String dietaryPreference) {\n    ArrayList<Recipe> filteredRecipes = new ArrayList<Recipe>();\n    \n    for (Recipe recipe : recipes) {\n      if (recipe.getDiet().equals(dietaryPreference)) {\n        filteredRecipes.add(recipe);\n      }\n    }\n    \n    return filteredRecipes;\n  }\n\n  public String recipesToString(ArrayList<Recipe> recipes) {\n    String result = \"\";\n\n    for (Recipe recipe : recipes) {\n      result += recipe + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Investigate and Modify: Private Methods #3',
+        lesson: 'Lesson 4: Private Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 instructions for the student to complete\n     * -----------------------------------------------------------------------------\n     *\n     * description of method to write\n     */\n\n    \n\n    \n    /* ---- \ud83d\udd0e ADD YOUR CODE BELOW THIS LINE ---- */\n\n\n    \n    \n    \n  }\n}" },
+          { path: 'Recipe.java', text: "public class Recipe {\n\n  private String name;\n  private String diet;\n\n  public Recipe(String name, String diet) {\n    this.name = name;\n    this.diet = diet;\n  }\n\n  public String getName() {\n    return name;\n  }\n\n  public String getDiet() {\n    return diet;\n  }\n\n  public String toString() {\n    return name + \" (\" + diet + \")\";\n  }\n  \n}" },
+          { path: 'RecipeBlog.java', text: "import java.util.ArrayList;\n\npublic class RecipeBlog {\n  \n  private ArrayList<Recipe> recipeList;\n  \n  public RecipeBlog(ArrayList<Recipe> recipeList) {\n    this.recipeList = recipeList;\n  }\n  \n  public String getRecommendedRecipes(String dietaryPreference) {\n    ArrayList<Recipe> filteredRecipes = filterByDiet(recipeList, dietaryPreference);\n    return recipesToString(filteredRecipes);\n  }\n\n  private ArrayList<Recipe> filterByDiet(ArrayList<Recipe> recipes, String dietaryPreference) {\n    ArrayList<Recipe> filteredRecipes = new ArrayList<Recipe>();\n    \n    for (Recipe recipe : recipes) {\n      if (recipe.getDiet().equals(dietaryPreference)) {\n        filteredRecipes.add(recipe);\n      }\n    }\n    \n    return filteredRecipes;\n  }\n\n  public String recipesToString(ArrayList<Recipe> recipes) {\n    String result = \"\";\n\n    for (Recipe recipe : recipes) {\n      result += recipe + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Private Methods (a)',
+        lesson: 'Lesson 4: Private Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a 1D array of Soda objects\n    Soda[] sodaList = {new Soda(\"Coca Cola\", 5), new Soda(\"Sprite\", 4), new Soda(\"Dr. Pepper\", 2), new Soda(\"Spindrift\", 3)};\n\n    // Creates a SodaMachine object\n    SodaMachine machine = new SodaMachine(sodaList, 1.50);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getTotalCost() method and print the result.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n    \n\n  }\n}" },
+          { path: 'Soda.java', text: "/*\n * Represents a soda\n */\npublic class Soda {\n\n  private String name;    // The name of a soda\n  private int quantity;   // The number of sodas in inventory\n\n  /*\n   * Sets name and quantity to the specified values\n   */\n  public Soda(String name, int quantity) {\n    this.name = name;\n    this.quantity = quantity;\n  }\n\n  /*\n   * Returns the name of the soda\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the quantity of sodas\n   */\n  public int getQuantity() {\n    return quantity;\n  }\n\n  /*\n   * Returns a String containing the name of the soda and quantity\n   */\n  public String toString() {\n    return name + \" - \" + quantity;\n  }\n  \n}" },
+          { path: 'SodaMachine.java', text: "/*\n * Represents a soda machine\n */\npublic class SodaMachine {\n\n  private Soda[] inventory;    // The 1D array of sodas in the machine\n  private double price;        // The price of each soda in the machine\n\n  /*\n   * Initializes inventory to the specified 1D array of sodas\n   * in the machine and sets price to the specified price;\n   */\n  public SodaMachine(Soda[] inventory, double price) {\n    this.inventory = inventory;\n    this.price = price;\n  }\n\n  /*\n   * Returns the 1D array of sodas in the machine\n   */\n  public Soda[] getInventory() {\n    return inventory;\n  }\n\n  /*\n   * Returns the price of sodas in the machine\n   */\n  public double getPrice() {\n    return price;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the private method getTotalSodas() to get the total number of\n   * sodas that are in the soda machine.\n   * -----------------------------------------------------------------------------\n   */\n\n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the public method getTotalCost() to calculate and return the total\n   * cost of all sodas in the machine.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n  \n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Private Methods (b)',
+        lesson: 'Lesson 4: Private Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates several User objects\n    User reparo = new User(\"scholarlyreparo\", true);\n    User protego = new User(\"inventiveprotego\", false);\n    User portus = new User(\"stylishportus\", false);\n    User lumos = new User(\"uniquelumos\", true);\n\n    // Creates a 1D array of User objects\n    User[] appUsers = {reparo, protego, portus, lumos};\n\n    // Creates a SocialMedia object\n    SocialMedia app = new SocialMedia(appUsers);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the createPost() method to create posts for some of the User objects,\n     * then print the publicPosts and hiddenPosts lists.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n\n  }\n}" },
+          { path: 'SocialMedia.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a social media platform\n */\npublic class SocialMedia {\n\n  private User[] profiles;                 // The 1D array of users on the social media service\n  private ArrayList<String> publicPosts;   // The list of public posts\n  private ArrayList<String> hiddenPosts;   // The list of hidden posts\n\n  /*\n   * Initializes profiles to the specified 1D array of users and\n   * initializes publicPosts and hiddenPosts to empty lists\n   */\n  public SocialMedia(User[] profiles) {\n    this.profiles = profiles;\n\n    publicPosts = new ArrayList<String>();\n    hiddenPosts = new ArrayList<String>();\n  }\n\n  /* \n   * Returns the 1D array of users\n   */\n  public User[] getProfiles() {\n    return profiles;\n  }\n\n  /*\n   * Returns the list of public posts as a String\n   */\n  public String getPublicPosts() {\n    String result = \"\\n----------PUBLIC POSTS----------\\n\";\n    \n    for (String post : publicPosts) {\n      result += post + \"\\n\";\n    }\n\n    return result;\n  }\n\n  /*\n   * Returns the list of hidden posts as a String\n   */\n  public String getHiddenPosts() {\n    String result = \"\\n----------PRIVATE POSTS----------\\n\";\n\n    for (String post : hiddenPosts) {\n      result += post + \"\\n\";\n    }\n\n    return result;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the private method markPost() to return a String with the post\n   * containing the user's username and \"[PRIVATE]\" if their profile is private.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the public method createPost() to add the marked post to publicPosts\n   * if the user's profile is public or hiddenPosts if the user's profile is private.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n\n  \n  \n}" },
+          { path: 'User.java', text: "/*\n * Represents a user on a social media platform\n */\npublic class User {\n\n  private String username;    // The user's username\n  private boolean isPrivate;  // Whether or not the user's profile is private\n\n  /*\n   * Sets username and isPrivate to the specified values\n   */\n  public User(String username, boolean isPrivate) {\n    this.username = username;\n    this.isPrivate = isPrivate;\n  }\n\n  /*\n   * Returns the user's username\n   */\n  public String getUsername() {\n    return username;\n  }\n\n  /*\n   * Returns the privacy status\n   */\n  public boolean getIsPrivate() {\n    return isPrivate;\n  }\n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+        ],
+      },
+      {
+        name: 'Practice: Private Methods (c)',
+        lesson: 'Lesson 4: Private Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "import java.util.ArrayList;\n\npublic class Main {\n  public static void main(String[] args) {\n\n    // Creates an ArrayList of recipes\n    ArrayList<Recipe> allRecipes = new ArrayList<Recipe>();\n    allRecipes.add(new Recipe(\"Spaghetti Bolognese\", FileReader.toStringList(\"recipe1.txt\")));\n    allRecipes.add(new Recipe(\"Chicken Curry\", FileReader.toStringList(\"recipe2.txt\")));\n    allRecipes.add(new Recipe(\"Beef Stroganoff\", FileReader.toStringList(\"recipe3.txt\")));\n    allRecipes.add(new Recipe(\"Vegetable Stir-Fry\", FileReader.toStringList(\"recipe4.txt\")));\n    allRecipes.add(new Recipe(\"Salmon with Asparagus\", FileReader.toStringList(\"recipe5.txt\")));\n\n    // Creates an ArrayList of preferred ingredients\n    ArrayList<String> preferred = new ArrayList<String>();\n    preferred.add(\"chicken\");\n    preferred.add(\"curry powder\");\n    preferred.add(\"coconut milk\");\n\n    // Creates a Website object\n    Website recipeWebsite = new Website(allRecipes);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the getRecommendedRecipes() method and print the results.\n     * -----------------------------------------------------------------------------\n     */\n\n\n\n\n    \n    \n  }\n}" },
+          { path: 'FileReader.java', text: "import java.util.Scanner;\nimport java.util.ArrayList;\nimport java.io.File;\nimport java.io.FileNotFoundException;\n\npublic class FileReader {\n\n  public static String[] toStringArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    String[] data = new String[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = currentValue;\n    }\n\n    return data;\n  }\n\n  public static ArrayList<String> toStringList(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    return temp;\n  }\n\n  public static int[] toIntArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    int[] data = new int[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Integer.parseInt(currentValue);\n    }\n\n    return data;\n  }\n\n  public static ArrayList<Integer> toIntList(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    ArrayList<Integer> data = new ArrayList<Integer>();\n\n    for (int index = 0; index < temp.size(); index++) {\n      String currentValue = temp.get(index);\n      data.add(Integer.parseInt(currentValue));\n    }\n\n    return data;\n  }\n\n  public static double[] toDoubleArray(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    double[] data = new double[temp.size()];\n\n    for (int index = 0; index < data.length; index++) {\n      String currentValue = temp.get(index);\n      data[index] = Double.parseDouble(currentValue);\n    }\n\n    return data;\n  }\n\n  public static ArrayList<Double> toDoubleList(String filename) {\n    ArrayList<String> temp = readDataFromFile(filename);\n    ArrayList<Double> data = new ArrayList<Double>();\n\n    for (int index = 0; index < temp.size(); index++) {\n      String currentValue = temp.get(index);\n      data.add(Double.parseDouble(currentValue));\n    }\n\n    return data;\n  }\n\n  private static Scanner createScanner(File theFile) {\n    Scanner tempScanner = null;\n\n    try {\n      tempScanner = new Scanner(theFile);\n    } catch(FileNotFoundException error) {\n      System.out.println(\"File not found.\");\n    }\n\n    return tempScanner;\n  }\n\n  private static ArrayList<String> readDataFromFile(String filename) {\n    File dataFile = new File(filename);\n    Scanner reader = createScanner(dataFile);\n    ArrayList<String> temp = new ArrayList<String>();\n\n    while (reader.hasNextLine()) {\n      String currentLine = reader.nextLine().trim();\n      temp.add(currentLine);\n    }\n\n    reader.close();\n    return temp;\n  }\n  \n}" },
+          { path: 'Recipe.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a recipe\n */\npublic class Recipe {\n  \n  private String name;                        // The name of a recipe\n  private ArrayList<String> ingredients;      // The list of ingredients\n\n  /*\n   * Sets name to the specified name and initializes\n   * ingredients to the specified list of ingredients\n   */\n  public Recipe(String name, ArrayList<String> ingredients) {\n    this.name = name;\n    this.ingredients = ingredients;\n  }\n\n  /*\n   * Returns the name of the recipe\n   */\n  public String getName() {\n    return name;\n  }\n\n  /*\n   * Returns the list of ingredients\n   */\n  public ArrayList<String> getIngredients() {\n    return ingredients;\n  }\n\n  /*\n   * Returns a String containing the recipe's information\n   */\n  public String toString() {\n    String result = name + \"\\n----------\\n\";\n\n    for (String ingred : ingredients) {\n      result += ingred + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Website.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a recipe website\n */\npublic class Website {\n\n  private ArrayList<Recipe> recipes;    // The list of recipes\n\n  /*\n   * Initializes recipes to the specified list of recipes\n   */\n  public Website(ArrayList<Recipe> recipes) {\n    this.recipes = recipes;\n  }\n\n  /*\n   * Returns the list of recipes\n   */\n  public ArrayList<Recipe> getRecipes() {\n    return recipes;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the private method resultsToString() with a parameter for an\n   * ArrayList of Recipe objects. The method should return each recipe in the list\n   * on separate lines.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the public method getRecommendedRecipes() with a parameter for an\n   * ArrayList of preferred ingredients. Find all recipes that contain a\n   * preferred ingredient and add each recipe that matches to a new ArrayList.\n   * Return a String containing the results using the resultsToString() method.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n  \n  \n}" },
+        ],
+        validationFiles: [],
+        solutionFiles: [],
+        dataFiles: [
+          { path: 'recipe1.txt', text: "spaghetti\nground beef\ntomato sauce\nonion\ngarlic" },
+          { path: 'recipe2.txt', text: "chicken\ncurry powder\ncoconut milk\nonion\ngarlic" },
+          { path: 'recipe3.txt', text: "beef\nsour cream\nmushrooms\nonion\nnoodles" },
+          { path: 'recipe4.txt', text: "vegetables\nsoy sauce\nginger\ngarlic" },
+          { path: 'recipe5.txt', text: "salmon\nasparagus\nlemon\ngarlic" },
+        ],
+      },
+      {
+        name: 'Practice: Private Methods (d)',
+        lesson: 'Lesson 4: Private Methods',
+        view: 'console',
+        grid: "",
+        files: [
+          { path: 'Main.java', text: "public class Main {\n  public static void main(String[] args) {\n\n    // Creates a User object\n    User amelia = new User();\n\n    // Creates a Video object\n    Video innovators = new Video(\"The Innovators: Women in Tech\", 3360);\n\n    /* ----------------------------------- TO DO -----------------------------------\n     * \u2705 Call the addViewing() method and print the User object.\n     * -----------------------------------------------------------------------------\n     */\n    \n\n\n    \n\n  }\n}" },
+          { path: 'User.java', text: "import java.util.ArrayList;\n\n/*\n * Represents a user on a video streaming website\n */\npublic class User {\n\n  private ArrayList<Video> history;     // The list of videos a user has viewed\n\n  /*\n   * Initializes history to an empty list\n   */\n  public User() {\n    this.history = new ArrayList<Video>();\n  }\n\n  /*\n   * Returns the list of videos the user has viewed\n   */\n  public ArrayList<Video> getHistory() {\n    return history;\n  }\n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the private method hasWatchedMinimum() with a parameter for the\n   * number of seconds that returns true if the number of seconds is greater than\n   * 30, otherwise returns false.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n  \n\n  /* ----------------------------------- TO DO -----------------------------------\n   * \u2705 Write the public method addViewing with a parameter for a Video object that\n   * adds a new Video object to the history list if hasWatchedMinimum() is true.\n   * -----------------------------------------------------------------------------\n   */\n  \n\n\n  \n\n  /*\n   * Returns a String containing the videos the user has viewed\n   */\n  public String toString() {\n    String result = \"\";\n\n    for (Video video : history) {\n      result += video + \"\\n\";\n    }\n\n    return result;\n  }\n  \n}" },
+          { path: 'Video.java', text: "/*\n * Represents a video on a video streaming website\n */\npublic class Video {\n\n  private String title;          // The title of a video\n  private int length;            // The length of a video in seconds\n  private int watched;           // The number of seconds a video was watched\n\n  /*\n   * Sets title and length to the specified values,\n   * and sets watched to 0\n   */\n  public Video(String title, int length) {\n    this.title = title;\n    this.length = length;\n  }\n\n  /*\n   * Returns the title of the video\n   */\n  public String getTitle() {\n    return title;\n  }\n\n  /*\n   * Returns the length of the video in seconds\n   */\n  public int getLength() {\n    return length;\n  }\n\n  /*\n   * Returns the number of seconds the video was watched\n   */\n  public int getWatched() {\n    return watched;\n  }\n\n  /*\n   * Sets the number of seconds the video was watched\n   */\n  public void setWatched(int numSeconds) {\n    watched = numSeconds;\n  }\n\n  /*\n   * Returns a String containing the video's information\n   */\n  public String toString() {\n    return title + \" - \" + length + \" seconds (\" + watched + \" seconds watched)\";\n  }\n  \n}" },
         ],
         validationFiles: [],
         solutionFiles: [],

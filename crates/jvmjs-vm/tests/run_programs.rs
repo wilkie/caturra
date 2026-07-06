@@ -559,6 +559,39 @@ fn reflection_method_get_and_invoke() {
 }
 
 #[test]
+fn reflection_method_array_and_void_invoke_statement() {
+    // getDeclaredMethods() -> Method[], getReturnType/getName qualified,
+    // getParameterTypes, and invoke of a void method as a bare statement.
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.*;
+        public class Main {
+            private int hours = 0;
+            public void addHours(Main other, int n) { hours += n; }
+            public java.util.ArrayList<String> makeList() { return new java.util.ArrayList<>(); }
+            public int getHours() { return hours; }
+            public static void main(String[] args) throws Exception {
+                Main obj = new Main();
+                Main other = new Main();
+                for (Method m : Main.class.getDeclaredMethods()) {
+                    if (m.getName().equals("addHours")) {
+                        System.out.println(m.getParameterCount());
+                        m.invoke(obj, other, 5);   // void invoke as a statement
+                    }
+                    if (m.getName().equals("makeList")) {
+                        System.out.println(m.getReturnType().getName());
+                    }
+                }
+                System.out.println(obj.getHours());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "2\njava.util.ArrayList\n5\n");
+}
+
+#[test]
 fn reflection_generic_field_type() {
     // Field.getGenericType() -> ParameterizedType -> getActualTypeArguments():
     // the compiler emits a Signature attribute the VM reflects on.
@@ -635,6 +668,34 @@ fn array_object_methods_reference_semantics() {
         "Main",
     );
     assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn easymock_full_mock_records_and_replays() {
+    // createMock(T.class): a full mock of a class with no no-arg constructor,
+    // recording a sequence of return values then replaying them.
+    let out = run_stdout(
+        r#"
+        import static org.easymock.EasyMock.*;
+        public class Main {
+            public static void main(String[] args) {
+                Soda mock = createMock(Soda.class);
+                expect(mock.getQuantity()).andReturn(2);
+                expect(mock.getQuantity()).andReturn(3);
+                replay(mock);
+                System.out.println(mock.getQuantity() + mock.getQuantity());
+                verify(mock);
+            }
+        }
+        class Soda {
+            private int quantity;
+            public Soda(int q) { quantity = q; }
+            public int getQuantity() { return quantity; }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "5\n");
 }
 
 #[test]

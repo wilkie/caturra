@@ -1167,6 +1167,7 @@ impl MethodTable {
                     JType::Str => ElemType::Str,
                     JType::Object(id) => ElemType::Object(id),
                     JType::Field => ElemType::Field,
+                    JType::Method => ElemType::Method,
                     JType::Constructor => ElemType::Constructor,
                     JType::Class => ElemType::Class,
                     // A wrapper array (`Integer[]`) stores its primitives
@@ -1481,6 +1482,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::Str
         | ElemType::Object(_)
         | ElemType::Field
+        | ElemType::Method
         | ElemType::Constructor
         | ElemType::Class => "java/lang/Object",
     }
@@ -1500,6 +1502,7 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Str => String::from("String"),
         ElemType::Object(id) => table.class_name(id).to_owned(),
         ElemType::Field => String::from("Field"),
+        ElemType::Method => String::from("Method"),
         ElemType::Constructor => String::from("Constructor"),
         ElemType::Class => String::from("Class"),
     }
@@ -1676,6 +1679,8 @@ enum ElemType {
     Object(ClassId),
     /// `java.lang.reflect.Field` (element of `getDeclaredFields()`).
     Field,
+    /// `java.lang.reflect.Method` (element of `getDeclaredMethods()`).
+    Method,
     /// `java.lang.reflect.Constructor` (element of `getDeclaredConstructors()`).
     Constructor,
     /// `java.lang.Class` (element of a `Class[]`, e.g. `getConstructor` args).
@@ -1696,6 +1701,7 @@ impl ElemType {
             ElemType::Str => String::from("Ljava/lang/String;"),
             ElemType::Object(id) => format!("L{};", table.class_name(id)),
             ElemType::Field => String::from("Ljava/lang/reflect/Field;"),
+            ElemType::Method => String::from("Ljava/lang/reflect/Method;"),
             ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             ElemType::Class => String::from("Ljava/lang/Class;"),
         }
@@ -1714,6 +1720,7 @@ impl ElemType {
             ElemType::Str => JType::Str,
             ElemType::Object(id) => JType::Object(id),
             ElemType::Field => JType::Field,
+            ElemType::Method => JType::Method,
             ElemType::Constructor => JType::Constructor,
             ElemType::Class => JType::Class,
         }
@@ -2329,8 +2336,14 @@ fn method_descriptor(
                     out.push_str("Ljava/lang/Class;");
                 } else if simple == "Field" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/reflect/Field;");
+                } else if simple == "Method" && !table.has_class(simple) {
+                    out.push_str("Ljava/lang/reflect/Method;");
                 } else if simple == "Constructor" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/reflect/Constructor;");
+                } else if (simple == "Type" || simple == "ParameterizedType")
+                    && !table.has_class(simple)
+                {
+                    out.push_str("Ljava/lang/reflect/Type;");
                 } else if name == crate::parser::TYPEVAR_SENTINEL
                     || name == "Object"
                     || name == "java.lang.Object"
@@ -2520,6 +2533,10 @@ enum BRet {
     Class,
     /// `Field[]` (`Class.getDeclaredFields`).
     FieldArray,
+    /// `Class[]` (`Method.getParameterTypes`).
+    ClassArray,
+    /// `Method[]` (`Class.getDeclaredMethods`).
+    MethodArray,
     /// `Constructor[]` (`Class.getDeclaredConstructors`).
     ConstructorArray,
     /// A single `java.lang.reflect.Constructor` (`Class.getConstructor`).
@@ -3679,6 +3696,18 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         "()[Ljava/lang/reflect/Field;",
     ),
     bm(
+        "getDeclaredMethods",
+        &[],
+        BRet::MethodArray,
+        "()[Ljava/lang/reflect/Method;",
+    ),
+    bm(
+        "getMethods",
+        &[],
+        BRet::MethodArray,
+        "()[Ljava/lang/reflect/Method;",
+    ),
+    bm(
         "getDeclaredConstructors",
         &[],
         BRet::ConstructorArray,
@@ -3846,7 +3875,15 @@ const METHOD_METHODS: &[BuiltinMethod] = &[
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
     bm("getReturnType", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm(
+        "getParameterTypes",
+        &[],
+        BRet::ClassArray,
+        "()[Ljava/lang/Class;",
+    ),
+    bm("getParameterCount", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("setAccessible", &[Z], BRet::Void, "(Z)V"),
     // invoke(Object receiver, Object... args); the varargs are packed into an
     // Object[] at the call site.
     bm(
@@ -4103,6 +4140,14 @@ fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<J
         BRet::Class => Some(JType::Class),
         BRet::FieldArray => Some(JType::Array {
             elem: ElemType::Field,
+            dims: 1,
+        }),
+        BRet::ClassArray => Some(JType::Array {
+            elem: ElemType::Class,
+            dims: 1,
+        }),
+        BRet::MethodArray => Some(JType::Array {
+            elem: ElemType::Method,
             dims: 1,
         }),
         BRet::ConstructorArray => Some(JType::Array {
@@ -8283,6 +8328,11 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            ElemType::Method => {
+                let class = intern_class(self.pool, "java/lang/reflect/Method");
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             ElemType::Constructor => {
                 let class = intern_class(self.pool, "java/lang/reflect/Constructor");
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
@@ -8306,6 +8356,7 @@ impl BodyGen<'_> {
                     ElemType::Str
                     | ElemType::Object(_)
                     | ElemType::Field
+                    | ElemType::Method
                     | ElemType::Constructor
                     | ElemType::Class => unreachable!(),
                 };
@@ -9703,6 +9754,7 @@ impl BodyGen<'_> {
             | ElemType::Str
             | ElemType::Object(_)
             | ElemType::Field
+            | ElemType::Method
             | ElemType::Constructor
             | ElemType::Class => "intValue",
             ElemType::Double => "doubleValue",

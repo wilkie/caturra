@@ -1410,6 +1410,10 @@ impl<'run> Interpreter<'run> {
                                         value = self.box_if_primitive(value, &wrapper);
                                     }
                                     frame.stack.push(value);
+                                } else if box_return_as.is_some() {
+                                    // A reflective `invoke` of a void method
+                                    // still hands back one value (`null`).
+                                    frame.stack.push(JValue::NULL);
                                 }
                                 continue 'frames;
                             }
@@ -2530,13 +2534,10 @@ impl<'run> Interpreter<'run> {
             }
         }
         let mut new_frame = self.make_frame(target, target_method, locals)?;
-        // Box a primitive return so `invoke` yields an Integer/Double/…
-        if matches!(
-            ret_desc.as_str(),
-            "I" | "J" | "D" | "F" | "Z" | "S" | "B" | "C"
-        ) {
-            new_frame.box_return_as = Some(ret_desc);
-        }
+        // Mark this as an `invoke` frame: its result is always an Object, so a
+        // primitive return is boxed (Integer/Double/…) and a void return still
+        // yields `null` (the caller's bytecode always expects one value back).
+        new_frame.box_return_as = Some(ret_desc);
         Ok(Some(new_frame))
     }
 
@@ -2585,7 +2586,12 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::Class { name }) => {
                 let name = name.clone();
                 match method {
-                    "getSimpleName" | "getName" => {
+                    // `getName` is the binary name (qualified for library types,
+                    // e.g. `java.util.ArrayList`; a user class in the default
+                    // package is already just its simple name). `getSimpleName`
+                    // always drops the package.
+                    "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&name))))),
+                    "getSimpleName" => {
                         let simple = simple_class_name(&name);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(simple)))))
                     }
@@ -2659,6 +2665,56 @@ impl<'run> Interpreter<'run> {
                                     descriptor,
                                     access,
                                     signature,
+                                })))
+                            })
+                            .collect();
+                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        Ok(Some(JValue::Ref(Some(array))))
+                    }
+                    "getDeclaredMethods" | "getMethods" => {
+                        let public_only = method == "getMethods";
+                        let methods: Vec<(String, String, u16)> = self
+                            .classes
+                            .get(&name)
+                            .map(|cf| {
+                                cf.methods
+                                    .iter()
+                                    .filter(|m| {
+                                        cf.constant_pool.get_utf8(m.name_index) != Some("<init>")
+                                            && cf.constant_pool.get_utf8(m.name_index)
+                                                != Some("<clinit>")
+                                    })
+                                    .filter(|m| {
+                                        !public_only
+                                            || m.access_flags.contains(
+                                                jvmjs_classfile::MethodAccessFlags::PUBLIC,
+                                            )
+                                    })
+                                    .map(|m| {
+                                        (
+                                            cf.constant_pool
+                                                .get_utf8(m.name_index)
+                                                .unwrap_or_default()
+                                                .to_owned(),
+                                            cf.constant_pool
+                                                .get_utf8(m.descriptor_index)
+                                                .unwrap_or_default()
+                                                .to_owned(),
+                                            m.access_flags.0,
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let simple = simple_class_name(&name).to_owned();
+                        let refs: Vec<JValue> = methods
+                            .into_iter()
+                            .map(|(mname, descriptor, access)| {
+                                JValue::Ref(Some(self.heap.alloc(HeapObject::Method {
+                                    declaring: simple.clone(),
+                                    name: mname,
+                                    descriptor,
+                                    access,
                                 })))
                             })
                             .collect();
@@ -2934,10 +2990,29 @@ impl<'run> Interpreter<'run> {
                         let reference = self.heap.alloc(HeapObject::Class { name: type_name });
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
+                    "getParameterTypes" => {
+                        let params = parse_descriptor_params(&descriptor);
+                        let refs: Vec<JValue> = params
+                            .iter()
+                            .map(|p| {
+                                let type_name = intrinsics::type_name_of_descriptor(p);
+                                JValue::Ref(Some(
+                                    self.heap.alloc(HeapObject::Class { name: type_name }),
+                                ))
+                            })
+                            .collect();
+                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        Ok(Some(JValue::Ref(Some(array))))
+                    }
+                    "getParameterCount" => {
+                        let count = parse_descriptor_params(&descriptor).len();
+                        Ok(Some(JValue::Int(i32::try_from(count).unwrap_or(0))))
+                    }
                     "toString" => {
                         let text = format!("{declaring}.{name}{descriptor}");
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
+                    "setAccessible" => Ok(None),
                     // `invoke` runs a frame and is handled before this value path.
                     other => Err(VmError::UnknownIntrinsic(format!("Method.{other}"))),
                 }

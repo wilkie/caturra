@@ -24,10 +24,16 @@ pub struct MockSpec {
     target: String,
     methods: Vec<String>,
     ctor_arity: usize,
+    /// `createMock(T.class)` — mock *every* method of `T`, not a named subset.
+    full: bool,
 }
 
-fn mock_class_name(target: &str, methods: &[String], ctor_arity: usize) -> String {
-    let base = format!("__EMock_{}_{}", target, methods.join("_"));
+fn mock_class_name(target: &str, methods: &[String], ctor_arity: usize, full: bool) -> String {
+    let base = if full {
+        format!("__EMock_{target}_all")
+    } else {
+        format!("__EMock_{}_{}", target, methods.join("_"))
+    };
     if ctor_arity == 0 {
         base
     } else {
@@ -64,7 +70,7 @@ pub fn rewrite(units: &mut [(String, CompilationUnit)]) -> Option<String> {
     let mut seen = BTreeSet::new();
     let mut source = String::new();
     for spec in &specs {
-        let name = mock_class_name(&spec.target, &spec.methods, spec.ctor_arity);
+        let name = mock_class_name(&spec.target, &spec.methods, spec.ctor_arity, spec.full);
         if !seen.insert(name.clone()) {
             continue;
         }
@@ -157,6 +163,54 @@ fn find_all_sigs<'a>(
     result
 }
 
+/// Every distinct method name in `target`'s hierarchy (for a full mock).
+#[allow(clippy::assigning_clones)] // `current` is `None` after `take`
+fn all_method_names(classes: &[(String, ClassSigs)], target: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut current = Some(target.to_owned());
+    while let Some(name) = current.take() {
+        let Some(entry) = classes.iter().find(|(n, _)| *n == name) else {
+            break;
+        };
+        for sig in &entry.1.methods {
+            if seen.insert(sig.method.clone()) {
+                names.push(sig.method.clone());
+            }
+        }
+        current = entry.1.superclass.clone();
+    }
+    names
+}
+
+/// The target's constructor with the fewest parameters (walking superclasses),
+/// for a full mock's forwarding no-arg constructor. `None` means no declared
+/// constructor (an implicit `super()` suffices).
+#[allow(clippy::assigning_clones)] // `current` is `None` after `take`
+fn simplest_ctor<'a>(classes: &'a [(String, ClassSigs)], target: &str) -> Option<&'a Vec<TypeRef>> {
+    let mut current = Some(target.to_owned());
+    while let Some(name) = current.take() {
+        let entry = classes.iter().find(|(n, _)| *n == name)?;
+        if let Some(params) = entry.1.constructors.iter().min_by_key(|p| p.len()) {
+            return Some(params);
+        }
+        current = entry.1.superclass.clone();
+    }
+    None
+}
+
+/// A default literal for a parameter type, for a forwarded `super(...)` call.
+fn default_value(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Int | TypeRef::Short | TypeRef::Byte | TypeRef::Long => "0".into(),
+        TypeRef::Double | TypeRef::Float => "0.0".into(),
+        TypeRef::Boolean => "false".into(),
+        TypeRef::Char => "(char) 0".into(),
+        // Reference types (including arrays): null.
+        _ => "null".into(),
+    }
+}
+
 /// Find a constructor of `target` (walking superclasses) with `arity`
 /// parameters, returning its parameter types.
 #[allow(clippy::assigning_clones)] // `current` is `None` after `take`
@@ -186,6 +240,16 @@ fn emit_mock_class(out: &mut String, name: &str, spec: &MockSpec, sigs: &[(Strin
     );
     out.push_str("  __EMockEngine __e = new __EMockEngine();\n");
     out.push_str("  public __EMockEngine __engine() { return __e; }\n");
+    // A full `createMock(T.class)` is constructed with no arguments, but T may
+    // have no no-arg constructor (real EasyMock bypasses it). Forward to T's
+    // simplest constructor with default argument values.
+    if spec.full
+        && let Some(params) = simplest_ctor(sigs, &spec.target)
+        && !params.is_empty()
+    {
+        let args: Vec<String> = params.iter().map(default_value).collect();
+        let _ = writeln!(out, "  public {name}() {{ super({}); }}", args.join(", "));
+    }
     // `withConstructor(args)` — forward to the matching super constructor.
     if spec.ctor_arity > 0 {
         let types = find_ctor(sigs, &spec.target, spec.ctor_arity).cloned();
@@ -204,7 +268,13 @@ fn emit_mock_class(out: &mut String, name: &str, spec: &MockSpec, sigs: &[(Strin
             args.join(", ")
         );
     }
-    for method in &spec.methods {
+    // A full `createMock(T.class)` mocks every method name in T's hierarchy.
+    let method_names: Vec<String> = if spec.full {
+        all_method_names(sigs, &spec.target)
+    } else {
+        spec.methods.clone()
+    };
+    for method in &method_names {
         // Mock every overload of the name (a library method not in `sigs`
         // falls back to a single no-arg override).
         let overloads = find_all_sigs(sigs, &spec.target, method);
@@ -296,6 +366,22 @@ fn extract_spec(expr: &Expr) -> Option<(MockSpec, Vec<Expr>)> {
     if method != "createMock" {
         return None;
     }
+    // Full mock: `createMock(T.class)` — no builder chain, mock all methods.
+    if receiver.is_none() {
+        let Expr::Call { args, .. } = expr else {
+            return None;
+        };
+        let target = class_literal_name(args.first()?)?;
+        return Some((
+            MockSpec {
+                target,
+                methods: Vec::new(),
+                ctor_arity: 0,
+                full: true,
+            },
+            Vec::new(),
+        ));
+    }
     let mut methods = Vec::new();
     let mut ctor_args: Vec<Expr> = Vec::new();
     let mut current = receiver.as_deref()?;
@@ -350,6 +436,7 @@ fn extract_spec(expr: &Expr) -> Option<(MockSpec, Vec<Expr>)> {
                         target,
                         methods,
                         ctor_arity,
+                        full: false,
                     },
                     ctor_args,
                 ));
@@ -376,7 +463,7 @@ fn class_literal_name(expr: &Expr) -> Option<String> {
 fn rewrite_expr(expr: &mut Expr, specs: &mut Vec<MockSpec>) {
     if let Some((spec, ctor_args)) = extract_spec(expr) {
         let span = expr.span();
-        let class = mock_class_name(&spec.target, &spec.methods, spec.ctor_arity);
+        let class = mock_class_name(&spec.target, &spec.methods, spec.ctor_arity, spec.full);
         specs.push(spec);
         *expr = Expr::NewObject {
             class,
