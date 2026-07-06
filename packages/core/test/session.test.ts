@@ -17,7 +17,7 @@ public class Main {
 `;
 
 beforeAll(async () => {
-  const wasmPath = new URL('../src/wasm/generated/jvmjs_bg.wasm', import.meta.url);
+  const wasmPath = new URL('../src/wasm/generated/caturra_bg.wasm', import.meta.url);
   await initJvm(await readFile(wasmPath));
 });
 
@@ -91,11 +91,11 @@ describe('javac (compile)', () => {
     const result = session.compile([
       {
         path: 'Main.java',
-        text: 'class Main { static void f() { String s = new String("hi"); } }',
+        text: 'class Main { static boolean f() { return "hi".matches("h."); } }',
       },
     ]);
     expect(result.success).toBe(false);
-    expect(result.diagnostics[0]?.message).toMatch(/arrives with the class library/);
+    expect(result.diagnostics[0]?.message).toMatch(/not supported by caturra/);
   });
 });
 

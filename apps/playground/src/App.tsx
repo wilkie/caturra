@@ -21,7 +21,7 @@ import {
   type DebugControlResponse,
   type DebugPauseSnapshot,
   type Diagnostic,
-} from '@jvmjs/core';
+} from '@caturra/core';
 import type { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import {
@@ -717,7 +717,7 @@ export function App(): React.JSX.Element {
       <AppBar position="static" color="default" elevation={1}>
         <Toolbar variant="dense" sx={{ gap: 2 }}>
           <Typography variant="h6" component="h1" sx={{ fontWeight: 700 }}>
-            jvmjs playground
+            caturra playground
           </Typography>
           <Typography
             variant="body2"

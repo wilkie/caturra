@@ -1,4 +1,4 @@
-# jvmjs
+# caturra
 
 A JVM for the browser: a Java compiler (`javac`) and runtime (`java`) implemented in
 Rust, compiled to WebAssembly, and wrapped in TypeScript — no backend server. The
@@ -11,19 +11,19 @@ an in-memory virtual filesystem.
 
 ```
 crates/                          Rust workspace (the engine)
-  jvmjs-classfile/               .class file model + binary reader/writer (JVMS §4)
-  jvmjs-compiler/                javac: lexer → parser → semantics → codegen
-  jvmjs-vm/                      java: interpreter, virtual filesystem, console IO
-  jvmjs-wasm/                    wasm-bindgen boundary (JvmSession: compile/run/vfs)
+  caturra-classfile/               .class file model + binary reader/writer (JVMS §4)
+  caturra-compiler/                javac: lexer → parser → semantics → codegen
+  caturra-vm/                      java: interpreter, virtual filesystem, console IO
+  caturra-wasm/                    wasm-bindgen boundary (JvmSession: compile/run/vfs)
 packages/
-  core/                          @jvmjs/core — typed TS wrapper around the WASM
+  core/                          @caturra/core — typed TS wrapper around the WASM
 apps/
   playground/                    Vite demo app: edit, compile, and run Java in-page
 e2e/                             Playwright tests driving the playground
 specs/                           Project decisions and specifications (start with SCOPE.md)
 ```
 
-Data flow: `@jvmjs/core` loads the WASM module and exposes `JvmSession`.
+Data flow: `@caturra/core` loads the WASM module and exposes `JvmSession`.
 `session.compile([{ path, text }])` is `javac` — it returns structured diagnostics
 (with 1-based line/column spans for editor squiggles) and retains compiled classes.
 `session.run('Main', { onStdout, onStderr, readStdin })` is `java` — console IO
@@ -45,7 +45,7 @@ path), and `java.io.File`/`PrintWriter` over the virtual filesystem
 (seedable and inspectable from JavaScript) — compile with our compiler
 and run on our VM. Semantics are
 Java-exact and **verified against OpenJDK 11**: a differential test suite
-runs identical programs through `javac`+`java` and jvmjs and requires
+runs identical programs through `javac`+`java` and caturra and requires
 byte-identical stdout. Compiler errors use javac's wording, and runtime
 exceptions use Java 11's messages (`ArrayIndexOutOfBoundsException: Index 5
 out of bounds for length 3`). Implemented and tested:
@@ -53,7 +53,7 @@ out of bounds for length 3`). Implemented and tested:
 - class file model, constant pool, `Code` attribute, binary read/write round-trip
 - compiler: lexer (complete token surface) → recursive-descent parser →
   codegen, for the v0 subset in `specs/LANGUAGE.md`; everything else gets a
-  friendly, located "not yet supported by jvmjs" diagnostic with recovery
+  friendly, located "not yet supported by caturra" diagnostic with recovery
 - VM: heap (UTF-16 strings, interning), bytecode dispatch loop for the slice
   opcodes, intrinsics (`System.out`/`err`, `PrintStream.print`/`println` with
   Java-style formatting), instruction budget against infinite loops
@@ -69,7 +69,7 @@ polish: an explicit-frame interpreter for deep recursion
 Dev note: with a JDK installed (`javac`/`java` on PATH), `cargo test`
 includes the differential suite; without one those tests skip.
 
-Deployment note: pages embedding jvmjs need `Cross-Origin-Opener-Policy:
+Deployment note: pages embedding caturra need `Cross-Origin-Opener-Policy:
 same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers for
 interactive console input (the playground's Vite config shows how).
 

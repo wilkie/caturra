@@ -104,7 +104,7 @@ export class JvmWorkerSession {
       this.#onMessage(event.data);
     });
     worker.addEventListener('error', (event) => {
-      const failure = new Error(`jvmjs worker failed: ${event.message}`);
+      const failure = new Error(`caturra worker failed: ${event.message}`);
       for (const pending of this.#pending.values()) {
         pending.reject(failure);
       }
@@ -116,7 +116,7 @@ export class JvmWorkerSession {
   static async create(): Promise<JvmWorkerSession> {
     const worker = new Worker(new URL('./worker.ts', import.meta.url), {
       type: 'module',
-      name: 'jvmjs-engine',
+      name: 'caturra-engine',
     });
     const session = new JvmWorkerSession(worker);
     await session.version();
@@ -140,7 +140,7 @@ export class JvmWorkerSession {
       (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true;
     if (options.stdin !== undefined && !isolated) {
       console.warn(
-        'jvmjs: stdin needs a cross-origin isolated page (COOP/COEP headers); ' +
+        'caturra: stdin needs a cross-origin isolated page (COOP/COEP headers); ' +
           'the program will see end-of-input. See specs/EXECUTION.md.',
       );
     }
@@ -182,7 +182,7 @@ export class JvmWorkerSession {
       (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true;
     if (!isolated) {
       throw new Error(
-        'jvmjs: debugging needs a cross-origin isolated page (COOP/COEP headers); ' +
+        'caturra: debugging needs a cross-origin isolated page (COOP/COEP headers); ' +
           'see specs/EXECUTION.md.',
       );
     }
@@ -275,7 +275,7 @@ export class JvmWorkerSession {
    */
   terminate(): void {
     this.#worker.terminate();
-    const terminated = new Error('jvmjs worker session was terminated');
+    const terminated = new Error('caturra worker session was terminated');
     for (const pending of this.#pending.values()) {
       pending.reject(terminated);
     }

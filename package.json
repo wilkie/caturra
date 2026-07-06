@@ -1,5 +1,5 @@
 {
-  "name": "jvmjs",
+  "name": "caturra",
   "version": "0.1.0",
   "private": true,
   "description": "A JVM (compiler + runtime) for the CSA subset of Java 11, in Rust compiled to WASM, for backend-free use in the browser",
@@ -9,9 +9,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "build:wasm": "wasm-pack build crates/jvmjs-wasm --target web --out-dir ../../packages/core/src/wasm/generated --out-name jvmjs --no-pack",
+    "build:wasm": "wasm-pack build crates/caturra-wasm --target web --out-dir ../../packages/core/src/wasm/generated --out-name caturra --no-pack",
     "build": "pnpm build:wasm && pnpm -r build",
-    "dev": "pnpm --filter @jvmjs/playground dev",
+    "dev": "pnpm --filter @caturra/playground dev",
     "test": "pnpm -r test",
     "test:rust": "cargo test --workspace",
     "test:e2e": "playwright test",

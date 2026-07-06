@@ -9,6 +9,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "caturra-classfile"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "thiserror",
+]
+
+[[package]]
+name = "caturra-compiler"
+version = "0.1.0"
+dependencies = [
+ "caturra-classfile",
+ "thiserror",
+]
+
+[[package]]
+name = "caturra-vm"
+version = "0.1.0"
+dependencies = [
+ "caturra-classfile",
+ "caturra-compiler",
+ "indexmap",
+ "thiserror",
+ "typed-arena",
+]
+
+[[package]]
+name = "caturra-wasm"
+version = "0.1.0"
+dependencies = [
+ "caturra-classfile",
+ "caturra-compiler",
+ "caturra-vm",
+ "console_error_panic_hook",
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -84,48 +126,6 @@ checksum = "53b44bfcdb3f8d5837a46dae1ca9660a837176eee74a28b229bc626816589102"
 dependencies = [
  "cfg-if",
  "futures-util",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "jvmjs-classfile"
-version = "0.1.0"
-dependencies = [
- "indexmap",
- "thiserror",
-]
-
-[[package]]
-name = "jvmjs-compiler"
-version = "0.1.0"
-dependencies = [
- "jvmjs-classfile",
- "thiserror",
-]
-
-[[package]]
-name = "jvmjs-vm"
-version = "0.1.0"
-dependencies = [
- "indexmap",
- "jvmjs-classfile",
- "jvmjs-compiler",
- "thiserror",
- "typed-arena",
-]
-
-[[package]]
-name = "jvmjs-wasm"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "js-sys",
- "jvmjs-classfile",
- "jvmjs-compiler",
- "jvmjs-vm",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
  "wasm-bindgen",
 ]
 

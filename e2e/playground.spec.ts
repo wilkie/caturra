@@ -1108,7 +1108,7 @@ test.describe('playground', () => {
       ].join('\n'),
     );
     await page.getByTestId('run').click();
-    await expect(page.getByTestId('console')).toContainText('not yet supported by jvmjs');
+    await expect(page.getByTestId('console')).toContainText('not yet supported by caturra');
   });
 });
 

@@ -1,6 +1,6 @@
 /**
  * Neighborhood visualizer: replays the `org.code.neighborhood` animation
- * stream jvmjs emits (the same `{type,value,detail}` ClientMessages the real
+ * stream caturra emits (the same `{type,value,detail}` ClientMessages the real
  * javabuilder marshals to its frontend) onto a canvas.
  *
  * The bundled Painter writes one JSON message per line to `neighborhood.jsonl`

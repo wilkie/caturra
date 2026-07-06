@@ -20,7 +20,7 @@ Worker, and blocking stdin is implemented with `SharedArrayBuffer` + `Atomics`.*
   Rust's point of view. In the worker, the JavaScript stdin callback performs
   `Atomics.wait` on a `SharedArrayBuffer` until the main thread supplies a line
   (or EOF), so the "block" happens in worker JS, never on the main thread.
-- `@jvmjs/core` ships two API layers:
+- `@caturra/core` ships two API layers:
   - `JvmSession` — the direct, synchronous wrapper around the WASM module. Used
     in Node (Vitest), in the worker itself, and by advanced embedders.
   - `JvmWorkerSession` — the **primary browser API**: async, spawns the worker,
@@ -46,7 +46,7 @@ Worker, and blocking stdin is implemented with `SharedArrayBuffer` + `Atomics`.*
 
 ## Consequences
 
-- Deployers of jvmjs-based pages must set COOP/COEP headers to get interactive
+- Deployers of caturra-based pages must set COOP/COEP headers to get interactive
   console input; this goes in the README.
 - The WASM module is loaded inside the worker only; the main thread never
   instantiates the engine (version queries etc. go through the message
@@ -81,7 +81,7 @@ standard class-file metadata so the pipeline stays honest:
   flag — also the stop button for runaway loops. Requires cross-origin
   isolation, like stdin.
 - Watch expressions (2026-07-03): at each pause the wasm boundary
-  synthesizes `class __JvmjsWatch {{ static String __eval(<the paused
+  synthesizes `class __CaturraWatch {{ static String __eval(<the paused
 frame's locals as typed parameters>) {{ return "" + (<expr>); }} }}`,
   compiles it together with the program sources (so watches can call
   user methods and read statics — and bad watches get javac wording),

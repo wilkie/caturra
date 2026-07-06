@@ -1,5 +1,5 @@
 /**
- * @jvmjs/core — the browser-facing API of the jvmjs engine.
+ * @caturra/core — the browser-facing API of the caturra engine.
  *
  * The engine itself (compiler + VM) is Rust compiled to WebAssembly;
  * this package loads that module and wraps its raw boundary in typed,
@@ -9,7 +9,7 @@
 import initWasm, {
   JvmSession as WasmSession,
   version as wasmVersion,
-} from './wasm/generated/jvmjs.js';
+} from './wasm/generated/caturra.js';
 
 /** One Java source file, e.g. `{ path: 'Main.java', text: '...' }`. */
 export interface JavaSourceFile {

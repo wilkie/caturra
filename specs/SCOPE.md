@@ -1,4 +1,4 @@
-# SCOPE — what jvmjs implements, and where the class library comes from
+# SCOPE — what caturra implements, and where the class library comes from
 
 - **Status:** accepted
 - **Date:** 2026-07-02
@@ -8,7 +8,7 @@
 
 ## Context
 
-jvmjs is a browser-only JVM (Rust → WASM engine, TypeScript wrapper) aimed at
+caturra is a browser-only JVM (Rust → WASM engine, TypeScript wrapper) aimed at
 running the Java taught in AP Computer Science A (CSA). A JVM is only useful with
 a class library (`java.lang.String`, `System.out`, `ArrayList`, ...), and we had
 three options: boot the real OpenJDK classes, port an Apache-licensed
@@ -27,7 +27,7 @@ Meanwhile the CSA surface is genuinely small (~30–40 classes, most thin).
 **We write our own class library, scoped to the CSA standards, and expose our
 implementations through the VM's bootstrap class loader.** When a program refers
 to `java.lang.String` or `java.util.ArrayList`, the class loader resolves it to
-jvmjs's implementation — user code never supplies or overrides these core classes.
+caturra's implementation — user code never supplies or overrides these core classes.
 
 Implementation is two-layered:
 

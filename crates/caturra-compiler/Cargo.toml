@@ -1,0 +1,15 @@
+[package]
+name = "caturra-compiler"
+description = "Java source to JVM bytecode compiler (the javac equivalent), targeting the CSA subset of Java 11"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+caturra-classfile.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -10,9 +10,9 @@ Hand-written recursive-descent parser with error recovery — chosen for
 student-quality diagnostics and zero dependencies. The parser recognizes more
 than the compiler can compile: constructs we plan to support but haven't built
 yet produce a **friendly, specific diagnostic** ("`if` statements are not yet
-supported by jvmjs") with a source span, never a cryptic parse error. Constructs
+supported by caturra") with a source span, never a cryptic parse error. Constructs
 outside SCOPE.md entirely (lambdas, streams, modules) get a "not supported by
-jvmjs" diagnostic phrased as a scope statement, not a bug.
+caturra" diagnostic phrased as a scope statement, not a bug.
 
 The full target surface is defined by [SCOPE.md](SCOPE.md); this file tracks
 what each stage of the compiler actually accepts, starting from the vertical
@@ -118,7 +118,7 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     (`matches`/`replaceAll`/`replaceFirst`), the stream family
     (`chars`/`codePoints`/`lines`), and `getBytes` — those report an
     honest "String.matches exists in Java, but regular expressions are
-    not supported by jvmjs" rather than a misleading cannot-find-symbol.
+    not supported by caturra" rather than a misleading cannot-find-symbol.
     Statics: `valueOf` (all overloads incl. `char[]`), `copyValueOf`,
     and `String.format` (2026-07-03) — plus `System.out.printf` and
     `PrintWriter.printf` — via a compiler special-case that synthesizes
@@ -185,7 +185,7 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
-    an honest "not supported by jvmjs" instead), and using `Scanner`,
+    an honest "not supported by caturra" instead), and using `Scanner`,
     `ArrayList`, `File`, or `PrintWriter` without the matching import
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
@@ -213,7 +213,7 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
 
 - **Exceptions** (2026-07-03): `try` / multi-`catch` with JVMS
   exception tables, `throw`, and `new SomeException("message")` over the
-  closed library hierarchy in `jvmjs-classfile::exceptions`
+  closed library hierarchy in `caturra-classfile::exceptions`
   (`Throwable` down through `Exception`/`Error`/`RuntimeException` to
   the concrete classes the runtime throws — `StackOverflowError` is
   catchable via `Error`, matching Java). Subtype catching, cross-frame
@@ -272,7 +272,7 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   `Scanner.nextFloat`, and `%f`-family formatting via `doubleValue()`
   widening. Rendering matches OpenJDK 11's FloatingDecimal — which is
   NOT shortest-round-trip (pre-Ryū): a clean-room implementation
-  (`crates/jvmjs-vm/src/floatdec.rs`) validated against a 25k-value
+  (`crates/caturra-vm/src/floatdec.rs`) validated against a 25k-value
   reference corpus (`tools/FloatCorpus.java`), byte-identical on
   99.94% including every value ordinary programs produce; the residue
   is exotic subnormal bit patterns, documented in the corpus test.
@@ -331,7 +331,7 @@ enum constant E.X` `IllegalArgumentException` on miss), `ordinal()`,
 
 - **Nested classes** (2026-07-03): `class`/`interface`/`enum`
   declarations inside a class body are hoisted to top level with their
-  simple name (jvmjs shares one flat namespace). Static nested classes
+  simple name (caturra shares one flat namespace). Static nested classes
   work fully — the dominant AP CS A pattern of a `private static class
 Node` inside a linked structure. They are referenced by simple name
   inside the enclosing class and as `Outer.Inner` elsewhere (including
@@ -456,7 +456,7 @@ friendly message for now.
 ## Codegen choices
 
 - Class file format: major version 55 (Java 11), as fixed in
-  `jvmjs-classfile`.
+  `caturra-classfile`.
 - String concatenation compiles to `StringBuilder` chains (javac-8 style), not
   `invokedynamic`/`StringConcatFactory` — keeps the VM free of `indy` support.
 - No `StackMapTable` emission (see [RUNTIME.md](RUNTIME.md) — our VM is the
@@ -474,8 +474,8 @@ friendly message for now.
    `switch` remain out for now; for-each arrives with arrays (stage 4).
 3. ~~Static methods with parameters and returns (user-defined), recursion.~~
    **Done (2026-07-02)** — verified against OpenJDK 11 by the differential
-   suite (`crates/jvmjs-vm/tests/differential.rs`), which runs identical
-   programs through `javac`+`java` and jvmjs and requires byte-identical
+   suite (`crates/caturra-vm/tests/differential.rs`), which runs identical
+   programs through `javac`+`java` and caturra and requires byte-identical
    stdout.
 4. ~~Arrays (1D, then 2D), `for-each`.~~ **Done (2026-07-02)** — both
    dimensions at once, differential-verified against OpenJDK 11.

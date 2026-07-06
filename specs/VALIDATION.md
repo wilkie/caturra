@@ -60,11 +60,11 @@ The picker still strips any helper needing that surface.
   (`getDeclaredMethods`, `getMethod(...).invoke`, `getConstructor(...).newInstance`)
   appears in later units.
 
-## What jvmjs must add
+## What caturra must add
 
 In rough dependency order. Each item is independently useful.
 
-1. **A reflective class registry.** jvmjs already holds every loaded class
+1. **A reflective class registry.** caturra already holds every loaded class
    (`MethodTable` in the compiler, the VM's class map) with fields, methods, and
    supertypes. Reflection is a _read view_ over that data plus instance field
    access — not new execution machinery. Expose: class by name, declared
@@ -76,14 +76,14 @@ In rough dependency order. Each item is independently useful.
    `PrintWriter` today). `Field.get/set` read/write the heap object's slots;
    `Method.invoke` / `Constructor.newInstance` call through the existing
    interpreter dispatch with a reflected argument array. `setAccessible` is a
-   no-op (jvmjs does not enforce private access at the VM level — access control
+   no-op (caturra does not enforce private access at the VM level — access control
    is a compile-time check). Start with the structural subset (item's surface
    above); add method/constructor invocation next.
 
 3. **A class loader seam.** Today classes are loaded up front and referenced by
    `ClassId`. Reflection needs name→class lookup and the ability to hold a
    `Class` handle. This is mostly surfacing the existing registry; a real
-   `URLClassLoader` is unnecessary — a single flat namespace (which jvmjs
+   `URLClassLoader` is unnecessary — a single flat namespace (which caturra
    already has) suffices.
 
 4. **A minimal test runner ("JUnit-lite").** Validation classes use JUnit
@@ -113,7 +113,7 @@ In rough dependency order. Each item is independently useful.
   Accessors/Mutators lessons) only needs field/superclass reflection + `main`
   invocation + `System.out` capture. Method/constructor invocation and richer
   JUnit come later.
-- **No access-control enforcement.** `setAccessible(true)` is implicit; jvmjs
+- **No access-control enforcement.** `setAccessible(true)` is implicit; caturra
   never blocks private access at runtime (it is a `javac`-style compile check
   only), which actually simplifies `Field.get/set`.
 - **Not real JUnit.** A convention-based `@Test` runner is enough; full JUnit

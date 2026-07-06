@@ -1,10 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/jvmjs-classfile",
-    "crates/jvmjs-compiler",
-    "crates/jvmjs-vm",
-    "crates/jvmjs-wasm",
+    "crates/caturra-classfile",
+    "crates/caturra-compiler",
+    "crates/caturra-vm",
+    "crates/caturra-wasm",
 ]
 
 [workspace.package]
@@ -12,12 +12,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-repository = "https://github.com/wilkie/jvmjs"
+repository = "https://github.com/wilkie/caturra"
 
 [workspace.dependencies]
-jvmjs-classfile = { path = "crates/jvmjs-classfile" }
-jvmjs-compiler = { path = "crates/jvmjs-compiler" }
-jvmjs-vm = { path = "crates/jvmjs-vm" }
+caturra-classfile = { path = "crates/caturra-classfile" }
+caturra-compiler = { path = "crates/caturra-compiler" }
+caturra-vm = { path = "crates/caturra-vm" }
 thiserror = "2"
 indexmap = "2"
 

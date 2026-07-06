@@ -1,5 +1,5 @@
 /**
- * Theater visualizer: replays the `org.code.theater` draw-command log jvmjs
+ * Theater visualizer: replays the `org.code.theater` draw-command log caturra
  * emits onto a 400×400 canvas — the browser-side equivalent of the real
  * javabuilder, which rasterizes the same commands to a GIF server-side with
  * `GraphicsHelper`/`GifWriter`.

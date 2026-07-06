@@ -41,7 +41,7 @@ UNITS = [
 def verifier_bin():
     """Build (if needed) and locate the nbhcheck verifier example."""
     subprocess.run(
-        ["cargo", "build", "-q", "-p", "jvmjs-vm", "--example", "nbhcheck"],
+        ["cargo", "build", "-q", "-p", "caturra-vm", "--example", "nbhcheck"],
         cwd=REPO, check=True,
     )
     bins = [b for b in glob.glob(os.path.join(REPO, "target/debug/examples/nbhcheck-*"))
@@ -185,7 +185,7 @@ def is_validator(text):
     return "org.junit" in text
 
 
-# Reflection jvmjs cannot run yet: field get/set, method/constructor invocation.
+# Reflection caturra cannot run yet: field get/set, method/constructor invocation.
 UNSUPPORTED_REFLECT = (
     ".invoke(", ".newInstance(", "getDeclaredMethod", "getMethod(",
     "getMethods(", "getConstructor", "getDeclaredConstructor",
@@ -254,12 +254,12 @@ def rename_main(files):
     return out
 
 
-# A jvmjs limitation (exclude) vs a real javac error the student fixes (include).
-JVMJS_LIMITS = ("jvmjs", "is not supported", "are not supported", "not yet supported")
+# A caturra limitation (exclude) vs a real javac error the student fixes (include).
+CATURRA_LIMITS = ("caturra", "is not supported", "are not supported", "not yet supported")
 
 
 def is_real_error(msg):
-    return not any(x in msg for x in JVMJS_LIMITS)
+    return not any(x in msg for x in CATURRA_LIMITS)
 
 
 def verify(files, grid, validators=(), data=()):

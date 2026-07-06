@@ -20,7 +20,7 @@ export default defineConfig({
   webServer: {
     // Build once, serve the production bundle; requires `pnpm build:wasm`
     // to have produced packages/core/src/wasm/generated first.
-    command: 'pnpm --filter @jvmjs/playground build && pnpm --filter @jvmjs/playground preview',
+    command: 'pnpm --filter @caturra/playground build && pnpm --filter @caturra/playground preview',
     url: 'http://localhost:4173',
     reuseExistingServer: !process.env['CI'],
     timeout: 120_000,
