@@ -104,7 +104,14 @@ pub enum HeapObject {
         descriptor: String,
         /// Raw `FieldAccessFlags` bits.
         access: u16,
+        /// The generic signature from the field's `Signature` attribute, e.g.
+        /// `Ljava/util/ArrayList<LFriend;>;` (for `Field.getGenericType()`).
+        signature: Option<String>,
     },
+    /// A `java.lang.reflect.Type` / `ParameterizedType` from
+    /// `Field.getGenericType()`: the raw type and its type arguments (empty
+    /// for a non-parameterized type).
+    ReflectType { raw: String, args: Vec<String> },
     /// A `java.lang.reflect.Constructor` from `getDeclaredConstructors()`.
     Constructor {
         declaring: String,

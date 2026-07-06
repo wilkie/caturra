@@ -526,6 +526,36 @@ fn reflection_method_get_and_invoke() {
 }
 
 #[test]
+fn reflection_generic_field_type() {
+    // Field.getGenericType() -> ParameterizedType -> getActualTypeArguments():
+    // the compiler emits a Signature attribute the VM reflects on.
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.*;
+        import java.util.*;
+        public class Main {
+            private ArrayList<Friend> friends;
+            private int age;
+            public static void main(String[] a) {
+                for (Field f : Main.class.getDeclaredFields()) {
+                    String text = f.getName();
+                    Type t = f.getGenericType();
+                    if (t instanceof ParameterizedType) {
+                        ParameterizedType p = (ParameterizedType) t;
+                        text += "<" + p.getActualTypeArguments()[0] + ">";
+                    }
+                    System.out.println(text);
+                }
+            }
+        }
+        class Friend {}
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "friends<class Friend>\nage\n");
+}
+
+#[test]
 fn reflection_field_access_and_modifiers() {
     // getDeclaredField -> Field.get (boxing) -> (int) unbox cast; getModifiers
     // + Modifier.isStatic/isFinal on a static final field.

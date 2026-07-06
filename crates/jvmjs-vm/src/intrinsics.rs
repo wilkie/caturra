@@ -1537,6 +1537,7 @@ fn display_jvalue(heap: &Heap, value: JValue) -> String {
                 name,
                 descriptor,
                 access,
+                ..
             }) => field_to_string(declaring, name, descriptor, *access),
             Some(HeapObject::Constructor {
                 declaring,
@@ -2806,6 +2807,48 @@ fn string_static(
 }
 
 /// Render a `StringBuilder.append` argument the way Java would.
+/// Render an `Object`-typed value inline (`String.valueOf` semantics) for the
+/// reflection handles that flow through `append(Object)`/`print(Object)`.
+fn object_display(heap: &Heap, value: JValue) -> String {
+    match value {
+        JValue::Ref(None) => String::from("null"),
+        JValue::Ref(Some(reference)) => match heap.get(reference) {
+            Some(HeapObject::JavaString(units)) => String::from_utf16_lossy(units),
+            Some(HeapObject::Class { name }) => format!("class {name}"),
+            Some(HeapObject::Boxed { class_name, value }) => boxed_to_string(class_name, *value),
+            Some(HeapObject::Field {
+                declaring,
+                name,
+                descriptor,
+                access,
+                ..
+            }) => field_to_string(declaring, name, descriptor, *access),
+            Some(HeapObject::Constructor {
+                declaring,
+                descriptor,
+                access,
+            }) => constructor_to_string(declaring, descriptor, *access),
+            Some(HeapObject::Method {
+                declaring,
+                name,
+                descriptor,
+                ..
+            }) => format!("{declaring}.{name}{descriptor}"),
+            Some(HeapObject::ReflectType { raw, args }) => {
+                let dotted = raw.replace('/', ".");
+                if args.is_empty() {
+                    dotted
+                } else {
+                    format!("{dotted}<{}>", args.join(", "))
+                }
+            }
+            Some(HeapObject::Instance { class_name, .. }) => format!("{class_name}@{reference:x}"),
+            _ => format!("object@{reference:x}"),
+        },
+        other => format!("{other:?}"),
+    }
+}
+
 fn append_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result<String, VmError> {
     let text = match (descriptor, args) {
         ("(I)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => v.to_string(),
@@ -2829,6 +2872,9 @@ fn append_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Resul
                 })?,
             }
         }
+        // `append(Object)` — `String.valueOf(Object)` semantics (used when a
+        // reflection handle like a Class type argument is concatenated).
+        ("(Ljava/lang/Object;)Ljava/lang/StringBuilder;", [value]) => object_display(heap, *value),
         _ => {
             return Err(VmError::UnknownIntrinsic(format!(
                 "StringBuilder.append overload {descriptor}"

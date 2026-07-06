@@ -398,6 +398,7 @@ impl<'run> Interpreter<'run> {
                     name,
                     descriptor,
                     access,
+                    ..
                 }) => intrinsics::field_to_string(declaring, name, descriptor, *access),
                 Some(crate::value::HeapObject::Constructor {
                     declaring,
@@ -957,6 +958,15 @@ impl<'run> Interpreter<'run> {
                                     Some(crate::value::HeapObject::Boxed {
                                         class_name, ..
                                     }) => *class_name == target,
+                                    // A reflect Type: it is a ParameterizedType
+                                    // only when it carries type arguments.
+                                    Some(crate::value::HeapObject::ReflectType {
+                                        args, ..
+                                    }) => {
+                                        target == "java/lang/reflect/Type"
+                                            || (target == "java/lang/reflect/ParameterizedType"
+                                                && !args.is_empty())
+                                    }
                                     _ => false,
                                 },
                             };
@@ -2277,6 +2287,7 @@ impl<'run> Interpreter<'run> {
                     | crate::value::HeapObject::Field { .. }
                     | crate::value::HeapObject::Constructor { .. }
                     | crate::value::HeapObject::Method { .. }
+                    | crate::value::HeapObject::ReflectType { .. }
             )
         );
         // `Constructor.newInstance` runs a constructor (a frame), so it can't
@@ -2578,6 +2589,12 @@ impl<'run> Interpreter<'run> {
                         let simple = simple_class_name(&name);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(simple)))))
                     }
+                    // `Class.toString()` is "class <name>" (used when a Class is
+                    // concatenated, e.g. a reflect type argument).
+                    "toString" => {
+                        let text = format!("class {}", simple_class_name(&name));
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
+                    }
                     // `this.isAssignableFrom(other)`: `other` is `this` or a
                     // subclass of `this` (walk `other`'s superclass chain).
                     "isAssignableFrom" => {
@@ -2609,7 +2626,7 @@ impl<'run> Interpreter<'run> {
                         }
                     }
                     "getDeclaredFields" => {
-                        let fields: Vec<(String, String, u16)> = self
+                        let fields: Vec<(String, String, u16, Option<String>)> = self
                             .classes
                             .get(&name)
                             .map(|cf| {
@@ -2626,6 +2643,7 @@ impl<'run> Interpreter<'run> {
                                                 .unwrap_or_default()
                                                 .to_owned(),
                                             fi.access_flags.0,
+                                            field_signature(cf, fi),
                                         )
                                     })
                                     .collect()
@@ -2634,12 +2652,13 @@ impl<'run> Interpreter<'run> {
                         let simple = simple_class_name(&name).to_owned();
                         let refs: Vec<JValue> = fields
                             .into_iter()
-                            .map(|(field_name, descriptor, access)| {
+                            .map(|(field_name, descriptor, access, signature)| {
                                 JValue::Ref(Some(self.heap.alloc(HeapObject::Field {
                                     declaring: simple.clone(),
                                     name: field_name,
                                     descriptor,
                                     access,
+                                    signature,
                                 })))
                             })
                             .collect();
@@ -2743,12 +2762,13 @@ impl<'run> Interpreter<'run> {
                                             .unwrap_or_default()
                                             .to_owned(),
                                         fi.access_flags.0,
+                                        field_signature(cf, fi),
                                     )
                                 })
                             })
                         });
                         match found {
-                            Some((fname, descriptor, access)) => {
+                            Some((fname, descriptor, access, signature)) => {
                                 let declaring = simple_class_name(&name).to_owned();
                                 Ok(Some(JValue::Ref(Some(self.heap.alloc(
                                     HeapObject::Field {
@@ -2756,6 +2776,7 @@ impl<'run> Interpreter<'run> {
                                         name: fname,
                                         descriptor,
                                         access,
+                                        signature,
                                     },
                                 )))))
                             }
@@ -2815,15 +2836,33 @@ impl<'run> Interpreter<'run> {
                 name,
                 descriptor,
                 access,
+                signature,
             }) => {
-                let (declaring, name, descriptor, access) =
-                    (declaring.clone(), name.clone(), descriptor.clone(), *access);
+                let (declaring, name, descriptor, access, signature) = (
+                    declaring.clone(),
+                    name.clone(),
+                    descriptor.clone(),
+                    *access,
+                    signature.clone(),
+                );
                 match method {
                     "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&name))))),
                     "getModifiers" => Ok(Some(JValue::Int(i32::from(access)))),
                     "getType" => {
                         let type_name = intrinsics::type_name_of_descriptor(&descriptor);
                         let reference = self.heap.alloc(HeapObject::Class { name: type_name });
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    // `Field.getGenericType()`: a ParameterizedType when the
+                    // field carries a Signature attribute, else the raw type.
+                    "getGenericType" => {
+                        let (raw, args) = signature
+                            .as_deref()
+                            .and_then(parse_parameterized)
+                            .unwrap_or_else(|| {
+                                (intrinsics::type_name_of_descriptor(&descriptor), Vec::new())
+                            });
+                        let reference = self.heap.alloc(HeapObject::ReflectType { raw, args });
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
                     "toString" => {
@@ -2901,6 +2940,43 @@ impl<'run> Interpreter<'run> {
                     }
                     // `invoke` runs a frame and is handled before this value path.
                     other => Err(VmError::UnknownIntrinsic(format!("Method.{other}"))),
+                }
+            }
+            Some(HeapObject::ReflectType { raw, args }) => {
+                let (raw, args) = (raw.clone(), args.clone());
+                match method {
+                    // Each type argument becomes a `Class` (its `toString` is
+                    // "class <name>", which the helpers concatenate).
+                    "getActualTypeArguments" => {
+                        let refs: Vec<JValue> = args
+                            .iter()
+                            .map(|name| {
+                                JValue::Ref(Some(self.heap.alloc(HeapObject::Class {
+                                    name: simple_class_name(name).to_owned(),
+                                })))
+                            })
+                            .collect();
+                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        Ok(Some(JValue::Ref(Some(array))))
+                    }
+                    "getRawType" => {
+                        let reference = self.heap.alloc(HeapObject::Class {
+                            name: simple_class_name(&raw).to_owned(),
+                        });
+                        Ok(Some(JValue::Ref(Some(reference))))
+                    }
+                    "getTypeName" | "toString" => {
+                        let dotted = raw.replace('/', ".");
+                        let text = if args.is_empty() {
+                            dotted
+                        } else {
+                            let inner: Vec<String> =
+                                args.iter().map(|a| a.replace('/', ".")).collect();
+                            format!("{dotted}<{}>", inner.join(", "))
+                        };
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
+                    }
+                    other => Err(VmError::UnknownIntrinsic(format!("Type.{other}"))),
                 }
             }
             _ => Err(VmError::UnknownIntrinsic(format!("reflect.{method}"))),
@@ -3472,6 +3548,36 @@ impl Frame<'_> {
 /// jvmjs is a flat namespace, so this is usually a no-op.
 fn simple_class_name(name: &str) -> &str {
     name.rsplit(['/', '.']).next().unwrap_or(name)
+}
+
+/// Read a field's generic `Signature` attribute (e.g.
+/// `Ljava/util/ArrayList<LFriend;>;`), if present.
+fn field_signature(cf: &ClassFile, fi: &jvmjs_classfile::FieldInfo) -> Option<String> {
+    fi.attributes.iter().find_map(|a| {
+        if cf.constant_pool.get_utf8(a.name_index) == Some("Signature") && a.info.len() == 2 {
+            let index = u16::from_be_bytes([a.info[0], a.info[1]]);
+            cf.constant_pool.get_utf8(index).map(str::to_owned)
+        } else {
+            None
+        }
+    })
+}
+
+/// Parse a parameterized generic signature (`Ljava/util/ArrayList<LFriend;>;`)
+/// into `(raw class, type-argument class names)`. `None` when not
+/// parameterized.
+fn parse_parameterized(signature: &str) -> Option<(String, Vec<String>)> {
+    let open = signature.find('<')?;
+    let close = signature.rfind('>')?;
+    let raw = signature.get(1..open)?.to_owned(); // strip leading 'L'
+    let mut args = Vec::new();
+    for part in signature.get(open + 1..close)?.split(';') {
+        let part = part.trim();
+        if let Some(name) = part.strip_prefix('L') {
+            args.push(name.to_owned());
+        }
+    }
+    Some((raw, args))
 }
 
 /// Whether a heap object is an array (all kinds), for `Object`-method dispatch.

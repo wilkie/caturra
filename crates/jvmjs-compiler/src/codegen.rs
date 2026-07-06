@@ -130,11 +130,22 @@ fn emit_class(
         }
         let name_index = class.constant_pool.intern_utf8(&field.name);
         let descriptor_index = class.constant_pool.intern_utf8(&ty.descriptor(table));
+        // A generic field (`ArrayList<Friend>`) carries a Signature attribute
+        // so reflection (`Field.getGenericType()`) can recover its type args.
+        let mut attributes = Vec::new();
+        if let Some(signature) = generic_field_signature(&field.ty, table) {
+            let name = class.constant_pool.intern_utf8("Signature");
+            let sig_index = class.constant_pool.intern_utf8(&signature);
+            attributes.push(AttributeInfo {
+                name_index: name,
+                info: sig_index.to_be_bytes().to_vec(),
+            });
+        }
         class.fields.push(jvmjs_classfile::FieldInfo {
             access_flags: jvmjs_classfile::FieldAccessFlags(flags),
             name_index,
             descriptor_index,
-            attributes: Vec::new(),
+            attributes,
         });
     }
 
@@ -1081,6 +1092,7 @@ impl MethodTable {
                     "Class" => Some(JType::Class),
                     "Field" => Some(JType::Field),
                     "Method" => Some(JType::Method),
+                    "Type" | "ParameterizedType" => Some(JType::Type),
                     "Constructor" => Some(JType::Constructor),
                     other => {
                         let internal = if name.contains('.') {
@@ -1490,6 +1502,28 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     }
 }
 
+/// The JVM generic signature of a parameterized field type
+/// (`ArrayList<Friend>` → `Ljava/util/ArrayList<LFriend;>;`), for the field
+/// `Signature` attribute. `None` for non-generic or non-reference types.
+fn generic_field_signature(ty: &TypeRef, table: &MethodTable) -> Option<String> {
+    let TypeRef::Generic { args, .. } = ty else {
+        return None;
+    };
+    if args.is_empty() {
+        return None;
+    }
+    let erased = table.resolve_type(ty)?.descriptor(table);
+    let base = erased.strip_suffix(';')?;
+    if !base.starts_with('L') {
+        return None;
+    }
+    let mut arg_sig = String::new();
+    for arg in args {
+        arg_sig.push_str(&table.resolve_type(arg)?.descriptor(table));
+    }
+    Some(format!("{base}<{arg_sig}>;"))
+}
+
 /// The [`ElemType`] a generic type argument denotes, per CSA usage
 /// (wrapper classes, String, or a user class).
 fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
@@ -1718,6 +1752,9 @@ enum JType {
     Field,
     /// `java.lang.reflect.Method` (reflection intrinsic).
     Method,
+    /// `java.lang.reflect.Type` / `ParameterizedType` (from
+    /// `Field.getGenericType()`).
+    Type,
     /// `java.lang.reflect.Constructor` (reflection intrinsic).
     Constructor,
     /// A library throwable; the id indexes the shared exception table
@@ -1788,6 +1825,7 @@ impl JType {
             JType::Class => String::from("Class"),
             JType::Field => String::from("Field"),
             JType::Method => String::from("Method"),
+            JType::Type => String::from("Type"),
             JType::Constructor => String::from("Constructor"),
             JType::Exception(id) => exception_internal(id)
                 .rsplit('/')
@@ -1834,6 +1872,9 @@ impl JType {
                 | JType::Boxed(_)
                 | JType::Class
                 | JType::Field
+                | JType::Method
+                | JType::Type
+                | JType::StringBuilder
                 | JType::Constructor
         )
     }
@@ -1895,6 +1936,7 @@ impl JType {
             JType::Class => String::from("Ljava/lang/Class;"),
             JType::Field => String::from("Ljava/lang/reflect/Field;"),
             JType::Method => String::from("Ljava/lang/reflect/Method;"),
+            JType::Type => String::from("Ljava/lang/reflect/Type;"),
             JType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
@@ -1936,6 +1978,7 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
         TypeRef::Named(name) if name == "Class" => Some(JType::Class),
         TypeRef::Named(name) if name == "Field" => Some(JType::Field),
         TypeRef::Named(name) if name == "Method" => Some(JType::Method),
+        TypeRef::Named(name) if name == "Type" || name == "ParameterizedType" => Some(JType::Type),
         TypeRef::Named(name) if name == "Constructor" => Some(JType::Constructor),
         TypeRef::Array(inner) => {
             let mut dims: u8 = 1;
@@ -2437,6 +2480,10 @@ enum BRet {
     Field,
     /// A single `java.lang.reflect.Method` (`Class.getMethod`).
     Method,
+    /// A `java.lang.reflect.Type` (`Field.getGenericType`).
+    Type,
+    /// `Object[]` (`ParameterizedType.getActualTypeArguments`, typed loosely).
+    ObjectArray,
     /// `java.lang.StringBuilder` (`StringBuilder.append`, for chaining).
     Builder,
     /// `java.lang.Object` (`Constructor.newInstance`).
@@ -3725,6 +3772,25 @@ const FIELD_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/lang/Object;Z)V",
     ),
+    bm(
+        "getGenericType",
+        &[],
+        BRet::Type,
+        "()Ljava/lang/reflect/Type;",
+    ),
+];
+
+/// `java.lang.reflect.Type` / `ParameterizedType` methods.
+const TYPE_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "getActualTypeArguments",
+        &[],
+        BRet::ObjectArray,
+        "()[Ljava/lang/reflect/Type;",
+    ),
+    bm("getRawType", &[], BRet::Type, "()Ljava/lang/reflect/Type;"),
+    bm("getTypeName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
 /// `java.lang.reflect.Method` methods.
@@ -3808,6 +3874,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Class => Some(("java/lang/Class", CLASS_METHODS)),
         JType::Field => Some(("java/lang/reflect/Field", FIELD_METHODS)),
         JType::Method => Some(("java/lang/reflect/Method", METHOD_METHODS)),
+        JType::Type => Some(("java/lang/reflect/Type", TYPE_METHODS)),
         JType::Constructor => Some(("java/lang/reflect/Constructor", CONSTRUCTOR_METHODS)),
         JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
         JType::File => Some(("java/io/File", FILE_METHODS)),
@@ -3997,6 +4064,11 @@ fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<J
         BRet::Constructor => Some(JType::Constructor),
         BRet::Field => Some(JType::Field),
         BRet::Method => Some(JType::Method),
+        BRet::Type => Some(JType::Type),
+        BRet::ObjectArray => Some(JType::Array {
+            elem: ElemType::Object(table.object_id),
+            dims: 1,
+        }),
         BRet::Builder => Some(JType::StringBuilder),
         BRet::Object => Some(JType::Object(table.object_id)),
     }
@@ -6145,6 +6217,7 @@ impl BodyGen<'_> {
             | JType::Class
             | JType::Field
             | JType::Method
+            | JType::Type
             | JType::Constructor
             | JType::Exception(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
@@ -7331,6 +7404,7 @@ impl BodyGen<'_> {
             | JType::Class
             | JType::Field
             | JType::Method
+            | JType::Type
             | JType::Constructor => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
@@ -7816,6 +7890,12 @@ impl BodyGen<'_> {
             // `x instanceof Integer` / `String` — wrapper and String tests.
             JType::Boxed(elem) => wrapper_internal(elem).to_owned(),
             JType::Str => String::from("java/lang/String"),
+            // `type instanceof ParameterizedType` — a runtime check on the
+            // reflect Type's kind (the VM inspects the value).
+            JType::Type => match ty {
+                TypeRef::Named(name) => format!("java/lang/reflect/{name}"),
+                _ => String::from("java/lang/reflect/Type"),
+            },
             other => {
                 self.error(
                     span,
@@ -9391,6 +9471,7 @@ impl BodyGen<'_> {
             | JType::Class
             | JType::Field
             | JType::Method
+            | JType::Type
             | JType::Constructor => "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
             JType::Int | JType::Short | JType::Byte => "(I)Ljava/lang/StringBuilder;",
             JType::Long => "(J)Ljava/lang/StringBuilder;",
