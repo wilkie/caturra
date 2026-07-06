@@ -13,6 +13,8 @@ export default defineConfig({
   // VITE_BASE=/caturra/ (project pages serve under the repo path).
   base: process.env.VITE_BASE ?? '/',
   plugins: [react()],
+  // Per-unit CSA level chunks are intentionally large and load on demand.
+  build: { chunkSizeWarningLimit: 1500 },
   server: {
     port: 5173,
     strictPort: true,

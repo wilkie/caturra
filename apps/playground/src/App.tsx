@@ -38,7 +38,13 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
-import { CSA_UNITS, type CsaLevel, type CsaLevelFile } from './levels.js';
+import {
+  CSA_UNITS,
+  levelHasSolution,
+  loadLevel,
+  type CsaLevelFile,
+  type CsaLevelMeta,
+} from './levels.js';
 
 // Stable automation hooks (Playwright drives the editor through these
 // rather than through CodeMirror's contenteditable internals).
@@ -52,6 +58,7 @@ declare global {
       setFile: (name: string, text: string) => void;
       selectFile: (name: string) => void;
       activeFile: () => string;
+      levelReady: () => Promise<void>;
       neighborhoodState: () => NeighborhoodState;
     };
   }
@@ -182,7 +189,7 @@ export function App(): React.JSX.Element {
   const [unitIndex, setUnitIndex] = useState('');
   const [levelValue, setLevelValue] = useState('');
   const [theaterValue, setTheaterValue] = useState('');
-  const [levels, setLevels] = useState<CsaLevel[]>([]);
+  const [levels, setLevels] = useState<CsaLevelMeta[]>([]);
   const [view, setView] = useState<'none' | 'neighborhood' | 'theater'>('none');
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [hasSolution, setHasSolution] = useState(false);
@@ -206,6 +213,10 @@ export function App(): React.JSX.Element {
   const validationFilesRef = useRef<CsaLevelFile[]>([]);
   const solutionFilesRef = useRef<CsaLevelFile[]>([]);
   const dataFilesRef = useRef<CsaLevelFile[]>([]);
+  // Latest requested level value, so an out-of-order chunk load is ignored.
+  const levelValueRef = useRef('');
+  // Settles when the current level's on-demand content chunk has loaded.
+  const levelLoadRef = useRef<Promise<void>>(Promise.resolve());
   const watchesRef = useRef<string[]>([]);
   const stopRequestedRef = useRef(false);
   const wasStopped = (): boolean => stopRequestedRef.current;
@@ -362,23 +373,33 @@ export function App(): React.JSX.Element {
 
   const onLevelChange = (value: string): void => {
     setLevelValue(value);
-    const level = levels[Number(value)];
-    if (!level) {
+    levelValueRef.current = value;
+    if (value === '') {
+      levelLoadRef.current = Promise.resolve();
       return;
     }
-    loadLevelFiles(level.files, level.dataFiles);
-    validationFilesRef.current = level.validationFiles;
-    solutionFilesRef.current = level.solutionFiles;
-    dataFilesRef.current = level.dataFiles;
-    setHasSolution(level.solutionFiles.length > 0);
+    // Whether a solution exists is known synchronously (eager map), so the
+    // Solve button appears immediately; its content arrives with the chunk.
+    setHasSolution(levelHasSolution(Number(unitIndex), Number(value)));
     setTestResults([]);
-    if (level.view === 'neighborhood') {
-      currentGridRef.current = level.grid;
-      setView('neighborhood');
-      neighborhoodVizRef.current?.load(level.grid, '');
-    } else {
-      setView('none');
-    }
+    // The unit's content chunk loads on demand (see levels.ts).
+    levelLoadRef.current = (async () => {
+      const level = await loadLevel(Number(unitIndex), Number(value));
+      if (!level || levelValueRef.current !== value) {
+        return;
+      }
+      loadLevelFiles(level.files, level.dataFiles);
+      validationFilesRef.current = level.validationFiles;
+      solutionFilesRef.current = level.solutionFiles;
+      dataFilesRef.current = level.dataFiles;
+      if (level.view === 'neighborhood') {
+        currentGridRef.current = level.grid;
+        setView('neighborhood');
+        neighborhoodVizRef.current?.load(level.grid, '');
+      } else {
+        setView('none');
+      }
+    })();
   };
 
   const onTheaterChange = (value: string): void => {
@@ -694,6 +715,7 @@ export function App(): React.JSX.Element {
         switchToFile(name);
       },
       activeFile: () => activeFileRef.current,
+      levelReady: () => levelLoadRef.current,
       neighborhoodState: (): NeighborhoodState => nbViz?.state() ?? { colors: [], painters: [] },
     };
 
@@ -1071,7 +1093,7 @@ function renderFrames(snapshot: DebugPauseSnapshot): string {
   return lines.join('\n');
 }
 
-function groupLevels(levels: CsaLevel[]): React.JSX.Element[] {
+function groupLevels(levels: CsaLevelMeta[]): React.JSX.Element[] {
   const groups: { lesson: string; items: { index: number; name: string }[] }[] = [];
   for (const [index, level] of levels.entries()) {
     let group = groups.at(-1);

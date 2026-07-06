@@ -1,31 +1,53 @@
-import { CSA_UNITS, type CsaLevel, type CsaLevelFile, type CsaUnit } from './csa-levels.js';
-// Teacher-authored JUnit validators are committed (so the hosted Test button
-// works). The `.local.ts` fallback lets a dev regenerate them under the old
-// name without a rebuild breaking; either resolves to `{}` if absent.
-import { VALIDATORS as COMMITTED_VALIDATORS } from './csa-validators.js';
+import {
+  CSA_UNITS,
+  type CsaLevelData,
+  type CsaLevelFile,
+  type CsaLevelMeta,
+  type CsaUnitMeta,
+} from './csa-index.js';
 
-// Complete solutions (Solve button) are NOT committed and never shipped: the
-// hosted build runs with `csa-solutions.local.ts` absent, so `import.meta.glob`
-// resolves to `{}` and no solutions enter the bundle. A dev checkout that has
-// generated the file gets the Solve button locally.
+// Per-unit level content is code-split: each csa-units/unit-N.ts becomes its
+// own chunk, fetched the first time a level in that unit is opened. Keeps the
+// initial bundle to the light index (unit/level names) instead of ~3.6 MB of
+// start sources and validators.
+const unitLoaders = import.meta.glob<{ LEVELS: CsaLevelData[] }>('./csa-units/unit-*.ts');
+
+// Complete solutions (Solve button) are dev-only and git-ignored; the hosted
+// build has no such file, so this resolves to `{}` and no solutions ship.
 const solutionModules = import.meta.glob<{
   SOLUTIONS?: Record<string, CsaLevelFile[]>;
 }>('./csa-solutions.local.ts', { eager: true });
-const localSolutions = Object.values(solutionModules)[0]?.SOLUTIONS;
+const SOLUTIONS = Object.values(solutionModules)[0]?.SOLUTIONS;
 
-CSA_UNITS.forEach((unit, unitIndex) => {
-  unit.levels.forEach((level, levelIndex) => {
-    const key = `${String(unitIndex)}:${String(levelIndex)}`;
-    const validators = COMMITTED_VALIDATORS[key];
-    if (validators) {
-      level.validationFiles = validators;
-    }
-    const solution = localSolutions?.[key];
-    if (solution) {
-      level.solutionFiles = solution;
-    }
-  });
-});
+export interface CsaLevel extends CsaLevelData {
+  solutionFiles: CsaLevelFile[];
+}
+
+/** Load a level's full content (start sources, validators, data, and — in a dev
+ *  checkout — its solution), fetching the unit's chunk on demand. */
+export async function loadLevel(
+  unitIndex: number,
+  levelIndex: number,
+): Promise<CsaLevel | undefined> {
+  const loader = unitLoaders[`./csa-units/unit-${String(unitIndex)}.ts`];
+  if (!loader) {
+    return undefined;
+  }
+  const data = (await loader()).LEVELS[levelIndex];
+  if (!data) {
+    return undefined;
+  }
+  return {
+    ...data,
+    solutionFiles: SOLUTIONS?.[`${String(unitIndex)}:${String(levelIndex)}`] ?? [],
+  };
+}
+
+/** Whether a level has a solution available (dev overlay only), known
+ *  synchronously from the eager solutions map — no chunk load needed. */
+export function levelHasSolution(unitIndex: number, levelIndex: number): boolean {
+  return !!SOLUTIONS?.[`${String(unitIndex)}:${String(levelIndex)}`];
+}
 
 export { CSA_UNITS };
-export type { CsaLevel, CsaLevelFile, CsaUnit };
+export type { CsaLevelData, CsaLevelFile, CsaLevelMeta, CsaUnitMeta };

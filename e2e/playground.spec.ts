@@ -10,6 +10,7 @@ interface PlaygroundHooks {
   setFile: (name: string, text: string) => void;
   selectFile: (name: string) => void;
   activeFile: () => string;
+  levelReady: () => Promise<void>;
   neighborhoodState: () => {
     colors: (string | null)[][];
     painters: { id: string; x: number; y: number; dir: string }[];
@@ -80,6 +81,13 @@ async function selectFile(page: Page, name: string): Promise<void> {
   }, name);
 }
 
+/** Wait for the selected level's on-demand content chunk to finish loading. */
+async function waitLevel(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    (window as unknown as { playground: PlaygroundHooks }).playground.levelReady(),
+  );
+}
+
 async function toggleBreakpoint(page: Page, line: number): Promise<void> {
   await page.evaluate((l) => {
     (window as unknown as { playground: PlaygroundHooks }).playground.toggleBreakpoint(l);
@@ -114,6 +122,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Investigate and Modify: Debugging' });
+    await waitLevel(page);
     await expect(page.getByTestId('viz')).toBeVisible();
     await expect(page.getByTestId('file-tabs')).toContainText('PainterPlus.java');
 
@@ -139,6 +148,7 @@ test.describe('playground', () => {
     // Pick the first real level (skip the placeholder) and run it.
     const firstLevel = await levelSelect.locator('optgroup option').first().getAttribute('value');
     await levelSelect.selectOption(firstLevel);
+    await waitLevel(page);
     await expect(page.getByTestId('viz')).toBeHidden();
     await page.getByTestId('run').click();
     // A console level compiles through javac (some Investigate levels start
@@ -199,11 +209,13 @@ test.describe('playground', () => {
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 3' });
     const level = page.getByTestId('level-select');
     await level.selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (a)' });
+    await waitLevel(page);
     // Make the shared MusicSurvey.java the active tab — the bug trigger:
     // an active non-Main file used to survive the level switch with stale
     // content (here a 2-arg constructor) shadowing the new level's version.
     await selectFile(page, 'MusicSurvey.java');
     await level.selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    await waitLevel(page);
     const source = await page.evaluate(() => {
       const pg = (window as unknown as { playground: PlaygroundHooks }).playground;
       pg.selectFile('MusicSurvey.java');
@@ -223,6 +235,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -243,6 +256,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: The substring() Method (a) #1' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -259,6 +273,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: 2D Array Elements (a)' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -275,6 +290,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: Using Static Variables and Methods (a)' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -291,6 +307,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: Creating 1D Arrays (a)' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -307,6 +324,7 @@ test.describe('playground', () => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });
     await page.getByTestId('level-select').selectOption({ label: 'Practice: The Food Truck' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -326,6 +344,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Skill Building: Writing a Constructor (a)' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -343,6 +362,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: PainterPlus Methods (a)' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -360,6 +380,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: Creating PainterPlus #1' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -379,6 +400,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Skill Building: Painter Objects' });
+    await waitLevel(page);
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
       test.skip(true, 'no local overlay (validators/solutions not generated)');
@@ -399,6 +421,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    await waitLevel(page);
     // The Solve button only appears when the (dev-only) solution overlay is present.
     const solve = page.getByTestId('solve');
     if ((await solve.count()) === 0) {
@@ -421,6 +444,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Practice: Writing Algorithms with 1D Arrays (d)' });
+    await waitLevel(page);
     // Data files load as editable tabs alongside the Java files.
     await expect(page.getByTestId('file-tabs')).toContainText('times.txt');
     await expect(page.getByTestId('file-tabs')).toContainText('ages.txt');
@@ -436,6 +460,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Predict and Run: Storing Multiple Values' });
+    await waitLevel(page);
     await page.getByTestId('run').click();
     // Reaching "$ java Main" means the array program compiled cleanly.
     await expect(page.getByTestId('console')).toContainText('$ java Main');
@@ -448,6 +473,7 @@ test.describe('playground', () => {
     await page
       .getByTestId('level-select')
       .selectOption({ label: 'Predict and Run: No-Argument Constructors' });
+    await waitLevel(page);
     await expect(page.getByTestId('file-tabs')).toContainText('ConstructorsHelper.java');
     await page.getByTestId('run').click();
     const console = page.getByTestId('console');
@@ -459,6 +485,7 @@ test.describe('playground', () => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 2' });
     await page.getByTestId('level-select').selectOption({ label: 'Practice: The Food Truck (a)' });
+    await waitLevel(page);
     // The level bundles the reflection helper and the classes to complete.
     await expect(page.getByTestId('file-tabs')).toContainText('AttributesHelper.java');
     await page.evaluate(() => {
@@ -487,6 +514,7 @@ test.describe('playground', () => {
     await unit.selectOption({ label: 'AP FRQ Practice' });
     const level = page.getByTestId('level-select');
     await level.selectOption({ index: 1 });
+    await waitLevel(page);
     // The level's student classes are loaded as tabs; its validator is hidden.
     await expect(page.getByTestId('file-tabs')).toContainText('BoxOfCandy.java');
     await expect(page.getByTestId('file-tabs')).toContainText('Candy.java');
