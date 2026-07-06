@@ -664,7 +664,8 @@ impl MethodTable {
                     if id.is_none() {
                         // `extends Exception` and friends: a library
                         // throwable parent.
-                        if let Some(internal) = caturra_classfile::exceptions::internal_name_of(name)
+                        if let Some(internal) =
+                            caturra_classfile::exceptions::internal_name_of(name)
                         {
                             library_superclass = Some(internal);
                         } else {

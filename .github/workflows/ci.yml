@@ -1,0 +1,96 @@
+name: CI
+
+# Test and lint on every pull request and on pushes to main.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# CI only reads the repo.
+permissions:
+  contents: read
+
+# A newer commit on the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the channel (1.95) and components; install them.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95'
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      # differential.rs runs only when a JDK is present, so it skips here.
+      - name: Test
+        run: cargo test --workspace
+
+  web:
+    name: Web (lint, types, unit, e2e)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm target)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95'
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Unit tests and e2e load the wasm engine from disk.
+      - name: Build the WASM engine
+        run: pnpm build:wasm
+
+      - name: Lint (eslint + prettier)
+        run: pnpm lint
+
+      - name: Typecheck (@caturra/core)
+        run: pnpm --filter @caturra/core exec tsc --noEmit
+
+      - name: Unit tests
+        run: pnpm -r test
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      # webServer builds the playground (also typechecks it) and serves it.
+      - name: End-to-end tests
+        run: pnpm test:e2e
