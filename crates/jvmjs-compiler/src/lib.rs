@@ -84,6 +84,10 @@ const ARRAYS_LIB: &str = include_str!("stdlib/arrays.java");
 /// `Modifier.` (the access-flag decoder used by reflection validators).
 const REFLECT_LIB: &str = include_str!("stdlib/reflect.java");
 
+/// Bundled `java.util` helpers (`Random`, `Collections`), injected when a
+/// source references `Random`/`Collections`.
+const UTIL_LIB: &str = include_str!("stdlib/util.java");
+
 /// Bundled `org.code.validation` (test harness helpers), injected when a
 /// source imports it: `SystemOutTestRunner`, `ValidationHelper`, and the
 /// neighborhood log types.
@@ -370,6 +374,19 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<reflect>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<reflect>"), unit));
+    }
+    if (sources.iter().any(|s| s.text.contains("Random"))
+        || sources.iter().any(|s| s.text.contains("Collections.")))
+        && !units.iter().any(|(_, unit)| {
+            unit.classes
+                .iter()
+                .any(|c| c.name == "Random" || c.name == "Collections")
+        })
+    {
+        let (tokens, _) = lexer::lex("<util>", UTIL_LIB);
+        let (unit, mut errs) = parser::parse("<util>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<util>"), unit));
     }
     if imports_prefix(&units, &["org", "junit"]) {
         let (tokens, _) = lexer::lex("<junit>", JUNIT_LIB);

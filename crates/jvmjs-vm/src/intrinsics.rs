@@ -223,6 +223,25 @@ pub fn invoke_special(
                 )))
             }
         }
+        // `new ArrayList<>(collection)` — copy the source collection's items.
+        ("<init>", "(Ljava/util/Collection;)V") => {
+            let items = match args.first() {
+                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                    Some(HeapObject::ArrayList(items)) => items.clone(),
+                    _ => return Err(throw("java.lang.ClassCastException: not a Collection")),
+                },
+                Some(JValue::Ref(None)) => return Err(throw("java.lang.NullPointerException")),
+                _ => Vec::new(),
+            };
+            if let Some(HeapObject::ArrayList(target)) = heap.get_mut(receiver) {
+                *target = items;
+                Ok(())
+            } else {
+                Err(VmError::UnknownIntrinsic(format!(
+                    "{class}.{method}{descriptor}"
+                )))
+            }
+        }
         _ => Err(VmError::UnknownIntrinsic(format!(
             "{class}.{method}{descriptor}"
         ))),

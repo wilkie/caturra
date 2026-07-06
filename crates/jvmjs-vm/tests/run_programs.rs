@@ -410,6 +410,29 @@ fn neighborhood_painter_simulation() {
 }
 
 #[test]
+fn arraylist_copy_and_aslist_varargs() {
+    // ArrayList copy constructor (independent list), Arrays.asList varargs,
+    // Collections.reverse over any element type.
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class Main {
+            public static void main(String[] a) {
+                List<String> v = Arrays.asList("a", "b", "c");
+                ArrayList<String> copy = new ArrayList<String>(v);
+                copy.add("d");
+                System.out.println(v.size() + " " + copy.size());
+                Collections.reverse(copy);
+                System.out.println(copy);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "3 4\n[d, c, b, a]\n");
+}
+
+#[test]
 fn string_builder_and_format_argument() {
     // First-class StringBuilder (append chaining, toString, length) plus the
     // fix for String.format(...) used directly as a method argument.
@@ -436,6 +459,7 @@ fn string_builder_and_format_argument() {
 }
 
 #[test]
+#[allow(clippy::needless_raw_string_hashes)]
 fn user_object_default_equals_is_identity() {
     // A class with no equals override uses Object identity equality.
     let out = run_stdout(

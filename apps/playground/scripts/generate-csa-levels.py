@@ -32,6 +32,7 @@ UNITS = [
     ("csa3-2025", "CSA 2025 Unit 3"),
     ("csa4-2025", "CSA 2025 Unit 4"),
     ("csa5-2025", "CSA 2025 Unit 5"),
+    ("csa6-2025", "CSA 2025 Unit 6"),
 ]
 
 

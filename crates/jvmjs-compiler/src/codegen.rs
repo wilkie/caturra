@@ -5954,22 +5954,15 @@ impl BodyGen<'_> {
     /// `new ArrayList<E>()` (diamond allowed when the declaration names
     /// the element type — students write both).
     fn new_array_list(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
-        if !args.is_empty() {
-            self.error(
-                span,
-                "ArrayList constructor arguments are not supported by jvmjs \
-                 (use new ArrayList<...>())",
-            );
+        if args.len() > 1 {
+            self.error(span, "ArrayList takes at most one constructor argument");
             return JType::Error;
         }
-        let elem = match type_args {
+        let mut elem = match type_args {
             [] => {
                 // Diamond `new ArrayList<>()`: the element type comes
-                // from the assignment context; the emission is
-                // identical, so leave it generic here. Diamond in a
-                // context we can't see types Error only if used
-                // standalone; declarations convert with the declared
-                // type's element (widening accepts identity).
+                // from the assignment context (or the copy source below);
+                // leave it generic here.
                 None
             }
             [arg] => {
@@ -5991,9 +5984,32 @@ impl BodyGen<'_> {
         let list_class = intern_class(self.pool, "java/util/ArrayList");
         self.code.push_op_u16(op::NEW, list_class, 1);
         self.code.push_op(op::DUP, 1);
-        let init_ref = intern_method_ref(self.pool, "java/util/ArrayList", "<init>", "()V");
-        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
-        self.code.drop_stack(1);
+        match args {
+            [] => {
+                let init_ref = intern_method_ref(self.pool, "java/util/ArrayList", "<init>", "()V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(1);
+            }
+            [source] => {
+                // Copy constructor `new ArrayList<>(collection)`: seed the
+                // new list with the source collection's elements.
+                let source_ty = self.expr(source);
+                if elem.is_none()
+                    && let JType::List(source_elem) = source_ty
+                {
+                    elem = Some(source_elem);
+                }
+                let init_ref = intern_method_ref(
+                    self.pool,
+                    "java/util/ArrayList",
+                    "<init>",
+                    "(Ljava/util/Collection;)V",
+                );
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2); // the dup'd receiver + the source
+            }
+            _ => unreachable!("arg count checked above"),
+        }
         match elem {
             Some(elem) => JType::List(elem),
             // Diamond: callers in declaration position convert with
@@ -7059,6 +7075,17 @@ impl BodyGen<'_> {
         if !self.table.has_class(class) && builtin_static_table(class).is_some() {
             return self.builtin_static_call(class, method, args, span);
         }
+        // `Arrays.asList` is variadic (`<T> List<T> asList(T...)`): a lone
+        // array argument is the varargs array; anything else packs into one.
+        if class == "Arrays" && method == "asList" {
+            return self.emit_arrays_as_list(args, span);
+        }
+        // `Collections.reverse/swap` are generic over the list element type;
+        // emit the (uniform-at-runtime) list argument(s) and call the bundle,
+        // bypassing invariant List<elem> parameter matching.
+        if class == "Collections" && (method == "reverse" || method == "swap") {
+            return self.emit_collections_call(method, args, span);
+        }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             // Emit the arguments so their own diagnostics surface.
@@ -7133,13 +7160,92 @@ impl BodyGen<'_> {
         // `Arrays.asList` is generic (`<T> List<T>`): the bundle returns a raw
         // `ArrayList`, but type the result as a `List` of the argument array's
         // element type so `List<String> x = Arrays.asList(strs)` type-checks.
-        if class == "Arrays"
-            && method == "asList"
-            && let Some(JType::Array { elem, dims: 1 }) = arg_types.first()
-        {
-            return Some(Some(JType::List(*elem)));
-        }
         Some(sig.ret)
+    }
+
+    /// `Collections.reverse(list)` / `Collections.swap(list, i, j)`: emit the
+    /// arguments and call the bundle directly (the list element type does not
+    /// affect the runtime representation).
+    #[allow(clippy::option_option, clippy::unnecessary_wraps)] // call-dispatch return shape
+    fn emit_collections_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let (descriptor, want) = match method {
+            "reverse" => ("(Ljava/util/ArrayList;)V", 1usize),
+            "swap" => ("(Ljava/util/ArrayList;II)V", 3usize),
+            _ => unreachable!("caller checked method"),
+        };
+        if args.len() != want {
+            self.error(
+                span,
+                format!("Collections.{method} takes {want} argument(s)"),
+            );
+            return None;
+        }
+        let mut width: u16 = 0;
+        for (i, arg) in args.iter().enumerate() {
+            let ty = self.expr(arg);
+            if i > 0 {
+                self.numeric_conversion(ty, JType::Int);
+            }
+            width += 1;
+        }
+        let method_ref = intern_method_ref(self.pool, "Collections", method, descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+        self.code.drop_stack(width);
+        Some(None)
+    }
+
+    /// `Arrays.asList(T...)`: pack the arguments into an `Object[]`, call the
+    /// bundled `Arrays.asList(Object[])`, and type the result `List<elem>`. A
+    /// single array argument is passed through as the varargs array.
+    #[allow(clippy::option_option, clippy::unnecessary_wraps)] // call-dispatch return shape
+    fn emit_arrays_as_list(&mut self, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
+        let object_elem = ElemType::Object(self.table.object_id);
+        let elem = if let [single] = args {
+            if let JType::Array { elem, dims: 1 } = self.type_of(single) {
+                // The lone array argument *is* the varargs array.
+                self.expr(single);
+                elem
+            } else {
+                let scalar = elem_type_of(self.type_of(single)).unwrap_or(object_elem);
+                self.emit_array_literal(
+                    args,
+                    JType::Array {
+                        elem: object_elem,
+                        dims: 1,
+                    },
+                    span,
+                );
+                scalar
+            }
+        } else {
+            let scalar = args
+                .first()
+                .and_then(|a| elem_type_of(self.type_of(a)))
+                .unwrap_or(object_elem);
+            self.emit_array_literal(
+                args,
+                JType::Array {
+                    elem: object_elem,
+                    dims: 1,
+                },
+                span,
+            );
+            scalar
+        };
+        let method_ref = intern_method_ref(
+            self.pool,
+            "Arrays",
+            "asList",
+            "([Ljava/lang/Object;)Ljava/util/ArrayList;",
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(1); // the array argument
+        Some(Some(JType::List(elem)))
     }
 
     /// `System.out.println(...)` and friends.
