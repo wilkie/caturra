@@ -1,0 +1,84 @@
+name: Deploy playground to GitHub Pages
+
+# Builds the playground and publishes it to the `gh-pages` branch on every push
+# to main. CI checks out only committed files, so the git-ignored
+# csa-solutions.local.ts is absent and solutions can never enter the build; the
+# committed csa-validators.ts ships so the Test button works. Mirrors
+# `pnpm deploy:pages` (scripts/deploy-pages.sh).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Push access to the gh-pages branch via the automatic GITHUB_TOKEN.
+permissions:
+  contents: write
+
+# Never run two deploys at once; a newer push supersedes an in-flight build.
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm target)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95'
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the WASM engine
+        run: pnpm build:wasm
+
+      - name: Build the playground (Pages base path)
+        run: pnpm --filter @caturra/playground build
+        env:
+          VITE_BASE: /caturra/
+
+      - name: Guard against publishing solutions
+        run: |
+          if grep -rqIl "export const SOLUTIONS" apps/playground/dist/assets; then
+            echo "::error::SOLUTIONS found in the built bundle — refusing to deploy"
+            exit 1
+          fi
+
+      - name: Publish dist/ to gh-pages
+        working-directory: apps/playground/dist
+        run: |
+          touch .nojekyll
+          git init -q
+          git checkout -q -b gh-pages
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Deploy ${GITHUB_SHA}"
+          git push -f \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
