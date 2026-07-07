@@ -255,6 +255,7 @@ static JAVA_AWT_EVENT: &[&str] = &[
     "ItemListener",
     "ItemEvent",
     "MouseListener",
+    "MouseMotionListener",
     "MouseAdapter",
     "MouseEvent",
 ];

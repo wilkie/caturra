@@ -119,6 +119,7 @@ class Component {
   void __setFromHost(String value) {}
   void __onEvent() {}
   void __onMouse(int x, int y) {}
+  void __onDrag(int x, int y) {}
   boolean __listens() { return false; }
 }
 
@@ -175,13 +176,15 @@ class JPanel extends Container {
   int __pw = 200;
   int __ph = 150;
   MouseListener __mouseListener = null;
+  MouseMotionListener __motionListener = null;
   public JPanel() {}
   public JPanel(LayoutManager m) { __layout = m; }
   public void setPreferredSize(Dimension d) { __pw = d.width; __ph = d.height; }
   public int getWidth() { return __pw; }
   public int getHeight() { return __ph; }
   public void addMouseListener(MouseListener l) { __mouseListener = l; __SwingRuntime.__interactive = true; }
-  boolean __listens() { return __mouseListener != null; }
+  public void addMouseMotionListener(MouseMotionListener l) { __motionListener = l; __SwingRuntime.__interactive = true; }
+  boolean __listens() { return __mouseListener != null || __motionListener != null; }
   void __onMouse(int x, int y) {
     if (__mouseListener != null) {
       // A real click fires press, then release, then clicked.
@@ -190,6 +193,9 @@ class JPanel extends Container {
       __mouseListener.mouseReleased(e);
       __mouseListener.mouseClicked(e);
     }
+  }
+  void __onDrag(int x, int y) {
+    if (__motionListener != null) __motionListener.mouseDragged(new MouseEvent(this, x, y));
   }
   // The event loop re-renders (and so re-paints) after every event, so a
   // repaint request is implicit; this exists so student code compiles.
@@ -205,8 +211,12 @@ class JPanel extends Container {
       paint = ",\"paint\":\"" + Component.__esc(g.__joined()) + "\",\"pw\":" + __pw
           + ",\"ph\":" + __ph;
     }
+    // Which pointer events to wire: mouse (click) and/or drag (motion).
+    String pointer = "";
+    if (__mouseListener != null) pointer += ",\"mouse\":true";
+    if (__motionListener != null) pointer += ",\"drag\":true";
     return "{\"type\":\"panel\",\"layout\":" + __layoutJson()
-        + ",\"children\":" + __kidsJson() + paint + "," + __commonJson() + "}";
+        + ",\"children\":" + __kidsJson() + paint + pointer + "," + __commonJson() + "}";
   }
 }
 
@@ -537,15 +547,23 @@ interface MouseListener {
   void mouseExited(MouseEvent e);
 }
 
-// The five-method MouseListener isn't a functional interface (no lambdas), so
-// students subclass this adapter and override only what they need — usually
-// via `new MouseAdapter() { ... }`.
-class MouseAdapter implements MouseListener {
+interface MouseMotionListener {
+  void mouseDragged(MouseEvent e);
+  void mouseMoved(MouseEvent e);
+}
+
+// The mouse listener interfaces aren't functional (no lambdas), so students
+// subclass this adapter and override only what they need — usually via
+// `new MouseAdapter() { ... }`. Like java.awt.event.MouseAdapter it covers
+// both MouseListener and MouseMotionListener.
+class MouseAdapter implements MouseListener, MouseMotionListener {
   public void mouseClicked(MouseEvent e) {}
   public void mousePressed(MouseEvent e) {}
   public void mouseReleased(MouseEvent e) {}
   public void mouseEntered(MouseEvent e) {}
   public void mouseExited(MouseEvent e) {}
+  public void mouseDragged(MouseEvent e) {}
+  public void mouseMoved(MouseEvent e) {}
 }
 
 // The event pump. setVisible enters __loop, which renders the current tree
@@ -628,24 +646,26 @@ class __SwingRuntime {
       }
       Component c = __find(cid);
       if (c != null) {
-        // A "__mouse=x,y" line marks a pointer event on the component, which
-        // dispatches to its MouseListener with coordinates; otherwise it's a
-        // control activation (button/checkbox/…).
-        int[] xy = __mouseOf(body);
-        if (xy != null) c.__onMouse(xy[0], xy[1]);
+        // A "__drag=x,y" line is a mouse drag; "__mouse=x,y" is a click; a
+        // component with neither is a control activation (button/checkbox/…).
+        int[] drag = __coordOf(body, "__drag=");
+        int[] click = __coordOf(body, "__mouse=");
+        if (drag != null) c.__onDrag(drag[0], drag[1]);
+        else if (click != null) c.__onMouse(click[0], click[1]);
         else c.__onEvent();
       }
     }
   }
 
-  static int[] __mouseOf(String body) {
+  // Parse an "<prefix>x,y" line out of the event body, or null if absent.
+  static int[] __coordOf(String body, String prefix) {
     String rest = body;
     while (rest.length() > 0) {
       int nl = rest.indexOf("\n");
       String line = nl < 0 ? rest : rest.substring(0, nl);
       rest = nl < 0 ? "" : rest.substring(nl + 1);
-      if (line.startsWith("__mouse=")) {
-        String coords = line.substring(8);
+      if (line.startsWith(prefix)) {
+        String coords = line.substring(prefix.length());
         int comma = coords.indexOf(",");
         if (comma < 0) return null;
         int x = Integer.parseInt(coords.substring(0, comma));

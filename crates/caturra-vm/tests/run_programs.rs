@@ -728,6 +728,39 @@ fn swing_lambda_as_constructor_argument_is_target_typed() {
 }
 
 #[test]
+fn swing_mouse_motion_listener_fires_on_drag() {
+    // A panel with a MouseMotionListener (an anonymous MouseAdapter, which
+    // implements both mouse interfaces) gets mouseDragged with the drag
+    // coordinates from a "__drag=x,y" payload line. Ids: frame c0, panel c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Pad");
+                JPanel panel = new JPanel();
+                panel.addMouseMotionListener(new MouseAdapter() {
+                    public void mouseDragged(MouseEvent e) {
+                        System.out.println("drag " + e.getX() + "," + e.getY());
+                    }
+                });
+                frame.add(panel);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\n__drag=10,20")),
+            Some(String::from("c1\n__drag=15,28")),
+        ],
+    );
+    assert_eq!(out, "drag 10,20\ndrag 15,28\n");
+}
+
+#[test]
 fn swing_rich_controls_dispatch_their_listeners() {
     // Non-button controls now dispatch: a checkbox toggle fires its
     // ItemListener, a combo box selection and a slider drag fire their

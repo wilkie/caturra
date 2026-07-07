@@ -412,6 +412,54 @@ class BallPanel extends JPanel {
 `,
   },
   {
+    name: 'Sketch pad',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.util.ArrayList;
+
+public class Main {
+  static ArrayList<Integer> xs = new ArrayList<Integer>();
+  static ArrayList<Integer> ys = new ArrayList<Integer>();
+  static Pad panel;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Sketch");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    panel = new Pad();
+    panel.setPreferredSize(new Dimension(320, 220));
+    panel.setToolTipText("Drag to draw");
+
+    // Dragging fires many mouseDragged events; the playground coalesces them
+    // so only the latest position is processed each frame. Connecting the
+    // points with lines keeps the stroke continuous.
+    panel.addMouseMotionListener(new MouseAdapter() {
+      public void mouseDragged(MouseEvent e) {
+        Main.xs.add(e.getX());
+        Main.ys.add(e.getY());
+        Main.panel.repaint();
+      }
+    });
+
+    frame.add(panel);
+    frame.setVisible(true);
+  }
+}
+
+class Pad extends JPanel {
+  public void paintComponent(Graphics g) {
+    super.paintComponent(g);
+    g.setColor(new Color(250, 250, 252));
+    g.fillRect(0, 0, getWidth(), getHeight());
+    g.setColor(new Color(180, 30, 90));
+    for (int i = 1; i < Main.xs.size(); i++) {
+      g.drawLine(Main.xs.get(i - 1), Main.ys.get(i - 1), Main.xs.get(i), Main.ys.get(i));
+    }
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
@@ -563,6 +611,9 @@ export function App(): React.JSX.Element {
   // Settles the pending Swing event promise when the user activates a
   // control; the engine's event loop is parked until it resolves.
   const swingEventResolverRef = useRef<((payload: string | null) => void) | null>(null);
+  // The newest drag payload seen while the loop was busy — coalesced so the
+  // flood of mousemove events becomes at most one dispatch per render.
+  const swingPendingMotionRef = useRef<string | null>(null);
   // Whether this run rendered a live (interactive) Swing UI, so we don't
   // clobber the final frame with a stale batch render after it completes.
   const swingRenderedLiveRef = useRef(false);
@@ -852,6 +903,20 @@ export function App(): React.JSX.Element {
 
   // Resolve the parked event promise when a control is activated.
   const dispatchSwingEvent = (payload: string): void => {
+    // Coalesce drags: they fire far faster than the loop can render. If the
+    // loop is parked, dispatch the latest now; otherwise keep only the newest
+    // position so the next park picks it up (dropping the ones in between).
+    if (payload.includes('\n__drag=')) {
+      if (swingEventResolverRef.current) {
+        const resolve = swingEventResolverRef.current;
+        swingEventResolverRef.current = null;
+        swingPendingMotionRef.current = null;
+        resolve(payload);
+      } else {
+        swingPendingMotionRef.current = payload;
+      }
+      return;
+    }
     const resolve = swingEventResolverRef.current;
     swingEventResolverRef.current = null;
     resolve?.(payload);
@@ -887,12 +952,20 @@ export function App(): React.JSX.Element {
           ),
         );
       }
+      // If a drag arrived while the loop was busy, dispatch its latest
+      // position now instead of waiting for the next event.
+      if (swingPendingMotionRef.current !== null) {
+        const motion = swingPendingMotionRef.current;
+        swingPendingMotionRef.current = null;
+        settle(motion);
+      }
     });
 
   // ----- Run / Test / Stop -----
   const runProgram = async (): Promise<void> => {
     stopRequestedRef.current = false;
     swingRenderedLiveRef.current = false;
+    swingPendingMotionRef.current = null;
     setPhase('running');
     clearConsole();
     neighborhoodVizRef.current?.stop();
@@ -962,6 +1035,7 @@ export function App(): React.JSX.Element {
   const stopProgram = async (): Promise<void> => {
     stopRequestedRef.current = true;
     swingEventResolverRef.current = null;
+    swingPendingMotionRef.current = null;
     // Clear any paused-debugger UI: a hard stop can happen mid-debug (an
     // interactive Swing session idling for the next event, say).
     debugResolverRef.current = null;
@@ -1068,6 +1142,7 @@ export function App(): React.JSX.Element {
   const debugProgram = async (): Promise<void> => {
     stopRequestedRef.current = false;
     swingRenderedLiveRef.current = false;
+    swingPendingMotionRef.current = null;
     setPhase('debugging');
     clearConsole();
     try {

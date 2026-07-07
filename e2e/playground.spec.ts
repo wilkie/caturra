@@ -1453,6 +1453,52 @@ test.describe('swing (interactive)', () => {
     await expect(page.getByTestId('stop-run')).toBeVisible();
   });
 
+  test('a MouseMotionListener draws while dragging (coalesced)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Sketch pad' });
+    await page.getByTestId('run').click();
+    const canvas = page.getByTestId('swing-root').getByRole('img', { name: 'Drag to draw' });
+    await expect(canvas).toBeVisible();
+    const box = await canvas.boundingBox();
+    if (!box) {
+      throw new Error('no canvas box');
+    }
+
+    // Drag a horizontal stroke across the middle. Pauses between moves let the
+    // event loop capture several coalesced positions (not just the last one).
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + 40, y);
+    await page.mouse.down();
+    for (const dx of [90, 140, 190, 240]) {
+      await page.mouse.move(box.x + dx, y);
+      await page.waitForTimeout(70);
+    }
+    await page.mouse.up();
+
+    // Somewhere along the mid-line at x≈140 there is a stroke pixel. The
+    // stroke is a 1px anti-aliased line, so check for the stroke's strong
+    // green drop from the near-white background rather than an exact colour.
+    const strokeNear = (px: number, y0: number, y1: number): Promise<boolean> =>
+      page.evaluate(
+        ([x, from, to]) => {
+          const c = document.querySelector<HTMLCanvasElement>('[data-testid="swing-root"] canvas');
+          const ctx = c?.getContext('2d');
+          if (!ctx) {
+            return false;
+          }
+          for (let yy = from; yy <= to; yy++) {
+            const d = ctx.getImageData(x, yy, 1, 1).data;
+            if ((d[1] ?? 255) < 200) {
+              return true; // green pulled down toward the stroke's 30
+            }
+          }
+          return false;
+        },
+        [px, y0, y1],
+      );
+    await expect.poll(() => strokeNear(140, 95, 125)).toBe(true);
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

@@ -54,6 +54,9 @@ interface SwingNode {
   /** Canvas dimensions for a painted panel. */
   pw?: number;
   ph?: number;
+  /** Panel has a MouseListener (wire click) / MouseMotionListener (wire drag). */
+  mouse?: boolean;
+  drag?: boolean;
   children?: SwingNode[];
 }
 
@@ -231,13 +234,34 @@ export class SwingViz {
     }
   }
 
+  /** Component-relative coordinates of a pointer event (mapped to the
+   * canvas's own pixel grid when it is CSS-scaled). */
+  #pointer(el: HTMLElement, event: MouseEvent): { x: number; y: number } {
+    const rect = el.getBoundingClientRect();
+    const scaleX = el instanceof HTMLCanvasElement && rect.width ? el.width / rect.width : 1;
+    const scaleY = el instanceof HTMLCanvasElement && rect.height ? el.height / rect.height : 1;
+    return {
+      x: Math.round((event.clientX - rect.left) * scaleX),
+      y: Math.round((event.clientY - rect.top) * scaleY),
+    };
+  }
+
+  /** The event payload for a pointer event: `<cid>\n<kind>=x,y` + field state. */
+  #pointerPayload(id: string, kind: '__mouse' | '__drag', x: number, y: number): string {
+    let payload = `${id}\n${kind}=${String(x)},${String(y)}`;
+    for (const [fieldId, field] of this.#fields) {
+      payload += `\n${fieldId}=${fieldValue(field)}`;
+    }
+    return payload;
+  }
+
   /**
    * Wire a panel with a MouseListener: a click reports component-relative
-   * coordinates (mapped to the canvas's own pixel grid when it is scaled).
-   * Pointer-only — a bitmap click target has no keyboard equivalent.
+   * coordinates. Pointer-only — a bitmap click target has no keyboard
+   * equivalent.
    */
   #mouse(el: HTMLElement, node: SwingNode): void {
-    if (!this.#onEvent || node.listens !== true) {
+    if (!this.#onEvent || node.mouse !== true) {
       return;
     }
     const onEvent = this.#onEvent;
@@ -246,16 +270,31 @@ export class SwingViz {
       el.style.cursor = 'crosshair';
     }
     el.addEventListener('click', (event) => {
-      const rect = el.getBoundingClientRect();
-      const scaleX = el instanceof HTMLCanvasElement && rect.width ? el.width / rect.width : 1;
-      const scaleY = el instanceof HTMLCanvasElement && rect.height ? el.height / rect.height : 1;
-      const x = Math.round((event.clientX - rect.left) * scaleX);
-      const y = Math.round((event.clientY - rect.top) * scaleY);
-      let payload = `${id}\n__mouse=${String(x)},${String(y)}`;
-      for (const [fieldId, field] of this.#fields) {
-        payload += `\n${fieldId}=${fieldValue(field)}`;
+      const { x, y } = this.#pointer(el, event);
+      onEvent(this.#pointerPayload(id, '__mouse', x, y));
+    });
+  }
+
+  /**
+   * Wire a panel with a MouseMotionListener: while a button is held, each
+   * move reports a drag position. These fire rapidly — the app layer
+   * coalesces them so the loop processes only the latest per render.
+   */
+  #motion(el: HTMLElement, node: SwingNode): void {
+    if (!this.#onEvent || node.drag !== true) {
+      return;
+    }
+    const onEvent = this.#onEvent;
+    const id = node.id;
+    if (el instanceof HTMLCanvasElement) {
+      el.style.cursor = 'crosshair';
+    }
+    el.addEventListener('mousemove', (event) => {
+      if ((event.buttons & 1) === 0) {
+        return; // only a drag (primary button held), not a passive move
       }
-      onEvent(payload);
+      const { x, y } = this.#pointer(el, event);
+      onEvent(this.#pointerPayload(id, '__drag', x, y));
     });
   }
 
@@ -361,6 +400,7 @@ export class SwingViz {
     panel.className = 'swing-panel';
     applyLayout(panel, node.layout);
     this.#mouse(panel, node);
+    this.#motion(panel, node);
     this.common(panel, node);
     this.children(panel, node);
     return panel;
@@ -380,6 +420,7 @@ export class SwingViz {
     canvas.setAttribute('aria-label', node.tooltip ?? 'Drawing');
     paintCanvas(canvas, node.paint ?? '');
     this.#mouse(canvas, node);
+    this.#motion(canvas, node);
     wrap.appendChild(canvas);
     // A painted panel rarely also holds child widgets, but honor them.
     this.children(wrap, node);
