@@ -49,6 +49,11 @@ interface SwingNode {
   value?: number;
   /** JRadioButton ButtonGroup id (shared DOM `name` for exclusivity). */
   group?: string;
+  /** A custom JPanel's recorded Graphics commands (newline-separated). */
+  paint?: string;
+  /** Canvas dimensions for a painted panel. */
+  pw?: number;
+  ph?: number;
   children?: SwingNode[];
 }
 
@@ -75,6 +80,67 @@ function fieldValue(el: FieldElement): string {
     return String(el.checked);
   }
   return el.value; // text field / slider
+}
+
+/** Replay a custom panel's recorded java.awt.Graphics commands onto a canvas. */
+function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return;
+  }
+  let color = 'rgb(0,0,0)'; // Graphics current color (fills and strokes)
+  const oval = (x: number, y: number, w: number, h: number): void => {
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  };
+  for (const command of paint.split('\n')) {
+    if (command === '') {
+      continue;
+    }
+    // `drawString "..." x y` keeps the quoted body intact.
+    const text = /^drawString "(.*)" (-?\d+) (-?\d+)$/.exec(command);
+    if (text) {
+      ctx.fillStyle = color;
+      ctx.font = '14px system-ui, sans-serif';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(text[1] ?? '', Number(text[2]), Number(text[3]));
+      continue;
+    }
+    const [op, ...rest] = command.split(' ');
+    const n = (i: number): number => Number(rest[i] ?? 0);
+    switch (op) {
+      case 'setColor':
+        color = `rgb(${String(n(0))},${String(n(1))},${String(n(2))})`;
+        break;
+      case 'fillRect':
+        ctx.fillStyle = color;
+        ctx.fillRect(n(0), n(1), n(2), n(3));
+        break;
+      case 'drawRect':
+        ctx.strokeStyle = color;
+        ctx.strokeRect(n(0), n(1), n(2), n(3));
+        break;
+      case 'fillOval':
+        oval(n(0), n(1), n(2), n(3));
+        ctx.fillStyle = color;
+        ctx.fill();
+        break;
+      case 'drawOval':
+        oval(n(0), n(1), n(2), n(3));
+        ctx.strokeStyle = color;
+        ctx.stroke();
+        break;
+      case 'drawLine':
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(n(0), n(1));
+        ctx.lineTo(n(2), n(3));
+        ctx.stroke();
+        break;
+      default:
+        break;
+    }
+  }
 }
 
 /** CSS for a container, mapping the Swing LayoutManager to flex/grid. */
@@ -260,12 +326,35 @@ export class SwingViz {
   }
 
   private panel(node: SwingNode): HTMLElement {
+    if (node.paint !== undefined) {
+      return this.canvasPanel(node);
+    }
     const panel = document.createElement('div');
     panel.className = 'swing-panel';
     applyLayout(panel, node.layout);
     this.common(panel, node);
     this.children(panel, node);
     return panel;
+  }
+
+  /** A custom-painted JPanel: a canvas replaying its Graphics commands. */
+  private canvasPanel(node: SwingNode): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'swing-panel';
+    const canvas = document.createElement('canvas');
+    canvas.className = 'swing-canvas';
+    canvas.width = node.pw ?? 200;
+    canvas.height = node.ph ?? 150;
+    // A bitmap drawing is opaque to assistive tech; expose it as a named
+    // image so a screen reader announces it (setToolTipText names it).
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', node.tooltip ?? 'Drawing');
+    paintCanvas(canvas, node.paint ?? '');
+    wrap.appendChild(canvas);
+    // A painted panel rarely also holds child widgets, but honor them.
+    this.children(wrap, node);
+    this.common(wrap, node);
+    return wrap;
   }
 
   private label(node: SwingNode): HTMLElement {

@@ -237,6 +237,7 @@ static JAVAX_SWING: &[&str] = &[
 static JAVA_AWT: &[&str] = &[
     "Color",
     "Dimension",
+    "Graphics",
     "LayoutManager",
     "FlowLayout",
     "GridLayout",

@@ -345,6 +345,14 @@ label {
   cursor: pointer;
 }
 
+.swing-canvas {
+  display: block;
+  background: #ffffff;
+  border: 1px solid light-dark(#c9c9bd, #5a5145);
+  border-radius: 4px;
+  max-width: 100%;
+}
+
 /* A clear keyboard-focus ring for every interactive widget. */
 .swing-button:focus-visible,
 .swing-close:focus-visible,

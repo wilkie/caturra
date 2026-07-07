@@ -453,6 +453,48 @@ fn swing_serializes_an_accessible_component_tree() {
 }
 
 #[test]
+fn swing_custom_painting_records_graphics_commands() {
+    // A JPanel subclass overriding paintComponent draws into a Graphics
+    // recorder during serialization; the commands (and the panel size) land
+    // in swing.json for the canvas renderer to replay.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Art");
+                Art art = new Art();
+                art.setPreferredSize(new Dimension(100, 80));
+                frame.add(art);
+                frame.setVisible(true);
+            }
+        }
+        class Art extends JPanel {
+            public void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                g.setColor(new Color(255, 0, 0));
+                g.fillRect(10, 10, 50, 30);
+                g.setColor(Color.BLACK);
+                g.drawString("hi", 12, 25);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""pw":100,"ph":80"#),
+        "no panel size: {json}"
+    );
+    assert!(json.contains("setColor 255 0 0"), "no fill color: {json}");
+    assert!(json.contains("fillRect 10 10 50 30"), "no rect: {json}");
+    assert!(
+        json.contains(r#"drawString \"hi\" 12 25"#),
+        "no text: {json}"
+    );
+}
+
+#[test]
 fn swing_interactive_program_compiles_and_renders_initial_frame() {
     // A listener-driven program. With no interactive host (BufferedConsole's
     // ui_await_event returns None), the event loop ends at once — but the

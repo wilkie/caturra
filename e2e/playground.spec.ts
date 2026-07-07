@@ -1327,6 +1327,41 @@ test.describe('swing (interactive)', () => {
     await expect(cats).not.toBeChecked();
   });
 
+  test('a custom-painted panel renders to an accessible canvas and repaints', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Custom drawing' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    // The bitmap drawing is exposed as a named image for assistive tech.
+    await expect(root.getByRole('img', { name: 'An orange circle you can grow' })).toBeVisible();
+
+    // Sample the canvas: the orange circle sits at the centre; a point above
+    // it is background until the circle grows into it.
+    const sample = (x: number, y: number): Promise<number[]> =>
+      page.evaluate(
+        ([px, py]) => {
+          const canvas = document.querySelector<HTMLCanvasElement>(
+            '[data-testid="swing-root"] canvas',
+          );
+          const ctx = canvas?.getContext('2d');
+          if (!ctx) {
+            return [-1, -1, -1];
+          }
+          const d = ctx.getImageData(px, py, 1, 1).data;
+          return [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0];
+        },
+        [x, y],
+      );
+
+    await expect.poll(() => sample(120, 100)).toEqual([255, 140, 0]); // centre is orange
+    expect(await sample(120, 70)).not.toEqual([255, 140, 0]); // 30px up is background
+
+    // Grow twice (radius 20 -> 50): the circle now covers the upper point.
+    await root.getByRole('button', { name: 'Grow' }).click();
+    await root.getByRole('button', { name: 'Grow' }).click();
+    await expect.poll(() => sample(120, 70)).toEqual([255, 140, 0]);
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

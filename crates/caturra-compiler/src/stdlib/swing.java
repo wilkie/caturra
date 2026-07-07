@@ -147,12 +147,53 @@ class Container extends Component {
 
 // ----- javax.swing widgets -----
 
+// java.awt.Graphics: a recorder. A custom JPanel's paintComponent draws into
+// it; the commands are replayed onto a <canvas> by the renderer. Coordinates
+// and the current color follow java.awt.Graphics (draw* strokes, fill* fills).
+class Graphics {
+  java.util.ArrayList<String> __cmds = new java.util.ArrayList<String>();
+  public void setColor(Color c) { __cmds.add("setColor " + c.__r + " " + c.__g + " " + c.__b); }
+  public void fillRect(int x, int y, int w, int h) { __cmds.add("fillRect " + x + " " + y + " " + w + " " + h); }
+  public void drawRect(int x, int y, int w, int h) { __cmds.add("drawRect " + x + " " + y + " " + w + " " + h); }
+  public void fillOval(int x, int y, int w, int h) { __cmds.add("fillOval " + x + " " + y + " " + w + " " + h); }
+  public void drawOval(int x, int y, int w, int h) { __cmds.add("drawOval " + x + " " + y + " " + w + " " + h); }
+  public void drawLine(int x1, int y1, int x2, int y2) { __cmds.add("drawLine " + x1 + " " + y1 + " " + x2 + " " + y2); }
+  public void drawString(String s, int x, int y) { __cmds.add("drawString \"" + s + "\" " + x + " " + y); }
+  boolean __empty() { return __cmds.size() == 0; }
+  String __joined() {
+    String out = "";
+    for (int i = 0; i < __cmds.size(); i++) {
+      if (i > 0) out += "\n";
+      out += __cmds.get(i);
+    }
+    return out;
+  }
+}
+
 class JPanel extends Container {
+  int __pw = 200;
+  int __ph = 150;
   public JPanel() {}
   public JPanel(LayoutManager m) { __layout = m; }
+  public void setPreferredSize(Dimension d) { __pw = d.width; __ph = d.height; }
+  public int getWidth() { return __pw; }
+  public int getHeight() { return __ph; }
+  // The event loop re-renders (and so re-paints) after every event, so a
+  // repaint request is implicit; this exists so student code compiles.
+  public void repaint() {}
+  // Overridden by a custom drawing panel; the base draws nothing. Called
+  // during serialization so the recorded commands go to the canvas.
+  public void paintComponent(Graphics g) {}
   String __json() {
+    Graphics g = new Graphics();
+    paintComponent(g); // virtual dispatch: a subclass draws into g
+    String paint = "";
+    if (!g.__empty()) {
+      paint = ",\"paint\":\"" + Component.__esc(g.__joined()) + "\",\"pw\":" + __pw
+          + ",\"ph\":" + __ph;
+    }
     return "{\"type\":\"panel\",\"layout\":" + __layoutJson()
-        + ",\"children\":" + __kidsJson() + "," + __commonJson() + "}";
+        + ",\"children\":" + __kidsJson() + paint + "," + __commonJson() + "}";
   }
 }
 

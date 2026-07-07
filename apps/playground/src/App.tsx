@@ -263,6 +263,55 @@ public class Main {
 `,
   },
   {
+    name: 'Custom drawing',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static int radius = 20;
+  static DrawPanel panel;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Grow");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    panel = new DrawPanel();
+    panel.setPreferredSize(new Dimension(240, 200));
+    panel.setToolTipText("An orange circle you can grow");
+
+    JButton grow = new JButton("Grow");
+    // Clicking changes state and requests a repaint; the next render
+    // re-runs paintComponent, so the circle redraws at the new size.
+    grow.addActionListener(e -> {
+      Main.radius = Main.radius + 15;
+      Main.panel.repaint();
+    });
+
+    frame.add(panel);
+    frame.add(grow);
+    frame.setVisible(true);
+  }
+}
+
+// A custom drawing surface: override paintComponent and draw with Graphics.
+class DrawPanel extends JPanel {
+  public void paintComponent(Graphics g) {
+    super.paintComponent(g);
+    g.setColor(new Color(230, 240, 255));
+    g.fillRect(0, 0, getWidth(), getHeight());
+
+    int r = Main.radius;
+    g.setColor(new Color(255, 140, 0));
+    g.fillOval(120 - r, 100 - r, 2 * r, 2 * r);
+
+    g.setColor(Color.BLACK);
+    g.drawString("r = " + Main.radius, 10, 20);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
