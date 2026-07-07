@@ -346,6 +346,42 @@ label {
   outline-offset: 1px;
 }
 
+/* ----- Swing table ----- */
+
+.swing-table {
+  border-collapse: collapse;
+  font: inherit;
+}
+
+.swing-table th,
+.swing-table td {
+  padding: 0.25rem 0.7rem;
+  text-align: left;
+  border: 1px solid light-dark(#c9c9bd, #5a5145);
+}
+
+.swing-table th {
+  background: light-dark(#eeeee8, #333333);
+  font-weight: 600;
+}
+
+.swing-table tbody tr {
+  cursor: default;
+}
+
+.swing-table[role='grid'] tbody tr {
+  cursor: pointer;
+}
+
+.swing-table tbody tr.swing-row-selected {
+  background: light-dark(#d6e2ff, #3b4a6b);
+}
+
+.swing-table tbody tr:focus-visible {
+  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline-offset: -2px;
+}
+
 .swing-checkbox,
 .swing-radio {
   display: inline-flex;

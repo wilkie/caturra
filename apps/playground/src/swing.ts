@@ -26,6 +26,7 @@ interface SwingNode {
     | 'list'
     | 'slider'
     | 'scrollpane'
+    | 'table'
     | 'component';
   id: string;
   enabled?: boolean;
@@ -75,6 +76,10 @@ interface SwingNode {
   view?: SwingNode | null;
   hpolicy?: number;
   vpolicy?: number;
+  /** JTable column names, row-major cell text, and the selected row (-1 none). */
+  headers?: string[];
+  cells?: string[][];
+  selectedRow?: number;
   children?: SwingNode[];
 }
 
@@ -412,6 +417,8 @@ export class SwingViz {
         return this.slider(node);
       case 'scrollpane':
         return this.scrollPane(node);
+      case 'table':
+        return this.table(node);
       default: {
         const span = document.createElement('span');
         this.common(span, node);
@@ -959,6 +966,103 @@ export class SwingViz {
     this.#field(select, node, 'change');
     this.common(select, node);
     return select;
+  }
+
+  /**
+   * A JTable as a semantic <table> (headers announced with their cells). When
+   * it has a selection listener it becomes an ARIA grid: rows are focusable,
+   * the arrow keys move focus, and Enter/Space or a click selects the row and
+   * dispatches (the highlight follows the model's selection on re-render).
+   */
+  private table(node: SwingNode): HTMLElement {
+    const table = document.createElement('table');
+    table.className = 'swing-table';
+    const headers = node.headers ?? [];
+    const cells = node.cells ?? [];
+    const selectedRow = node.selectedRow ?? -1;
+    const selectable = this.#onEvent !== null && node.listens === true;
+    if (selectable) {
+      table.setAttribute('role', 'grid');
+    }
+    if (node.tooltip !== undefined) {
+      table.setAttribute('aria-label', node.tooltip);
+    }
+
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    for (const name of headers) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = name;
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (const [r, row] of cells.entries()) {
+      const tr = document.createElement('tr');
+      for (const value of row) {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      if (selectable && this.#onEvent) {
+        const onEvent = this.#onEvent;
+        tr.id = `${node.id}-r${String(r)}`;
+        const isSelected = r === selectedRow;
+        tr.setAttribute('aria-selected', String(isSelected));
+        tr.classList.toggle('swing-row-selected', isSelected);
+        // Roving tabindex: only the selected row (or the first) is tabbable.
+        tr.tabIndex = isSelected || (selectedRow < 0 && r === 0) ? 0 : -1;
+        const select = (): void => {
+          // Selecting reports the row index alongside the usual field state.
+          onEvent(`${this.#payload(node.id)}\n${node.id}=${String(r)}`);
+        };
+        tr.addEventListener('click', select);
+        tr.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            select();
+          }
+        });
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+
+    if (selectable) {
+      // Arrow keys move focus between rows (client-side); Enter/Space selects.
+      tbody.addEventListener('keydown', (event) => {
+        const rows = [...tbody.querySelectorAll<HTMLElement>('tr')];
+        const current = rows.indexOf(document.activeElement as HTMLElement);
+        if (current < 0) {
+          return;
+        }
+        let next: number;
+        if (event.key === 'ArrowDown') {
+          next = Math.min(current + 1, rows.length - 1);
+        } else if (event.key === 'ArrowUp') {
+          next = Math.max(current - 1, 0);
+        } else if (event.key === 'Home') {
+          next = 0;
+        } else if (event.key === 'End') {
+          next = rows.length - 1;
+        } else {
+          return;
+        }
+        event.preventDefault();
+        rows[current]?.setAttribute('tabindex', '-1');
+        const target = rows[next];
+        if (target) {
+          target.tabIndex = 0;
+          target.focus();
+        }
+      });
+    }
+
+    this.common(table, node);
+    return table;
   }
 
   private slider(node: SwingNode): HTMLElement {

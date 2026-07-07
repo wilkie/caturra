@@ -494,6 +494,76 @@ fn swing_border_layout_records_child_regions() {
 }
 
 #[test]
+fn swing_table_serializes_headers_and_rows() {
+    // A JTable serializes its column names and cell grid (each cell via
+    // toString), for the accessible <table> renderer.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Scores");
+                String[] columns = {"Name", "Score"};
+                Object[][] data = {
+                    {"Ada", "95"},
+                    {"Al", "88"}
+                };
+                JTable table = new JTable(data, columns);
+                frame.add(table);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""type":"table""#), "no table: {json}");
+    assert!(
+        json.contains(r#""headers":["Name","Score"]"#),
+        "no headers: {json}"
+    );
+    assert!(
+        json.contains(r#""cells":[["Ada","95"],["Al","88"]]"#),
+        "no cells: {json}"
+    );
+    assert!(json.contains(r#""selectedRow":-1"#), "no selection: {json}");
+}
+
+#[test]
+fn swing_table_row_selection_fires_listener() {
+    // Selecting a row syncs the selected index and fires the selection model's
+    // ListSelectionListener; getValueAt reads a cell. Ids: frame c0, table c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        public class Main {
+            static JTable table;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Scores");
+                String[] columns = {"Name", "Score"};
+                Object[][] data = {{"Ada", "95"}, {"Al", "88"}, {"Bo", "72"}};
+                table = new JTable(data, columns);
+                table.getSelectionModel().addListSelectionListener(e -> {
+                    int r = Main.table.getSelectedRow();
+                    System.out.println("row " + r + " = " + Main.table.getValueAt(r, 0));
+                });
+                frame.add(table);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\nc1=2")),
+            Some(String::from("c1\nc1=0")),
+        ],
+    );
+    assert_eq!(out, "row 2 = Bo\nrow 0 = Ada\n");
+}
+
+#[test]
 fn swing_custom_painting_records_graphics_commands() {
     // A JPanel subclass overriding paintComponent draws into a Graphics
     // recorder during serialization; the commands (and the panel size) land

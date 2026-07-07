@@ -1711,6 +1711,28 @@ test.describe('swing (interactive)', () => {
     await expect(list.getByRole('option', { name: 'Buy milk' })).toHaveCount(0);
   });
 
+  test('a JTable shows a grid, selects a row, and reads/writes cells', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Table (JTable)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const table = root.getByRole('grid');
+    await expect(table).toBeVisible();
+
+    // Column headers and one row per data entry (plus the header row).
+    await expect(table.getByRole('columnheader', { name: 'Player' })).toBeVisible();
+    await expect(table.getByRole('row')).toHaveCount(4);
+
+    // Selecting a row fires the selection listener.
+    await table.getByRole('row', { name: /Bo/ }).click();
+    await expect(root).toContainText('Bo has 7 points');
+
+    // The Award button reads and writes the selected cell (getValueAt/setValueAt).
+    await root.getByRole('button', { name: 'Award point' }).click();
+    await expect(root).toContainText('Bo now has 8 points');
+    await expect(table.getByRole('row', { name: /Bo/ })).toContainText('8');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

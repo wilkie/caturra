@@ -446,12 +446,19 @@ class JComboBox extends Component {
   }
 }
 
-// The selection modes, as constants (real Swing puts these on
-// ListSelectionModel). JList defaults to MULTIPLE_INTERVAL_SELECTION.
+// The selection modes as constants (real Swing puts these on
+// ListSelectionModel). Also a small selection model that carries the
+// ListSelectionListener for a JTable's getSelectionModel().addListSelectionListener.
 class ListSelectionModel {
   public static final int SINGLE_SELECTION = 0;
   public static final int SINGLE_INTERVAL_SELECTION = 1;
   public static final int MULTIPLE_INTERVAL_SELECTION = 2;
+  ListSelectionListener __listener = null;
+  public void addListSelectionListener(ListSelectionListener l) {
+    __listener = l;
+    __SwingRuntime.__interactive = true;
+  }
+  public void setSelectionMode(int mode) {} // single-row selection in this model
 }
 
 // A mutable list model. A JList built on one re-reads it on every render, so
@@ -588,6 +595,60 @@ class JSlider extends Component {
   String __json() {
     return "{\"type\":\"slider\",\"min\":" + __min + ",\"max\":" + __max + ",\"value\":" + __value
         + "," + __commonJson() + "}";
+  }
+}
+
+// A grid of rows and columns. Cells are Objects rendered via toString; row
+// selection (single row) reports through getSelectionModel()'s listener.
+class JTable extends Component {
+  Object[][] __data;
+  Object[] __columns;
+  int __selectedRow = -1;
+  ListSelectionModel __selectionModel = new ListSelectionModel();
+  public JTable() { __data = new Object[0][0]; __columns = new Object[0]; }
+  public JTable(Object[][] data, Object[] columns) { __data = data; __columns = columns; }
+  public int getRowCount() { return __data.length; }
+  public int getColumnCount() { return __columns.length; }
+  public String getColumnName(int col) { return "" + __columns[col]; }
+  public Object getValueAt(int row, int col) { return __data[row][col]; }
+  public void setValueAt(Object value, int row, int col) { __data[row][col] = value; }
+  public int getSelectedRow() { return __selectedRow; }
+  public void setRowSelectionInterval(int index0, int index1) { __selectedRow = index0; }
+  public void clearSelection() { __selectedRow = -1; }
+  public ListSelectionModel getSelectionModel() { return __selectionModel; }
+  void __setFromHost(String value) { __selectedRow = Integer.parseInt(value); }
+  void __onEvent() {
+    if (__selectionModel.__listener != null) {
+      __selectionModel.__listener.valueChanged(new ListSelectionEvent(this));
+    }
+  }
+  boolean __listens() { return __selectionModel.__listener != null; }
+  String __colsJson() {
+    String s = "[";
+    for (int c = 0; c < __columns.length; c++) {
+      if (c > 0) s += ",";
+      s += "\"" + Component.__esc("" + __columns[c]) + "\"";
+    }
+    return s + "]";
+  }
+  String __rowsJson() {
+    String s = "[";
+    for (int r = 0; r < __data.length; r++) {
+      if (r > 0) s += ",";
+      s += "[";
+      for (int c = 0; c < __columns.length; c++) {
+        if (c > 0) s += ",";
+        Object cell = c < __data[r].length ? __data[r][c] : null;
+        String text = cell == null ? "" : "" + cell;
+        s += "\"" + Component.__esc(text) + "\"";
+      }
+      s += "]";
+    }
+    return s + "]";
+  }
+  String __json() {
+    return "{\"type\":\"table\",\"headers\":" + __colsJson() + ",\"cells\":" + __rowsJson()
+        + ",\"selectedRow\":" + __selectedRow + "," + __commonJson() + "}";
   }
 }
 

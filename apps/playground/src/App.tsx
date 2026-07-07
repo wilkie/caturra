@@ -797,6 +797,59 @@ public class Main {
 `,
   },
   {
+    name: 'Table (JTable)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JTable table;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Scoreboard");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    String[] columns = {"Player", "Score"};
+    Object[][] data = {
+        {"Ada", "10"},
+        {"Bo", "7"},
+        {"Cy", "13"}
+    };
+    table = new JTable(data, columns);
+
+    // Row selection reports through the selection model's listener.
+    table.getSelectionModel().addListSelectionListener(e -> {
+      int row = Main.table.getSelectedRow();
+      if (row >= 0) {
+        Main.status.setText(
+            Main.table.getValueAt(row, 0) + " has " + Main.table.getValueAt(row, 1) + " points");
+      }
+    });
+
+    status = new JLabel("Select a player.");
+
+    // Award a point to the selected row (getValueAt / setValueAt).
+    JButton award = new JButton("Award point");
+    award.addActionListener(e -> {
+      int row = Main.table.getSelectedRow();
+      if (row >= 0) {
+        int score = Integer.parseInt("" + Main.table.getValueAt(row, 1));
+        Main.table.setValueAt("" + (score + 1), row, 1);
+        Main.status.setText(Main.table.getValueAt(row, 0) + " now has " + (score + 1) + " points");
+      }
+    });
+
+    frame.add(status, BorderLayout.NORTH);
+    frame.add(table, BorderLayout.CENTER);
+    frame.add(award, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
