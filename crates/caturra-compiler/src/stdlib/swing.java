@@ -85,18 +85,20 @@ class Component {
   public void setBackground(Color c) { __bg = c; }
   public void setForeground(Color c) { __fg = c; }
 
-  // JSON escaping without char/StringBuilder ops the subset may not model.
+  // JSON escaping. Uses a StringBuilder (not `out += ...`): appending to a
+  // String in a loop is O(n^2), and this runs over the whole serialized paint
+  // string every frame, so it dominated the cost of a growing drawing.
   static String __esc(String s) {
-    String out = "";
+    StringBuilder out = new StringBuilder();
     for (int i = 0; i < s.length(); i++) {
       String ch = s.substring(i, i + 1);
-      if (ch.equals("\"")) out += "\\\"";
-      else if (ch.equals("\\")) out += "\\\\";
-      else if (ch.equals("\n")) out += "\\n";
-      else if (ch.equals("\t")) out += "\\t";
-      else out += ch;
+      if (ch.equals("\"")) out.append("\\\"");
+      else if (ch.equals("\\")) out.append("\\\\");
+      else if (ch.equals("\n")) out.append("\\n");
+      else if (ch.equals("\t")) out.append("\\t");
+      else out.append(ch);
     }
-    return out;
+    return out.toString();
   }
 
   // The shared trailing fields every node carries (no braces, no leading comma).
@@ -146,12 +148,12 @@ class Container extends Component {
   }
 
   String __kidsJson() {
-    String s = "[";
+    StringBuilder s = new StringBuilder("[");
     for (int i = 0; i < __kids.size(); i++) {
-      if (i > 0) s += ",";
-      s += __kids.get(i).__json();
+      if (i > 0) s.append(",");
+      s.append(__kids.get(i).__json());
     }
-    return s + "]";
+    return s.append("]").toString();
   }
 }
 
@@ -171,12 +173,15 @@ class Graphics {
   public void drawString(String s, int x, int y) { __cmds.add("drawString \"" + s + "\" " + x + " " + y); }
   boolean __empty() { return __cmds.size() == 0; }
   String __joined() {
-    String out = "";
+    // StringBuilder, not `out += ...`: appending to a String in a loop is
+    // O(n^2) (each += copies the whole accumulator), which made repainting a
+    // growing drawing quadratic per frame.
+    StringBuilder out = new StringBuilder();
     for (int i = 0; i < __cmds.size(); i++) {
-      if (i > 0) out += "\n";
-      out += __cmds.get(i);
+      if (i > 0) out.append("\n");
+      out.append(__cmds.get(i));
     }
-    return out;
+    return out.toString();
   }
 }
 
@@ -435,13 +440,13 @@ class JComboBox extends Component {
   }
   boolean __listens() { return __actionListener != null; }
   String __json() {
-    String opts = "[";
+    StringBuilder opts = new StringBuilder("[");
     for (int i = 0; i < __items.size(); i++) {
-      if (i > 0) opts += ",";
-      opts += "\"" + Component.__esc(__items.get(i)) + "\"";
+      if (i > 0) opts.append(",");
+      opts.append("\"").append(Component.__esc(__items.get(i))).append("\"");
     }
-    opts += "]";
-    return "{\"type\":\"combobox\",\"items\":" + opts + ",\"selectedIndex\":" + __selectedIndex
+    opts.append("]");
+    return "{\"type\":\"combobox\",\"items\":" + opts.toString() + ",\"selectedIndex\":" + __selectedIndex
         + "," + __commonJson() + "}";
   }
 }
@@ -559,19 +564,19 @@ class JList extends Component {
   boolean __listens() { return __listener != null; }
   String __json() {
     java.util.ArrayList<String> data = __data();
-    String opts = "[";
+    StringBuilder opts = new StringBuilder("[");
     for (int i = 0; i < data.size(); i++) {
-      if (i > 0) opts += ",";
-      opts += "\"" + Component.__esc(data.get(i)) + "\"";
+      if (i > 0) opts.append(",");
+      opts.append("\"").append(Component.__esc(data.get(i))).append("\"");
     }
-    opts += "]";
-    String sel = "[";
+    opts.append("]");
+    StringBuilder sel = new StringBuilder("[");
     for (int i = 0; i < __selected.size(); i++) {
-      if (i > 0) sel += ",";
-      sel += __selected.get(i);
+      if (i > 0) sel.append(",");
+      sel.append(__selected.get(i));
     }
-    sel += "]";
-    return "{\"type\":\"list\",\"items\":" + opts + ",\"selectedIndices\":" + sel
+    sel.append("]");
+    return "{\"type\":\"list\",\"items\":" + opts.toString() + ",\"selectedIndices\":" + sel.toString()
         + ",\"multiple\":" + __multiple() + ",\"rows\":" + __visibleRows + "," + __commonJson() + "}";
   }
 }
@@ -685,26 +690,26 @@ class JTable extends Component {
   }
   boolean __listens() { return __selectionModel.__listener != null; }
   String __colsJson() {
-    String s = "[";
+    StringBuilder s = new StringBuilder("[");
     for (int c = 0; c < getColumnCount(); c++) {
-      if (c > 0) s += ",";
-      s += "\"" + Component.__esc(getColumnName(c)) + "\"";
+      if (c > 0) s.append(",");
+      s.append("\"").append(Component.__esc(getColumnName(c))).append("\"");
     }
-    return s + "]";
+    return s.append("]").toString();
   }
   String __rowsJson() {
-    String s = "[";
+    StringBuilder s = new StringBuilder("[");
     for (int r = 0; r < getRowCount(); r++) {
-      if (r > 0) s += ",";
-      s += "[";
+      if (r > 0) s.append(",");
+      s.append("[");
       for (int c = 0; c < getColumnCount(); c++) {
-        if (c > 0) s += ",";
+        if (c > 0) s.append(",");
         Object cell = getValueAt(r, c);
-        s += "\"" + Component.__esc(cell == null ? "" : "" + cell) + "\"";
+        s.append("\"").append(Component.__esc(cell == null ? "" : "" + cell)).append("\"");
       }
-      s += "]";
+      s.append("]");
     }
-    return s + "]";
+    return s.append("]").toString();
   }
   String __json() {
     return "{\"type\":\"table\",\"headers\":" + __colsJson() + ",\"cells\":" + __rowsJson()
@@ -749,12 +754,13 @@ class JMenu extends JMenuItem {
   }
   public int getItemCount() { return __items.size(); }
   String __json() {
-    String s = "{\"type\":\"menu\",\"text\":\"" + Component.__esc(__text) + "\",\"items\":[";
+    StringBuilder s = new StringBuilder("{\"type\":\"menu\",\"text\":\"");
+    s.append(Component.__esc(__text)).append("\",\"items\":[");
     for (int i = 0; i < __items.size(); i++) {
-      if (i > 0) s += ",";
-      s += __items.get(i).__json();
+      if (i > 0) s.append(",");
+      s.append(__items.get(i).__json());
     }
-    return s + "]}";
+    return s.append("]}").toString();
   }
 }
 
@@ -764,12 +770,12 @@ class JMenuBar {
   public void add(JMenu menu) { __menus.add(menu); }
   public int getMenuCount() { return __menus.size(); }
   String __json() {
-    String s = "{\"menus\":[";
+    StringBuilder s = new StringBuilder("{\"menus\":[");
     for (int i = 0; i < __menus.size(); i++) {
-      if (i > 0) s += ",";
-      s += __menus.get(i).__json();
+      if (i > 0) s.append(",");
+      s.append(__menus.get(i).__json());
     }
-    return s + "]}";
+    return s.append("]}").toString();
   }
 }
 
@@ -1030,16 +1036,16 @@ class __SwingRuntime {
   // Running timers only (a stopped timer stays in the list but drops out
   // of the JSON so the host stops scheduling it).
   static String __timersJson() {
-    String s = "[";
+    StringBuilder s = new StringBuilder("[");
     boolean first = true;
     for (int i = 0; i < __timers.size(); i++) {
       Timer t = __timers.get(i);
       if (!t.__running) continue;
-      if (!first) s += ",";
+      if (!first) s.append(",");
       first = false;
-      s += "{\"id\":\"" + t.__tid + "\",\"delay\":" + t.__delay + "}";
+      s.append("{\"id\":\"").append(t.__tid).append("\",\"delay\":").append(t.__delay).append("}");
     }
-    return s + "]";
+    return s.append("]").toString();
   }
 
   static Component __find(String cid) {

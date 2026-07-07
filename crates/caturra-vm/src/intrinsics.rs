@@ -2853,7 +2853,11 @@ fn object_display(heap: &Heap, value: JValue) -> String {
     match value {
         JValue::Ref(None) => String::from("null"),
         JValue::Ref(Some(reference)) => match heap.get(reference) {
-            Some(HeapObject::JavaString(units)) => String::from_utf16_lossy(units),
+            // A StringBuilder renders as its content (String.valueOf/append(Object)
+            // call toString), same as a String.
+            Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
+                String::from_utf16_lossy(units)
+            }
             Some(HeapObject::Class { name }) => format!("class {name}"),
             Some(HeapObject::Boxed { class_name, value }) => boxed_to_string(class_name, *value),
             Some(HeapObject::Field {

@@ -5711,3 +5711,24 @@ fn instruction_budget_stops_runaway_bytecode() {
         "{result:?}"
     );
 }
+
+#[test]
+fn string_builder_appends_and_concats_as_content() {
+    let out = run_stdout(
+        r#"
+        public class Main {
+            public static void main(String[] args) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("world");
+                String s = "hello " + sb;      // StringBuilder in a + concat
+                StringBuilder sb2 = new StringBuilder();
+                sb2.append("[").append(sb);    // append(StringBuilder)
+                System.out.println(s);
+                System.out.println(sb2.toString());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "hello world\n[world\n");
+}
