@@ -603,6 +603,84 @@ class JSlider extends Component {
   }
 }
 
+// A progress bar (display only): determinate with a value, or indeterminate.
+class JProgressBar extends Component {
+  int __min = 0;
+  int __max = 100;
+  int __value = 0;
+  boolean __indeterminate = false;
+  boolean __stringPainted = false;
+  String __string = null;
+  public JProgressBar() {}
+  public JProgressBar(int min, int max) { __min = min; __max = max; }
+  public void setValue(int value) { __value = value; }
+  public int getValue() { return __value; }
+  public void setMinimum(int min) { __min = min; }
+  public int getMinimum() { return __min; }
+  public void setMaximum(int max) { __max = max; }
+  public int getMaximum() { return __max; }
+  public void setIndeterminate(boolean b) { __indeterminate = b; }
+  public boolean isIndeterminate() { return __indeterminate; }
+  public void setStringPainted(boolean b) { __stringPainted = b; }
+  public boolean isStringPainted() { return __stringPainted; }
+  public void setString(String s) { __string = s; }
+  public String getString() {
+    if (__string != null) return __string;
+    int span = __max - __min;
+    int pct = span <= 0 ? 0 : (__value - __min) * 100 / span;
+    return pct + "%";
+  }
+  public int getPercentComplete() {
+    int span = __max - __min;
+    return span <= 0 ? 0 : (__value - __min) * 100 / span;
+  }
+  String __json() {
+    String extra = ",\"stringPainted\":" + __stringPainted;
+    if (__stringPainted) extra += ",\"string\":\"" + Component.__esc(getString()) + "\"";
+    return "{\"type\":\"progressbar\",\"min\":" + __min + ",\"max\":" + __max + ",\"value\":" + __value
+        + ",\"indeterminate\":" + __indeterminate + extra + "," + __commonJson() + "}";
+  }
+}
+
+// SpinnerNumberModel + JSpinner: an integer spinner. getValue() returns an
+// Object (a boxed Integer), as in real Swing.
+class SpinnerNumberModel {
+  int __value;
+  int __min;
+  int __max;
+  int __step;
+  public SpinnerNumberModel() { __value = 0; __min = 0; __max = 100; __step = 1; }
+  public SpinnerNumberModel(int value, int min, int max, int step) {
+    __value = value; __min = min; __max = max; __step = step;
+  }
+  public Object getValue() { return __value; }
+  public Object getNumber() { return __value; }
+  public void setValue(int value) { __value = value; }
+  public int getMinimum() { return __min; }
+  public int getMaximum() { return __max; }
+  public int getStepSize() { return __step; }
+}
+
+class JSpinner extends Component {
+  SpinnerNumberModel __model;
+  ChangeListener __changeListener = null;
+  public JSpinner() { __model = new SpinnerNumberModel(); }
+  public JSpinner(SpinnerNumberModel model) { __model = model; }
+  public Object getValue() { return __model.__value; }
+  public void setValue(int value) { __model.__value = value; }
+  public SpinnerNumberModel getModel() { return __model; }
+  public void addChangeListener(ChangeListener l) { __changeListener = l; __SwingRuntime.__interactive = true; }
+  void __setFromHost(String value) { __model.__value = Integer.parseInt(value); }
+  void __onEvent() {
+    if (__changeListener != null) __changeListener.stateChanged(new ChangeEvent(this));
+  }
+  boolean __listens() { return __changeListener != null; }
+  String __json() {
+    return "{\"type\":\"spinner\",\"value\":" + __model.__value + ",\"min\":" + __model.__min
+        + ",\"max\":" + __model.__max + ",\"step\":" + __model.__step + "," + __commonJson() + "}";
+  }
+}
+
 // A mutable table model. A JTable built on one re-reads it every render, so
 // addRow/removeRow/setValueAt appear as soon as the event loop repaints. Cells
 // are stored in row-major order as their string form (this subset shows cells

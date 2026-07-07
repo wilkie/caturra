@@ -926,6 +926,51 @@ public class Main {
 `,
   },
   {
+    name: 'Progress + spinner',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JSpinner spinner;
+  static JProgressBar bar;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Level");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    JLabel prompt = new JLabel("Level (0-100):");
+    spinner = new JSpinner(new SpinnerNumberModel(40, 0, 100, 5));
+    prompt.setLabelFor(spinner);
+
+    bar = new JProgressBar(0, 100);
+    bar.setValue(40);
+    bar.setStringPainted(true);
+
+    status = new JLabel("Level is 40.");
+
+    // Changing the spinner drives the progress bar.
+    spinner.addChangeListener(e -> {
+      int value = (Integer) Main.spinner.getValue();
+      Main.bar.setValue(value);
+      Main.status.setText("Level is " + value + ".");
+    });
+
+    JPanel top = new JPanel();
+    top.add(prompt);
+    top.add(spinner);
+
+    frame.add(top, BorderLayout.NORTH);
+    frame.add(bar, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

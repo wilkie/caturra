@@ -27,6 +27,8 @@ interface SwingNode {
     | 'slider'
     | 'scrollpane'
     | 'table'
+    | 'progressbar'
+    | 'spinner'
     | 'component';
   id: string;
   enabled?: boolean;
@@ -56,10 +58,15 @@ interface SwingNode {
   items?: string[];
   /** JComboBox selected option index. */
   selectedIndex?: number;
-  /** JSlider range/value. */
+  /** JSlider/JSpinner/JProgressBar range and value; JSpinner step. */
   min?: number;
   max?: number;
   value?: number;
+  step?: number;
+  /** JProgressBar: indeterminate mode and its painted string. */
+  indeterminate?: boolean;
+  stringPainted?: boolean;
+  string?: string;
   /** JRadioButton ButtonGroup id (shared DOM `name` for exclusivity). */
   group?: string;
   /** A custom JPanel's recorded Graphics commands (newline-separated). */
@@ -408,6 +415,21 @@ export class SwingViz {
       case 'table':
         this.#patchTable(el as HTMLTableElement, node);
         break;
+      case 'progressbar':
+        this.#progressState(el, node);
+        break;
+      case 'spinner': {
+        const input = el as HTMLInputElement;
+        input.min = String(node.min ?? 0);
+        input.max = String(node.max ?? 100);
+        input.step = String(node.step ?? 1);
+        if (input.value !== String(node.value ?? 0)) {
+          input.value = String(node.value ?? 0);
+        }
+        input.disabled = node.enabled === false;
+        this.#fields.set(node.id, input);
+        break;
+      }
       default:
         break;
     }
@@ -622,6 +644,10 @@ export class SwingViz {
         return this.scrollPane(node);
       case 'table':
         return this.table(node);
+      case 'progressbar':
+        return this.progressBar(node);
+      case 'spinner':
+        return this.spinner(node);
       default: {
         const span = document.createElement('span');
         this.common(span, node);
@@ -1276,6 +1302,75 @@ export class SwingViz {
     input.disabled = node.enabled === false;
     // Native range inputs expose value/min/max to assistive tech; add a name
     // from the tooltip when no JLabel targets it.
+    if (node.tooltip !== undefined) {
+      input.setAttribute('aria-label', node.tooltip);
+    }
+    this.#field(input, node, 'change');
+    this.common(input, node);
+    return input;
+  }
+
+  /** A JProgressBar: an accessible progress bar (role progressbar with aria
+   * value min/max/now), or indeterminate when there's no known value. */
+  private progressBar(node: SwingNode): HTMLElement {
+    const bar = document.createElement('div');
+    bar.className = 'swing-progress';
+    bar.setAttribute('role', 'progressbar');
+    const fill = document.createElement('div');
+    fill.className = 'swing-progress-fill';
+    const text = document.createElement('span');
+    text.className = 'swing-progress-text';
+    bar.append(fill, text);
+    if (node.tooltip !== undefined) {
+      bar.setAttribute('aria-label', node.tooltip);
+    }
+    this.#progressState(bar, node);
+    this.common(bar, node);
+    return bar;
+  }
+
+  /** Apply a progress bar's value/indeterminate state (shared build + patch). */
+  #progressState(bar: HTMLElement, node: SwingNode): void {
+    const min = node.min ?? 0;
+    const max = node.max ?? 100;
+    const value = node.value ?? 0;
+    const fill = bar.querySelector<HTMLElement>('.swing-progress-fill');
+    const text = bar.querySelector<HTMLElement>('.swing-progress-text');
+    bar.setAttribute('aria-valuemin', String(min));
+    bar.setAttribute('aria-valuemax', String(max));
+    if (node.indeterminate === true) {
+      bar.classList.add('swing-progress-indeterminate');
+      bar.removeAttribute('aria-valuenow');
+      bar.removeAttribute('aria-valuetext');
+      if (fill) fill.style.width = '100%';
+      if (text) text.textContent = '';
+      return;
+    }
+    bar.classList.remove('swing-progress-indeterminate');
+    bar.setAttribute('aria-valuenow', String(value));
+    const span = max - min;
+    const pct = span <= 0 ? 0 : ((value - min) * 100) / span;
+    if (fill) fill.style.width = `${String(pct)}%`;
+    const showText = node.stringPainted === true;
+    if (text) text.textContent = showText ? (node.string ?? '') : '';
+    if (showText && node.string !== undefined) {
+      bar.setAttribute('aria-valuetext', node.string);
+    } else {
+      bar.removeAttribute('aria-valuetext');
+    }
+  }
+
+  /** A JSpinner: a native number input (role spinbutton; arrow keys step). */
+  private spinner(node: SwingNode): HTMLElement {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'swing-spinner';
+    input.id = node.id;
+    input.min = String(node.min ?? 0);
+    input.max = String(node.max ?? 100);
+    input.step = String(node.step ?? 1);
+    input.value = String(node.value ?? 0);
+    input.disabled = node.enabled === false;
     if (node.tooltip !== undefined) {
       input.setAttribute('aria-label', node.tooltip);
     }

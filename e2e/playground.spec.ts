@@ -1757,6 +1757,25 @@ test.describe('swing (interactive)', () => {
     await expect(table.getByRole('row', { name: /Apples/ })).toHaveCount(0);
   });
 
+  test('a JSpinner drives a JProgressBar (spinbutton + progressbar roles)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Progress + spinner' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const bar = root.getByRole('progressbar');
+    const spin = root.getByRole('spinbutton', { name: 'Level (0-100):' });
+    await expect(bar).toHaveAttribute('aria-valuenow', '40');
+    await expect(bar).toContainText('40%');
+    await expect(spin).toHaveValue('40');
+
+    // Changing the spinner fires its ChangeListener, which updates the bar.
+    await spin.fill('75');
+    await spin.blur();
+    await expect(bar).toHaveAttribute('aria-valuenow', '75');
+    await expect(bar).toContainText('75%');
+    await expect(root).toContainText('Level is 75.');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

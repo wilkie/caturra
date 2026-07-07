@@ -618,6 +618,69 @@ fn swing_default_table_model_updates_rows_on_render() {
 }
 
 #[test]
+fn swing_progress_bar_serializes_value_and_string() {
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Loading");
+                JProgressBar bar = new JProgressBar(0, 200);
+                bar.setValue(50);
+                bar.setStringPainted(true);
+                frame.add(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""type":"progressbar","min":0,"max":200,"value":50,"indeterminate":false"#),
+        "no progressbar: {json}"
+    );
+    // 50 of 0..200 is 25%.
+    assert!(
+        json.contains(r#""stringPainted":true,"string":"25%""#),
+        "no string: {json}"
+    );
+}
+
+#[test]
+fn swing_spinner_change_fires_and_reads_value() {
+    // A JSpinner is a numeric field: changing it syncs the value and fires the
+    // ChangeListener; getValue() returns a boxed Integer. Ids: frame c0,
+    // spinner c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        public class Main {
+            static JSpinner spinner;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Pick");
+                spinner = new JSpinner(new SpinnerNumberModel(3, 0, 10, 1));
+                spinner.addChangeListener(e -> {
+                    int v = (Integer) Main.spinner.getValue();
+                    System.out.println("value " + v);
+                });
+                frame.add(spinner);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\nc1=7")),
+            Some(String::from("c1\nc1=2")),
+        ],
+    );
+    assert_eq!(out, "value 7\nvalue 2\n");
+}
+
+#[test]
 fn swing_custom_painting_records_graphics_commands() {
     // A JPanel subclass overriding paintComponent draws into a Graphics
     // recorder during serialization; the commands (and the panel size) land
