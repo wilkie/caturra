@@ -2283,8 +2283,9 @@ impl Parser<'_> {
     #[allow(clippy::too_many_lines)] // one coherent grammar production
     /// Parse an anonymous class body and desugar it to a synthesized
     /// top-level class that extends/implements `supertype`. Returns a
-    /// `new Anon$N()` expression. Constructor arguments and captured
-    /// enclosing locals are not yet supported.
+    /// `new Anon$N(args)` expression; the capture pass synthesizes a
+    /// constructor that forwards `args` to `super(...)` (and stores any
+    /// captured enclosing locals).
     #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
     fn anonymous_class(
         &mut self,
@@ -2292,12 +2293,6 @@ impl Parser<'_> {
         args: Vec<Expr>,
         start: SourceSpan,
     ) -> Parsed<Expr> {
-        if !args.is_empty() {
-            self.error_at(
-                start,
-                "anonymous classes with constructor arguments are not yet supported by caturra",
-            );
-        }
         self.pos += 1; // '{'
         let mut methods = Vec::new();
         let mut fields = Vec::new();
@@ -2357,7 +2352,9 @@ impl Parser<'_> {
         Ok(Expr::NewObject {
             class: name,
             type_args: Vec::new(),
-            args: Vec::new(),
+            // The super-constructor args ride along; the capture pass turns them
+            // into a synthesized constructor that calls super(...).
+            args,
             span,
         })
     }

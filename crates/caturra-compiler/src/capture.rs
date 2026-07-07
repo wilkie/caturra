@@ -38,8 +38,9 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
         return;
     }
 
-    // Phase 1: capture set per anonymous class (sorted for determinism).
-    let mut captures: HashMap<String, Vec<(String, TypeRef)>> = HashMap::new();
+    // Phase 1: capture set per anonymous class (sorted for determinism), plus
+    // the type of each super-constructor argument at its `new` site.
+    let mut found = Found::default();
     for (_, unit) in units.iter() {
         for class in &unit.classes {
             for method in &class.methods {
@@ -50,22 +51,25 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
                         .map(|p| (p.name.clone(), p.ty.clone()))
                         .collect(),
                 ];
-                find_in_stmts(&method.body, &mut scope, &anon_bodies, &mut captures);
+                find_in_stmts(&method.body, &mut scope, &anon_bodies, &mut found);
             }
             for block in &class.init_blocks {
                 let mut scope: Vec<HashMap<String, TypeRef>> = vec![HashMap::new()];
-                find_in_stmts(&block.body, &mut scope, &anon_bodies, &mut captures);
+                find_in_stmts(&block.body, &mut scope, &anon_bodies, &mut found);
             }
         }
     }
+    let captures = found.captures;
+    let super_args = found.super_args;
 
-    // Phase 2a: synthesize the fields and constructor on each anon class.
+    // Phase 2a: synthesize the fields and constructor on each anon class that
+    // captures locals or forwards args to super.
     for (_, unit) in units.iter_mut() {
         for class in &mut unit.classes {
-            if let Some(caps) = captures.get(&class.name)
-                && !caps.is_empty()
-            {
-                add_capture_members(class, caps);
+            let caps = captures.get(&class.name).cloned().unwrap_or_default();
+            let supers = super_args.get(&class.name).cloned().unwrap_or_default();
+            if !caps.is_empty() || !supers.is_empty() {
+                add_capture_members(class, &caps, &supers);
             }
         }
     }
@@ -83,8 +87,10 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
     }
 }
 
-/// Add a field per capture and a constructor that stores them.
-fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
+/// Add a field per capture and a constructor that forwards `supers` to
+/// `super(...)` and stores the captured locals. The constructor's parameters
+/// are the super-args first (`__super0`, …) then one per capture.
+fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers: &[TypeRef]) {
     let zero = class.span;
     for (name, ty) in caps {
         class.fields.push(FieldDecl {
@@ -98,29 +104,47 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
             span: zero,
         });
     }
-    let params: Vec<Param> = caps
+    let super_names: Vec<String> = (0..supers.len()).map(|i| format!("__super{i}")).collect();
+    let mut params: Vec<Param> = supers
         .iter()
-        .map(|(name, ty)| Param {
+        .zip(&super_names)
+        .map(|(ty, name)| Param {
             ty: ty.clone(),
             name: name.clone(),
             is_varargs: false,
         })
         .collect();
-    let body: Vec<Stmt> = caps
-        .iter()
-        .map(|(name, _)| Stmt::Assign {
-            target: crate::ast::AssignTarget::Field {
-                object: Box::new(Expr::This { span: zero }),
-                name: name.clone(),
-            },
-            op: None,
-            value: Expr::Name {
-                path: vec![name.clone()],
-                span: zero,
-            },
+    params.extend(caps.iter().map(|(name, ty)| Param {
+        ty: ty.clone(),
+        name: name.clone(),
+        is_varargs: false,
+    }));
+    let mut body: Vec<Stmt> = Vec::new();
+    if !supers.is_empty() {
+        // super(...) must be the first statement in the constructor.
+        body.push(Stmt::SuperCall {
+            args: super_names
+                .iter()
+                .map(|name| Expr::Name {
+                    path: vec![name.clone()],
+                    span: zero,
+                })
+                .collect(),
             span: zero,
-        })
-        .collect();
+        });
+    }
+    body.extend(caps.iter().map(|(name, _)| Stmt::Assign {
+        target: crate::ast::AssignTarget::Field {
+            object: Box::new(Expr::This { span: zero }),
+            name: name.clone(),
+        },
+        op: None,
+        value: Expr::Name {
+            path: vec![name.clone()],
+            span: zero,
+        },
+        span: zero,
+    }));
     class.methods.push(MethodDecl {
         name: class.name.clone(),
         is_static: false,
@@ -141,6 +165,14 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
 
 type Scope = Vec<HashMap<String, TypeRef>>;
 
+/// What phase 1 collects per anonymous class: the captured enclosing locals and
+/// the types of the super-constructor arguments at its `new` site.
+#[derive(Default)]
+struct Found {
+    captures: HashMap<String, Vec<(String, TypeRef)>>,
+    super_args: HashMap<String, Vec<TypeRef>>,
+}
+
 fn scope_lookup(scope: &Scope, name: &str) -> Option<TypeRef> {
     scope
         .iter()
@@ -148,11 +180,41 @@ fn scope_lookup(scope: &Scope, name: &str) -> Option<TypeRef> {
         .find_map(|frame| frame.get(name).cloned())
 }
 
+/// Best-effort static type of a super-constructor argument, from the forms
+/// students actually pass: a local/param name, a `new T(...)`, a cast, an
+/// array creation, or a literal. `super(...)` resolution then matches it (with
+/// assignability) against the real superclass constructor.
+fn infer_type(expr: &Expr, scope: &Scope) -> Option<TypeRef> {
+    match expr {
+        Expr::Name { path, .. } if path.len() == 1 => scope_lookup(scope, &path[0]),
+        Expr::NewObject { class, .. } => Some(TypeRef::Named(class.clone())),
+        Expr::NewArray { elem, dims, .. } => {
+            let mut ty = elem.clone();
+            for _ in 0..dims.len() {
+                ty = TypeRef::Array(Box::new(ty));
+            }
+            Some(ty)
+        }
+        Expr::Cast { ty, .. } => Some(ty.clone()),
+        Expr::Literal { value, .. } => Some(match value {
+            crate::ast::Literal::Int(_) => TypeRef::Int,
+            crate::ast::Literal::Long(_) => TypeRef::Long,
+            crate::ast::Literal::Float(_) => TypeRef::Float,
+            crate::ast::Literal::Double(_) => TypeRef::Double,
+            crate::ast::Literal::Char(_) => TypeRef::Char,
+            crate::ast::Literal::Bool(_) => TypeRef::Boolean,
+            crate::ast::Literal::Str(_) => TypeRef::Named(String::from("String")),
+            crate::ast::Literal::Null => return None,
+        }),
+        _ => None,
+    }
+}
+
 fn find_in_stmts(
     stmts: &[Stmt],
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
-    out: &mut HashMap<String, Vec<(String, TypeRef)>>,
+    out: &mut Found,
 ) {
     scope.push(HashMap::new());
     for stmt in stmts {
@@ -166,7 +228,7 @@ fn find_in_stmt(
     stmt: &Stmt,
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
-    out: &mut HashMap<String, Vec<(String, TypeRef)>>,
+    out: &mut Found,
 ) {
     match stmt {
         Stmt::Block(body) => find_in_stmts(body, scope, anon, out),
@@ -275,7 +337,7 @@ fn find_in_expr(
     expr: &Expr,
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
-    out: &mut HashMap<String, Vec<(String, TypeRef)>>,
+    out: &mut Found,
 ) {
     match expr {
         Expr::NewObject { class, args, .. } => {
@@ -283,10 +345,25 @@ fn find_in_expr(
                 find_in_expr(a, scope, anon, out);
             }
             if let Some(body) = anon.get(class)
-                && !out.contains_key(class)
+                && !out.captures.contains_key(class)
             {
                 let caps = captures_of(body, scope);
-                out.insert(class.clone(), caps);
+                out.captures.insert(class.clone(), caps);
+                // These args (the ones the parser recorded) are the super-args;
+                // captured locals get appended later, in phase 2b.
+                if !args.is_empty() {
+                    let types = args
+                        .iter()
+                        .map(|a| infer_type(a, scope))
+                        .collect::<Vec<_>>();
+                    out.super_args.insert(
+                        class.clone(),
+                        types
+                            .into_iter()
+                            .map(|t| t.unwrap_or(TypeRef::Named(String::from("Object"))))
+                            .collect(),
+                    );
+                }
             }
         }
         Expr::Call { receiver, args, .. } => {
@@ -700,13 +777,11 @@ fn rewrite_expr(expr: &mut Expr, captures: &HashMap<String, Vec<(String, TypeRef
             && !caps.is_empty()
         {
             let span = *span;
-            *args = caps
-                .iter()
-                .map(|(name, _)| Expr::Name {
-                    path: vec![name.clone()],
-                    span,
-                })
-                .collect();
+            // Append captured locals after the super-args already at the site.
+            args.extend(caps.iter().map(|(name, _)| Expr::Name {
+                path: vec![name.clone()],
+                span,
+            }));
         }
         return;
     }

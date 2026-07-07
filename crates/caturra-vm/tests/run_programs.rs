@@ -5899,3 +5899,63 @@ fn swing_table_read_only_via_model_override() {
         "data lost: {json}"
     );
 }
+
+#[test]
+fn swing_table_read_only_via_anonymous_subclass() {
+    // The anonymous form with constructor args now works: super(data, cols) is
+    // forwarded and the isCellEditable override virtual-dispatches.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("RO");
+                String[] cols = {"Name", "Score"};
+                Object[][] data = {{"Ada", "95"}};
+                JTable table = new JTable(data, cols) {
+                    public boolean isCellEditable(int row, int col) { return false; }
+                };
+                frame.add(table);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""editable":false"#),
+        "override not honored: {json}"
+    );
+    assert!(
+        json.contains(r#""cells":[["Ada","95"]]"#),
+        "data lost: {json}"
+    );
+}
+
+#[test]
+fn anonymous_class_forwards_super_args_and_captures_a_local() {
+    // The synthesized constructor takes the super-arg (5) first, then the
+    // captured local (extra=100): super(5) sets `base`, and the override reads
+    // base + extra.
+    let out = run_stdout(
+        r"
+        class Base {
+            int base;
+            Base(int b) { this.base = b; }
+            int compute() { return base; }
+        }
+        public class Main {
+            public static void main(String[] args) {
+                int extra = 100;
+                Base b = new Base(5) {
+                    int compute() { return base + extra; }
+                };
+                System.out.println(b.compute());
+            }
+        }
+        ",
+        "Main",
+    );
+    assert_eq!(out, "105\n");
+}
