@@ -971,6 +971,46 @@ public class Main {
 `,
   },
   {
+    name: 'Box layout',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Menu");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+    // A vertical stack: buttons separated by struts, glue pushes the status
+    // label to the bottom.
+    JPanel panel = new JPanel();
+    panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+
+    JButton one = new JButton("One");
+    one.addActionListener(e -> Main.status.setText("Picked One"));
+    JButton two = new JButton("Two");
+    two.addActionListener(e -> Main.status.setText("Picked Two"));
+    JButton three = new JButton("Three");
+    three.addActionListener(e -> Main.status.setText("Picked Three"));
+
+    status = new JLabel("Pick a button.");
+
+    panel.add(one);
+    panel.add(Box.createVerticalStrut(8));
+    panel.add(two);
+    panel.add(Box.createVerticalStrut(8));
+    panel.add(three);
+    panel.add(Box.createVerticalGlue());
+    panel.add(status);
+
+    frame.add(panel);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

@@ -29,6 +29,7 @@ interface SwingNode {
     | 'table'
     | 'progressbar'
     | 'spinner'
+    | 'strut'
     | 'component';
   id: string;
   enabled?: boolean;
@@ -67,6 +68,10 @@ interface SwingNode {
   indeterminate?: boolean;
   stringPainted?: boolean;
   string?: string;
+  /** Box strut/glue: fixed spacer size, or glue that stretches. */
+  w?: number;
+  h?: number;
+  glue?: boolean;
   /** JRadioButton ButtonGroup id (shared DOM `name` for exclusivity). */
   group?: string;
   /** A custom JPanel's recorded Graphics commands (newline-separated). */
@@ -237,6 +242,16 @@ function applyLayout(el: HTMLElement, layout: string | undefined): void {
     el.style.gridTemplateRows = 'auto 1fr auto';
     el.style.gridTemplateColumns = 'auto 1fr auto';
     el.style.gap = '8px';
+    return;
+  }
+  if (layout?.startsWith('box ')) {
+    // BoxLayout: stack along one axis (Y_AXIS/PAGE_AXIS = column, else row).
+    // No default gap — spacing comes from Box struts/glue.
+    const axis = Number(layout.split(' ')[1] ?? 1);
+    el.style.display = 'flex';
+    el.style.flexDirection = axis === 1 || axis === 3 ? 'column' : 'row';
+    el.style.alignItems = 'flex-start';
+    el.style.gap = '0';
     return;
   }
   // FlowLayout (the default) lays out inline.
@@ -648,6 +663,8 @@ export class SwingViz {
         return this.progressBar(node);
       case 'spinner':
         return this.spinner(node);
+      case 'strut':
+        return this.strut(node);
       default: {
         const span = document.createElement('span');
         this.common(span, node);
@@ -1377,5 +1394,26 @@ export class SwingViz {
     this.#field(input, node, 'change');
     this.common(input, node);
     return input;
+  }
+
+  /** A Box strut or glue: an invisible spacer in a BoxLayout. A strut holds a
+   * fixed size; glue stretches to push its neighbors apart. */
+  private strut(node: SwingNode): HTMLElement {
+    const div = document.createElement('div');
+    div.className = 'swing-strut';
+    div.setAttribute('aria-hidden', 'true');
+    if (node.glue === true) {
+      div.style.flex = '1 1 auto';
+    } else {
+      div.style.flexShrink = '0';
+      if (node.w !== undefined && node.w > 0) {
+        div.style.width = `${String(node.w)}px`;
+      }
+      if (node.h !== undefined && node.h > 0) {
+        div.style.height = `${String(node.h)}px`;
+      }
+    }
+    this.common(div, node);
+    return div;
   }
 }

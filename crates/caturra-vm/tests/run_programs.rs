@@ -618,6 +618,43 @@ fn swing_default_table_model_updates_rows_on_render() {
 }
 
 #[test]
+fn swing_box_layout_stacks_with_struts() {
+    // A Y_AXIS BoxLayout serializes as "box 1"; Box struts/glue become spacers.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Stack");
+                JPanel panel = new JPanel();
+                panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+                panel.add(new JButton("Top"));
+                panel.add(Box.createVerticalStrut(12));
+                panel.add(new JButton("Bottom"));
+                panel.add(Box.createVerticalGlue());
+                frame.add(panel);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""layout":"box 1""#),
+        "no box layout: {json}"
+    );
+    assert!(
+        json.contains(r#""type":"strut","w":0,"h":12,"glue":false"#),
+        "no strut: {json}"
+    );
+    assert!(
+        json.contains(r#""type":"strut","w":0,"h":0,"glue":true"#),
+        "no glue: {json}"
+    );
+}
+
+#[test]
 fn swing_progress_bar_serializes_value_and_string() {
     let json = run_swing(
         r#"

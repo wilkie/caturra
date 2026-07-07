@@ -228,6 +228,8 @@ static JAVAX_SWING: &[&str] = &[
     "JScrollPane",
     "JLabel",
     "JButton",
+    "BoxLayout",
+    "Box",
     "JTextField",
     "JTextArea",
     "JCheckBox",

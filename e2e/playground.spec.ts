@@ -1776,6 +1776,36 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Level is 75.');
   });
 
+  test('a BoxLayout stacks components vertically; a button still dispatches', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Box layout' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const one = root.getByRole('button', { name: 'One' });
+    const two = root.getByRole('button', { name: 'Two' });
+    const three = root.getByRole('button', { name: 'Three' });
+    await expect(one).toBeVisible();
+
+    const box = async (loc: Locator): Promise<{ x: number; y: number; bottom: number }> => {
+      const b = await loc.boundingBox();
+      if (!b) throw new Error('element has no bounding box');
+      return { x: b.x, y: b.y, bottom: b.y + b.height };
+    };
+    const b1 = await box(one);
+    const b2 = await box(two);
+    const b3 = await box(three);
+
+    // Y_AXIS: stacked top to bottom, left-aligned in a column (same x).
+    expect(b2.y).toBeGreaterThan(b1.y);
+    expect(b3.y).toBeGreaterThan(b2.y);
+    expect(Math.abs(b2.x - b1.x)).toBeLessThan(2);
+    // The 8px strut leaves a gap between consecutive buttons.
+    expect(b2.y - b1.bottom).toBeGreaterThanOrEqual(6);
+
+    await two.click();
+    await expect(root).toContainText('Picked Two');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

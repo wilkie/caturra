@@ -62,6 +62,47 @@ class BorderLayout implements LayoutManager {
   public static final String CENTER = "Center";
 }
 
+// Stacks components along one axis (X row, Y column). The target container is
+// accepted (real API) but the axis is all the renderer needs; spacing comes
+// from Box struts/glue, not a default gap.
+class BoxLayout implements LayoutManager {
+  int __axis;
+  public static final int X_AXIS = 0;
+  public static final int Y_AXIS = 1;
+  public static final int LINE_AXIS = 2;
+  public static final int PAGE_AXIS = 3;
+  public BoxLayout(Container target, int axis) { __axis = axis; }
+  public String __desc() { return "box " + __axis; }
+}
+
+// An invisible spacer produced by the Box factory methods (a strut is fixed
+// size; glue stretches to push its neighbors apart).
+class __Strut extends Component {
+  int __w = 0;
+  int __h = 0;
+  boolean __glue = false;
+  String __json() {
+    return "{\"type\":\"strut\",\"w\":" + __w + ",\"h\":" + __h + ",\"glue\":" + __glue
+        + "," + __commonJson() + "}";
+  }
+}
+
+// Box: factory methods for BoxLayout spacers.
+class Box {
+  static __Strut __make(int w, int h, boolean glue) {
+    __Strut s = new __Strut();
+    s.__w = w;
+    s.__h = h;
+    s.__glue = glue;
+    return s;
+  }
+  public static Component createVerticalStrut(int height) { return __make(0, height, false); }
+  public static Component createHorizontalStrut(int width) { return __make(width, 0, false); }
+  public static Component createRigidArea(Dimension d) { return __make(d.width, d.height, false); }
+  public static Component createVerticalGlue() { return __make(0, 0, true); }
+  public static Component createHorizontalGlue() { return __make(0, 0, true); }
+}
+
 // ----- Component model -----
 
 class Component {
