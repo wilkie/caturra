@@ -226,12 +226,17 @@ class JFrame extends Container {
   public JFrame() { __title = ""; }
   public JFrame(String title) { __title = title; }
 
+  // Real JFrame default: closing hides the window (the program keeps
+  // running). Students set EXIT_ON_CLOSE to end it — see __SwingRuntime.
+  int __closeOp = 1; // HIDE_ON_CLOSE
+
   public void setTitle(String title) { __title = title; }
   public String getTitle() { return __title; }
   public void setSize(int width, int height) { __w = width; __h = height; }
   public void setSize(Dimension d) { __w = d.width; __h = d.height; }
   public void setPreferredSize(Dimension d) { __w = d.width; __h = d.height; }
-  public void setDefaultCloseOperation(int op) {}
+  public void setDefaultCloseOperation(int op) { __closeOp = op; }
+  public int getDefaultCloseOperation() { return __closeOp; }
   public void setResizable(boolean resizable) {}
   public void setLocationRelativeTo(Object o) {}
   public void pack() {}
@@ -306,9 +311,18 @@ class __SwingRuntime {
   static void __loop(JFrame frame) {
     while (true) {
       String payload = System.__uiAwait(frame.__jsonTree());
-      if (payload == null) return; // window closed / stopped / no host
+      if (payload == null) return; // host ended the session (Stop / no host)
       int nl = payload.indexOf("\n");
       String cid = nl < 0 ? payload : payload.substring(0, nl);
+      // The window's close button: end the program for EXIT/DISPOSE (the
+      // usual EXIT_ON_CLOSE), otherwise keep running (HIDE/DO_NOTHING).
+      if (cid.equals("__close")) {
+        if (frame.__closeOp == JFrame.EXIT_ON_CLOSE
+            || frame.__closeOp == JFrame.DISPOSE_ON_CLOSE) {
+          return;
+        }
+        continue;
+      }
       if (nl >= 0) __applyFields(payload.substring(nl + 1));
       Component c = __find(cid);
       if (c != null) c.__onEvent();

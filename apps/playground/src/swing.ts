@@ -171,8 +171,24 @@ export class SwingViz {
 
     const titlebar = document.createElement('div');
     titlebar.className = 'swing-titlebar';
-    titlebar.setAttribute('aria-hidden', 'true'); // the region name already conveys it
-    titlebar.textContent = node.title ?? '';
+    // The title text is hidden from assistive tech (the region name already
+    // conveys it), but the close button stays in the accessibility tree.
+    const titleText = document.createElement('span');
+    titleText.setAttribute('aria-hidden', 'true');
+    titleText.textContent = node.title ?? '';
+    titlebar.appendChild(titleText);
+    if (this.#onEvent) {
+      const onEvent = this.#onEvent;
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'swing-close';
+      close.setAttribute('aria-label', 'Close window');
+      close.textContent = '×'; // ×
+      close.addEventListener('click', () => {
+        onEvent(this.#payload('__close'));
+      });
+      titlebar.appendChild(close);
+    }
     section.appendChild(titlebar);
 
     const content = document.createElement('div');

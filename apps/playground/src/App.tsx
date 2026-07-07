@@ -158,6 +158,7 @@ public class Main {
 
   public static void main(String[] args) {
     JFrame frame = new JFrame("Counter");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
     frame.setLayout(new GridLayout(2, 1));
     JLabel label = new JLabel("Clicks: 0");
     JButton button = new JButton("Click me");
@@ -185,6 +186,7 @@ import java.awt.*;
 public class Main {
   public static void main(String[] args) {
     JFrame frame = new JFrame("Greeter");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
     frame.setLayout(new GridLayout(3, 2));
 
     JLabel prompt = new JLabel("Name:");
@@ -350,6 +352,9 @@ export function App(): React.JSX.Element {
   // Settles the pending Swing event promise when the user activates a
   // control; the engine's event loop is parked until it resolves.
   const swingEventResolverRef = useRef<((payload: string | null) => void) | null>(null);
+  // Whether this run rendered a live (interactive) Swing UI, so we don't
+  // clobber the final frame with a stale batch render after it completes.
+  const swingRenderedLiveRef = useRef(false);
   const stopRequestedRef = useRef(false);
   const wasStopped = (): boolean => stopRequestedRef.current;
   const debugResolverRef = useRef<((command: DebugCommandName | 'refresh') => void) | null>(null);
@@ -630,6 +635,10 @@ export function App(): React.JSX.Element {
     swingVizRef.current?.render(json);
   };
 
+  // Read through a function so flow analysis doesn't assume the ref's value:
+  // it is flipped by the event-loop callback during the awaited run.
+  const swingRenderedLive = (): boolean => swingRenderedLiveRef.current;
+
   // Resolve the parked event promise when a control is activated.
   const dispatchSwingEvent = (payload: string): void => {
     const resolve = swingEventResolverRef.current;
@@ -642,6 +651,7 @@ export function App(): React.JSX.Element {
   // blocked in the worker until this resolves.
   const awaitSwingEvent = (tree: string): Promise<string | null> =>
     new Promise((resolve) => {
+      swingRenderedLiveRef.current = true;
       swingEventResolverRef.current = resolve;
       setView('swing');
       swingVizRef.current?.render(tree, dispatchSwingEvent);
@@ -650,6 +660,7 @@ export function App(): React.JSX.Element {
   // ----- Run / Test / Stop -----
   const runProgram = async (): Promise<void> => {
     stopRequestedRef.current = false;
+    swingRenderedLiveRef.current = false;
     setPhase('running');
     clearConsole();
     neighborhoodVizRef.current?.stop();
@@ -698,7 +709,9 @@ export function App(): React.JSX.Element {
             await renderNeighborhood();
           } else if (theater) {
             await renderTheater();
-          } else if (swing) {
+          } else if (swing && !swingRenderedLive()) {
+            // Interactive UIs already rendered live; only a non-interactive
+            // window needs the one-shot batch render from swing.json.
             await renderSwing();
           }
         }
@@ -822,6 +835,7 @@ export function App(): React.JSX.Element {
 
   const debugProgram = async (): Promise<void> => {
     stopRequestedRef.current = false;
+    swingRenderedLiveRef.current = false;
     setPhase('debugging');
     clearConsole();
     try {
@@ -884,7 +898,12 @@ export function App(): React.JSX.Element {
           append(`(exit code ${String(result.exitCode)})\n`);
         }
         // A non-interactive Swing UI renders once on exit (batch), like Run.
-        if (swing && result.status !== 'error' && result.status !== 'stopped') {
+        if (
+          swing &&
+          !swingRenderedLive() &&
+          result.status !== 'error' &&
+          result.status !== 'stopped'
+        ) {
           await renderSwing();
         }
       }

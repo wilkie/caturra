@@ -490,6 +490,107 @@ fn swing_interactive_program_compiles_and_renders_initial_frame() {
     );
 }
 
+/// A console that scripts Swing UI events (and captures stdout), so the
+/// event loop and window-close handling can be exercised headlessly. Each
+/// `__uiAwait` returns the next scripted event; `Some(None)` and running out
+/// both yield `None` (the loop's end-of-session signal).
+struct ScriptedUiConsole {
+    events: std::collections::VecDeque<Option<String>>,
+    stdout: Vec<u8>,
+}
+
+impl ScriptedUiConsole {
+    fn new(events: Vec<Option<String>>) -> Self {
+        Self {
+            events: events.into_iter().collect(),
+            stdout: Vec::new(),
+        }
+    }
+    fn stdout_text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+}
+
+impl caturra_vm::ConsoleIo for ScriptedUiConsole {
+    fn stdout(&mut self, bytes: &[u8]) {
+        self.stdout.extend_from_slice(bytes);
+    }
+    fn stderr(&mut self, _bytes: &[u8]) {}
+    fn read_line(&mut self) -> Option<String> {
+        None
+    }
+    fn ui_await_event(&mut self, _tree: &str) -> Option<String> {
+        self.events.pop_front().flatten()
+    }
+}
+
+fn run_swing_scripted(source: &str, main: &str, events: Vec<Option<String>>) -> String {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{main}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "compile failed: {:?}",
+        compilation.diagnostics
+    );
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = ScriptedUiConsole::new(events);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    let result = vm.run_main(main, &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    console.stdout_text()
+}
+
+/// Construction order fixes ids: frame c0, button c1. A shared program that
+/// prints on a click and again after the event loop returns.
+const SWING_CLOSE_PROGRAM: &str = r#"
+    import javax.swing.*;
+    import java.awt.*;
+    public class Main {
+        public static void main(String[] args) {
+            JFrame frame = new JFrame("W");
+            CLOSE_OP
+            JButton b = new JButton("Go");
+            b.addActionListener(e -> System.out.println("clicked"));
+            frame.add(b);
+            frame.setVisible(true);
+            System.out.println("after close");
+        }
+    }
+"#;
+
+#[test]
+fn swing_close_with_exit_on_close_ends_the_program() {
+    // The close button (EXIT_ON_CLOSE) ends the event loop: setVisible
+    // returns and the rest of main runs — without dispatching the click.
+    let source = SWING_CLOSE_PROGRAM.replace(
+        "CLOSE_OP",
+        "frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);",
+    );
+    let out = run_swing_scripted(&source, "Main", vec![Some(String::from("__close"))]);
+    assert_eq!(out, "after close\n", "close should end the loop cleanly");
+}
+
+#[test]
+fn swing_close_with_default_hide_keeps_running() {
+    // The default (HIDE_ON_CLOSE) ignores the close, so the loop keeps
+    // going: the next event (a click on button c1) fires its listener, and
+    // only the end-of-session signal (None) finally returns.
+    let out = run_swing_scripted(
+        &SWING_CLOSE_PROGRAM.replace("CLOSE_OP", ""),
+        "Main",
+        vec![Some(String::from("__close")), Some(String::from("c1"))],
+    );
+    assert_eq!(
+        out, "clicked\nafter close\n",
+        "close was ignored, click ran"
+    );
+}
+
 #[test]
 fn neighborhood_painter_simulation() {
     // A 4x4 grid: a wall at (2,1) and a one-unit paint bucket at (1,2).

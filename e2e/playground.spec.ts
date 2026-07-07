@@ -1261,6 +1261,25 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Clicks: 2');
   });
 
+  test('the window close button ends an interactive run cleanly', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    await expect(root.getByRole('button', { name: 'Click me' })).toBeVisible();
+    // A live UI keeps the run going: Run is disabled, Stop is offered.
+    await expect(page.getByTestId('run')).toBeDisabled();
+    await expect(page.getByTestId('stop-run')).toBeVisible();
+
+    // The accessible close button (the demo sets EXIT_ON_CLOSE) ends the
+    // program on its own — the run completes without terminating the worker.
+    const close = root.getByRole('button', { name: 'Close window' });
+    await expect(close).toBeVisible();
+    await close.click();
+    await expect(page.getByTestId('run')).toBeEnabled();
+    await expect(page.getByTestId('stop-run')).toBeHidden();
+  });
+
   test('a listener reads the current value typed into a text field', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Greeter form' });
