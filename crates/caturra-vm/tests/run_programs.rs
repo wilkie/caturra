@@ -5866,3 +5866,36 @@ fn string_builder_appends_and_concats_as_content() {
     );
     assert_eq!(out, "hello world\n[world\n");
 }
+
+#[test]
+fn swing_table_read_only_via_model_override() {
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        class ReadOnlyModel extends DefaultTableModel {
+            public ReadOnlyModel(Object[][] d, Object[] c) { super(d, c); }
+            public boolean isCellEditable(int row, int col) { return false; }
+        }
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("RO");
+                String[] cols = {"Name", "Score"};
+                Object[][] data = {{"Ada", "95"}};
+                JTable table = new JTable(new ReadOnlyModel(data, cols));
+                frame.add(table);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""editable":false"#),
+        "override not honored: {json}"
+    );
+    assert!(
+        json.contains(r#""cells":[["Ada","95"]]"#),
+        "data lost: {json}"
+    );
+}

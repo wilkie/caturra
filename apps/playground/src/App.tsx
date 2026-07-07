@@ -802,6 +802,13 @@ public class Main {
 import java.awt.*;
 import javax.swing.event.*;
 
+// A read-only model: cells can't be edited directly (override isCellEditable).
+// JTable cells are editable by default, so a display table opts out this way.
+class ScoreModel extends DefaultTableModel {
+  public ScoreModel(Object[][] data, Object[] columns) { super(data, columns); }
+  public boolean isCellEditable(int row, int col) { return false; }
+}
+
 public class Main {
   static JTable table;
   static JLabel status;
@@ -817,7 +824,7 @@ public class Main {
         {"Bo", "7"},
         {"Cy", "13"}
     };
-    table = new JTable(data, columns);
+    table = new JTable(new ScoreModel(data, columns));
 
     // Row selection reports through the selection model's listener.
     table.getSelectionModel().addListSelectionListener(e -> {

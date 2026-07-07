@@ -1723,6 +1723,9 @@ test.describe('swing (interactive)', () => {
     await expect(table.getByRole('columnheader', { name: 'Player' })).toBeVisible();
     await expect(table.getByRole('row')).toHaveCount(4);
 
+    // This model overrides isCellEditable, so the cells are read-only.
+    await expect(table.locator('td.swing-cell-editable')).toHaveCount(0);
+
     // Selecting a row fires the selection listener.
     await table.getByRole('row', { name: /Bo/ }).click();
     await expect(root).toContainText('Bo has 7 points');
