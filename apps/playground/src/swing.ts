@@ -140,6 +140,10 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
   if (!ctx) {
     return;
   }
+  // Wipe the whole canvas, then replay — a full redraw, like paintComponent
+  // (the panel is cleared before it paints). The canvas element is retained
+  // across ticks, so without this the previous frame would show through.
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   let color = 'rgb(0,0,0)'; // Graphics current color (fills and strokes)
   const oval = (x: number, y: number, w: number, h: number): void => {
     ctx.beginPath();
@@ -245,13 +249,25 @@ export class SwingViz {
   // Cleanups to run before the next render (e.g. document-level listeners
   // added by the menu bar for click-away dismissal).
   #teardown: (() => void)[] = [];
+  // Rendered elements by component id, so re-renders REUSE them (reconcile)
+  // instead of tearing down and rebuilding the whole tree each tick — the
+  // window persists, the canvas keeps its pixels, and focus/scroll survive.
+  #byId = new Map<string, HTMLElement>();
 
   constructor(private readonly mount: HTMLElement) {}
+
+  /** Dispatch an event payload to the program (no-op in batch mode). Listeners
+   * call this rather than capturing `#onEvent`, so a retained element always
+   * reaches the current callback. */
+  #dispatch(payload: string): void {
+    this.#onEvent?.(payload);
+  }
 
   /** Remove any previously rendered UI. */
   clear(): void {
     this.#onEvent = null;
     this.#fields.clear();
+    this.#byId.clear();
     this.mount.replaceChildren();
   }
 
@@ -259,42 +275,232 @@ export class SwingViz {
    * Parse a `swing.json` tree and render it as accessible DOM. Pass
    * `onEvent` for interactive runs: activating a control (a button) invokes
    * it with the event payload, which the engine's event loop consumes.
-   * Focus is preserved across re-renders so keyboard users keep their place.
+   *
+   * Re-renders RECONCILE against the previous DOM: an element is reused for a
+   * component id whenever its kind matches, and only its mutable state is
+   * updated. So the window isn't recreated each tick (like a native OS window),
+   * a canvas keeps its pixels, and — because elements persist — focus and
+   * scroll position survive without any save/restore dance.
    */
   render(json: string, onEvent?: (payload: string) => void): void {
-    const focusedId = this.mount.contains(document.activeElement)
-      ? (document.activeElement as HTMLElement).id
-      : '';
-    // Remember scroll positions (by component id) so scroll panes don't jump
-    // to the top on every re-render.
-    const scrolls = new Map<string, { top: number; left: number }>();
-    for (const pane of this.mount.querySelectorAll<HTMLElement>('.swing-scrollpane')) {
-      const cid = pane.dataset.cid;
-      if (cid !== undefined) {
-        scrolls.set(cid, { top: pane.scrollTop, left: pane.scrollLeft });
-      }
-    }
+    // Focus can still be lost when an element's CONTENT is rebuilt (table
+    // rows); note it so we can put it back afterward.
+    const focusedId =
+      this.mount.contains(document.activeElement) && document.activeElement instanceof HTMLElement
+        ? document.activeElement.id
+        : '';
     for (const cleanup of this.#teardown) {
       cleanup();
     }
     this.#teardown = [];
     this.#onEvent = onEvent ?? null;
     this.#fields.clear();
-    this.mount.replaceChildren();
+    const prev = this.#byId;
+    this.#byId = new Map();
     const root = JSON.parse(json) as SwingNode;
-    this.mount.appendChild(this.build(root));
-    if (focusedId !== '') {
-      this.mount.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`)?.focus();
+    const rootEl = this.#reconcile(root, prev);
+    if (this.mount.firstElementChild !== rootEl) {
+      this.mount.replaceChildren(rootEl);
     }
-    for (const [cid, pos] of scrolls) {
-      const pane = this.mount.querySelector<HTMLElement>(
-        `.swing-scrollpane[data-cid="${CSS.escape(cid)}"]`,
-      );
-      if (pane) {
-        pane.scrollTop = pos.top;
-        pane.scrollLeft = pos.left;
+    if (focusedId !== '') {
+      const again = this.mount.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`);
+      if (again && document.activeElement !== again) {
+        again.focus();
       }
     }
+  }
+
+  /** Reuse the element previously rendered for this component id (if its kind
+   * matches) and patch its mutable state; otherwise build it fresh. */
+  #reconcile(node: SwingNode, prev: Map<string, HTMLElement>): HTMLElement {
+    const old = prev.get(node.id);
+    if (old?.dataset.kind === node.type) {
+      this.#patch(old, node, prev);
+      this.#byId.set(node.id, old);
+      return old;
+    }
+    const el = this.build(node);
+    this.#byId.set(node.id, el);
+    return el;
+  }
+
+  /** Reconcile a container's children in order: reuse/patch each by id, insert
+   * new ones, drop the leftovers, and re-apply BorderLayout regions. */
+  #reconcileChildren(host: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
+    const nodes = node.children ?? [];
+    const border = node.layout === 'border';
+    for (const [i, child] of nodes.entries()) {
+      const el = this.#reconcile(child, prev);
+      if (border) {
+        el.style.gridArea = (child.region ?? 'Center').toLowerCase();
+      }
+      const current = host.children[i];
+      if (current !== el) {
+        host.insertBefore(el, current ?? null);
+      }
+    }
+    while (host.children.length > nodes.length) {
+      host.lastElementChild?.remove();
+    }
+  }
+
+  /** Update the mutable state of a reused element (and reconcile its children). */
+  #patch(el: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
+    this.common(el, node);
+    switch (node.type) {
+      case 'frame':
+        this.#patchFrame(el, node, prev);
+        break;
+      case 'panel':
+        this.#patchPanel(el, node, prev);
+        break;
+      case 'scrollpane':
+        this.#patchScroll(el, node, prev);
+        break;
+      case 'label':
+        el.textContent = node.text ?? '';
+        break;
+      case 'button':
+        el.textContent = node.text ?? '';
+        (el as HTMLButtonElement).disabled = node.enabled === false;
+        break;
+      case 'textfield':
+      case 'textarea': {
+        const input = el as HTMLInputElement | HTMLTextAreaElement;
+        // Don't clobber the caret/selection when the value is unchanged.
+        if (input.value !== (node.text ?? '')) {
+          input.value = node.text ?? '';
+        }
+        input.disabled = node.enabled === false;
+        if (input instanceof HTMLTextAreaElement) {
+          input.readOnly = node.editable === false;
+        }
+        this.#fields.set(node.id, input);
+        break;
+      }
+      case 'checkbox':
+      case 'radio': {
+        const input = el.querySelector('input');
+        const span = el.querySelector('span');
+        if (input) {
+          input.checked = node.selected === true;
+          input.disabled = node.enabled === false;
+          this.#fields.set(node.id, input);
+        }
+        if (span) {
+          span.textContent = node.text ?? '';
+        }
+        break;
+      }
+      case 'combobox':
+      case 'list':
+        this.#patchSelect(el as HTMLSelectElement, node);
+        break;
+      case 'slider': {
+        const input = el as HTMLInputElement;
+        input.min = String(node.min ?? 0);
+        input.max = String(node.max ?? 100);
+        input.value = String(node.value ?? 0);
+        input.disabled = node.enabled === false;
+        this.#fields.set(node.id, input);
+        break;
+      }
+      case 'table':
+        this.#patchTable(el as HTMLTableElement, node);
+        break;
+      default:
+        break;
+    }
+  }
+
+  #patchFrame(el: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
+    el.setAttribute(
+      'aria-label',
+      node.title === undefined || node.title === '' ? 'Window' : node.title,
+    );
+    const titleText = el.querySelector('.swing-titlebar span');
+    if (titleText) {
+      titleText.textContent = node.title ?? '';
+    }
+    // The menu bar is cheap and its click-away listeners were just torn down —
+    // rebuild it rather than reconcile its nested structure.
+    el.querySelector(':scope > .swing-menubar')?.remove();
+    const content = el.querySelector<HTMLElement>(':scope > .swing-content');
+    if (content && node.menubar) {
+      el.insertBefore(this.menuBar(node.menubar), content);
+    }
+    if (content) {
+      applyLayout(content, node.layout);
+      this.#reconcileChildren(content, node, prev);
+    }
+  }
+
+  #patchPanel(el: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
+    if (node.paint !== undefined) {
+      const canvas = el.querySelector('canvas');
+      if (canvas) {
+        paintCanvas(canvas, node.paint); // clears then replays — a full redraw
+      }
+      return;
+    }
+    applyLayout(el, node.layout);
+    this.#reconcileChildren(el, node, prev);
+  }
+
+  #patchScroll(el: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
+    el.style.width = `${String(node.pw ?? 200)}px`;
+    el.style.height = `${String(node.ph ?? 150)}px`;
+    el.style.overflowX = scrollbarOverflow(node.hpolicy);
+    el.style.overflowY = scrollbarOverflow(node.vpolicy);
+    if (node.view) {
+      const child = this.#reconcile(node.view, prev);
+      if (el.firstElementChild !== child) {
+        el.replaceChildren(child);
+      }
+    }
+  }
+
+  #patchSelect(select: HTMLSelectElement, node: SwingNode): void {
+    const items = node.items ?? [];
+    const same =
+      select.options.length === items.length &&
+      items.every((item, i) => select.options[i]?.textContent === item);
+    if (!same) {
+      select.replaceChildren(
+        ...items.map((item, i) => {
+          const option = document.createElement('option');
+          option.value = String(i);
+          option.textContent = item;
+          return option;
+        }),
+      );
+    }
+    if (node.type === 'list') {
+      const selected = new Set(node.selectedIndices ?? []);
+      for (let i = 0; i < select.options.length; i++) {
+        const option = select.options[i];
+        if (option) {
+          option.selected = selected.has(i);
+        }
+      }
+    } else {
+      select.selectedIndex = node.selectedIndex ?? -1;
+    }
+    select.disabled = node.enabled === false;
+    this.#fields.set(node.id, select);
+  }
+
+  #patchTable(table: HTMLTableElement, node: SwingNode): void {
+    // Rebuild the head/body (rows change with the model) but keep the <table>
+    // element itself, so its place in a scroll pane and identity are stable.
+    const fresh = this.table(node);
+    const role = fresh.getAttribute('role');
+    if (role !== null) {
+      table.setAttribute('role', role);
+    } else {
+      table.removeAttribute('role');
+    }
+    table.replaceChildren(...Array.from(fresh.childNodes));
   }
 
   /**
@@ -318,11 +524,10 @@ export class SwingViz {
    */
   #field(el: FieldElement, node: SwingNode, event: 'change'): void {
     this.#fields.set(node.id, el);
-    if (this.#onEvent && node.listens === true) {
-      const onEvent = this.#onEvent;
+    if (node.listens === true) {
       const id = node.id;
       el.addEventListener(event, () => {
-        onEvent(this.#payload(id));
+        this.#dispatch(this.#payload(id));
       });
     }
   }
@@ -354,17 +559,16 @@ export class SwingViz {
    * equivalent.
    */
   #mouse(el: HTMLElement, node: SwingNode): void {
-    if (!this.#onEvent || node.mouse !== true) {
+    if (node.mouse !== true) {
       return;
     }
-    const onEvent = this.#onEvent;
     const id = node.id;
     if (el instanceof HTMLCanvasElement) {
       el.style.cursor = 'crosshair';
     }
     el.addEventListener('click', (event) => {
       const { x, y } = this.#pointer(el, event);
-      onEvent(this.#pointerPayload(id, '__mouse', x, y));
+      this.#dispatch(this.#pointerPayload(id, '__mouse', x, y));
     });
   }
 
@@ -374,10 +578,9 @@ export class SwingViz {
    * coalesces them so the loop processes only the latest per render.
    */
   #motion(el: HTMLElement, node: SwingNode): void {
-    if (!this.#onEvent || node.drag !== true) {
+    if (node.drag !== true) {
       return;
     }
-    const onEvent = this.#onEvent;
     const id = node.id;
     if (el instanceof HTMLCanvasElement) {
       el.style.cursor = 'crosshair';
@@ -387,7 +590,7 @@ export class SwingViz {
         return; // only a drag (primary button held), not a passive move
       }
       const { x, y } = this.#pointer(el, event);
-      onEvent(this.#pointerPayload(id, '__drag', x, y));
+      this.#dispatch(this.#pointerPayload(id, '__drag', x, y));
     });
   }
 
@@ -430,6 +633,7 @@ export class SwingViz {
   /** Shared props: id (label-for target), enabled, tooltip, colors. */
   private common(el: HTMLElement, node: SwingNode): void {
     el.dataset.cid = node.id;
+    el.dataset.kind = node.type; // reconcile reuses an element only if kind matches
     if (node.tooltip !== undefined) {
       el.title = node.tooltip;
     }
@@ -476,14 +680,13 @@ export class SwingViz {
     titleText.textContent = node.title ?? '';
     titlebar.appendChild(titleText);
     if (this.#onEvent) {
-      const onEvent = this.#onEvent;
       const close = document.createElement('button');
       close.type = 'button';
       close.className = 'swing-close';
       close.setAttribute('aria-label', 'Close window');
       close.textContent = '×'; // ×
       close.addEventListener('click', () => {
-        onEvent(this.#payload('__close'));
+        this.#dispatch(this.#payload('__close'));
       });
       titlebar.appendChild(close);
     }
@@ -684,13 +887,12 @@ export class SwingViz {
       item.addEventListener('mouseenter', () => {
         closeChild();
       });
-      if (this.#onEvent && entry.listens === true && entry.id !== undefined) {
-        const onEvent = this.#onEvent;
+      if (entry.listens === true && entry.id !== undefined) {
         const id = entry.id;
         item.addEventListener('click', (event) => {
           event.stopPropagation();
           closeRoot();
-          onEvent(this.#payload(id));
+          this.#dispatch(this.#payload(id));
         });
       }
       popup.appendChild(item);
@@ -828,11 +1030,10 @@ export class SwingViz {
     // A click reports the button's id plus every field's current value to
     // the program's ActionListener. (Native <button> also fires on
     // Enter/Space, so keyboard works.) Only wired when it has a listener.
-    if (this.#onEvent && node.listens === true) {
-      const onEvent = this.#onEvent;
+    if (node.listens === true) {
       const id = node.id;
       button.addEventListener('click', () => {
-        onEvent(this.#payload(id));
+        this.#dispatch(this.#payload(id));
       });
     }
     this.common(button, node);
@@ -1007,8 +1208,7 @@ export class SwingViz {
         td.textContent = value;
         tr.appendChild(td);
       }
-      if (selectable && this.#onEvent) {
-        const onEvent = this.#onEvent;
+      if (selectable) {
         tr.id = `${node.id}-r${String(r)}`;
         const isSelected = r === selectedRow;
         tr.setAttribute('aria-selected', String(isSelected));
@@ -1017,7 +1217,7 @@ export class SwingViz {
         tr.tabIndex = isSelected || (selectedRow < 0 && r === 0) ? 0 : -1;
         const select = (): void => {
           // Selecting reports the row index alongside the usual field state.
-          onEvent(`${this.#payload(node.id)}\n${node.id}=${String(r)}`);
+          this.#dispatch(`${this.#payload(node.id)}\n${node.id}=${String(r)}`);
         };
         tr.addEventListener('click', select);
         tr.addEventListener('keydown', (event) => {
