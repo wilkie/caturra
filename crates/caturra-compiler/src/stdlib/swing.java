@@ -403,6 +403,50 @@ class JSlider extends Component {
   }
 }
 
+// javax.swing.JOptionPane: standard modal dialogs. Each show* blocks (via the
+// native System.__uiDialog) until the user answers, then returns the result —
+// a message dialog returns nothing, a confirm returns an option code, an input
+// returns the typed text (or null when dismissed).
+class JOptionPane {
+  public static final int YES_NO_OPTION = 0;
+  public static final int YES_NO_CANCEL_OPTION = 1;
+  public static final int OK_CANCEL_OPTION = 2;
+  public static final int DEFAULT_OPTION = -1;
+  public static final int YES_OPTION = 0;
+  public static final int OK_OPTION = 0;
+  public static final int NO_OPTION = 1;
+  public static final int CANCEL_OPTION = 2;
+  public static final int CLOSED_OPTION = -1;
+  public static final int PLAIN_MESSAGE = -1;
+  public static final int ERROR_MESSAGE = 0;
+  public static final int INFORMATION_MESSAGE = 1;
+  public static final int WARNING_MESSAGE = 2;
+  public static final int QUESTION_MESSAGE = 3;
+
+  public static void showMessageDialog(Object parent, Object message) {
+    System.__uiDialog("message", "" + message);
+  }
+  public static void showMessageDialog(Object parent, Object message, String title, int messageType) {
+    System.__uiDialog("message", "" + message);
+  }
+  public static int showConfirmDialog(Object parent, Object message) {
+    return __parse(System.__uiDialog("confirm:" + YES_NO_CANCEL_OPTION, "" + message));
+  }
+  public static int showConfirmDialog(Object parent, Object message, String title, int optionType) {
+    return __parse(System.__uiDialog("confirm:" + optionType, "" + message));
+  }
+  public static String showInputDialog(Object parent, Object message) {
+    return System.__uiDialog("input", "" + message);
+  }
+  public static String showInputDialog(Object message) {
+    return System.__uiDialog("input", "" + message);
+  }
+  static int __parse(String s) {
+    if (s == null) return CLOSED_OPTION;
+    try { return Integer.parseInt(s); } catch (Exception e) { return CLOSED_OPTION; }
+  }
+}
+
 // javax.swing.Timer: fires its ActionListener every `delay` ms. The host
 // schedules the wakeup (see App.awaitSwingEvent); the loop dispatches the
 // tick. A running timer keeps the app alive (like any animation).

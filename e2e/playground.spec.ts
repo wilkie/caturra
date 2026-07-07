@@ -1499,6 +1499,32 @@ test.describe('swing (interactive)', () => {
     await expect.poll(() => strokeNear(140, 95, 125)).toBe(true);
   });
 
+  test('JOptionPane shows accessible modal dialogs (input, confirm, message)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Dialogs (JOptionPane)' });
+    await page.getByTestId('run').click();
+
+    // Input dialog: a focus-trapped modal with a text field. Each show*
+    // blocks the program until answered.
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("What's your name?");
+    await page.getByTestId('dialog-input').fill('Ada');
+    await dialog.getByRole('button', { name: 'OK' }).click();
+
+    // Confirm dialog: Yes/No/Cancel; the entered name flowed back to the VM.
+    await expect(dialog).toContainText('Nice to meet you, Ada.');
+    await dialog.getByRole('button', { name: 'Yes' }).click();
+
+    // Message dialog: the YES branch's greeting.
+    await expect(dialog).toContainText('Hello, Ada!');
+    await dialog.getByRole('button', { name: 'OK' }).click();
+
+    // The program finishes and the controls reset.
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTestId('run')).toBeEnabled();
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

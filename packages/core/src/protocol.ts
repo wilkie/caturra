@@ -71,4 +71,5 @@ export type WorkerResponse =
   | { id: number; type: 'stderr'; text: string }
   | { id: number; type: 'stdin-request' }
   | { id: number; type: 'debug-paused'; snapshot: DebugPauseSnapshot }
-  | { id: number; type: 'swing-render'; tree: string };
+  | { id: number; type: 'swing-render'; tree: string }
+  | { id: number; type: 'swing-dialog'; kind: string; message: string };

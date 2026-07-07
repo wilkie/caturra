@@ -33,6 +33,15 @@ pub trait ConsoleIo {
         None
     }
 
+    /// Show a modal dialog (bundled `JOptionPane`): `kind` is `message`,
+    /// `confirm:<optionType>`, or `input`; `message` is its text. Blocks
+    /// until the user answers and returns the response — a numeric option
+    /// code, the entered text, or `None` if dismissed. Default: no host, so
+    /// dismissed.
+    fn ui_dialog(&mut self, _kind: &str, _message: &str) -> Option<String> {
+        None
+    }
+
     /// Start capturing standard-out messages (for `SystemOutTestRunner`,
     /// which runs the student's `main` and inspects what it printed). While
     /// capturing, standard out is redirected here (`System.setOut` semantics)

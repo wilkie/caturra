@@ -1893,6 +1893,21 @@ pub fn invoke_static(
                     None => Ok(Some(JValue::Ref(None))),
                 }
             }
+            // Blocking JOptionPane dialog: kind (arg 0) + message (arg 1);
+            // returns the response String, or null when dismissed.
+            "__uiDialog" => {
+                let arg_str = |i: usize| match args.get(i) {
+                    Some(JValue::Ref(Some(reference))) => {
+                        heap.string_text(*reference).unwrap_or_default()
+                    }
+                    _ => String::new(),
+                };
+                let (kind, message) = (arg_str(0), arg_str(1));
+                match console.ui_dialog(&kind, &message) {
+                    Some(response) => Ok(Some(JValue::Ref(Some(heap.alloc_string(&response))))),
+                    None => Ok(Some(JValue::Ref(None))),
+                }
+            }
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),

@@ -538,6 +538,7 @@ fn swing_interactive_program_compiles_and_renders_initial_frame() {
 /// both yield `None` (the loop's end-of-session signal).
 struct ScriptedUiConsole {
     events: std::collections::VecDeque<Option<String>>,
+    dialogs: std::collections::VecDeque<Option<String>>,
     stdout: Vec<u8>,
 }
 
@@ -545,8 +546,14 @@ impl ScriptedUiConsole {
     fn new(events: Vec<Option<String>>) -> Self {
         Self {
             events: events.into_iter().collect(),
+            dialogs: std::collections::VecDeque::new(),
             stdout: Vec::new(),
         }
+    }
+    /// Script the responses to `JOptionPane` dialogs, in order.
+    fn with_dialogs(mut self, dialogs: Vec<Option<String>>) -> Self {
+        self.dialogs = dialogs.into_iter().collect();
+        self
     }
     fn stdout_text(&self) -> String {
         String::from_utf8_lossy(&self.stdout).into_owned()
@@ -563,6 +570,9 @@ impl caturra_vm::ConsoleIo for ScriptedUiConsole {
     }
     fn ui_await_event(&mut self, _tree: &str) -> Option<String> {
         self.events.pop_front().flatten()
+    }
+    fn ui_dialog(&mut self, _kind: &str, _message: &str) -> Option<String> {
+        self.dialogs.pop_front().flatten()
     }
 }
 
@@ -725,6 +735,47 @@ fn swing_lambda_as_constructor_argument_is_target_typed() {
         vec![Some(String::from("__timer:t1"))],
     );
     assert_eq!(out, "tick 1\n");
+}
+
+#[test]
+fn swing_joptionpane_dialogs_block_and_return_responses() {
+    // JOptionPane dialogs run in plain main (no event loop). Each show*
+    // blocks on the host and returns its scripted response: the input dialog
+    // yields "Ada", the confirm yields "0" (YES_OPTION); the message dialog's
+    // response is ignored.
+    let source = r#"
+        import javax.swing.*;
+        public class Main {
+            public static void main(String[] args) {
+                String name = JOptionPane.showInputDialog("name?");
+                System.out.println("hi " + name);
+                int ok = JOptionPane.showConfirmDialog(null, "ok?");
+                if (ok == JOptionPane.YES_OPTION) {
+                    System.out.println("confirmed");
+                    JOptionPane.showMessageDialog(null, "done");
+                }
+            }
+        }
+    "#;
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("Main.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "compile failed: {:?}",
+        compilation.diagnostics
+    );
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = ScriptedUiConsole::new(vec![])
+        .with_dialogs(vec![Some(String::from("Ada")), Some(String::from("0"))]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    let result = vm.run_main("Main", &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "hi Ada\nconfirmed\n");
 }
 
 #[test]

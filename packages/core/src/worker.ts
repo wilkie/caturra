@@ -56,6 +56,14 @@ async function handle(request: WorkerRequest): Promise<unknown> {
               scope.postMessage({ id, type: 'swing-render', tree });
             })
         : undefined;
+      // Blocking JOptionPane dialog: same channel (dialogs and events never
+      // overlap — the loop isn't parked while a listener shows a dialog).
+      const showDialog = swingBuffer
+        ? (kind: string, message: string) =>
+            readLineBlocking(swingBuffer, () => {
+              scope.postMessage({ id, type: 'swing-dialog', kind, message });
+            })
+        : undefined;
       return (await session()).run(request.mainClass, {
         args: request.args,
         onStdout: (text) => {
@@ -66,6 +74,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
         },
         readStdin,
         ...(awaitUiEvent ? { awaitUiEvent } : {}),
+        ...(showDialog ? { showDialog } : {}),
       });
     }
     case 'runDebug': {
@@ -82,6 +91,12 @@ async function handle(request: WorkerRequest): Promise<unknown> {
         ? (tree: string) =>
             readLineBlocking(swingBuffer, () => {
               scope.postMessage({ id, type: 'swing-render', tree });
+            })
+        : undefined;
+      const showDialog = swingBuffer
+        ? (kind: string, message: string) =>
+            readLineBlocking(swingBuffer, () => {
+              scope.postMessage({ id, type: 'swing-dialog', kind, message });
             })
         : undefined;
       return (await session()).runDebug(request.mainClass, {
@@ -107,6 +122,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
         },
         pollInterrupt: () => consumeInterrupt(interruptFlag),
         ...(awaitUiEvent ? { awaitUiEvent } : {}),
+        ...(showDialog ? { showDialog } : {}),
       });
     }
     case 'writeFile':

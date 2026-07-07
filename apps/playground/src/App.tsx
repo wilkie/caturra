@@ -8,6 +8,11 @@ import TextField from '@mui/material/TextField';
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Paper from '@mui/material/Paper';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogActions from '@mui/material/DialogActions';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import ScienceIcon from '@mui/icons-material/Science';
@@ -460,6 +465,30 @@ class Pad extends JPanel {
 `,
   },
   {
+    name: 'Dialogs (JOptionPane)',
+    starter: `import javax.swing.*;
+
+public class Main {
+  public static void main(String[] args) {
+    // Each JOptionPane call blocks until you answer it — no JFrame needed.
+    String name = JOptionPane.showInputDialog("What's your name?");
+    if (name == null || name.equals("")) {
+      name = "stranger";
+    }
+
+    int choice = JOptionPane.showConfirmDialog(
+        null, "Nice to meet you, " + name + ".\\nShow a greeting?");
+
+    if (choice == JOptionPane.YES_OPTION) {
+      JOptionPane.showMessageDialog(null, "Hello, " + name + "!");
+    } else {
+      JOptionPane.showMessageDialog(null, "No problem.");
+    }
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
@@ -579,6 +608,8 @@ export function App(): React.JSX.Element {
   const [swingValue, setSwingValue] = useState('');
   const [levels, setLevels] = useState<CsaLevelMeta[]>([]);
   const [view, setView] = useState<'none' | 'neighborhood' | 'theater' | 'swing'>('none');
+  const [swingDialog, setSwingDialog] = useState<{ kind: string; message: string } | null>(null);
+  const [swingDialogInput, setSwingDialogInput] = useState('');
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [hasSolution, setHasSolution] = useState(false);
   const [debugBar, setDebugBar] = useState(false);
@@ -614,6 +645,8 @@ export function App(): React.JSX.Element {
   // The newest drag payload seen while the loop was busy — coalesced so the
   // flood of mousemove events becomes at most one dispatch per render.
   const swingPendingMotionRef = useRef<string | null>(null);
+  // Settles the pending JOptionPane dialog when the user answers it.
+  const swingDialogResolverRef = useRef<((response: string | null) => void) | null>(null);
   // Whether this run rendered a live (interactive) Swing UI, so we don't
   // clobber the final frame with a stale batch render after it completes.
   const swingRenderedLiveRef = useRef(false);
@@ -922,6 +955,96 @@ export function App(): React.JSX.Element {
     resolve?.(payload);
   };
 
+  // JOptionPane: show a modal and park the engine (blocked in the worker)
+  // until the user answers it.
+  const awaitSwingDialog = (kind: string, message: string): Promise<string | null> =>
+    new Promise((resolve) => {
+      swingDialogResolverRef.current = resolve;
+      setSwingDialogInput('');
+      setSwingDialog({ kind, message });
+    });
+
+  const resolveSwingDialog = (response: string | null): void => {
+    const resolve = swingDialogResolverRef.current;
+    swingDialogResolverRef.current = null;
+    setSwingDialog(null);
+    resolve?.(response);
+  };
+
+  // The dialog's buttons and their JOptionPane response codes, by kind.
+  const dialogActions = (kind: string): React.JSX.Element[] => {
+    if (kind === 'message') {
+      return [
+        <Button
+          key="ok"
+          onClick={() => {
+            resolveSwingDialog('');
+          }}
+        >
+          OK
+        </Button>,
+      ];
+    }
+    if (kind === 'input') {
+      return [
+        <Button
+          key="cancel"
+          onClick={() => {
+            resolveSwingDialog(null);
+          }}
+        >
+          Cancel
+        </Button>,
+        <Button
+          key="ok"
+          onClick={() => {
+            resolveSwingDialog(swingDialogInput);
+          }}
+        >
+          OK
+        </Button>,
+      ];
+    }
+    // confirm:<optionType> — YES=0, NO=1, CANCEL=2 (OK maps to YES=0).
+    const option = Number(kind.slice('confirm:'.length));
+    const buttons: React.JSX.Element[] = [];
+    if (option === 1 || option === 2) {
+      buttons.push(
+        <Button
+          key="cancel"
+          onClick={() => {
+            resolveSwingDialog('2');
+          }}
+        >
+          Cancel
+        </Button>,
+      );
+    }
+    if (option === 0 || option === 1) {
+      buttons.push(
+        <Button
+          key="no"
+          onClick={() => {
+            resolveSwingDialog('1');
+          }}
+        >
+          No
+        </Button>,
+      );
+    }
+    buttons.push(
+      <Button
+        key="yes"
+        onClick={() => {
+          resolveSwingDialog('0');
+        }}
+      >
+        {option === 2 ? 'OK' : 'Yes'}
+      </Button>,
+    );
+    return buttons;
+  };
+
   // Interactive Swing: render the live tree (wiring controls to dispatch),
   // then park until the user activates a control OR a Timer fires. The
   // engine's event loop stays blocked in the worker until this resolves.
@@ -966,6 +1089,7 @@ export function App(): React.JSX.Element {
     stopRequestedRef.current = false;
     swingRenderedLiveRef.current = false;
     swingPendingMotionRef.current = null;
+    setSwingDialog(null);
     setPhase('running');
     clearConsole();
     neighborhoodVizRef.current?.stop();
@@ -1002,7 +1126,7 @@ export function App(): React.JSX.Element {
           onStderr: (text) => {
             append(text, 'error');
           },
-          ...(swing ? { onSwingEvent: awaitSwingEvent } : {}),
+          ...(swing ? { onSwingEvent: awaitSwingEvent, onSwingDialog: awaitSwingDialog } : {}),
         });
         if (result.status === 'error') {
           append(`${result.error ?? 'unknown VM error'}\n`, 'error');
@@ -1036,6 +1160,8 @@ export function App(): React.JSX.Element {
     stopRequestedRef.current = true;
     swingEventResolverRef.current = null;
     swingPendingMotionRef.current = null;
+    swingDialogResolverRef.current = null;
+    setSwingDialog(null);
     // Clear any paused-debugger UI: a hard stop can happen mid-debug (an
     // interactive Swing session idling for the next event, say).
     debugResolverRef.current = null;
@@ -1143,6 +1269,7 @@ export function App(): React.JSX.Element {
     stopRequestedRef.current = false;
     swingRenderedLiveRef.current = false;
     swingPendingMotionRef.current = null;
+    setSwingDialog(null);
     setPhase('debugging');
     clearConsole();
     try {
@@ -1166,7 +1293,7 @@ export function App(): React.JSX.Element {
           watches: [...watchesRef.current],
           // An interactive Swing UI runs its event loop under the debugger,
           // so breakpoints inside listeners pause like any other code.
-          ...(swing ? { onSwingEvent: awaitSwingEvent } : {}),
+          ...(swing ? { onSwingEvent: awaitSwingEvent, onSwingDialog: awaitSwingDialog } : {}),
           onStdout: (text) => {
             append(text);
           },
@@ -1639,6 +1766,47 @@ export function App(): React.JSX.Element {
           </Box>
         </Paper>
       </Box>
+
+      {/* JOptionPane: an accessible modal (focus-trapped, Escape closes). */}
+      <Dialog
+        open={swingDialog !== null}
+        onClose={() => {
+          resolveSwingDialog(null);
+        }}
+        aria-labelledby="swing-dialog-title"
+        data-testid="swing-dialog"
+      >
+        <DialogTitle id="swing-dialog-title">
+          {swingDialog?.kind === 'input'
+            ? 'Input'
+            : swingDialog?.kind === 'message'
+              ? 'Message'
+              : 'Select an Option'}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ whiteSpace: 'pre-wrap' }}>
+            {swingDialog?.message}
+          </DialogContentText>
+          {swingDialog?.kind === 'input' && (
+            <TextField
+              autoFocus
+              fullWidth
+              variant="standard"
+              value={swingDialogInput}
+              onChange={(event) => {
+                setSwingDialogInput(event.target.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  resolveSwingDialog(swingDialogInput);
+                }
+              }}
+              slotProps={{ htmlInput: { 'data-testid': 'dialog-input', 'aria-label': 'Input' } }}
+            />
+          )}
+        </DialogContent>
+        <DialogActions>{swingDialog ? dialogActions(swingDialog.kind) : null}</DialogActions>
+      </Dialog>
     </Box>
   );
 }

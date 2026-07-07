@@ -334,6 +334,9 @@ struct JsConsole<'a> {
     /// renders it and blocks until the next UI event, returning that
     /// event's payload or `null`/`undefined` when the window is closed.
     await_ui: Option<&'a js_sys::Function>,
+    /// Blocking `JOptionPane` dialog: called with `(kind, message)`; shows a
+    /// modal and returns the response, or `null`/`undefined` when dismissed.
+    dialog_ui: Option<&'a js_sys::Function>,
     /// Per-call captured messages for an active `SystemOutTestRunner` run
     /// (the JS console streams, so capture needs its own buffer). `None`
     /// when not capturing.
@@ -359,6 +362,18 @@ impl ConsoleIo for JsConsole<'_> {
 
     fn read_line(&mut self) -> Option<String> {
         let result = self.stdin?.call0(&JsValue::NULL).ok()?;
+        result.as_string()
+    }
+
+    fn ui_dialog(&mut self, kind: &str, message: &str) -> Option<String> {
+        let result = self
+            .dialog_ui?
+            .call2(
+                &JsValue::NULL,
+                &JsValue::from_str(kind),
+                &JsValue::from_str(message),
+            )
+            .ok()?;
         result.as_string()
     }
 
@@ -482,7 +497,7 @@ impl JvmSession {
     /// `stdout` and `stderr` receive string chunks as the program
     /// writes them. `stdin`, if provided, is called when the program
     /// reads a line and should return a string or `null` for EOF.
-    #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
     pub fn run(
         &mut self,
         main_class: &str,
@@ -491,12 +506,14 @@ impl JvmSession {
         stderr: &js_sys::Function,
         stdin: Option<js_sys::Function>,
         await_ui: Option<js_sys::Function>,
+        dialog_ui: Option<js_sys::Function>,
     ) -> Result<JsValue, JsValue> {
         let mut console = JsConsole {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
             await_ui: await_ui.as_ref(),
+            dialog_ui: dialog_ui.as_ref(),
             capture: None,
         };
         // Real entropy for Math.random(); tests off-browser use the
@@ -554,6 +571,7 @@ impl JvmSession {
         on_pause: &js_sys::Function,
         poll_interrupt: Option<js_sys::Function>,
         await_ui: Option<js_sys::Function>,
+        dialog_ui: Option<js_sys::Function>,
     ) -> Result<JsValue, JsValue> {
         let mut console = JsConsole {
             stdout,
@@ -563,6 +581,7 @@ impl JvmSession {
             // breakpoint inside a listener pauses through the debug host
             // below (the two blocking channels are used at different times).
             await_ui: await_ui.as_ref(),
+            dialog_ui: dialog_ui.as_ref(),
             capture: None,
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

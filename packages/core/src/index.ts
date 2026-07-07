@@ -151,6 +151,14 @@ export interface RunOptions {
    * user interacts (see `JvmWorkerSession.run`).
    */
   awaitUiEvent?: (tree: string) => string | null;
+  /**
+   * Blocking JOptionPane dialog. Called with `(kind, message)` — `kind` is
+   * `message`, `confirm:<optionType>`, or `input` — to show a modal and
+   * return the response (an option code, the typed text, or `null` when
+   * dismissed). In the worker this blocks on the SharedArrayBuffer until the
+   * user answers.
+   */
+  showDialog?: (kind: string, message: string) => string | null;
 }
 
 /** Accepted by {@link initJvm} to override where the .wasm comes from. */
@@ -209,6 +217,7 @@ export class JvmSession {
       (text: string) => options.onStderr?.(text),
       options.readStdin ?? null,
       options.awaitUiEvent ?? null,
+      options.showDialog ?? null,
     ) as RunResult;
   }
 
@@ -232,6 +241,7 @@ export class JvmSession {
       },
       options.pollInterrupt ?? null,
       options.awaitUiEvent ?? null,
+      options.showDialog ?? null,
     ) as RunResult;
   }
 

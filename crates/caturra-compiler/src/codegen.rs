@@ -3680,6 +3680,15 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(Ljava/lang/String;)Ljava/lang/String;",
     ),
+    // Internal blocking dialog (bundled JOptionPane): show a modal of the
+    // given kind with the message, block until the user answers, and return
+    // the response (a code / entered text, or null if dismissed).
+    bm(
+        "__uiDialog",
+        &[S, S],
+        BRet::Str,
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+    ),
 ];
 
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[

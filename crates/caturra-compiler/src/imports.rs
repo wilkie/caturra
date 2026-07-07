@@ -234,6 +234,7 @@ static JAVAX_SWING: &[&str] = &[
     "JSlider",
     "ButtonGroup",
     "Timer",
+    "JOptionPane",
 ];
 static JAVA_AWT: &[&str] = &[
     "Color",

@@ -50,6 +50,12 @@ export interface WorkerRunOptions {
    * stays parked until it resolves. Needs a cross-origin isolated page.
    */
   onSwingEvent?: (tree: string) => Promise<string | null>;
+  /**
+   * Blocking JOptionPane dialog. Called with `(kind, message)`; show a modal
+   * and resolve with the response (option code / typed text) or `null` when
+   * dismissed. May be async. Needs a cross-origin isolated page.
+   */
+  onSwingDialog?: (kind: string, message: string) => Promise<string | null>;
 }
 
 /** Options for {@link JvmWorkerSession.runDebug}. */
@@ -77,6 +83,7 @@ interface Pending {
     | undefined;
   debugBuffer?: SharedArrayBuffer | undefined;
   onSwingEvent?: ((tree: string) => Promise<string | null>) | undefined;
+  onSwingDialog?: ((kind: string, message: string) => Promise<string | null>) | undefined;
   swingBuffer?: SharedArrayBuffer | undefined;
 }
 
@@ -156,9 +163,10 @@ export class JvmWorkerSession {
       );
     }
     const stdinBuffer = isolated ? createStdinBuffer() : undefined;
-    // A separate blocking channel for Swing events, only when the caller
-    // wants an interactive UI and the page can block (cross-origin isolated).
-    const swingBuffer = isolated && options.onSwingEvent ? createStdinBuffer() : undefined;
+    // A separate blocking channel for Swing events and dialogs, only when the
+    // caller wants them and the page can block (cross-origin isolated).
+    const swingBuffer =
+      isolated && (options.onSwingEvent || options.onSwingDialog) ? createStdinBuffer() : undefined;
 
     const id = this.#nextId++;
     const promise = new Promise<unknown>((resolve, reject) => {
@@ -170,6 +178,7 @@ export class JvmWorkerSession {
         nextLine: normalizeStdin(options.stdin),
         stdinBuffer,
         onSwingEvent: options.onSwingEvent,
+        onSwingDialog: options.onSwingDialog,
         swingBuffer,
       });
     });
@@ -208,9 +217,10 @@ export class JvmWorkerSession {
     const stdinBuffer = createStdinBuffer();
     const debugBuffer = createStdinBuffer();
     const interruptFlag = createInterruptFlag();
-    // A separate blocking channel for Swing events, so an interactive UI
-    // can run — and pause in its listeners — under the debugger.
-    const swingBuffer = options.onSwingEvent ? createStdinBuffer() : undefined;
+    // A separate blocking channel for Swing events and dialogs, so an
+    // interactive UI can run — and pause in its listeners — under the debugger.
+    const swingBuffer =
+      options.onSwingEvent || options.onSwingDialog ? createStdinBuffer() : undefined;
     this.#activeInterruptFlag = interruptFlag;
 
     const id = this.#nextId++;
@@ -225,6 +235,7 @@ export class JvmWorkerSession {
         onPause: options.onPause,
         debugBuffer,
         onSwingEvent: options.onSwingEvent,
+        onSwingDialog: options.onSwingDialog,
         swingBuffer,
       });
     });
@@ -348,6 +359,9 @@ export class JvmWorkerSession {
       case 'swing-render':
         void this.#answerSwing(pending, message.tree);
         break;
+      case 'swing-dialog':
+        void this.#answerDialog(pending, message.kind, message.message);
+        break;
     }
   }
 
@@ -362,6 +376,19 @@ export class JvmWorkerSession {
       payload = null;
     }
     supplyLine(pending.swingBuffer, payload);
+  }
+
+  async #answerDialog(pending: Pending, kind: string, message: string): Promise<void> {
+    if (!pending.swingBuffer || !pending.onSwingDialog) {
+      return;
+    }
+    let response: string | null;
+    try {
+      response = await pending.onSwingDialog(kind, message);
+    } catch {
+      response = null;
+    }
+    supplyLine(pending.swingBuffer, response);
   }
 
   async #answerPause(pending: Pending, snapshot: DebugPauseSnapshot): Promise<void> {
