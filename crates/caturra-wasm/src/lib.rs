@@ -553,14 +553,16 @@ impl JvmSession {
         stdin: Option<js_sys::Function>,
         on_pause: &js_sys::Function,
         poll_interrupt: Option<js_sys::Function>,
+        await_ui: Option<js_sys::Function>,
     ) -> Result<JsValue, JsValue> {
         let mut console = JsConsole {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
-            // The debugger and the Swing event loop don't compose (both
-            // want to own the run); a debug run has no interactive UI.
-            await_ui: None,
+            // An interactive Swing run drives its event loop here too, so a
+            // breakpoint inside a listener pauses through the debug host
+            // below (the two blocking channels are used at different times).
+            await_ui: await_ui.as_ref(),
             capture: None,
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

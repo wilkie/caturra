@@ -231,6 +231,7 @@ export class JvmSession {
         return JSON.stringify(options.onPause(snapshot));
       },
       options.pollInterrupt ?? null,
+      options.awaitUiEvent ?? null,
     ) as RunResult;
   }
 

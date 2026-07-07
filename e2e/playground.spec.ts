@@ -1282,6 +1282,63 @@ test.describe('swing (interactive)', () => {
   });
 });
 
+test.describe('swing (debugger)', () => {
+  test('a breakpoint inside an event listener pauses when the button is clicked', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    // Explicit source so the listener body lines are known (10 and 11).
+    await setSource(
+      page,
+      [
+        'import javax.swing.*;', // 1
+        'import java.awt.*;', // 2
+        '', // 3
+        'public class Main {', // 4
+        '  static int count = 0;', // 5
+        '  public static void main(String[] args) {', // 6
+        '    JFrame frame = new JFrame("Counter");', // 7
+        '    JButton button = new JButton("Bump");', // 8
+        '    button.addActionListener(e -> {', // 9
+        '      Main.count++;', // 10
+        '      System.out.println("count is " + Main.count);', // 11
+        '    });', // 12
+        '    frame.add(button);', // 13
+        '    frame.setVisible(true);', // 14
+        '  }', // 15
+        '}', // 16
+      ].join('\n'),
+    );
+    // Breakpoint on the first statement inside the listener body.
+    await toggleBreakpoint(page, 10);
+    await page.getByTestId('debug').click();
+
+    // The UI renders live under the debugger; clicking the button runs the
+    // listener in the VM, which hits the breakpoint and pauses.
+    const button = page.getByTestId('swing-root').getByRole('button', { name: 'Bump' });
+    await expect(button).toBeVisible();
+    await button.click();
+
+    // Paused inside the listener, at the right source line, with the loop's
+    // ActionEvent local in scope.
+    const frames = page.getByTestId('frames');
+    await expect(frames).toContainText('Main.java:10');
+    await expect(page.locator('.cm-paused-line')).toContainText('Main.count++');
+
+    // A single resume runs the rest of the listener body (the println fires)
+    // — it does not spuriously re-pause on the same source line.
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('count is 1');
+    await expect(page.getByTestId('paused-view')).toBeHidden();
+
+    // The interactive debug session is still live; Stop aborts it and the
+    // controls reset (the escape hatch when idling for the next event).
+    await expect(page.getByTestId('stop-run')).toBeVisible();
+    await page.getByTestId('stop-run').click();
+    await expect(page.getByTestId('run')).toBeEnabled();
+  });
+});
+
 test.describe('playground in dark mode', () => {
   test.use({ colorScheme: 'dark' });
 

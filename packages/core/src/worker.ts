@@ -69,13 +69,21 @@ async function handle(request: WorkerRequest): Promise<unknown> {
       });
     }
     case 'runDebug': {
-      const { id, stdinBuffer, debugBuffer, interruptFlag } = request;
+      const { id, stdinBuffer, debugBuffer, interruptFlag, swingBuffer } = request;
       const readStdin = stdinBuffer
         ? () =>
             readLineBlocking(stdinBuffer, () => {
               scope.postMessage({ id, type: 'stdin-request' });
             })
         : () => null;
+      // Interactive Swing under the debugger: same event pump as `run`, so
+      // a listener runs (and can hit a breakpoint via onPause below).
+      const awaitUiEvent = swingBuffer
+        ? (tree: string) =>
+            readLineBlocking(swingBuffer, () => {
+              scope.postMessage({ id, type: 'swing-render', tree });
+            })
+        : undefined;
       return (await session()).runDebug(request.mainClass, {
         args: request.args,
         breakpoints: request.breakpoints,
@@ -98,6 +106,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
             : (JSON.parse(response) as DebugControlResponse);
         },
         pollInterrupt: () => consumeInterrupt(interruptFlag),
+        ...(awaitUiEvent ? { awaitUiEvent } : {}),
       });
     }
     case 'writeFile':

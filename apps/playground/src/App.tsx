@@ -717,6 +717,12 @@ export function App(): React.JSX.Element {
   const stopProgram = async (): Promise<void> => {
     stopRequestedRef.current = true;
     swingEventResolverRef.current = null;
+    // Clear any paused-debugger UI: a hard stop can happen mid-debug (an
+    // interactive Swing session idling for the next event, say).
+    debugResolverRef.current = null;
+    setDebugBar(false);
+    setPaused(null);
+    setPausedLine(editor(), null);
     const session = await sessionRef.current;
     session.terminate();
     sessionRef.current = JvmWorkerSession.create();
@@ -815,11 +821,17 @@ export function App(): React.JSX.Element {
   };
 
   const debugProgram = async (): Promise<void> => {
+    stopRequestedRef.current = false;
     setPhase('debugging');
     clearConsole();
     try {
       const session = await sessionRef.current;
       await writeDataFiles(session);
+      const swing = isSwingProgram();
+      if (swing) {
+        await session.remove('swing.json').catch(() => undefined);
+        setView('none');
+      }
       const sources = collectSources();
       append(`$ javac ${sources.map((file) => file.path).join(' ')}\n`);
       const compiled = await session.compile(sources);
@@ -831,6 +843,9 @@ export function App(): React.JSX.Element {
           stdin: stdinLines,
           breakpoints: currentBreakpoints(),
           watches: [...watchesRef.current],
+          // An interactive Swing UI runs its event loop under the debugger,
+          // so breakpoints inside listeners pause like any other code.
+          ...(swing ? { onSwingEvent: awaitSwingEvent } : {}),
           onStdout: (text) => {
             append(text);
           },
@@ -868,11 +883,19 @@ export function App(): React.JSX.Element {
         } else if (result.status === 'exited') {
           append(`(exit code ${String(result.exitCode)})\n`);
         }
+        // A non-interactive Swing UI renders once on exit (batch), like Run.
+        if (swing && result.status !== 'error' && result.status !== 'stopped') {
+          await renderSwing();
+        }
       }
     } catch (error) {
-      append(`${String(error)}\n`, 'error');
+      if (!wasStopped()) {
+        append(`${String(error)}\n`, 'error');
+      }
     } finally {
-      setPhase('idle');
+      if (!wasStopped()) {
+        setPhase('idle');
+      }
     }
   };
 
@@ -1067,7 +1090,7 @@ export function App(): React.JSX.Element {
                 Solve
               </Button>
             )}
-            {phase === 'running' && (
+            {(phase === 'running' || phase === 'debugging') && (
               <Button
                 id="stop-run"
                 data-testid="stop-run"

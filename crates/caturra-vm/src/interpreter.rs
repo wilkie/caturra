@@ -79,8 +79,11 @@ struct DebugState<'run> {
     breakpoints: std::collections::HashSet<(String, u32)>,
     /// Active step goal from the last pause.
     step: Option<StepGoal>,
-    /// Skip the pause check once at this address (just resumed there).
-    resume_at: Option<usize>,
+    /// The source line we just resumed from; suppress re-pausing anywhere
+    /// on it until execution leaves it. A single line can compile to
+    /// several boundary PCs, so skipping only the paused address would
+    /// re-fire a breakpoint (or step) at the line's next boundary.
+    resume_line: Option<(String, u16)>,
     /// Countdown to the next interrupt poll.
     poll_in: u32,
 }
@@ -139,7 +142,7 @@ impl<'run> Interpreter<'run> {
                 .map(|b| (b.file.clone(), b.line))
                 .collect(),
             step: None,
-            resume_at: None,
+            resume_line: None,
             poll_in: INTERRUPT_POLL_INTERVAL,
         });
     }
@@ -216,19 +219,23 @@ impl<'run> Interpreter<'run> {
     fn debug_checkpoint(
         &mut self,
         frame: &mut Frame<'run>,
-        addr: usize,
         boundary_line: u16,
     ) -> Option<DebugCommand> {
         let depth = self.frames.len();
         let debug = self.debug.as_mut().expect("caller checked debug mode");
+        let at_line_boundary = boundary_line != 0;
 
-        // Just resumed: the first instruction after a pause is the one
-        // we paused on — run it without re-pausing. The marker clears
-        // immediately so looping back to the same address pauses again.
-        if let Some(resume_addr) = debug.resume_at.take()
-            && resume_addr == addr
-        {
-            return None;
+        // Just resumed: suppress re-pausing anywhere on the line we paused
+        // at until execution moves off it. One source line can compile to
+        // several boundary PCs, so skipping only the paused address would
+        // re-fire a breakpoint (or step) at the line's next boundary.
+        if at_line_boundary {
+            match &debug.resume_line {
+                Some((file, line)) if file == &frame.code.source_file && *line == boundary_line => {
+                    return None;
+                }
+                _ => debug.resume_line = None,
+            }
         }
 
         // Host interrupt (pause / stop button), polled sparsely.
@@ -240,7 +247,6 @@ impl<'run> Interpreter<'run> {
             false
         };
 
-        let at_line_boundary = boundary_line != 0;
         let reason = if interrupted {
             Some(PauseReason::Interrupt)
         } else if at_line_boundary
@@ -293,7 +299,7 @@ impl<'run> Interpreter<'run> {
             }
             _ => None,
         };
-        debug.resume_at = Some(addr);
+        debug.resume_line = Some((frame.code.source_file.clone(), boundary_line));
         Some(control.command)
     }
 
@@ -500,7 +506,7 @@ impl<'run> Interpreter<'run> {
                 }
                 if self.debug.is_some() {
                     frame.pc = addr;
-                    if self.debug_checkpoint(&mut frame, addr, boundary_line)
+                    if self.debug_checkpoint(&mut frame, boundary_line)
                         == Some(DebugCommand::Terminate)
                     {
                         return Err(VmError::Stopped);

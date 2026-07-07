@@ -208,6 +208,9 @@ export class JvmWorkerSession {
     const stdinBuffer = createStdinBuffer();
     const debugBuffer = createStdinBuffer();
     const interruptFlag = createInterruptFlag();
+    // A separate blocking channel for Swing events, so an interactive UI
+    // can run — and pause in its listeners — under the debugger.
+    const swingBuffer = options.onSwingEvent ? createStdinBuffer() : undefined;
     this.#activeInterruptFlag = interruptFlag;
 
     const id = this.#nextId++;
@@ -221,6 +224,8 @@ export class JvmWorkerSession {
         stdinBuffer,
         onPause: options.onPause,
         debugBuffer,
+        onSwingEvent: options.onSwingEvent,
+        swingBuffer,
       });
     });
     this.#worker.postMessage({
@@ -233,6 +238,7 @@ export class JvmWorkerSession {
       debugBuffer,
       interruptFlag,
       stdinBuffer,
+      ...(swingBuffer ? { swingBuffer } : {}),
     } satisfies WorkerRequest);
     try {
       return (await promise) as RunResult;

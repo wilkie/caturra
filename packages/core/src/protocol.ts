@@ -41,6 +41,8 @@ export type WorkerRequest =
       /** Pause-button flag, polled by the engine between instructions. */
       interruptFlag: SharedArrayBuffer;
       stdinBuffer?: SharedArrayBuffer;
+      /** Blocking Swing event channel, when debugging an interactive UI. */
+      swingBuffer?: SharedArrayBuffer;
     }
   | { id: number; type: 'writeFile'; path: string; contents: string | Uint8Array }
   | { id: number; type: 'readFile'; path: string }
