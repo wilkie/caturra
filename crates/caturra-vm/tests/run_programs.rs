@@ -634,6 +634,36 @@ fn swing_close_with_default_hide_keeps_running() {
 }
 
 #[test]
+fn swing_mouse_listener_fires_with_coordinates() {
+    // A panel with a MouseListener (an anonymous MouseAdapter subclass) gets
+    // its mousePressed called with the click coordinates the host reports in
+    // a "__mouse=x,y" payload line. Ids: frame c0, panel c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Paint");
+                JPanel panel = new JPanel();
+                panel.addMouseListener(new MouseAdapter() {
+                    public void mousePressed(MouseEvent e) {
+                        System.out.println("press " + e.getX() + "," + e.getY());
+                    }
+                });
+                frame.add(panel);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("c1\n__mouse=50,60"))],
+    );
+    assert_eq!(out, "press 50,60\n");
+}
+
+#[test]
 fn swing_rich_controls_dispatch_their_listeners() {
     // Non-button controls now dispatch: a checkbox toggle fires its
     // ItemListener, a combo box selection and a slider drag fire their

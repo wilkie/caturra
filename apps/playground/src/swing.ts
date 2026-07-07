@@ -231,6 +231,34 @@ export class SwingViz {
     }
   }
 
+  /**
+   * Wire a panel with a MouseListener: a click reports component-relative
+   * coordinates (mapped to the canvas's own pixel grid when it is scaled).
+   * Pointer-only — a bitmap click target has no keyboard equivalent.
+   */
+  #mouse(el: HTMLElement, node: SwingNode): void {
+    if (!this.#onEvent || node.listens !== true) {
+      return;
+    }
+    const onEvent = this.#onEvent;
+    const id = node.id;
+    if (el instanceof HTMLCanvasElement) {
+      el.style.cursor = 'crosshair';
+    }
+    el.addEventListener('click', (event) => {
+      const rect = el.getBoundingClientRect();
+      const scaleX = el instanceof HTMLCanvasElement && rect.width ? el.width / rect.width : 1;
+      const scaleY = el instanceof HTMLCanvasElement && rect.height ? el.height / rect.height : 1;
+      const x = Math.round((event.clientX - rect.left) * scaleX);
+      const y = Math.round((event.clientY - rect.top) * scaleY);
+      let payload = `${id}\n__mouse=${String(x)},${String(y)}`;
+      for (const [fieldId, field] of this.#fields) {
+        payload += `\n${fieldId}=${fieldValue(field)}`;
+      }
+      onEvent(payload);
+    });
+  }
+
   private build(node: SwingNode): HTMLElement {
     switch (node.type) {
       case 'frame':
@@ -332,6 +360,7 @@ export class SwingViz {
     const panel = document.createElement('div');
     panel.className = 'swing-panel';
     applyLayout(panel, node.layout);
+    this.#mouse(panel, node);
     this.common(panel, node);
     this.children(panel, node);
     return panel;
@@ -350,6 +379,7 @@ export class SwingViz {
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', node.tooltip ?? 'Drawing');
     paintCanvas(canvas, node.paint ?? '');
+    this.#mouse(canvas, node);
     wrap.appendChild(canvas);
     // A painted panel rarely also holds child widgets, but honor them.
     this.children(wrap, node);

@@ -246,8 +246,17 @@ static JAVA_AWT: &[&str] = &[
     "Component",
 ];
 /// java.awt.event (listeners): the functional interfaces students attach
-/// (addActionListener / addItemListener) plus their event objects.
-static JAVA_AWT_EVENT: &[&str] = &["ActionListener", "ActionEvent", "ItemListener", "ItemEvent"];
+/// (addActionListener / addItemListener), the mouse listener/adapter, plus
+/// their event objects.
+static JAVA_AWT_EVENT: &[&str] = &[
+    "ActionListener",
+    "ActionEvent",
+    "ItemListener",
+    "ItemEvent",
+    "MouseListener",
+    "MouseAdapter",
+    "MouseEvent",
+];
 /// `javax.swing.event`: the `ChangeListener` used with `JSlider`.
 static JAVAX_SWING_EVENT: &[&str] = &["ChangeListener", "ChangeEvent"];
 

@@ -1362,6 +1362,37 @@ test.describe('swing (interactive)', () => {
     await expect.poll(() => sample(120, 70)).toEqual([255, 140, 0]);
   });
 
+  test('a MouseListener fires with canvas coordinates (click to draw)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Click to draw' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const canvas = root.getByRole('img', { name: 'Click to add a dot' });
+    await expect(canvas).toBeVisible();
+
+    const sample = (x: number, y: number): Promise<number[]> =>
+      page.evaluate(
+        ([px, py]) => {
+          const c = document.querySelector<HTMLCanvasElement>('[data-testid="swing-root"] canvas');
+          const ctx = c?.getContext('2d');
+          if (!ctx) {
+            return [-1, -1, -1];
+          }
+          const d = ctx.getImageData(px, py, 1, 1).data;
+          return [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0];
+        },
+        [x, y],
+      );
+
+    // Nothing drawn yet: the spot is background, not a blue dot.
+    expect(await sample(100, 80)).not.toEqual([30, 90, 200]);
+
+    // Clicking the canvas dispatches mousePressed with those coordinates; the
+    // listener adds a dot there and the panel repaints.
+    await canvas.click({ position: { x: 100, y: 80 } });
+    await expect.poll(() => sample(100, 80)).toEqual([30, 90, 200]);
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

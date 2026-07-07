@@ -118,6 +118,7 @@ class Component {
   // whether it has one. All no-op/false by default; widgets override them.
   void __setFromHost(String value) {}
   void __onEvent() {}
+  void __onMouse(int x, int y) {}
   boolean __listens() { return false; }
 }
 
@@ -173,11 +174,23 @@ class Graphics {
 class JPanel extends Container {
   int __pw = 200;
   int __ph = 150;
+  MouseListener __mouseListener = null;
   public JPanel() {}
   public JPanel(LayoutManager m) { __layout = m; }
   public void setPreferredSize(Dimension d) { __pw = d.width; __ph = d.height; }
   public int getWidth() { return __pw; }
   public int getHeight() { return __ph; }
+  public void addMouseListener(MouseListener l) { __mouseListener = l; __SwingRuntime.__interactive = true; }
+  boolean __listens() { return __mouseListener != null; }
+  void __onMouse(int x, int y) {
+    if (__mouseListener != null) {
+      // A real click fires press, then release, then clicked.
+      MouseEvent e = new MouseEvent(this, x, y);
+      __mouseListener.mousePressed(e);
+      __mouseListener.mouseReleased(e);
+      __mouseListener.mouseClicked(e);
+    }
+  }
   // The event loop re-renders (and so re-paints) after every event, so a
   // repaint request is implicit; this exists so student code compiles.
   public void repaint() {}
@@ -473,6 +486,35 @@ interface ChangeListener {
   void stateChanged(ChangeEvent e);
 }
 
+class MouseEvent {
+  Object __src;
+  int __x, __y;
+  public MouseEvent(Object source, int x, int y) { __src = source; __x = x; __y = y; }
+  public Object getSource() { return __src; }
+  public int getX() { return __x; }
+  public int getY() { return __y; }
+  public int getButton() { return 1; } // BUTTON1
+}
+
+interface MouseListener {
+  void mouseClicked(MouseEvent e);
+  void mousePressed(MouseEvent e);
+  void mouseReleased(MouseEvent e);
+  void mouseEntered(MouseEvent e);
+  void mouseExited(MouseEvent e);
+}
+
+// The five-method MouseListener isn't a functional interface (no lambdas), so
+// students subclass this adapter and override only what they need — usually
+// via `new MouseAdapter() { ... }`.
+class MouseAdapter implements MouseListener {
+  public void mouseClicked(MouseEvent e) {}
+  public void mousePressed(MouseEvent e) {}
+  public void mouseReleased(MouseEvent e) {}
+  public void mouseEntered(MouseEvent e) {}
+  public void mouseExited(MouseEvent e) {}
+}
+
 // The event pump. setVisible enters __loop, which renders the current tree
 // and blocks on System.__uiAwait for the next event. The host returns the
 // clicked component's id plus newline-separated "id=value" field states;
@@ -513,10 +555,36 @@ class __SwingRuntime {
         }
         continue;
       }
-      if (nl >= 0) __applyFields(payload.substring(nl + 1));
+      String body = nl < 0 ? "" : payload.substring(nl + 1);
+      __applyFields(body);
       Component c = __find(cid);
-      if (c != null) c.__onEvent();
+      if (c != null) {
+        // A "__mouse=x,y" line marks a pointer event on the component, which
+        // dispatches to its MouseListener with coordinates; otherwise it's a
+        // control activation (button/checkbox/…).
+        int[] xy = __mouseOf(body);
+        if (xy != null) c.__onMouse(xy[0], xy[1]);
+        else c.__onEvent();
+      }
     }
+  }
+
+  static int[] __mouseOf(String body) {
+    String rest = body;
+    while (rest.length() > 0) {
+      int nl = rest.indexOf("\n");
+      String line = nl < 0 ? rest : rest.substring(0, nl);
+      rest = nl < 0 ? "" : rest.substring(nl + 1);
+      if (line.startsWith("__mouse=")) {
+        String coords = line.substring(8);
+        int comma = coords.indexOf(",");
+        if (comma < 0) return null;
+        int x = Integer.parseInt(coords.substring(0, comma));
+        int y = Integer.parseInt(coords.substring(comma + 1));
+        return new int[]{x, y};
+      }
+    }
+    return null;
   }
 
   // Sync the DOM's live field values (sent with every event) back into the

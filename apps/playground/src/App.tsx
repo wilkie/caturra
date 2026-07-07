@@ -312,6 +312,56 @@ class DrawPanel extends JPanel {
 `,
   },
   {
+    name: 'Click to draw',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.util.ArrayList;
+
+public class Main {
+  static ArrayList<Integer> xs = new ArrayList<Integer>();
+  static ArrayList<Integer> ys = new ArrayList<Integer>();
+  static DotPanel panel;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Dots");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+    panel = new DotPanel();
+    panel.setPreferredSize(new Dimension(300, 220));
+    panel.setToolTipText("Click to add a dot");
+
+    // MouseListener has five methods, so subclass MouseAdapter and override
+    // just the one you need. getX()/getY() are canvas coordinates.
+    panel.addMouseListener(new MouseAdapter() {
+      public void mousePressed(MouseEvent e) {
+        Main.xs.add(e.getX());
+        Main.ys.add(e.getY());
+        Main.panel.repaint();
+      }
+    });
+
+    frame.add(panel);
+    frame.setVisible(true);
+  }
+}
+
+class DotPanel extends JPanel {
+  public void paintComponent(Graphics g) {
+    super.paintComponent(g);
+    g.setColor(new Color(245, 245, 250));
+    g.fillRect(0, 0, getWidth(), getHeight());
+    g.setColor(new Color(30, 90, 200));
+    for (int i = 0; i < Main.xs.size(); i++) {
+      int x = Main.xs.get(i);
+      int y = Main.ys.get(i);
+      g.fillOval(x - 6, y - 6, 12, 12);
+    }
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
