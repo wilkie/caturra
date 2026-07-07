@@ -1220,6 +1220,68 @@ test.describe('swing (accessible DOM)', () => {
   });
 });
 
+test.describe('swing (interactive)', () => {
+  test('a button click runs its listener in the VM and re-renders', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const button = root.getByRole('button', { name: 'Click me' });
+    await expect(button).toBeVisible();
+    await expect(root).toContainText('Clicks: 0');
+
+    // Each click round-trips to the parked VM event loop, runs the Java
+    // ActionListener (count++, label.setText), and re-renders the tree.
+    await button.click();
+    await expect(root).toContainText('Clicks: 1');
+    await button.click();
+    await expect(root).toContainText('Clicks: 2');
+
+    // The program is still live (an interactive UI never "completes"): Stop
+    // is offered and Run stays disabled until it is pressed.
+    await expect(page.getByTestId('stop-run')).toBeVisible();
+  });
+
+  test('the button is operable from the keyboard (Enter and Space)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const button = root.getByRole('button', { name: 'Click me' });
+    await expect(button).toBeVisible();
+
+    // Focus the button and activate it with the keyboard; focus is restored
+    // across the re-render, so repeated key presses keep hitting it.
+    await button.focus();
+    await expect(button).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(root).toContainText('Clicks: 1');
+    await expect(button).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(root).toContainText('Clicks: 2');
+  });
+
+  test('a listener reads the current value typed into a text field', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Greeter form' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const field = root.getByRole('textbox', { name: 'Name:' });
+    await expect(field).toBeVisible();
+
+    // The field value is sent with the click, synced into the JTextField,
+    // and read by the listener via getText().
+    await field.fill('Ada');
+    await root.getByRole('button', { name: 'Greet' }).click();
+    await expect(root).toContainText('Hello, Ada!');
+
+    // Typing a new value and clicking again reflects the latest input.
+    await field.fill('Grace');
+    await root.getByRole('button', { name: 'Greet' }).click();
+    await expect(root).toContainText('Hello, Grace!');
+  });
+});
+
 test.describe('playground in dark mode', () => {
   test.use({ colorScheme: 'dark' });
 

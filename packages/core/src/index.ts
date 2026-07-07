@@ -142,6 +142,15 @@ export interface RunOptions {
    * (`Scanner`, `System.in`). Return `null` to signal end of input.
    */
   readStdin?: () => string | null;
+  /**
+   * Swing event pump. Called with the current component tree (JSON) each
+   * time an interactive `JFrame` needs the next event: render the tree and
+   * return the next event's payload — the activated component's id, then
+   * newline-separated `id=value` field states — or `null` to close the
+   * window. In the worker this blocks on a SharedArrayBuffer until the
+   * user interacts (see `JvmWorkerSession.run`).
+   */
+  awaitUiEvent?: (tree: string) => string | null;
 }
 
 /** Accepted by {@link initJvm} to override where the .wasm comes from. */
@@ -199,6 +208,7 @@ export class JvmSession {
       (text: string) => options.onStdout?.(text),
       (text: string) => options.onStderr?.(text),
       options.readStdin ?? null,
+      options.awaitUiEvent ?? null,
     ) as RunResult;
   }
 

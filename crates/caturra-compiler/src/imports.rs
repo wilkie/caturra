@@ -111,9 +111,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
 /// Real JDK packages we don't model at all (for wildcard/unknown-class
 /// imports of them, an honest message beats "does not exist").
 const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
-    // `java.awt.event` (listeners) is Phase 2 of the Swing support; the
-    // widget packages themselves (`java.awt`, `javax.swing`) are modeled.
-    "java.awt.event",
     "java.net",
     "java.nio",
     "java.time",
@@ -201,6 +198,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "org.code.media" => Some(ORG_CODE_MEDIA),
         "javax.swing" => Some(JAVAX_SWING),
         "java.awt" => Some(JAVA_AWT),
+        "java.awt.event" => Some(JAVA_AWT_EVENT),
         _ => None,
     }
 }
@@ -241,6 +239,9 @@ static JAVA_AWT: &[&str] = &[
     "Container",
     "Component",
 ];
+/// java.awt.event (Phase 2 listeners): the functional interface students
+/// attach with addActionListener, plus its event object.
+static JAVA_AWT_EVENT: &[&str] = &["ActionListener", "ActionEvent"];
 
 /// Public classes of the bundled theater/media library.
 static ORG_CODE_THEATER: &[&str] = &["Scene", "Theater", "Instrument"];

@@ -41,6 +41,15 @@ export interface WorkerRunOptions {
    * for EOF. Needs a cross-origin isolated page.
    */
   stdin?: StdinSource;
+  /**
+   * Swing event pump for an interactive `JFrame`. Called with the current
+   * component tree (JSON) each time the program needs the next UI event:
+   * render the tree, then resolve with the next event's payload (the
+   * activated component's id, then newline-separated `id=value` field
+   * states) or `null` to close the window. May be async — the engine
+   * stays parked until it resolves. Needs a cross-origin isolated page.
+   */
+  onSwingEvent?: (tree: string) => Promise<string | null>;
 }
 
 /** Options for {@link JvmWorkerSession.runDebug}. */
@@ -67,6 +76,8 @@ interface Pending {
     | ((snapshot: DebugPauseSnapshot) => DebugControlResponse | Promise<DebugControlResponse>)
     | undefined;
   debugBuffer?: SharedArrayBuffer | undefined;
+  onSwingEvent?: ((tree: string) => Promise<string | null>) | undefined;
+  swingBuffer?: SharedArrayBuffer | undefined;
 }
 
 function normalizeStdin(source: StdinSource | undefined): () => Promise<string | null> {
@@ -145,6 +156,9 @@ export class JvmWorkerSession {
       );
     }
     const stdinBuffer = isolated ? createStdinBuffer() : undefined;
+    // A separate blocking channel for Swing events, only when the caller
+    // wants an interactive UI and the page can block (cross-origin isolated).
+    const swingBuffer = isolated && options.onSwingEvent ? createStdinBuffer() : undefined;
 
     const id = this.#nextId++;
     const promise = new Promise<unknown>((resolve, reject) => {
@@ -155,6 +169,8 @@ export class JvmWorkerSession {
         onStderr: options.onStderr,
         nextLine: normalizeStdin(options.stdin),
         stdinBuffer,
+        onSwingEvent: options.onSwingEvent,
+        swingBuffer,
       });
     });
     const request: WorkerRequest = {
@@ -165,6 +181,9 @@ export class JvmWorkerSession {
     };
     if (stdinBuffer) {
       request.stdinBuffer = stdinBuffer;
+    }
+    if (swingBuffer) {
+      request.swingBuffer = swingBuffer;
     }
     this.#worker.postMessage(request);
     return promise as Promise<RunResult>;
@@ -320,7 +339,23 @@ export class JvmWorkerSession {
       case 'debug-paused':
         void this.#answerPause(pending, message.snapshot);
         break;
+      case 'swing-render':
+        void this.#answerSwing(pending, message.tree);
+        break;
     }
+  }
+
+  async #answerSwing(pending: Pending, tree: string): Promise<void> {
+    if (!pending.swingBuffer || !pending.onSwingEvent) {
+      return;
+    }
+    let payload: string | null;
+    try {
+      payload = await pending.onSwingEvent(tree);
+    } catch {
+      payload = null;
+    }
+    supplyLine(pending.swingBuffer, payload);
   }
 
   async #answerPause(pending: Pending, snapshot: DebugPauseSnapshot): Promise<void> {

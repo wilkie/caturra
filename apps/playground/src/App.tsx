@@ -149,6 +149,66 @@ interface SwingLevel {
 // keyboard navigation and screen-reader names). Interactivity is Phase 2.
 const SWING_LEVELS: SwingLevel[] = [
   {
+    name: 'Click counter',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static int count = 0;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Counter");
+    frame.setLayout(new GridLayout(2, 1));
+    JLabel label = new JLabel("Clicks: 0");
+    JButton button = new JButton("Click me");
+
+    // The listener runs in the VM on every click, updates the label,
+    // and the window re-renders. Try it with the keyboard too: Tab to
+    // the button and press Enter or Space.
+    button.addActionListener(e -> {
+      Main.count++;
+      label.setText("Clicks: " + Main.count);
+    });
+
+    frame.add(label);
+    frame.add(button);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
+    name: 'Greeter form',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Greeter");
+    frame.setLayout(new GridLayout(3, 2));
+
+    JLabel prompt = new JLabel("Name:");
+    JTextField field = new JTextField(12);
+    prompt.setLabelFor(field);
+
+    JLabel greeting = new JLabel("Type a name, then Greet.");
+    JButton greet = new JButton("Greet");
+
+    // Clicking reads whatever the user typed into the field.
+    greet.addActionListener(e -> {
+      greeting.setText("Hello, " + field.getText() + "!");
+    });
+
+    frame.add(prompt);
+    frame.add(field);
+    frame.add(greet);
+    frame.add(greeting);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
@@ -287,6 +347,9 @@ export function App(): React.JSX.Element {
   // Settles when the current level's on-demand content chunk has loaded.
   const levelLoadRef = useRef<Promise<void>>(Promise.resolve());
   const watchesRef = useRef<string[]>([]);
+  // Settles the pending Swing event promise when the user activates a
+  // control; the engine's event loop is parked until it resolves.
+  const swingEventResolverRef = useRef<((payload: string | null) => void) | null>(null);
   const stopRequestedRef = useRef(false);
   const wasStopped = (): boolean => stopRequestedRef.current;
   const debugResolverRef = useRef<((command: DebugCommandName | 'refresh') => void) | null>(null);
@@ -567,6 +630,23 @@ export function App(): React.JSX.Element {
     swingVizRef.current?.render(json);
   };
 
+  // Resolve the parked event promise when a control is activated.
+  const dispatchSwingEvent = (payload: string): void => {
+    const resolve = swingEventResolverRef.current;
+    swingEventResolverRef.current = null;
+    resolve?.(payload);
+  };
+
+  // Interactive Swing: render the live tree (wiring controls to dispatch),
+  // then park until the user activates one. The engine's event loop stays
+  // blocked in the worker until this resolves.
+  const awaitSwingEvent = (tree: string): Promise<string | null> =>
+    new Promise((resolve) => {
+      swingEventResolverRef.current = resolve;
+      setView('swing');
+      swingVizRef.current?.render(tree, dispatchSwingEvent);
+    });
+
   // ----- Run / Test / Stop -----
   const runProgram = async (): Promise<void> => {
     stopRequestedRef.current = false;
@@ -606,6 +686,7 @@ export function App(): React.JSX.Element {
           onStderr: (text) => {
             append(text, 'error');
           },
+          ...(swing ? { onSwingEvent: awaitSwingEvent } : {}),
         });
         if (result.status === 'error') {
           append(`${result.error ?? 'unknown VM error'}\n`, 'error');
@@ -635,6 +716,7 @@ export function App(): React.JSX.Element {
 
   const stopProgram = async (): Promise<void> => {
     stopRequestedRef.current = true;
+    swingEventResolverRef.current = null;
     const session = await sessionRef.current;
     session.terminate();
     sessionRef.current = JvmWorkerSession.create();

@@ -1879,6 +1879,20 @@ pub fn invoke_static(
                     heap.alloc(HeapObject::RefArray(refs)),
                 ))))
             }
+            // Swing event pump: render the tree (arg 0), block for the next
+            // event, return its payload String — or null to end the loop.
+            "__uiAwait" => {
+                let tree = match args.first() {
+                    Some(JValue::Ref(Some(reference))) => {
+                        heap.string_text(*reference).unwrap_or_default()
+                    }
+                    _ => String::new(),
+                };
+                match console.ui_await_event(&tree) {
+                    Some(payload) => Ok(Some(JValue::Ref(Some(heap.alloc_string(&payload))))),
+                    None => Ok(Some(JValue::Ref(None))),
+                }
+            }
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),

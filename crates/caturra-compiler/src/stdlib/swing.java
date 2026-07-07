@@ -107,15 +107,22 @@ class Component {
 
   // Overridden by every concrete component; returns one JSON object.
   String __json() { return "{\"type\":\"component\"," + __commonJson() + "}"; }
+
+  // Phase 2 event hooks. __setFromHost syncs a value the user changed in
+  // the DOM (text typed, box toggled) before dispatch; __onEvent fires the
+  // component's listener when it is the activated control. Both no-op by
+  // default; interactive widgets override them.
+  void __setFromHost(String value) {}
+  void __onEvent() {}
 }
 
 class Container extends Component {
   java.util.ArrayList<Component> __kids = new java.util.ArrayList<Component>();
   LayoutManager __layout = null;
 
-  public void add(Component c) { __kids.add(c); }
+  public void add(Component c) { __kids.add(c); __SwingRuntime.__register(c); }
   // BorderLayout-style constraints are accepted but Phase 1 lays out in flow.
-  public void add(Component c, Object constraints) { __kids.add(c); }
+  public void add(Component c, Object constraints) { add(c); }
   public void setLayout(LayoutManager m) { __layout = m; }
 
   String __layoutJson() {
@@ -160,10 +167,18 @@ class JLabel extends Component {
 
 class JButton extends Component {
   String __text;
+  ActionListener __listener = null;
   public JButton() { __text = ""; }
   public JButton(String text) { __text = text; }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
+  public void addActionListener(ActionListener l) {
+    __listener = l;
+    __SwingRuntime.__interactive = true;
+  }
+  void __onEvent() {
+    if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
+  }
   String __json() {
     return "{\"type\":\"button\",\"text\":\"" + Component.__esc(__text) + "\"," + __commonJson() + "}";
   }
@@ -179,6 +194,7 @@ class JTextField extends Component {
   public String getText() { return __text; }
   public void setText(String text) { __text = text; }
   public int getColumns() { return __cols; }
+  void __setFromHost(String value) { __text = value; }
   String __json() {
     return "{\"type\":\"textfield\",\"text\":\"" + Component.__esc(__text) + "\",\"columns\":" + __cols
         + "," + __commonJson() + "}";
@@ -195,6 +211,7 @@ class JCheckBox extends Component {
   public void setSelected(boolean selected) { __sel = selected; }
   public String getText() { return __text; }
   public void setText(String text) { __text = text; }
+  void __setFromHost(String value) { __sel = value.equals("true"); }
   String __json() {
     return "{\"type\":\"checkbox\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
         + "," + __commonJson() + "}";
@@ -225,17 +242,94 @@ class JFrame extends Container {
   public static final int DO_NOTHING_ON_CLOSE = 0;
 
   public void setVisible(boolean visible) {
-    if (visible) __render();
+    if (!visible) return;
+    __render();
+    // If any listener was registered, hand control to the event loop; it
+    // blocks on the host, dispatching events until the window closes. With
+    // no listeners (or no interactive host) this returns and the static
+    // swing.json is the whole story (Phase 1 batch render).
+    if (__SwingRuntime.__interactive) __SwingRuntime.__loop(this);
+  }
+
+  String __jsonTree() {
+    return "{\"type\":\"frame\",\"title\":\"" + Component.__esc(__title) + "\",\"width\":" + __w
+        + ",\"height\":" + __h + ",\"layout\":" + __layoutJson()
+        + ",\"children\":" + __kidsJson() + "," + __commonJson() + "}";
   }
 
   void __render() {
-    String json = "{\"type\":\"frame\",\"title\":\"" + Component.__esc(__title) + "\",\"width\":" + __w
-        + ",\"height\":" + __h + ",\"layout\":" + __layoutJson()
-        + ",\"children\":" + __kidsJson() + "," + __commonJson() + "}";
     try {
       java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File("swing.json"));
-      w.print(json);
+      w.print(__jsonTree());
       w.close();
     } catch (Exception e) {}
+  }
+}
+
+// ----- java.awt.event + the Phase 2 event loop -----
+
+class ActionEvent {
+  Object __src;
+  public ActionEvent(Object source) { __src = source; }
+  public Object getSource() { return __src; }
+}
+
+interface ActionListener {
+  void actionPerformed(ActionEvent e);
+}
+
+// The event pump. setVisible enters __loop, which renders the current tree
+// and blocks on System.__uiAwait for the next event. The host returns the
+// clicked component's id plus newline-separated "id=value" field states;
+// we sync those into the widgets, then fire the clicked component's
+// listener. All Swing dispatch stays here in Java — the VM only provides
+// the one blocking native hook.
+class __SwingRuntime {
+  static boolean __interactive = false;
+  static java.util.ArrayList<Component> __live = new java.util.ArrayList<Component>();
+
+  static void __register(Component c) {
+    for (int i = 0; i < __live.size(); i++) {
+      if (__live.get(i).__cid.equals(c.__cid)) return;
+    }
+    __live.add(c);
+  }
+
+  static Component __find(String cid) {
+    for (int i = 0; i < __live.size(); i++) {
+      Component c = __live.get(i);
+      if (c.__cid.equals(cid)) return c;
+    }
+    return null;
+  }
+
+  static void __loop(JFrame frame) {
+    while (true) {
+      String payload = System.__uiAwait(frame.__jsonTree());
+      if (payload == null) return; // window closed / stopped / no host
+      int nl = payload.indexOf("\n");
+      String cid = nl < 0 ? payload : payload.substring(0, nl);
+      if (nl >= 0) __applyFields(payload.substring(nl + 1));
+      Component c = __find(cid);
+      if (c != null) c.__onEvent();
+    }
+  }
+
+  // Sync the DOM's live field values (sent with every event) back into the
+  // widgets, so a listener reading getText()/isSelected() sees what the
+  // user actually typed or toggled.
+  static void __applyFields(String body) {
+    String rest = body;
+    while (rest.length() > 0) {
+      int nl = rest.indexOf("\n");
+      String line = nl < 0 ? rest : rest.substring(0, nl);
+      rest = nl < 0 ? "" : rest.substring(nl + 1);
+      int eq = line.indexOf("=");
+      if (eq < 0) continue;
+      String id = line.substring(0, eq);
+      String value = line.substring(eq + 1);
+      Component c = __find(id);
+      if (c != null) c.__setFromHost(value);
+    }
   }
 }

@@ -330,6 +330,10 @@ struct JsConsole<'a> {
     stdout: &'a js_sys::Function,
     stderr: &'a js_sys::Function,
     stdin: Option<&'a js_sys::Function>,
+    /// Swing event pump: called with the current component tree (JSON);
+    /// renders it and blocks until the next UI event, returning that
+    /// event's payload or `null`/`undefined` when the window is closed.
+    await_ui: Option<&'a js_sys::Function>,
     /// Per-call captured messages for an active `SystemOutTestRunner` run
     /// (the JS console streams, so capture needs its own buffer). `None`
     /// when not capturing.
@@ -355,6 +359,14 @@ impl ConsoleIo for JsConsole<'_> {
 
     fn read_line(&mut self) -> Option<String> {
         let result = self.stdin?.call0(&JsValue::NULL).ok()?;
+        result.as_string()
+    }
+
+    fn ui_await_event(&mut self, tree: &str) -> Option<String> {
+        let result = self
+            .await_ui?
+            .call1(&JsValue::NULL, &JsValue::from_str(tree))
+            .ok()?;
         result.as_string()
     }
 
@@ -478,11 +490,13 @@ impl JvmSession {
         stdout: &js_sys::Function,
         stderr: &js_sys::Function,
         stdin: Option<js_sys::Function>,
+        await_ui: Option<js_sys::Function>,
     ) -> Result<JsValue, JsValue> {
         let mut console = JsConsole {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
+            await_ui: await_ui.as_ref(),
             capture: None,
         };
         // Real entropy for Math.random(); tests off-browser use the
@@ -544,6 +558,9 @@ impl JvmSession {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
+            // The debugger and the Swing event loop don't compose (both
+            // want to own the run); a debug run has no interactive UI.
+            await_ui: None,
             capture: None,
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

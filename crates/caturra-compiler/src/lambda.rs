@@ -634,10 +634,16 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         span,
     };
 
+    // The target is known to be a functional interface (it is in `sams`),
+    // so record it in the `implements` slot directly. Parking it in
+    // `superclass` for codegen to reclassify relies on the interface's
+    // `is_interface` flag already being set, which fails when the interface
+    // lives in a later compilation unit (e.g. the injected `ActionListener`)
+    // than the synthesized lambda class.
     ctx.new_classes.push(ClassDecl {
         name: name.clone(),
-        superclass: Some(interface.to_owned()),
-        interfaces: Vec::new(),
+        superclass: None,
+        interfaces: vec![interface.to_owned()],
         is_abstract: false,
         is_interface: false,
         is_enum: false,

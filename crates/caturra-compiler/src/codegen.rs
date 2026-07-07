@@ -3666,6 +3666,15 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
     // SystemOutTestRunner (org.code.validation): one String per print/println.
     bm("__captureStart", &[], BRet::Void, "()V"),
     bm("__captureEnd", &[], BRet::StrArray, "()[Ljava/lang/String;"),
+    // Internal Swing event pump, used only by the bundled __SwingRuntime:
+    // render the current component tree (JSON), block until the next UI
+    // event, and return its payload (or null when the window is closed).
+    bm(
+        "__uiAwait",
+        &[S],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
 ];
 
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[

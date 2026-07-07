@@ -453,6 +453,44 @@ fn swing_serializes_an_accessible_component_tree() {
 }
 
 #[test]
+fn swing_interactive_program_compiles_and_renders_initial_frame() {
+    // A listener-driven program. With no interactive host (BufferedConsole's
+    // ui_await_event returns None), the event loop ends at once — but the
+    // initial frame still renders, and crucially the lambda, addActionListener,
+    // and the __SwingRuntime event loop all compile and run to completion.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static int count = 0;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Counter");
+                JLabel label = new JLabel("Clicks: 0");
+                JButton button = new JButton("Click me");
+                button.addActionListener(e -> {
+                    Main.count++;
+                    label.setText("Clicks: " + Main.count);
+                });
+                frame.add(label);
+                frame.add(button);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""type":"label","text":"Clicks: 0""#),
+        "no initial label: {json}"
+    );
+    assert!(
+        json.contains(r#""type":"button","text":"Click me""#),
+        "no button: {json}"
+    );
+}
+
+#[test]
 fn neighborhood_painter_simulation() {
     // A 4x4 grid: a wall at (2,1) and a one-unit paint bucket at (1,2).
     let grid = "1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0\n1,0 1,1 1,0 1,0\n1,0 1,0 1,0 1,0\n";
@@ -3110,10 +3148,10 @@ fn stage6_compile_errors_match_javac_wording() {
             "java.util.HashMap is not supported by caturra (the class library covers the AP CS A subset)",
         ),
         (
-            // java.awt / javax.swing are modeled now; their event (listener)
-            // subpackage is still Phase 2 and reports an honest message.
-            "import java.awt.event.*; class M { }",
-            "package java.awt.event is not supported by caturra",
+            // java.awt / javax.swing (and java.awt.event listeners) are
+            // modeled now; an unmodeled package still reports honestly.
+            "import java.nio.*; class M { }",
+            "package java.nio is not supported by caturra",
         ),
         (
             "class M { static void f() { java.util.NotReal x = null; } }",

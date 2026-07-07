@@ -40,13 +40,22 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'compile':
       return (await session()).compile(request.sources);
     case 'run': {
-      const { id, stdinBuffer } = request;
+      const { id, stdinBuffer, swingBuffer } = request;
       const readStdin = stdinBuffer
         ? () =>
             readLineBlocking(stdinBuffer, () => {
               scope.postMessage({ id, type: 'stdin-request' });
             })
         : () => null;
+      // Swing event pump: post the current tree for the main thread to
+      // render, then park on the shared channel until it supplies the
+      // next event (same blocking pattern as stdin/debug). `null` = closed.
+      const awaitUiEvent = swingBuffer
+        ? (tree: string) =>
+            readLineBlocking(swingBuffer, () => {
+              scope.postMessage({ id, type: 'swing-render', tree });
+            })
+        : undefined;
       return (await session()).run(request.mainClass, {
         args: request.args,
         onStdout: (text) => {
@@ -56,6 +65,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
           scope.postMessage({ id, type: 'stderr', text });
         },
         readStdin,
+        ...(awaitUiEvent ? { awaitUiEvent } : {}),
       });
     }
     case 'runDebug': {

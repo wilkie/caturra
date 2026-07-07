@@ -64,18 +64,54 @@ function applyLayout(el: HTMLElement, layout: string | undefined): void {
 }
 
 export class SwingViz {
+  // When set (interactive runs), activating a control calls this with the
+  // event payload; when null (Phase 1 batch render) controls are inert.
+  #onEvent: ((payload: string) => void) | null = null;
+  // Live field controls by id, so a button click can report every field's
+  // current value back to the program (what the user typed / toggled).
+  #fields = new Map<string, HTMLInputElement>();
+
   constructor(private readonly mount: HTMLElement) {}
 
   /** Remove any previously rendered UI. */
   clear(): void {
+    this.#onEvent = null;
+    this.#fields.clear();
     this.mount.replaceChildren();
   }
 
-  /** Parse a `swing.json` tree and render it as accessible DOM. */
-  render(json: string): void {
-    this.clear();
+  /**
+   * Parse a `swing.json` tree and render it as accessible DOM. Pass
+   * `onEvent` for interactive runs: activating a control (a button) invokes
+   * it with the event payload, which the engine's event loop consumes.
+   * Focus is preserved across re-renders so keyboard users keep their place.
+   */
+  render(json: string, onEvent?: (payload: string) => void): void {
+    const focusedId = this.mount.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement).id
+      : '';
+    this.#onEvent = onEvent ?? null;
+    this.#fields.clear();
+    this.mount.replaceChildren();
     const root = JSON.parse(json) as SwingNode;
     this.mount.appendChild(this.build(root));
+    if (focusedId !== '') {
+      this.mount.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`)?.focus();
+    }
+  }
+
+  /**
+   * The event payload for activating `clickedId`: its id, then one
+   * `id=value` line per live field so the program reads the user's current
+   * input (text) and checkbox states when the listener runs.
+   */
+  #payload(clickedId: string): string {
+    let payload = clickedId;
+    for (const [id, el] of this.#fields) {
+      const value = el.type === 'checkbox' ? String(el.checked) : el.value;
+      payload += `\n${id}=${value}`;
+    }
+    return payload;
   }
 
   private build(node: SwingNode): HTMLElement {
@@ -184,6 +220,16 @@ export class SwingViz {
     button.id = node.id;
     button.textContent = node.text ?? '';
     button.disabled = node.enabled === false;
+    // The one control that drives events: a click reports the button's id
+    // plus every field's current value to the program's ActionListener.
+    // (Native <button> also fires this on Enter/Space, so keyboard works.)
+    if (this.#onEvent) {
+      const onEvent = this.#onEvent;
+      const id = node.id;
+      button.addEventListener('click', () => {
+        onEvent(this.#payload(id));
+      });
+    }
     this.common(button, node);
     return button;
   }
@@ -202,6 +248,7 @@ export class SwingViz {
     if (node.tooltip !== undefined) {
       input.setAttribute('aria-label', node.tooltip);
     }
+    this.#fields.set(node.id, input);
     this.common(input, node);
     return input;
   }
@@ -219,6 +266,7 @@ export class SwingViz {
     const text = document.createElement('span');
     text.textContent = node.text ?? '';
     label.append(input, text);
+    this.#fields.set(node.id, input);
     this.common(label, node);
     return label;
   }

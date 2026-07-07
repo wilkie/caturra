@@ -26,6 +26,8 @@ export type WorkerRequest =
       args: string[];
       /** Present when the page is cross-origin isolated; carries stdin. */
       stdinBuffer?: SharedArrayBuffer;
+      /** Blocking Swing event channel: the worker parks here between UI events. */
+      swingBuffer?: SharedArrayBuffer;
     }
   | {
       id: number;
@@ -66,4 +68,5 @@ export type WorkerResponse =
   | { id: number; type: 'stdout'; text: string }
   | { id: number; type: 'stderr'; text: string }
   | { id: number; type: 'stdin-request' }
-  | { id: number; type: 'debug-paused'; snapshot: DebugPauseSnapshot };
+  | { id: number; type: 'debug-paused'; snapshot: DebugPauseSnapshot }
+  | { id: number; type: 'swing-render'; tree: string };

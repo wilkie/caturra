@@ -23,6 +23,16 @@ pub trait ConsoleIo {
     /// Returns `None` at end of input.
     fn read_line(&mut self) -> Option<String>;
 
+    /// Swing event pump (see the bundled `__SwingRuntime`): present the
+    /// current component tree (`tree`, a JSON string), then block until
+    /// the next UI event and return its payload — the clicked component's
+    /// id followed by newline-separated `id=value` field states. `None`
+    /// ends the event loop (window closed, or no interactive host). Hosts
+    /// without a UI (tests) use the default, which ends the loop at once.
+    fn ui_await_event(&mut self, _tree: &str) -> Option<String> {
+        None
+    }
+
     /// Start capturing standard-out messages (for `SystemOutTestRunner`,
     /// which runs the student's `main` and inspects what it printed). While
     /// capturing, standard out is redirected here (`System.setOut` semantics)
