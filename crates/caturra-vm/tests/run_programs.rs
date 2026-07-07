@@ -564,6 +564,60 @@ fn swing_table_row_selection_fires_listener() {
 }
 
 #[test]
+fn swing_default_table_model_updates_rows_on_render() {
+    // A JTable backed by a DefaultTableModel re-reads the model each render, so
+    // buttons that addRow / removeRow / setValueAt change the serialized grid.
+    // Ids: frame c0, table c1, add c2, bump c3, remove c4.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static DefaultTableModel model;
+            static int n = 0;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Grid");
+                String[] cols = {"Item", "Qty"};
+                Object[][] data = {{"Apple", "3"}};
+                model = new DefaultTableModel(data, cols);
+                JTable table = new JTable(model);
+                JButton add = new JButton("Add");
+                add.addActionListener(e -> {
+                    Main.n = Main.n + 1;
+                    Object[] row = {"Item " + Main.n, "1"};
+                    Main.model.addRow(row);
+                    System.out.println("rows " + Main.model.getRowCount());
+                });
+                JButton bump = new JButton("Bump");
+                bump.addActionListener(e -> {
+                    Main.model.setValueAt("9", 0, 1);
+                    System.out.println("apple qty " + Main.model.getValueAt(0, 1));
+                });
+                JButton remove = new JButton("Remove");
+                remove.addActionListener(e -> {
+                    Main.model.removeRow(0);
+                    System.out.println("rows " + Main.model.getRowCount());
+                });
+                frame.add(table);
+                frame.add(add);
+                frame.add(bump);
+                frame.add(remove);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        // Add a row (2), bump apple's qty, then remove the first row (1 left).
+        vec![
+            Some(String::from("c2")),
+            Some(String::from("c3")),
+            Some(String::from("c4")),
+        ],
+    );
+    assert_eq!(out, "rows 2\napple qty 9\nrows 1\n");
+}
+
+#[test]
 fn swing_custom_painting_records_graphics_commands() {
     // A JPanel subclass overriding paintComponent draws into a Graphics
     // recorder during serialization; the commands (and the panel size) land

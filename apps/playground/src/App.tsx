@@ -850,6 +850,82 @@ public class Main {
 `,
   },
   {
+    name: 'Editable table (DefaultTableModel)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static DefaultTableModel model;
+  static JTable table;
+  static JTextField nameField;
+  static JTextField qtyField;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Inventory");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // The model holds the rows; addRow/removeRow update the table live.
+    String[] cols = {"Item", "Qty"};
+    Object[][] data = {{"Apples", "3"}, {"Bread", "1"}};
+    model = new DefaultTableModel(data, cols);
+    table = new JTable(model);
+
+    status = new JLabel("Add or select an item.");
+    table.getSelectionModel().addListSelectionListener(e -> {
+      int row = Main.table.getSelectedRow();
+      if (row >= 0 && row < Main.model.getRowCount()) {
+        Main.status.setText("Selected: " + Main.model.getValueAt(row, 0));
+      }
+    });
+
+    // NORTH: a small form to append a row.
+    nameField = new JTextField(8);
+    qtyField = new JTextField(3);
+    JLabel itemLabel = new JLabel("Item:");
+    itemLabel.setLabelFor(nameField);
+    JLabel qtyLabel = new JLabel("Qty:");
+    qtyLabel.setLabelFor(qtyField);
+    JButton add = new JButton("Add");
+    add.addActionListener(e -> {
+      String name = Main.nameField.getText();
+      if (!name.equals("")) {
+        Object[] row = {name, Main.qtyField.getText()};
+        Main.model.addRow(row);
+        Main.nameField.setText("");
+        Main.qtyField.setText("");
+      }
+    });
+    JPanel top = new JPanel();
+    top.add(itemLabel);
+    top.add(nameField);
+    top.add(qtyLabel);
+    top.add(qtyField);
+    top.add(add);
+
+    // SOUTH: remove the selected row, plus a status label.
+    JButton remove = new JButton("Remove selected");
+    remove.addActionListener(e -> {
+      int row = Main.table.getSelectedRow();
+      if (row >= 0 && row < Main.model.getRowCount()) {
+        Main.model.removeRow(row);
+      }
+    });
+    JPanel bottom = new JPanel();
+    bottom.add(remove);
+    bottom.add(status);
+
+    frame.add(top, BorderLayout.NORTH);
+    frame.add(table, BorderLayout.CENTER);
+    frame.add(bottom, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

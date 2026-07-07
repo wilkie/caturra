@@ -1733,6 +1733,30 @@ test.describe('swing (interactive)', () => {
     await expect(table.getByRole('row', { name: /Bo/ })).toContainText('8');
   });
 
+  test('a DefaultTableModel-backed JTable adds and removes rows live', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('swing-level')
+      .selectOption({ label: 'Editable table (DefaultTableModel)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const table = root.getByRole('grid');
+    await expect(table.getByRole('row')).toHaveCount(3); // header + 2 rows
+
+    // Append a row through the form; the model update re-renders the grid.
+    await root.getByRole('textbox', { name: 'Item:' }).fill('Cherries');
+    await root.getByRole('textbox', { name: 'Qty:' }).fill('5');
+    await root.getByRole('button', { name: 'Add' }).click();
+    await expect(table.getByRole('row')).toHaveCount(4);
+    await expect(table.getByRole('row', { name: /Cherries/ })).toContainText('5');
+
+    // Select a row and remove it.
+    await table.getByRole('row', { name: /Apples/ }).click();
+    await root.getByRole('button', { name: 'Remove selected' }).click();
+    await expect(table.getByRole('row')).toHaveCount(3);
+    await expect(table.getByRole('row', { name: /Apples/ })).toHaveCount(0);
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });
