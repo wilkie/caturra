@@ -906,6 +906,52 @@ fn swing_list_selection_fires_listener_with_value() {
 }
 
 #[test]
+fn swing_default_list_model_updates_the_list_on_render() {
+    // A JList backed by a DefaultListModel re-reads the model every render, so
+    // a button that mutates the model changes what the list serializes. Ids:
+    // frame c0, list c1, add-button c2, clear-button c3.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static DefaultListModel model;
+            static int n = 0;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Tasks");
+                model = new DefaultListModel();
+                model.addElement("first");
+                JList list = new JList(model);
+                JButton add = new JButton("Add");
+                add.addActionListener(e -> {
+                    Main.n = Main.n + 1;
+                    Main.model.addElement("task " + Main.n);
+                    System.out.println("size " + Main.model.getSize());
+                });
+                JButton clear = new JButton("Clear");
+                clear.addActionListener(e -> {
+                    Main.model.clear();
+                    System.out.println("size " + Main.model.getSize());
+                });
+                frame.add(list);
+                frame.add(add);
+                frame.add(clear);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        // Add twice (grows to 3), then clear (drops to 0).
+        vec![
+            Some(String::from("c2")),
+            Some(String::from("c2")),
+            Some(String::from("c3")),
+        ],
+    );
+    assert_eq!(out, "size 2\nsize 3\nsize 0\n");
+}
+
+#[test]
 fn swing_multi_select_list_reports_all_indices() {
     // A multi-select JList: the host reports the chosen indices comma-separated,
     // and getSelectedIndices / getSelectedValues expose all of them (with

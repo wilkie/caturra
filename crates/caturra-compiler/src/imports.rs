@@ -235,6 +235,7 @@ static JAVAX_SWING: &[&str] = &[
     "JComboBox",
     "JList",
     "ListSelectionModel",
+    "DefaultListModel",
     "JSlider",
     "ButtonGroup",
     "Timer",

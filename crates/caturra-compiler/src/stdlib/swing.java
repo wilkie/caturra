@@ -454,8 +454,35 @@ class ListSelectionModel {
   public static final int MULTIPLE_INTERVAL_SELECTION = 2;
 }
 
+// A mutable list model. A JList built on one re-reads it on every render, so
+// addElement/remove/clear appear as soon as the event loop repaints.
+class DefaultListModel {
+  java.util.ArrayList<String> __elements = new java.util.ArrayList<String>();
+  public DefaultListModel() {}
+  public void addElement(String element) { __elements.add(element); }
+  public void add(int index, String element) { __elements.add(index, element); }
+  public String get(int index) { return __elements.get(index); }
+  public String getElementAt(int index) { return __elements.get(index); }
+  public String elementAt(int index) { return __elements.get(index); }
+  public String set(int index, String element) { return __elements.set(index, element); }
+  public String remove(int index) { return __elements.remove(index); }
+  // Element params are String (the model holds Strings), where real Swing uses
+  // Object — the bundled ArrayList types these overloads by element type.
+  public boolean removeElement(String element) { return __elements.remove(element); }
+  public void removeAllElements() { __elements.clear(); }
+  public void clear() { __elements.clear(); }
+  public int getSize() { return __elements.size(); }
+  public int size() { return __elements.size(); }
+  public boolean isEmpty() { return __elements.isEmpty(); }
+  public boolean contains(String element) { return __elements.contains(element); }
+  public int indexOf(String element) { return __elements.indexOf(element); }
+  public String firstElement() { return __elements.get(0); }
+  public String lastElement() { return __elements.get(__elements.size() - 1); }
+}
+
 class JList extends Component {
   java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
+  DefaultListModel __model = null;
   // Selected indices, in the order the host reports them.
   java.util.ArrayList<Integer> __selected = new java.util.ArrayList<Integer>();
   int __visibleRows = 8;
@@ -463,10 +490,16 @@ class JList extends Component {
   ListSelectionListener __listener = null;
   public JList() {}
   public JList(String[] items) { setListData(items); }
+  public JList(DefaultListModel model) { __model = model; }
+  public void setModel(DefaultListModel model) { __model = model; }
+  public DefaultListModel getModel() { return __model; }
   public void setListData(String[] items) {
+    __model = null;
     __items = new java.util.ArrayList<String>();
     for (int i = 0; i < items.length; i++) __items.add(items[i]);
   }
+  // The live element list: the model's when model-backed, else the static data.
+  java.util.ArrayList<String> __data() { return __model != null ? __model.__elements : __items; }
   public int getSelectedIndex() { return __selected.isEmpty() ? -1 : __selected.get(0); }
   public void setSelectedIndex(int index) {
     __selected = new java.util.ArrayList<Integer>();
@@ -480,12 +513,12 @@ class JList extends Component {
   public Object getSelectedValue() {
     if (__selected.isEmpty()) return null;
     int index = __selected.get(0);
-    if (index < 0 || index >= __items.size()) return null;
-    return __items.get(index);
+    if (index < 0 || index >= __data().size()) return null;
+    return __data().get(index);
   }
   public Object[] getSelectedValues() {
     Object[] out = new Object[__selected.size()];
-    for (int i = 0; i < __selected.size(); i++) out[i] = __items.get(__selected.get(i));
+    for (int i = 0; i < __selected.size(); i++) out[i] = __data().get(__selected.get(i));
     return out;
   }
   public boolean isSelectedIndex(int index) { return __selected.contains(index); }
@@ -518,10 +551,11 @@ class JList extends Component {
   }
   boolean __listens() { return __listener != null; }
   String __json() {
+    java.util.ArrayList<String> data = __data();
     String opts = "[";
-    for (int i = 0; i < __items.size(); i++) {
+    for (int i = 0; i < data.size(); i++) {
       if (i > 0) opts += ",";
-      opts += "\"" + Component.__esc(__items.get(i)) + "\"";
+      opts += "\"" + Component.__esc(data.get(i)) + "\"";
     }
     opts += "]";
     String sel = "[";

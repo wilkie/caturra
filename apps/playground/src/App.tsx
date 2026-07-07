@@ -742,6 +742,61 @@ public class Main {
 `,
   },
   {
+    name: 'To-do list (DefaultListModel)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static DefaultListModel model;
+  static JList list;
+  static JTextField field;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("To-do");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // The model holds the list's contents; mutating it updates the JList.
+    model = new DefaultListModel();
+    model.addElement("Buy milk");
+    model.addElement("Walk the dog");
+
+    list = new JList(model);
+    list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    list.setVisibleRowCount(6);
+
+    // NORTH: a field + Add button to append a new item.
+    field = new JTextField(16);
+    JButton add = new JButton("Add");
+    add.addActionListener(e -> {
+      String text = Main.field.getText();
+      if (!text.equals("")) {
+        Main.model.addElement(text);
+        Main.field.setText("");
+      }
+    });
+    JPanel top = new JPanel();
+    top.add(field);
+    top.add(add);
+
+    // SOUTH: remove the selected item.
+    JButton remove = new JButton("Remove selected");
+    remove.addActionListener(e -> {
+      int i = Main.list.getSelectedIndex();
+      if (i >= 0) {
+        Main.model.remove(i);
+      }
+    });
+
+    frame.add(top, BorderLayout.NORTH);
+    frame.add(list, BorderLayout.CENTER);
+    frame.add(remove, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

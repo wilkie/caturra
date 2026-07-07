@@ -1690,6 +1690,27 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('3 topping(s): Cheese, Pepperoni, Olive');
   });
 
+  test('a DefaultListModel-backed JList adds and removes items live', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'To-do list (DefaultListModel)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const list = root.getByRole('listbox');
+    await expect(list.getByRole('option')).toHaveCount(2);
+
+    // Adding to the model re-renders the list with the new item.
+    await root.getByRole('textbox').fill('Water plants');
+    await root.getByRole('button', { name: 'Add' }).click();
+    await expect(list.getByRole('option')).toHaveCount(3);
+    await expect(list.getByRole('option', { name: 'Water plants' })).toBeVisible();
+
+    // Removing the selected item shrinks the model-backed list.
+    await list.selectOption({ label: 'Buy milk' });
+    await root.getByRole('button', { name: 'Remove selected' }).click();
+    await expect(list.getByRole('option')).toHaveCount(2);
+    await expect(list.getByRole('option', { name: 'Buy milk' })).toHaveCount(0);
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });
