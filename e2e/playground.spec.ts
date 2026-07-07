@@ -1550,6 +1550,40 @@ test.describe('swing (interactive)', () => {
     await dialog.getByRole('button', { name: 'OK' }).click();
   });
 
+  test('a nested submenu cascades via keyboard; click-away collapses the bar', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Menus (JMenuBar)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const fileButton = root.getByRole('button', { name: 'File' });
+
+    // Click-away: open File, then click outside the bar — it all collapses.
+    // Click low in the window, clear of the popup (top-left) and close button.
+    await fileButton.click();
+    await expect(fileButton).toHaveAttribute('aria-expanded', 'true');
+    await expect(root.getByRole('menuitem', { name: 'Export' })).toBeVisible();
+    const box = await root.boundingBox();
+    if (!box) throw new Error('swing-root has no bounding box');
+    await page.mouse.click(box.x + box.width - 10, box.y + box.height - 10);
+    await expect(fileButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(root.getByRole('menuitem', { name: 'Export' })).toBeHidden();
+
+    // Keyboard: open File, arrow down to the Export submenu, open it with
+    // ArrowRight, and activate a nested item.
+    await fileButton.click();
+    await page.keyboard.press('ArrowDown'); // New -> Open
+    await page.keyboard.press('ArrowDown'); // Open -> Export
+    const exportItem = root.getByRole('menuitem', { name: 'Export' });
+    await expect(exportItem).toBeFocused();
+    await expect(exportItem).toHaveAttribute('aria-haspopup', 'true');
+    await page.keyboard.press('ArrowRight'); // open submenu, focus PNG
+    await expect(root.getByRole('menu', { name: 'Export' })).toBeVisible();
+    await expect(root.getByRole('menuitem', { name: 'PNG' })).toBeFocused();
+    await page.keyboard.press('ArrowDown'); // PNG -> JPEG
+    await page.keyboard.press('Enter');
+    await expect(root).toContainText('Exported JPEG');
+  });
+
   test('a JTextArea holds multi-line text that a listener reads back', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Notepad (JTextArea)' });

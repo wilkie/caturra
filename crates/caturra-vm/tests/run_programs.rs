@@ -900,10 +900,48 @@ fn swing_multi_select_list_reports_all_indices() {
 }
 
 #[test]
+fn swing_nested_submenu_item_dispatches() {
+    // A JMenu can be added to another JMenu as a submenu; items inside a nested
+    // submenu still register and dispatch. JMenu is a Component too, so ids are
+    // frame c0, File c1, Export c2, "As image" c3, PNG c4, JPEG c5.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                JMenuBar bar = new JMenuBar();
+                JMenu file = new JMenu("File");
+                JMenuItem export = new JMenuItem("Export");
+                export.addActionListener(e -> System.out.println("export"));
+                JMenu asImage = new JMenu("As image");
+                JMenuItem png = new JMenuItem("PNG");
+                png.addActionListener(e -> System.out.println("png"));
+                JMenuItem jpeg = new JMenuItem("JPEG");
+                jpeg.addActionListener(e -> System.out.println("jpeg"));
+                asImage.add(png);
+                asImage.add(jpeg);
+                file.add(export);
+                file.add(asImage);
+                bar.add(file);
+                frame.setJMenuBar(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        // Click the deep submenu item (JPEG=c5), then the top item (Export=c2).
+        vec![Some(String::from("c5")), Some(String::from("c2"))],
+    );
+    assert_eq!(out, "jpeg\nexport\n");
+}
+
+#[test]
 fn swing_menu_item_click_fires_its_listener() {
     // A menu item fires its ActionListener when activated, like a button.
-    // JMenuBar/JMenu are plain holders (no component id); the frame is c0 and
-    // the two JMenuItems are c1 (Open) and c2 (Quit).
+    // JMenuBar is a plain holder (no id); JMenu is a Component, so ids are
+    // frame c0, file c1, Open c2, Quit c3 (the separator is c4).
     let out = run_swing_scripted(
         r#"
         import javax.swing.*;
@@ -927,7 +965,7 @@ fn swing_menu_item_click_fires_its_listener() {
         }
         "#,
         "Main",
-        vec![Some(String::from("c2")), Some(String::from("c1"))],
+        vec![Some(String::from("c3")), Some(String::from("c2"))],
     );
     assert_eq!(out, "quit!\nopen!\n");
 }

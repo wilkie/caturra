@@ -434,6 +434,14 @@ label {
   display: none;
 }
 
+/* A nested submenu cascades to the right of its parent (its vertical offset is
+   set inline to line up with the parent item). */
+.swing-menu-popup .swing-menu-popup {
+  top: 0;
+  left: 100%;
+  margin: -0.25rem 0 0 2px;
+}
+
 .swing-menu-item {
   font: inherit;
   text-align: left;
@@ -442,6 +450,15 @@ label {
   background: transparent;
   color: inherit;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* Submenu items show a right-pointing marker. */
+.swing-submenu::after {
+  content: '▸';
+  margin-left: auto;
 }
 
 .swing-menu-item:hover,

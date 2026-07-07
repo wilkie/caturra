@@ -570,13 +570,14 @@ class JMenuItem extends Component {
   }
 }
 
-class JMenu {
-  String __text;
+// A JMenu is itself a JMenuItem (as in real Swing), so it can be added to
+// another JMenu as a submenu. It holds its own items.
+class JMenu extends JMenuItem {
   java.util.ArrayList<JMenuItem> __items = new java.util.ArrayList<JMenuItem>();
-  public JMenu() { __text = ""; }
+  public JMenu() {}
   public JMenu(String text) { __text = text; }
-  public String getText() { return __text; }
-  // Adding an item registers it so a click can find and fire it.
+  // Adding an item (or a submenu, which is also a JMenuItem) registers it so a
+  // click can find and fire it.
   public void add(JMenuItem item) { __items.add(item); __SwingRuntime.__register(item); }
   public void addSeparator() {
     JMenuItem s = new JMenuItem();
@@ -585,7 +586,7 @@ class JMenu {
   }
   public int getItemCount() { return __items.size(); }
   String __json() {
-    String s = "{\"text\":\"" + Component.__esc(__text) + "\",\"items\":[";
+    String s = "{\"type\":\"menu\",\"text\":\"" + Component.__esc(__text) + "\",\"items\":[";
     for (int i = 0; i < __items.size(); i++) {
       if (i > 0) s += ",";
       s += __items.get(i).__json();

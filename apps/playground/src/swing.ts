@@ -79,14 +79,18 @@ interface SwingMenuBar {
   menus: SwingMenu[];
 }
 interface SwingMenu {
+  type?: 'menu';
   text?: string;
   items?: SwingMenuEntry[];
 }
+// A menu entry is a leaf item, a separator, or a nested submenu (which is
+// itself a SwingMenu with its own items).
 interface SwingMenuEntry {
-  type: 'menuitem' | 'separator';
+  type: 'menuitem' | 'separator' | 'menu';
   text?: string;
   id?: string;
   listens?: boolean;
+  items?: SwingMenuEntry[];
 }
 
 type FieldElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
@@ -223,6 +227,9 @@ export class SwingViz {
   // Live field controls by id, so any event can report every field's
   // current value back to the program (what the user typed / toggled / chose).
   #fields = new Map<string, FieldElement>();
+  // Cleanups to run before the next render (e.g. document-level listeners
+  // added by the menu bar for click-away dismissal).
+  #teardown: (() => void)[] = [];
 
   constructor(private readonly mount: HTMLElement) {}
 
@@ -252,6 +259,10 @@ export class SwingViz {
         scrolls.set(cid, { top: pane.scrollTop, left: pane.scrollLeft });
       }
     }
+    for (const cleanup of this.#teardown) {
+      cleanup();
+    }
+    this.#teardown = [];
     this.#onEvent = onEvent ?? null;
     this.#fields.clear();
     this.mount.replaceChildren();
@@ -472,21 +483,23 @@ export class SwingViz {
 
   /**
    * An accessible menu bar (WAI-ARIA menu-button pattern): each menu is a
-   * button that opens a `role="menu"` popup of `role="menuitem"` buttons.
-   * Keyboard: open with Enter/Space, Arrow/Home/End move within the menu,
-   * Escape closes and returns focus to the button; activating an item
-   * dispatches its ActionListener (and closes the menu).
+   * button that opens a `role="menu"` popup of `role="menuitem"` buttons, and
+   * a menu item can itself be a submenu that cascades a nested popup. Keyboard:
+   * open with Enter/Space/ArrowDown, Arrow/Home/End move within a menu,
+   * ArrowRight opens a submenu, ArrowLeft/Escape close back to the parent;
+   * activating a leaf item dispatches its ActionListener. A click (or focus)
+   * anywhere outside the bar collapses every open menu.
    */
   private menuBar(bar: SwingMenuBar): HTMLElement {
     const menubar = document.createElement('div');
     menubar.className = 'swing-menubar';
     menubar.setAttribute('role', 'menubar');
-    let open: { popup: HTMLElement; button: HTMLButtonElement } | null = null;
-    const close = (): void => {
-      if (open) {
-        open.popup.hidden = true;
-        open.button.setAttribute('aria-expanded', 'false');
-        open = null;
+
+    let openTop: { button: HTMLButtonElement; popup: HTMLElement } | null = null;
+    const closeTop = (): void => {
+      if (openTop) {
+        this.#collapseMenu(openTop.popup, openTop.button);
+        openTop = null;
       }
     };
 
@@ -501,73 +514,208 @@ export class SwingViz {
       button.setAttribute('aria-haspopup', 'true');
       button.setAttribute('aria-expanded', 'false');
 
-      const popup = document.createElement('div');
-      popup.className = 'swing-menu-popup';
-      popup.setAttribute('role', 'menu');
-      popup.setAttribute('aria-label', menu.text ?? 'Menu');
-      popup.hidden = true;
-
-      for (const entry of menu.items ?? []) {
-        if (entry.type === 'separator') {
-          const separator = document.createElement('div');
-          separator.className = 'swing-menu-separator';
-          separator.setAttribute('role', 'separator');
-          popup.appendChild(separator);
-          continue;
-        }
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'swing-menu-item';
-        item.setAttribute('role', 'menuitem');
-        item.tabIndex = -1; // reached via arrow keys, not Tab
-        item.textContent = entry.text ?? '';
-        if (this.#onEvent && entry.listens === true && entry.id !== undefined) {
-          const onEvent = this.#onEvent;
-          const id = entry.id;
-          item.addEventListener('click', () => {
-            close();
-            onEvent(this.#payload(id));
-          });
-        }
-        popup.appendChild(item);
-      }
-
-      button.addEventListener('click', () => {
-        const wasOpen = open?.button === button;
-        close();
-        if (!wasOpen) {
-          popup.hidden = false;
-          button.setAttribute('aria-expanded', 'true');
-          open = { popup, button };
-          popup.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-        }
+      const popup = this.#menuPopup(menu, closeTop, () => {
+        closeTop();
+        button.focus();
       });
 
-      popup.addEventListener('keydown', (event) => {
-        const items = [...popup.querySelectorAll<HTMLElement>('[role="menuitem"]')];
-        const index = items.indexOf(document.activeElement as HTMLElement);
-        if (event.key === 'ArrowDown') {
+      const openThis = (): void => {
+        if (openTop?.button !== button) {
+          closeTop();
+          popup.hidden = false;
+          button.setAttribute('aria-expanded', 'true');
+          openTop = { button, popup };
+        }
+      };
+
+      button.addEventListener('click', () => {
+        if (openTop?.button === button) {
+          closeTop();
+        } else {
+          openThis();
+          this.#focusFirst(popup);
+        }
+      });
+      // Once a menu is open, hovering a sibling menu switches to it.
+      button.addEventListener('mouseenter', () => {
+        if (openTop && openTop.button !== button) {
+          openThis();
+        }
+      });
+      button.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          items[(index + 1) % items.length]?.focus();
-        } else if (event.key === 'ArrowUp') {
-          event.preventDefault();
-          items[(index - 1 + items.length) % items.length]?.focus();
-        } else if (event.key === 'Home') {
-          event.preventDefault();
-          items[0]?.focus();
-        } else if (event.key === 'End') {
-          event.preventDefault();
-          items[items.length - 1]?.focus();
-        } else if (event.key === 'Escape') {
-          close();
-          button.focus();
+          openThis();
+          this.#focusFirst(popup);
         }
       });
 
       wrap.append(button, popup);
       menubar.appendChild(wrap);
     }
+
+    // Click or focus outside the bar collapses whatever is open.
+    const onOutside = (event: Event): void => {
+      if (!menubar.contains(event.target as Node)) {
+        closeTop();
+      }
+    };
+    document.addEventListener('click', onOutside);
+    document.addEventListener('focusin', onOutside);
+    this.#teardown.push(() => {
+      document.removeEventListener('click', onOutside);
+      document.removeEventListener('focusin', onOutside);
+    });
+
     return menubar;
+  }
+
+  /** Build one `role="menu"` popup (recursively for submenus). `closeRoot`
+   * collapses the whole tree (used when a leaf item fires); `closeSelf` closes
+   * just this popup and refocuses its opener (Escape / ArrowLeft). */
+  #menuPopup(
+    menu: SwingMenu | SwingMenuEntry,
+    closeRoot: () => void,
+    closeSelf: () => void,
+  ): HTMLElement {
+    const popup = document.createElement('div');
+    popup.className = 'swing-menu-popup';
+    popup.setAttribute('role', 'menu');
+    popup.setAttribute('aria-label', menu.text ?? 'Menu');
+    popup.hidden = true;
+
+    let openChild: { button: HTMLButtonElement; popup: HTMLElement } | null = null;
+    const closeChild = (): void => {
+      if (openChild) {
+        this.#collapseMenu(openChild.popup, openChild.button);
+        openChild = null;
+      }
+    };
+
+    for (const entry of menu.items ?? []) {
+      if (entry.type === 'separator') {
+        const separator = document.createElement('div');
+        separator.className = 'swing-menu-separator';
+        separator.setAttribute('role', 'separator');
+        popup.appendChild(separator);
+        continue;
+      }
+
+      if (entry.type === 'menu') {
+        const subButton = document.createElement('button');
+        subButton.type = 'button';
+        subButton.className = 'swing-menu-item swing-submenu';
+        subButton.setAttribute('role', 'menuitem');
+        subButton.setAttribute('aria-haspopup', 'true');
+        subButton.setAttribute('aria-expanded', 'false');
+        subButton.tabIndex = -1;
+        subButton.textContent = entry.text ?? '';
+
+        const subPopup = this.#menuPopup(entry, closeRoot, () => {
+          closeChild();
+          subButton.focus();
+        });
+
+        const openSub = (): void => {
+          if (openChild?.button !== subButton) {
+            closeChild();
+            subPopup.hidden = false;
+            subPopup.style.top = `${String(subButton.offsetTop)}px`;
+            subButton.setAttribute('aria-expanded', 'true');
+            openChild = { button: subButton, popup: subPopup };
+          }
+        };
+
+        subButton.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (openChild?.button === subButton) {
+            closeChild();
+          } else {
+            openSub();
+          }
+        });
+        subButton.addEventListener('mouseenter', () => {
+          openSub();
+        });
+        subButton.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            event.stopPropagation();
+            openSub();
+            this.#focusFirst(subPopup);
+          }
+        });
+
+        popup.append(subButton, subPopup);
+        continue;
+      }
+
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'swing-menu-item';
+      item.setAttribute('role', 'menuitem');
+      item.tabIndex = -1; // reached via arrow keys, not Tab
+      item.textContent = entry.text ?? '';
+      // Moving onto a plain item closes any sibling submenu that was open.
+      item.addEventListener('mouseenter', () => {
+        closeChild();
+      });
+      if (this.#onEvent && entry.listens === true && entry.id !== undefined) {
+        const onEvent = this.#onEvent;
+        const id = entry.id;
+        item.addEventListener('click', (event) => {
+          event.stopPropagation();
+          closeRoot();
+          onEvent(this.#payload(id));
+        });
+      }
+      popup.appendChild(item);
+    }
+
+    popup.addEventListener('keydown', (event) => {
+      const items = [...popup.querySelectorAll<HTMLElement>(':scope > [role="menuitem"]')];
+      const index = items.indexOf(document.activeElement as HTMLElement);
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        event.stopPropagation();
+        items[(index + 1) % items.length]?.focus();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        event.stopPropagation();
+        items[(index - 1 + items.length) % items.length]?.focus();
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        event.stopPropagation();
+        items[0]?.focus();
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        event.stopPropagation();
+        items[items.length - 1]?.focus();
+      } else if (event.key === 'Escape' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeSelf();
+      }
+    });
+
+    return popup;
+  }
+
+  /** Hide a popup and everything nested inside it, resetting aria-expanded. */
+  #collapseMenu(popup: HTMLElement, button: HTMLElement): void {
+    for (const nested of popup.querySelectorAll<HTMLElement>('[role="menu"]')) {
+      nested.hidden = true;
+    }
+    for (const expanded of popup.querySelectorAll<HTMLElement>('[aria-expanded="true"]')) {
+      expanded.setAttribute('aria-expanded', 'false');
+    }
+    popup.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  }
+
+  /** Focus a popup's first menu item (its direct children only). */
+  #focusFirst(popup: HTMLElement): void {
+    popup.querySelector<HTMLElement>(':scope > [role="menuitem"]')?.focus();
   }
 
   private panel(node: SwingNode): HTMLElement {

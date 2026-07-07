@@ -507,10 +507,21 @@ public class Main {
     newItem.addActionListener(e -> Main.status.setText("New file"));
     JMenuItem openItem = new JMenuItem("Open");
     openItem.addActionListener(e -> Main.status.setText("Opened a file"));
+
+    // A nested submenu: File > Export > (PNG | JPEG).
+    JMenu export = new JMenu("Export");
+    JMenuItem png = new JMenuItem("PNG");
+    png.addActionListener(e -> Main.status.setText("Exported PNG"));
+    JMenuItem jpeg = new JMenuItem("JPEG");
+    jpeg.addActionListener(e -> Main.status.setText("Exported JPEG"));
+    export.add(png);
+    export.add(jpeg);
+
     JMenuItem quitItem = new JMenuItem("Quit");
     quitItem.addActionListener(e -> Main.status.setText("Bye!"));
     file.add(newItem);
     file.add(openItem);
+    file.add(export);
     file.addSeparator();
     file.add(quitItem);
 
