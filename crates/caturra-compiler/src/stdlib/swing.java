@@ -438,33 +438,73 @@ class JComboBox extends Component {
   }
 }
 
-class JList extends Component {
-  java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
-  int __selectedIndex = -1;
-  int __visibleRows = 8;
-  ListSelectionListener __listener = null;
+// The selection modes, as constants (real Swing puts these on
+// ListSelectionModel). JList defaults to MULTIPLE_INTERVAL_SELECTION.
+class ListSelectionModel {
   public static final int SINGLE_SELECTION = 0;
   public static final int SINGLE_INTERVAL_SELECTION = 1;
   public static final int MULTIPLE_INTERVAL_SELECTION = 2;
+}
+
+class JList extends Component {
+  java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
+  // Selected indices, in the order the host reports them.
+  java.util.ArrayList<Integer> __selected = new java.util.ArrayList<Integer>();
+  int __visibleRows = 8;
+  int __mode = 2; // MULTIPLE_INTERVAL_SELECTION, matching real JList
+  ListSelectionListener __listener = null;
   public JList() {}
   public JList(String[] items) { setListData(items); }
   public void setListData(String[] items) {
     __items = new java.util.ArrayList<String>();
     for (int i = 0; i < items.length; i++) __items.add(items[i]);
   }
-  public int getSelectedIndex() { return __selectedIndex; }
-  public void setSelectedIndex(int index) { __selectedIndex = index; }
-  public Object getSelectedValue() {
-    if (__selectedIndex < 0 || __selectedIndex >= __items.size()) return null;
-    return __items.get(__selectedIndex);
+  public int getSelectedIndex() { return __selected.isEmpty() ? -1 : __selected.get(0); }
+  public void setSelectedIndex(int index) {
+    __selected = new java.util.ArrayList<Integer>();
+    if (index >= 0) __selected.add(index);
   }
-  public boolean isSelectionEmpty() { return __selectedIndex < 0; }
-  public void clearSelection() { __selectedIndex = -1; }
+  public int[] getSelectedIndices() {
+    int[] out = new int[__selected.size()];
+    for (int i = 0; i < __selected.size(); i++) out[i] = __selected.get(i);
+    return out;
+  }
+  public Object getSelectedValue() {
+    if (__selected.isEmpty()) return null;
+    int index = __selected.get(0);
+    if (index < 0 || index >= __items.size()) return null;
+    return __items.get(index);
+  }
+  public Object[] getSelectedValues() {
+    Object[] out = new Object[__selected.size()];
+    for (int i = 0; i < __selected.size(); i++) out[i] = __items.get(__selected.get(i));
+    return out;
+  }
+  public boolean isSelectedIndex(int index) { return __selected.contains(index); }
+  public boolean isSelectionEmpty() { return __selected.isEmpty(); }
+  public void clearSelection() { __selected = new java.util.ArrayList<Integer>(); }
   public void setVisibleRowCount(int rows) { __visibleRows = rows; }
   public int getVisibleRowCount() { return __visibleRows; }
-  public void setSelectionMode(int mode) {} // single selection only
+  public void setSelectionMode(int mode) { __mode = mode; }
+  public int getSelectionMode() { return __mode; }
   public void addListSelectionListener(ListSelectionListener l) { __listener = l; __SwingRuntime.__interactive = true; }
-  void __setFromHost(String value) { __selectedIndex = Integer.parseInt(value); }
+  boolean __multiple() { return __mode != 0; } // 0 == SINGLE_SELECTION
+  // The host sends the selected indices comma-separated ("" when none, or
+  // "-1" from a single <select> with nothing chosen); ignore invalid ones.
+  void __setFromHost(String value) {
+    __selected = new java.util.ArrayList<Integer>();
+    int start = 0;
+    while (start < value.length()) {
+      int comma = value.indexOf(",", start);
+      String part = comma < 0 ? value.substring(start) : value.substring(start, comma);
+      if (part.length() > 0) {
+        int index = Integer.parseInt(part);
+        if (index >= 0) __selected.add(index);
+      }
+      if (comma < 0) break;
+      start = comma + 1;
+    }
+  }
   void __onEvent() {
     if (__listener != null) __listener.valueChanged(new ListSelectionEvent(this));
   }
@@ -476,8 +516,14 @@ class JList extends Component {
       opts += "\"" + Component.__esc(__items.get(i)) + "\"";
     }
     opts += "]";
-    return "{\"type\":\"list\",\"items\":" + opts + ",\"selectedIndex\":" + __selectedIndex
-        + ",\"rows\":" + __visibleRows + "," + __commonJson() + "}";
+    String sel = "[";
+    for (int i = 0; i < __selected.size(); i++) {
+      if (i > 0) sel += ",";
+      sel += __selected.get(i);
+    }
+    sel += "]";
+    return "{\"type\":\"list\",\"items\":" + opts + ",\"selectedIndices\":" + sel
+        + ",\"multiple\":" + __multiple() + ",\"rows\":" + __visibleRows + "," + __commonJson() + "}";
   }
 }
 

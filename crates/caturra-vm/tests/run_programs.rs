@@ -865,6 +865,41 @@ fn swing_list_selection_fires_listener_with_value() {
 }
 
 #[test]
+fn swing_multi_select_list_reports_all_indices() {
+    // A multi-select JList: the host reports the chosen indices comma-separated,
+    // and getSelectedIndices / getSelectedValues expose all of them (with
+    // getSelectedValue still the first). Ids: frame c0, list c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        public class Main {
+            static JList list;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Pick");
+                list = new JList(new String[]{"Red", "Green", "Blue"});
+                list.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+                list.addListSelectionListener(e -> {
+                    int[] idx = Main.list.getSelectedIndices();
+                    System.out.println("count " + idx.length + " first " + Main.list.getSelectedValue());
+                });
+                frame.add(list);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        // Select indices 0 and 2 (Red, Blue), then clear to none.
+        vec![
+            Some(String::from("c1\nc1=0,2")),
+            Some(String::from("c1\nc1=")),
+        ],
+    );
+    assert_eq!(out, "count 2 first Red\ncount 0 first null\n");
+}
+
+#[test]
 fn swing_menu_item_click_fires_its_listener() {
     // A menu item fires its ActionListener when activated, like a button.
     // JMenuBar/JMenu are plain holders (no component id); the frame is c0 and

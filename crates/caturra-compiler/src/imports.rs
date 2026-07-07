@@ -234,6 +234,7 @@ static JAVAX_SWING: &[&str] = &[
     "JRadioButton",
     "JComboBox",
     "JList",
+    "ListSelectionModel",
     "JSlider",
     "ButtonGroup",
     "Timer",

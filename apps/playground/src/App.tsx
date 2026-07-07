@@ -623,6 +623,7 @@ public class Main {
     JLabel prompt = new JLabel("Pick a fruit:");
     fruits = new JList(new String[]{
         "Apple", "Banana", "Cherry", "Date", "Elderberry", "Fig", "Grape"});
+    fruits.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
     fruits.setVisibleRowCount(5);
     prompt.setLabelFor(fruits);
 
@@ -634,6 +635,51 @@ public class Main {
 
     frame.add(prompt);
     frame.add(fruits);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
+    name: 'Multi-select list (JList)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JLabel status;
+  static JList toppings;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Pizza");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    JLabel prompt = new JLabel("Choose toppings (Ctrl/Shift-click for several):");
+    toppings = new JList(new String[]{
+        "Cheese", "Mushroom", "Pepperoni", "Onion", "Olive", "Pepper"});
+    // MULTIPLE_INTERVAL_SELECTION is the JList default; shown here for clarity.
+    toppings.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+    prompt.setLabelFor(toppings);
+
+    status = new JLabel("No toppings yet.");
+    toppings.addListSelectionListener(e -> {
+      Object[] picks = Main.toppings.getSelectedValues();
+      if (picks.length == 0) {
+        Main.status.setText("No toppings yet.");
+        return;
+      }
+      String list = "";
+      for (int i = 0; i < picks.length; i++) {
+        if (i > 0) list += ", ";
+        list += picks[i];
+      }
+      Main.status.setText(picks.length + " topping(s): " + list);
+    });
+
+    frame.add(prompt);
+    frame.add(toppings);
     frame.add(status);
     frame.setVisible(true);
   }

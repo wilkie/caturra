@@ -1603,6 +1603,22 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('You picked Banana');
   });
 
+  test('a multi-select JList reports every chosen value', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Multi-select list (JList)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const list = root.getByRole('listbox', { name: /Choose toppings/ });
+    await expect(list).toBeVisible();
+    // A native multi-select list box (the browser maps this into the
+    // accessibility tree as multiselectable for screen readers).
+    await expect(list).toHaveJSProperty('multiple', true);
+
+    // Choosing several options reports all of them (via getSelectedValues).
+    await list.selectOption([{ label: 'Cheese' }, { label: 'Pepperoni' }, { label: 'Olive' }]);
+    await expect(root).toContainText('3 topping(s): Cheese, Pepperoni, Olive');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

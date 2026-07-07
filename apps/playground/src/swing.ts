@@ -42,6 +42,9 @@ interface SwingNode {
   editable?: boolean;
   wrap?: boolean;
   selected?: boolean;
+  /** JList: the selected indices and whether multiple selection is allowed. */
+  selectedIndices?: number[];
+  multiple?: boolean;
   for?: string;
   /** True when the widget has a listener, so its native event dispatches. */
   listens?: boolean;
@@ -106,7 +109,11 @@ function cssColor(triple: string | undefined): string | null {
 function fieldValue(el: FieldElement): string {
   let raw: string;
   if (el instanceof HTMLSelectElement) {
-    raw = String(el.selectedIndex); // JComboBox: selected index
+    // A multi-select JList reports every chosen index; a single select (or
+    // JComboBox) reports the one selected index (-1 when none).
+    raw = el.multiple
+      ? [...el.selectedOptions].map((option) => String(option.index)).join(',')
+      : String(el.selectedIndex);
   } else if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
     raw = String(el.checked);
   } else {
@@ -764,18 +771,21 @@ export class SwingViz {
   }
 
   /** A JList: a sized <select> renders as a native, accessible list box
-   * (role listbox; arrow keys, Home/End, and typeahead come for free). */
+   * (role listbox; arrow keys, Home/End, and typeahead come for free).
+   * `multiple` makes it a multi-select list box. */
   private listBox(node: SwingNode): HTMLElement {
     const select = document.createElement('select');
     select.className = 'swing-list';
     select.id = node.id;
     select.size = Math.max(node.rows ?? 8, 2); // size > 1 => list box, not dropdown
+    select.multiple = node.multiple === true;
     select.disabled = node.enabled === false;
+    const selected = new Set(node.selectedIndices ?? []);
     for (const [index, item] of (node.items ?? []).entries()) {
       const option = document.createElement('option');
       option.value = String(index);
       option.textContent = item;
-      option.selected = index === node.selectedIndex;
+      option.selected = selected.has(index);
       select.appendChild(option);
     }
     if (node.tooltip !== undefined) {
