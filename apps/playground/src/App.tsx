@@ -365,7 +365,6 @@ class DotPanel extends JPanel {
     name: 'Bouncing ball',
     starter: `import javax.swing.*;
 import java.awt.*;
-import java.awt.event.*;
 
 public class Main {
   static int x = 30;
@@ -386,14 +385,12 @@ public class Main {
 
     // A Timer fires its ActionListener every 40ms: move the ball, bounce at
     // the edges, and repaint. The host schedules the ticks.
-    Timer timer = new Timer(40, new ActionListener() {
-      public void actionPerformed(ActionEvent e) {
-        Main.x = Main.x + Main.dx;
-        if (Main.x < 20 || Main.x > 280) Main.dx = -Main.dx;
-        Main.ticks = Main.ticks + 1;
-        Main.status.setText("ticks: " + Main.ticks);
-        Main.panel.repaint();
-      }
+    Timer timer = new Timer(40, e -> {
+      Main.x = Main.x + Main.dx;
+      if (Main.x < 20 || Main.x > 280) Main.dx = -Main.dx;
+      Main.ticks = Main.ticks + 1;
+      Main.status.setText("ticks: " + Main.ticks);
+      Main.panel.repaint();
     });
     timer.start();
 

@@ -29,6 +29,8 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
     let sams = functional_interfaces(units);
     // Signatures for single-candidate method-argument target typing.
     let methods = method_signatures(units);
+    // Constructor signatures per class, for `new T(…, lambda)` target typing.
+    let constructors = constructor_signatures(units);
     let static_methods = static_method_names(units);
     let class_names = class_name_set(units);
 
@@ -53,6 +55,7 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                 let mut ctx = Ctx {
                     sams: &sams,
                     methods: &methods,
+                    constructors: &constructors,
                     static_methods: &static_methods,
                     class_names: &class_names,
                     ret: ret.as_ref(),
@@ -69,6 +72,7 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                     let mut ctx = Ctx {
                         sams: &sams,
                         methods: &methods,
+                        constructors: &constructors,
                         static_methods: &static_methods,
                         class_names: &class_names,
                         ret: None,
@@ -93,6 +97,9 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
 struct Ctx<'a> {
     sams: &'a HashMap<String, Sam>,
     methods: &'a HashMap<String, Vec<Vec<TypeRef>>>,
+    /// Class name -> its constructors' parameter-type lists, for target
+    /// typing a lambda passed to `new T(…)`.
+    constructors: &'a HashMap<String, Vec<Vec<TypeRef>>>,
     /// Class name -> its static method names, for method-reference
     /// static-vs-instance disambiguation.
     static_methods: &'a HashMap<String, std::collections::HashSet<String>>,
@@ -219,6 +226,26 @@ fn is_library_static(method: &str) -> bool {
             | "log"
             | "exp"
     )
+}
+
+/// Class name -> each constructor's parameter-type list, for target typing
+/// a lambda passed to `new T(…)`.
+fn constructor_signatures(
+    units: &[(String, CompilationUnit)],
+) -> HashMap<String, Vec<Vec<TypeRef>>> {
+    let mut out: HashMap<String, Vec<Vec<TypeRef>>> = HashMap::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            for method in &class.methods {
+                if method.is_constructor {
+                    out.entry(class.name.clone())
+                        .or_default()
+                        .push(method.params.iter().map(|p| p.ty.clone()).collect());
+                }
+            }
+        }
+    }
+    out
 }
 
 fn method_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<Vec<TypeRef>>> {
@@ -380,6 +407,7 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per expression kind
 fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
     // A method reference in a target-typed position becomes a lambda.
     if matches!(expr, Expr::MethodRef { .. }) {
@@ -428,7 +456,23 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 desugar_expr(arg, expected.as_ref(), ctx);
             }
         }
-        Expr::NewObject { args, .. } | Expr::SuperMethodCall { args, .. } => {
+        Expr::NewObject { class, args, .. } => {
+            // Target-type a lambda constructor argument (`new Timer(40, e -> …)`)
+            // when exactly one constructor of the class takes this many args.
+            let param_types = ctx.constructors.get(class).and_then(|sigs| {
+                let mut matching = sigs.iter().filter(|s| s.len() == args.len());
+                let first = matching.next()?;
+                match matching.next() {
+                    None => Some(first.clone()),
+                    Some(_) => None, // ambiguous arity — leave untyped
+                }
+            });
+            for (index, arg) in args.iter_mut().enumerate() {
+                let expected = param_types.as_ref().map(|types| types[index].clone());
+                desugar_expr(arg, expected.as_ref(), ctx);
+            }
+        }
+        Expr::SuperMethodCall { args, .. } => {
             for a in args {
                 desugar_expr(a, None, ctx);
             }

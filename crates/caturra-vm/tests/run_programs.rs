@@ -700,6 +700,34 @@ fn swing_timer_ticks_fire_the_action_listener() {
 }
 
 #[test]
+fn swing_lambda_as_constructor_argument_is_target_typed() {
+    // A lambda passed straight to a constructor (`new Timer(40, e -> …)`) is
+    // target-typed by the constructor's parameter, so it desugars like a
+    // method-argument lambda. Ids: frame c0, timer t1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static int ticks = 0;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("T");
+                Timer timer = new Timer(50, e -> {
+                    Main.ticks++;
+                    System.out.println("tick " + Main.ticks);
+                });
+                timer.start();
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("__timer:t1"))],
+    );
+    assert_eq!(out, "tick 1\n");
+}
+
+#[test]
 fn swing_rich_controls_dispatch_their_listeners() {
     // Non-button controls now dispatch: a checkbox toggle fires its
     // ItemListener, a combo box selection and a slider drag fire their
