@@ -37,6 +37,9 @@ interface SwingNode {
   width?: number;
   height?: number;
   layout?: string;
+  /** This child's BorderLayout region ("North".."Center"), when its parent
+   * uses a BorderLayout. */
+  region?: string;
   columns?: number;
   rows?: number;
   editable?: boolean;
@@ -209,15 +212,22 @@ function applyLayout(el: HTMLElement, layout: string | undefined): void {
     el.style.alignItems = 'center';
     return;
   }
-  // FlowLayout (the default) and BorderLayout both lay out inline in Phase 1.
+  if (layout === 'border') {
+    // Five regions: NORTH/SOUTH span the full width, WEST/EAST flank a CENTER
+    // that takes the remaining space. Children are placed by grid-area (set in
+    // children()); an empty region collapses to nothing.
+    el.style.display = 'grid';
+    el.style.gridTemplateAreas = '"north north north" "west center east" "south south south"';
+    el.style.gridTemplateRows = 'auto 1fr auto';
+    el.style.gridTemplateColumns = 'auto 1fr auto';
+    el.style.gap = '8px';
+    return;
+  }
+  // FlowLayout (the default) lays out inline.
   el.style.display = 'flex';
   el.style.flexWrap = 'wrap';
   el.style.gap = '8px';
   el.style.alignItems = 'center';
-  if (layout === 'border') {
-    el.style.flexDirection = 'column';
-    el.style.alignItems = 'stretch';
-  }
 }
 
 export class SwingViz {
@@ -427,8 +437,15 @@ export class SwingViz {
   }
 
   private children(container: HTMLElement, node: SwingNode): void {
+    const border = node.layout === 'border';
     for (const child of node.children ?? []) {
-      container.appendChild(this.build(child));
+      const el = this.build(child);
+      if (border) {
+        // Place the child in its BorderLayout region; unconstrained children
+        // default to the center, as real BorderLayout does.
+        el.style.gridArea = (child.region ?? 'Center').toLowerCase();
+      }
+      container.appendChild(el);
     }
   }
 

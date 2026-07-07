@@ -453,6 +453,47 @@ fn swing_serializes_an_accessible_component_tree() {
 }
 
 #[test]
+fn swing_border_layout_records_child_regions() {
+    // add(component, BorderLayout.X) records the region on the child so the
+    // renderer can place it; add() with no constraint carries none (the
+    // renderer defaults it to CENTER).
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Layout");
+                frame.setLayout(new BorderLayout());
+                frame.add(new JLabel("Top"), BorderLayout.NORTH);
+                frame.add(new JLabel("Bottom"), BorderLayout.SOUTH);
+                frame.add(new JLabel("Middle"));
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""layout":"border""#),
+        "no border layout: {json}"
+    );
+    assert!(
+        json.contains(r#""text":"Top","id":"c1","enabled":true,"region":"North""#),
+        "no north region: {json}"
+    );
+    assert!(
+        json.contains(r#""text":"Bottom","id":"c2","enabled":true,"region":"South""#),
+        "no south region: {json}"
+    );
+    // The unconstrained child carries no region field.
+    assert!(
+        json.contains(r#""text":"Middle","id":"c3","enabled":true}"#),
+        "middle should have no region: {json}"
+    );
+}
+
+#[test]
 fn swing_custom_painting_records_graphics_commands() {
     // A JPanel subclass overriding paintComponent draws into a Graphics
     // recorder during serialization; the commands (and the panel size) land

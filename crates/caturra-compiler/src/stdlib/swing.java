@@ -73,6 +73,9 @@ class Component {
   String __ttip = null;
   Color __bg = null;
   Color __fg = null;
+  // The BorderLayout region ("North".."Center") this component was added with,
+  // or null when it carries no layout constraint.
+  String __region = null;
 
   Component() { __cid = "c" + __nextId(); }
 
@@ -106,6 +109,7 @@ class Component {
     if (__ttip != null) s += ",\"tooltip\":\"" + Component.__esc(__ttip) + "\"";
     if (__bg != null) s += ",\"bg\":\"" + __bg.__r + "," + __bg.__g + "," + __bg.__b + "\"";
     if (__fg != null) s += ",\"fg\":\"" + __fg.__r + "," + __fg.__g + "," + __fg.__b + "\"";
+    if (__region != null) s += ",\"region\":\"" + Component.__esc(__region) + "\"";
     return s;
   }
 
@@ -128,8 +132,12 @@ class Container extends Component {
   LayoutManager __layout = null;
 
   public void add(Component c) { __kids.add(c); __SwingRuntime.__register(c); }
-  // BorderLayout-style constraints are accepted but Phase 1 lays out in flow.
-  public void add(Component c, Object constraints) { add(c); }
+  // A BorderLayout constraint (e.g. BorderLayout.NORTH) records the region the
+  // renderer places the child in; other layouts ignore it.
+  public void add(Component c, Object constraints) {
+    if (constraints != null) c.__region = "" + constraints;
+    add(c);
+  }
   public void setLayout(LayoutManager m) { __layout = m; }
 
   String __layoutJson() {

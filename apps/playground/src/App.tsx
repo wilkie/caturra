@@ -293,8 +293,8 @@ public class Main {
       Main.panel.repaint();
     });
 
-    frame.add(panel);
-    frame.add(grow);
+    frame.add(panel, BorderLayout.CENTER);
+    frame.add(grow, BorderLayout.SOUTH);
     frame.setVisible(true);
   }
 }
@@ -399,8 +399,8 @@ public class Main {
     });
     timer.start();
 
-    frame.add(panel);
-    frame.add(status);
+    frame.add(panel, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
     frame.setVisible(true);
   }
 }
@@ -484,6 +484,47 @@ public class Main {
     } else {
       JOptionPane.showMessageDialog(null, "No problem.");
     }
+  }
+}
+`,
+  },
+  {
+    name: 'BorderLayout regions',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Layout");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // NORTH: a toolbar button spanning the top.
+    JButton refresh = new JButton("Refresh");
+    refresh.addActionListener(e -> Main.status.setText("Refreshed the view"));
+    frame.add(refresh, BorderLayout.NORTH);
+
+    // WEST: a side action down the left edge.
+    JButton west = new JButton("Sidebar");
+    west.addActionListener(e -> Main.status.setText("Opened the sidebar"));
+    frame.add(west, BorderLayout.WEST);
+
+    // EAST: an info panel on the right.
+    frame.add(new JLabel("Details"), BorderLayout.EAST);
+
+    // CENTER: the main content, which soaks up the remaining space.
+    JTextArea center = new JTextArea(6, 24);
+    center.setText("Main content area.\\nBorderLayout gives this the center.");
+    center.setLineWrap(true);
+    frame.add(center, BorderLayout.CENTER);
+
+    // SOUTH: a status bar spanning the bottom.
+    status = new JLabel("Ready.");
+    frame.add(status, BorderLayout.SOUTH);
+
+    frame.setVisible(true);
   }
 }
 `,
@@ -573,10 +614,13 @@ public class Main {
       Main.status.setText(lines + " line(s), " + text.length() + " chars");
     });
 
-    frame.add(prompt);
-    frame.add(notes);
-    frame.add(count);
-    frame.add(status);
+    // NORTH label, CENTER text area, and a SOUTH bar holding the button + status.
+    JPanel bottom = new JPanel();
+    bottom.add(count);
+    bottom.add(status);
+    frame.add(prompt, BorderLayout.NORTH);
+    frame.add(notes, BorderLayout.CENTER);
+    frame.add(bottom, BorderLayout.SOUTH);
     frame.setVisible(true);
   }
 }
@@ -609,8 +653,8 @@ public class Main {
 
     status = new JLabel("Scroll the list and pick an item.");
 
-    frame.add(scroll);
-    frame.add(status);
+    frame.add(scroll, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
     frame.setVisible(true);
   }
 }
@@ -644,9 +688,9 @@ public class Main {
       Main.status.setText(picked == null ? "Nothing selected." : "You picked " + picked);
     });
 
-    frame.add(prompt);
-    frame.add(fruits);
-    frame.add(status);
+    frame.add(prompt, BorderLayout.NORTH);
+    frame.add(fruits, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
     frame.setVisible(true);
   }
 }
@@ -689,9 +733,9 @@ public class Main {
       Main.status.setText(picks.length + " topping(s): " + list);
     });
 
-    frame.add(prompt);
-    frame.add(toppings);
-    frame.add(status);
+    frame.add(prompt, BorderLayout.NORTH);
+    frame.add(toppings, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
     frame.setVisible(true);
   }
 }

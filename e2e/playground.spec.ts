@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 /** The editor's automation hooks installed by the playground page. */
 interface PlaygroundHooks {
@@ -1548,6 +1548,43 @@ test.describe('swing (interactive)', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('Notes 1.0');
     await dialog.getByRole('button', { name: 'OK' }).click();
+  });
+
+  test('BorderLayout places children north/south/east/west/center; they dispatch', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'BorderLayout regions' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    const refresh = root.getByRole('button', { name: 'Refresh' }); // NORTH
+    const sidebar = root.getByRole('button', { name: 'Sidebar' }); // WEST
+    const details = root.getByText('Details'); // EAST
+    const center = root.getByRole('textbox'); // CENTER
+    const statusBar = root.getByText('Ready.'); // SOUTH
+    await expect(refresh).toBeVisible();
+
+    const centerOf = async (loc: Locator): Promise<{ x: number; y: number }> => {
+      const b = await loc.boundingBox();
+      if (!b) throw new Error('element has no bounding box');
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    };
+    const north = await centerOf(refresh);
+    const south = await centerOf(statusBar);
+    const west = await centerOf(sidebar);
+    const east = await centerOf(details);
+    const middle = await centerOf(center);
+
+    // The five regions sit where BorderLayout puts them, relative to CENTER.
+    expect(north.y).toBeLessThan(middle.y);
+    expect(south.y).toBeGreaterThan(middle.y);
+    expect(west.x).toBeLessThan(middle.x);
+    expect(east.x).toBeGreaterThan(middle.x);
+
+    // The NORTH toolbar button dispatches to the SOUTH status bar.
+    await refresh.click();
+    await expect(root).toContainText('Refreshed the view');
   });
 
   test('a nested submenu cascades via keyboard; click-away collapses the bar', async ({ page }) => {
