@@ -362,6 +362,59 @@ class DotPanel extends JPanel {
 `,
   },
   {
+    name: 'Bouncing ball',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+
+public class Main {
+  static int x = 30;
+  static int dx = 6;
+  static int ticks = 0;
+  static BallPanel panel;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Bounce");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    panel = new BallPanel();
+    panel.setPreferredSize(new Dimension(300, 160));
+    panel.setToolTipText("A bouncing ball animation");
+    status = new JLabel("ticks: 0");
+
+    // A Timer fires its ActionListener every 40ms: move the ball, bounce at
+    // the edges, and repaint. The host schedules the ticks.
+    Timer timer = new Timer(40, new ActionListener() {
+      public void actionPerformed(ActionEvent e) {
+        Main.x = Main.x + Main.dx;
+        if (Main.x < 20 || Main.x > 280) Main.dx = -Main.dx;
+        Main.ticks = Main.ticks + 1;
+        Main.status.setText("ticks: " + Main.ticks);
+        Main.panel.repaint();
+      }
+    });
+    timer.start();
+
+    frame.add(panel);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+
+class BallPanel extends JPanel {
+  public void paintComponent(Graphics g) {
+    super.paintComponent(g);
+    g.setColor(new Color(20, 24, 40));
+    g.fillRect(0, 0, getWidth(), getHeight());
+    g.setColor(new Color(255, 200, 0));
+    g.fillOval(Main.x - 15, 65, 30, 30);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
@@ -448,6 +501,16 @@ function parseTestResults(output: string): TestResult[] {
     results.push({ passed: status === 'PASS', name: name ?? '', message: message ?? '' });
   }
   return results;
+}
+
+/** Running Swing timers from a serialized component tree (for wakeups). */
+function parseSwingTimers(tree: string): { id: string; delay: number }[] {
+  try {
+    const root = JSON.parse(tree) as { timers?: { id: string; delay: number }[] };
+    return root.timers ?? [];
+  } catch {
+    return [];
+  }
 }
 
 function formatDiagnostic(diagnostic: Diagnostic): string {
@@ -798,14 +861,35 @@ export function App(): React.JSX.Element {
   };
 
   // Interactive Swing: render the live tree (wiring controls to dispatch),
-  // then park until the user activates one. The engine's event loop stays
-  // blocked in the worker until this resolves.
+  // then park until the user activates a control OR a Timer fires. The
+  // engine's event loop stays blocked in the worker until this resolves.
   const awaitSwingEvent = (tree: string): Promise<string | null> =>
     new Promise((resolve) => {
       swingRenderedLiveRef.current = true;
-      swingEventResolverRef.current = resolve;
+      const timeouts: ReturnType<typeof setTimeout>[] = [];
+      const settle = (payload: string | null): void => {
+        for (const timeout of timeouts) {
+          clearTimeout(timeout);
+        }
+        swingEventResolverRef.current = null;
+        resolve(payload);
+      };
+      // A control activation resolves through this ref (via dispatchSwingEvent).
+      swingEventResolverRef.current = settle;
       setView('swing');
       swingVizRef.current?.render(tree, dispatchSwingEvent);
+      // Race the running timers: whichever fires first wakes the loop; the
+      // next iteration re-reads the tree and reschedules them.
+      for (const timer of parseSwingTimers(tree)) {
+        timeouts.push(
+          setTimeout(
+            () => {
+              settle(`__timer:${timer.id}`);
+            },
+            Math.max(timer.delay, 1),
+          ),
+        );
+      }
     });
 
   // ----- Run / Test / Stop -----

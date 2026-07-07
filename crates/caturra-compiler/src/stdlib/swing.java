@@ -393,6 +393,38 @@ class JSlider extends Component {
   }
 }
 
+// javax.swing.Timer: fires its ActionListener every `delay` ms. The host
+// schedules the wakeup (see App.awaitSwingEvent); the loop dispatches the
+// tick. A running timer keeps the app alive (like any animation).
+class Timer {
+  String __tid;
+  int __delay;
+  boolean __running = false;
+  boolean __repeats = true;
+  ActionListener __listener;
+  public Timer(int delay, ActionListener listener) {
+    __tid = "t" + Component.__nextId();
+    __delay = delay;
+    __listener = listener;
+  }
+  public void start() {
+    __running = true;
+    __SwingRuntime.__interactive = true;
+    __SwingRuntime.__addTimer(this);
+  }
+  public void stop() { __running = false; }
+  public void restart() { start(); }
+  public boolean isRunning() { return __running; }
+  public void setDelay(int delay) { __delay = delay; }
+  public int getDelay() { return __delay; }
+  public void setRepeats(boolean repeats) { __repeats = repeats; }
+  public void addActionListener(ActionListener l) { __listener = l; }
+  void __fire() {
+    if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
+    if (!__repeats) stop();
+  }
+}
+
 class JFrame extends Container {
   String __title;
   int __w = 0;
@@ -434,7 +466,8 @@ class JFrame extends Container {
   String __jsonTree() {
     return "{\"type\":\"frame\",\"title\":\"" + Component.__esc(__title) + "\",\"width\":" + __w
         + ",\"height\":" + __h + ",\"layout\":" + __layoutJson()
-        + ",\"children\":" + __kidsJson() + "," + __commonJson() + "}";
+        + ",\"children\":" + __kidsJson()
+        + ",\"timers\":" + __SwingRuntime.__timersJson() + "," + __commonJson() + "}";
   }
 
   void __render() {
@@ -524,12 +557,42 @@ class MouseAdapter implements MouseListener {
 class __SwingRuntime {
   static boolean __interactive = false;
   static java.util.ArrayList<Component> __live = new java.util.ArrayList<Component>();
+  static java.util.ArrayList<Timer> __timers = new java.util.ArrayList<Timer>();
 
   static void __register(Component c) {
     for (int i = 0; i < __live.size(); i++) {
       if (__live.get(i).__cid.equals(c.__cid)) return;
     }
     __live.add(c);
+  }
+
+  static void __addTimer(Timer t) {
+    for (int i = 0; i < __timers.size(); i++) {
+      if (__timers.get(i).__tid.equals(t.__tid)) return;
+    }
+    __timers.add(t);
+  }
+
+  static Timer __findTimer(String tid) {
+    for (int i = 0; i < __timers.size(); i++) {
+      if (__timers.get(i).__tid.equals(tid)) return __timers.get(i);
+    }
+    return null;
+  }
+
+  // Running timers only (a stopped timer stays in the list but drops out
+  // of the JSON so the host stops scheduling it).
+  static String __timersJson() {
+    String s = "[";
+    boolean first = true;
+    for (int i = 0; i < __timers.size(); i++) {
+      Timer t = __timers.get(i);
+      if (!t.__running) continue;
+      if (!first) s += ",";
+      first = false;
+      s += "{\"id\":\"" + t.__tid + "\",\"delay\":" + t.__delay + "}";
+    }
+    return s + "]";
   }
 
   static Component __find(String cid) {
@@ -557,6 +620,12 @@ class __SwingRuntime {
       }
       String body = nl < 0 ? "" : payload.substring(nl + 1);
       __applyFields(body);
+      // A timer tick: "__timer:<id>" — fire that timer's ActionListener.
+      if (cid.startsWith("__timer:")) {
+        Timer t = __findTimer(cid.substring(8));
+        if (t != null && t.__running) t.__fire();
+        continue;
+      }
       Component c = __find(cid);
       if (c != null) {
         // A "__mouse=x,y" line marks a pointer event on the component, which

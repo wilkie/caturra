@@ -1393,6 +1393,29 @@ test.describe('swing (interactive)', () => {
     await expect.poll(() => sample(100, 80)).toEqual([30, 90, 200]);
   });
 
+  test('a Timer drives an animation (ticks advance on their own)', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Bouncing ball' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    await expect(root).toContainText('ticks:');
+
+    // No interaction: the Timer keeps firing and the tick count climbs.
+    await expect
+      .poll(
+        async () => {
+          const text = (await root.textContent()) ?? '';
+          const match = /ticks: (\d+)/.exec(text);
+          return match ? Number(match[1]) : 0;
+        },
+        { timeout: 5000 },
+      )
+      .toBeGreaterThan(5);
+
+    // An animation never completes on its own: it stays running until Stop.
+    await expect(page.getByTestId('stop-run')).toBeVisible();
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

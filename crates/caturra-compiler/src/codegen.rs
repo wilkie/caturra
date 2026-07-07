@@ -565,7 +565,12 @@ impl MethodTable {
                         library_superclass: None,
                         interfaces: Vec::new(),
                         is_abstract: false,
-                        is_interface: false,
+                        // Known in pass 1 so the anonymous-class extends-vs-
+                        // implements check (pass 2) is order-independent: an
+                        // anonymous class implementing an interface declared in
+                        // a later unit (e.g. the injected ActionListener) must
+                        // still resolve it as an interface.
+                        is_interface: class.is_interface,
                         is_enum: false,
                         type_param_count: 0,
                         methods: Vec::new(),
