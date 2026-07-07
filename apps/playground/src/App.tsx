@@ -606,6 +606,41 @@ public class Main {
 `,
   },
   {
+    name: 'List (JList)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JLabel status;
+  static JList fruits;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Fruits");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    JLabel prompt = new JLabel("Pick a fruit:");
+    fruits = new JList(new String[]{
+        "Apple", "Banana", "Cherry", "Date", "Elderberry", "Fig", "Grape"});
+    fruits.setVisibleRowCount(5);
+    prompt.setLabelFor(fruits);
+
+    status = new JLabel("Nothing selected yet.");
+    fruits.addListSelectionListener(e -> {
+      Object picked = Main.fruits.getSelectedValue();
+      Main.status.setText(picked == null ? "Nothing selected." : "You picked " + picked);
+    });
+
+    frame.add(prompt);
+    frame.add(fruits);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

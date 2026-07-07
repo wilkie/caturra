@@ -23,6 +23,7 @@ interface SwingNode {
     | 'checkbox'
     | 'radio'
     | 'combobox'
+    | 'list'
     | 'slider'
     | 'scrollpane'
     | 'component';
@@ -377,6 +378,8 @@ export class SwingViz {
         return this.radioButton(node);
       case 'combobox':
         return this.comboBox(node);
+      case 'list':
+        return this.listBox(node);
       case 'slider':
         return this.slider(node);
       case 'scrollpane':
@@ -752,6 +755,29 @@ export class SwingViz {
     }
     // A <select> has no implicit label; fall back to the tooltip when no
     // JLabel targets it (setLabelFor still gives the strongest name).
+    if (node.tooltip !== undefined) {
+      select.setAttribute('aria-label', node.tooltip);
+    }
+    this.#field(select, node, 'change');
+    this.common(select, node);
+    return select;
+  }
+
+  /** A JList: a sized <select> renders as a native, accessible list box
+   * (role listbox; arrow keys, Home/End, and typeahead come for free). */
+  private listBox(node: SwingNode): HTMLElement {
+    const select = document.createElement('select');
+    select.className = 'swing-list';
+    select.id = node.id;
+    select.size = Math.max(node.rows ?? 8, 2); // size > 1 => list box, not dropdown
+    select.disabled = node.enabled === false;
+    for (const [index, item] of (node.items ?? []).entries()) {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = item;
+      option.selected = index === node.selectedIndex;
+      select.appendChild(option);
+    }
     if (node.tooltip !== undefined) {
       select.setAttribute('aria-label', node.tooltip);
     }

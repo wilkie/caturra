@@ -438,6 +438,49 @@ class JComboBox extends Component {
   }
 }
 
+class JList extends Component {
+  java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
+  int __selectedIndex = -1;
+  int __visibleRows = 8;
+  ListSelectionListener __listener = null;
+  public static final int SINGLE_SELECTION = 0;
+  public static final int SINGLE_INTERVAL_SELECTION = 1;
+  public static final int MULTIPLE_INTERVAL_SELECTION = 2;
+  public JList() {}
+  public JList(String[] items) { setListData(items); }
+  public void setListData(String[] items) {
+    __items = new java.util.ArrayList<String>();
+    for (int i = 0; i < items.length; i++) __items.add(items[i]);
+  }
+  public int getSelectedIndex() { return __selectedIndex; }
+  public void setSelectedIndex(int index) { __selectedIndex = index; }
+  public Object getSelectedValue() {
+    if (__selectedIndex < 0 || __selectedIndex >= __items.size()) return null;
+    return __items.get(__selectedIndex);
+  }
+  public boolean isSelectionEmpty() { return __selectedIndex < 0; }
+  public void clearSelection() { __selectedIndex = -1; }
+  public void setVisibleRowCount(int rows) { __visibleRows = rows; }
+  public int getVisibleRowCount() { return __visibleRows; }
+  public void setSelectionMode(int mode) {} // single selection only
+  public void addListSelectionListener(ListSelectionListener l) { __listener = l; __SwingRuntime.__interactive = true; }
+  void __setFromHost(String value) { __selectedIndex = Integer.parseInt(value); }
+  void __onEvent() {
+    if (__listener != null) __listener.valueChanged(new ListSelectionEvent(this));
+  }
+  boolean __listens() { return __listener != null; }
+  String __json() {
+    String opts = "[";
+    for (int i = 0; i < __items.size(); i++) {
+      if (i > 0) opts += ",";
+      opts += "\"" + Component.__esc(__items.get(i)) + "\"";
+    }
+    opts += "]";
+    return "{\"type\":\"list\",\"items\":" + opts + ",\"selectedIndex\":" + __selectedIndex
+        + ",\"rows\":" + __visibleRows + "," + __commonJson() + "}";
+  }
+}
+
 class JSlider extends Component {
   int __min, __max, __value;
   ChangeListener __changeListener = null;
@@ -692,6 +735,17 @@ class ChangeEvent {
 
 interface ChangeListener {
   void stateChanged(ChangeEvent e);
+}
+
+class ListSelectionEvent {
+  Object __src;
+  public ListSelectionEvent(Object source) { __src = source; }
+  public Object getSource() { return __src; }
+  public boolean getValueIsAdjusting() { return false; }
+}
+
+interface ListSelectionListener {
+  void valueChanged(ListSelectionEvent e);
 }
 
 class MouseEvent {

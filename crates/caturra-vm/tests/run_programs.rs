@@ -835,6 +835,36 @@ fn swing_scroll_pane_registers_and_dispatches_its_view() {
 }
 
 #[test]
+fn swing_list_selection_fires_listener_with_value() {
+    // Selecting a JList item fires its (lambda) ListSelectionListener and
+    // getSelectedValue reads the picked item. Ids: frame c0, list c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        public class Main {
+            static JList list;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Pick");
+                list = new JList(new String[]{"Apple", "Banana", "Cherry"});
+                list.addListSelectionListener(e -> System.out.println("picked " + Main.list.getSelectedValue()));
+                frame.add(list);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        // Select index 2 (Cherry), then index 0 (Apple).
+        vec![
+            Some(String::from("c1\nc1=2")),
+            Some(String::from("c1\nc1=0")),
+        ],
+    );
+    assert_eq!(out, "picked Cherry\npicked Apple\n");
+}
+
+#[test]
 fn swing_menu_item_click_fires_its_listener() {
     // A menu item fires its ActionListener when activated, like a button.
     // JMenuBar/JMenu are plain holders (no component id); the frame is c0 and

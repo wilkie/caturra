@@ -1583,6 +1583,26 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Picked Item 20');
   });
 
+  test('a JList is a native list box; selecting an item fires its listener', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'List (JList)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    // A sized <select> exposes role "listbox"; setLabelFor gives it a name.
+    const list = root.getByRole('listbox', { name: 'Pick a fruit:' });
+    await expect(list).toBeVisible();
+
+    // Selecting an option fires the ListSelectionListener; getSelectedValue
+    // reads the picked item.
+    await list.selectOption({ label: 'Cherry' });
+    await expect(root).toContainText('You picked Cherry');
+
+    // Keyboard: the native list box moves selection with the arrow keys.
+    await list.focus();
+    await page.keyboard.press('ArrowUp');
+    await expect(root).toContainText('You picked Banana');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

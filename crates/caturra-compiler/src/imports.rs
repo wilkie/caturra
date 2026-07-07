@@ -233,6 +233,7 @@ static JAVAX_SWING: &[&str] = &[
     "JCheckBox",
     "JRadioButton",
     "JComboBox",
+    "JList",
     "JSlider",
     "ButtonGroup",
     "Timer",
@@ -265,8 +266,14 @@ static JAVA_AWT_EVENT: &[&str] = &[
     "MouseAdapter",
     "MouseEvent",
 ];
-/// `javax.swing.event`: the `ChangeListener` used with `JSlider`.
-static JAVAX_SWING_EVENT: &[&str] = &["ChangeListener", "ChangeEvent"];
+/// `javax.swing.event`: the `ChangeListener` (`JSlider`) and
+/// `ListSelectionListener` (`JList`) plus their events.
+static JAVAX_SWING_EVENT: &[&str] = &[
+    "ChangeListener",
+    "ChangeEvent",
+    "ListSelectionListener",
+    "ListSelectionEvent",
+];
 
 /// Public classes of the bundled theater/media library.
 static ORG_CODE_THEATER: &[&str] = &["Scene", "Theater", "Instrument"];

@@ -357,7 +357,8 @@ label {
   cursor: pointer;
 }
 
-.swing-combobox {
+.swing-combobox,
+.swing-list {
   padding: 0.25rem 0.4rem;
   font: inherit;
   border-radius: 4px;
@@ -365,6 +366,10 @@ label {
   background: light-dark(#ffffff, #333333);
   color: inherit;
   cursor: pointer;
+}
+
+.swing-list option {
+  padding: 0.15rem 0.3rem;
 }
 
 .swing-slider {
@@ -462,6 +467,7 @@ label {
 .swing-textfield:focus-visible,
 .swing-textarea:focus-visible,
 .swing-combobox:focus-visible,
+.swing-list:focus-visible,
 .swing-slider:focus-visible,
 .swing-checkbox input:focus-visible,
 .swing-radio input:focus-visible {
