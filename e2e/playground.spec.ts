@@ -1261,6 +1261,72 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Clicks: 2');
   });
 
+  test('combo box, slider, and checkbox dispatch their listeners', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Controls demo' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    await expect(root).toContainText('1 Small pizza');
+
+    // Each control exposes the right ARIA role and an accessible name (via
+    // setLabelFor / its own label), and firing it updates the summary in the
+    // VM. A combo box selection fires its ActionListener.
+    await root.getByRole('combobox', { name: 'Size:' }).selectOption({ label: 'Large' });
+    await expect(root).toContainText('Large');
+
+    // A slider fires its ChangeListener.
+    await root.getByRole('slider', { name: 'Quantity:' }).fill('3');
+    await expect(root).toContainText('3 Large pizza');
+
+    // A checkbox toggle fires its ItemListener.
+    await root.getByRole('checkbox', { name: 'Extra cheese' }).check();
+    await expect(root).toContainText('with extra cheese');
+  });
+
+  test('radio buttons in a ButtonGroup are single-select and dispatch', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'import javax.swing.*;',
+        'import java.awt.*;',
+        'public class Main {',
+        '  public static void main(String[] args) {',
+        '    JFrame frame = new JFrame("Pick");',
+        '    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);',
+        '    JLabel out = new JLabel("none");',
+        '    JRadioButton a = new JRadioButton("Cats");',
+        '    JRadioButton b = new JRadioButton("Dogs");',
+        '    ButtonGroup g = new ButtonGroup();',
+        '    g.add(a);',
+        '    g.add(b);',
+        '    a.addActionListener(e -> out.setText("Cats"));',
+        '    b.addActionListener(e -> out.setText("Dogs"));',
+        '    frame.add(a);',
+        '    frame.add(b);',
+        '    frame.add(out);',
+        '    frame.setVisible(true);',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const cats = root.getByRole('radio', { name: 'Cats' });
+    const dogs = root.getByRole('radio', { name: 'Dogs' });
+    await expect(cats).toBeVisible();
+
+    await cats.check();
+    await expect(root).toContainText('Cats');
+    await expect(cats).toBeChecked();
+
+    // Selecting the other radio deselects the first (shared ButtonGroup name).
+    await dogs.check();
+    await expect(root).toContainText('Dogs');
+    await expect(dogs).toBeChecked();
+    await expect(cats).not.toBeChecked();
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

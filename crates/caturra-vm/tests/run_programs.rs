@@ -592,6 +592,56 @@ fn swing_close_with_default_hide_keeps_running() {
 }
 
 #[test]
+fn swing_rich_controls_dispatch_their_listeners() {
+    // Non-button controls now dispatch: a checkbox toggle fires its
+    // ItemListener, a combo box selection and a slider drag fire their
+    // listeners, and a radio button selection fires (with its state synced).
+    // Ids follow construction order (frame c0, checkbox c1, combo c2, slider
+    // c3, radios c4/c5); each scripted payload is "<cid>\n<id>=<value>...".
+    let source = r#"
+        import javax.swing.*;
+        import javax.swing.event.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Controls");
+                frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                JCheckBox agree = new JCheckBox("Agree");
+                agree.addItemListener(e -> System.out.println("agree=" + agree.isSelected()));
+                JComboBox size = new JComboBox(new String[]{"S", "M", "L"});
+                size.addActionListener(e -> System.out.println("size=" + size.getSelectedItem()));
+                JSlider level = new JSlider(0, 10, 5);
+                level.addChangeListener(e -> System.out.println("level=" + level.getValue()));
+                JRadioButton red = new JRadioButton("Red", true);
+                JRadioButton blue = new JRadioButton("Blue");
+                ButtonGroup colors = new ButtonGroup();
+                colors.add(red);
+                colors.add(blue);
+                blue.addItemListener(e -> System.out.println("blue=" + blue.isSelected()));
+                frame.add(agree);
+                frame.add(size);
+                frame.add(level);
+                frame.add(red);
+                frame.add(blue);
+                frame.setVisible(true);
+            }
+        }
+    "#;
+    let out = run_swing_scripted(
+        source,
+        "Main",
+        vec![
+            Some(String::from("c1\nc1=true")),           // tick the checkbox
+            Some(String::from("c2\nc2=2")),              // combo box -> "L"
+            Some(String::from("c3\nc3=8")),              // slider -> 8
+            Some(String::from("c5\nc5=true\nc4=false")), // pick the Blue radio
+        ],
+    );
+    assert_eq!(out, "agree=true\nsize=L\nlevel=8\nblue=true\n");
+}
+
+#[test]
 fn neighborhood_painter_simulation() {
     // A 4x4 grid: a wall at (2,1) and a one-unit paint bucket at (1,2).
     let grid = "1,0 1,0 1,0 1,0\n1,0 1,0 0,0 1,0\n1,0 1,1 1,0 1,0\n1,0 1,0 1,0 1,0\n";

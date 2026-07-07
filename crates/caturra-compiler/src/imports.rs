@@ -197,6 +197,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "org.code.theater" => Some(ORG_CODE_THEATER),
         "org.code.media" => Some(ORG_CODE_MEDIA),
         "javax.swing" => Some(JAVAX_SWING),
+        "javax.swing.event" => Some(JAVAX_SWING_EVENT),
         "java.awt" => Some(JAVA_AWT),
         "java.awt.event" => Some(JAVA_AWT_EVENT),
         _ => None,
@@ -228,6 +229,10 @@ static JAVAX_SWING: &[&str] = &[
     "JButton",
     "JTextField",
     "JCheckBox",
+    "JRadioButton",
+    "JComboBox",
+    "JSlider",
+    "ButtonGroup",
 ];
 static JAVA_AWT: &[&str] = &[
     "Color",
@@ -239,9 +244,11 @@ static JAVA_AWT: &[&str] = &[
     "Container",
     "Component",
 ];
-/// java.awt.event (Phase 2 listeners): the functional interface students
-/// attach with addActionListener, plus its event object.
-static JAVA_AWT_EVENT: &[&str] = &["ActionListener", "ActionEvent"];
+/// java.awt.event (listeners): the functional interfaces students attach
+/// (addActionListener / addItemListener) plus their event objects.
+static JAVA_AWT_EVENT: &[&str] = &["ActionListener", "ActionEvent", "ItemListener", "ItemEvent"];
+/// `javax.swing.event`: the `ChangeListener` used with `JSlider`.
+static JAVAX_SWING_EVENT: &[&str] = &["ChangeListener", "ChangeEvent"];
 
 /// Public classes of the bundled theater/media library.
 static ORG_CODE_THEATER: &[&str] = &["Scene", "Theater", "Instrument"];

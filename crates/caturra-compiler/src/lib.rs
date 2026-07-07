@@ -362,6 +362,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // javax.swing / java.awt (accessible DOM Swing): the component tree
     // serializes to `swing.json` on `setVisible(true)`.
     if imports_package(&units, &["javax", "swing"])
+        || imports_package(&units, &["javax", "swing", "event"])
         || imports_package(&units, &["java", "awt"])
         || imports_package(&units, &["java", "awt", "event"])
     {

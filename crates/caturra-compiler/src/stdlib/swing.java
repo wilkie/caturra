@@ -99,6 +99,10 @@ class Component {
   // The shared trailing fields every node carries (no braces, no leading comma).
   String __commonJson() {
     String s = "\"id\":\"" + __cid + "\",\"enabled\":" + __enabled;
+    // Only widgets with a listener dispatch on interaction; the renderer
+    // wires a control's native event to the VM only when this is set, so an
+    // input read at submit-time (no listener) doesn't round-trip on every key.
+    if (__listens()) s += ",\"listens\":true";
     if (__ttip != null) s += ",\"tooltip\":\"" + Component.__esc(__ttip) + "\"";
     if (__bg != null) s += ",\"bg\":\"" + __bg.__r + "," + __bg.__g + "," + __bg.__b + "\"";
     if (__fg != null) s += ",\"fg\":\"" + __fg.__r + "," + __fg.__g + "," + __fg.__b + "\"";
@@ -110,10 +114,11 @@ class Component {
 
   // Phase 2 event hooks. __setFromHost syncs a value the user changed in
   // the DOM (text typed, box toggled) before dispatch; __onEvent fires the
-  // component's listener when it is the activated control. Both no-op by
-  // default; interactive widgets override them.
+  // component's listener when it is the activated control; __listens reports
+  // whether it has one. All no-op/false by default; widgets override them.
   void __setFromHost(String value) {}
   void __onEvent() {}
+  boolean __listens() { return false; }
 }
 
 class Container extends Component {
@@ -179,6 +184,7 @@ class JButton extends Component {
   void __onEvent() {
     if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
   }
+  boolean __listens() { return __listener != null; }
   String __json() {
     return "{\"type\":\"button\",\"text\":\"" + Component.__esc(__text) + "\"," + __commonJson() + "}";
   }
@@ -204,6 +210,8 @@ class JTextField extends Component {
 class JCheckBox extends Component {
   String __text;
   boolean __sel;
+  ItemListener __itemListener = null;
+  ActionListener __actionListener = null;
   public JCheckBox() { __text = ""; __sel = false; }
   public JCheckBox(String text) { __text = text; __sel = false; }
   public JCheckBox(String text, boolean selected) { __text = text; __sel = selected; }
@@ -211,9 +219,122 @@ class JCheckBox extends Component {
   public void setSelected(boolean selected) { __sel = selected; }
   public String getText() { return __text; }
   public void setText(String text) { __text = text; }
+  public void addItemListener(ItemListener l) { __itemListener = l; __SwingRuntime.__interactive = true; }
+  public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
   void __setFromHost(String value) { __sel = value.equals("true"); }
+  void __onEvent() {
+    if (__itemListener != null) {
+      int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
+      __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
+    }
+    if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
+  }
+  boolean __listens() { return __itemListener != null || __actionListener != null; }
   String __json() {
     return "{\"type\":\"checkbox\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
+        + "," + __commonJson() + "}";
+  }
+}
+
+class JRadioButton extends Component {
+  String __text;
+  boolean __sel;
+  String __group = null; // ButtonGroup id, for mutual exclusivity
+  ItemListener __itemListener = null;
+  ActionListener __actionListener = null;
+  public JRadioButton() { __text = ""; __sel = false; }
+  public JRadioButton(String text) { __text = text; __sel = false; }
+  public JRadioButton(String text, boolean selected) { __text = text; __sel = selected; }
+  public boolean isSelected() { return __sel; }
+  public void setSelected(boolean selected) { __sel = selected; }
+  public String getText() { return __text; }
+  public void setText(String text) { __text = text; }
+  public void addItemListener(ItemListener l) { __itemListener = l; __SwingRuntime.__interactive = true; }
+  public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
+  void __setFromHost(String value) { __sel = value.equals("true"); }
+  void __onEvent() {
+    if (__itemListener != null) {
+      int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
+      __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
+    }
+    if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
+  }
+  boolean __listens() { return __itemListener != null || __actionListener != null; }
+  String __json() {
+    String g = __group == null ? "" : ",\"group\":\"" + __group + "\"";
+    return "{\"type\":\"radio\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
+        + g + "," + __commonJson() + "}";
+  }
+}
+
+// Groups radio buttons for mutual exclusivity. The shared id becomes the DOM
+// radios' `name`, so the browser enforces "only one selected"; the VM syncs
+// every group member's state from the host on each event.
+class ButtonGroup {
+  String __gid;
+  java.util.ArrayList<JRadioButton> __buttons = new java.util.ArrayList<JRadioButton>();
+  public ButtonGroup() { __gid = "g" + Component.__nextId(); }
+  public void add(JRadioButton b) { b.__group = __gid; __buttons.add(b); }
+  public int getButtonCount() { return __buttons.size(); }
+}
+
+class JComboBox extends Component {
+  java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
+  int __selectedIndex = -1;
+  ActionListener __actionListener = null;
+  public JComboBox() {}
+  public JComboBox(String[] items) {
+    for (int i = 0; i < items.length; i++) __items.add(items[i]);
+    if (__items.size() > 0) __selectedIndex = 0;
+  }
+  public void addItem(String item) {
+    __items.add(item);
+    if (__selectedIndex < 0) __selectedIndex = 0;
+  }
+  public int getItemCount() { return __items.size(); }
+  public String getItemAt(int index) { return __items.get(index); }
+  public int getSelectedIndex() { return __selectedIndex; }
+  public void setSelectedIndex(int index) { __selectedIndex = index; }
+  public Object getSelectedItem() {
+    if (__selectedIndex < 0 || __selectedIndex >= __items.size()) return null;
+    return __items.get(__selectedIndex);
+  }
+  public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
+  void __setFromHost(String value) { __selectedIndex = Integer.parseInt(value); }
+  void __onEvent() {
+    if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
+  }
+  boolean __listens() { return __actionListener != null; }
+  String __json() {
+    String opts = "[";
+    for (int i = 0; i < __items.size(); i++) {
+      if (i > 0) opts += ",";
+      opts += "\"" + Component.__esc(__items.get(i)) + "\"";
+    }
+    opts += "]";
+    return "{\"type\":\"combobox\",\"items\":" + opts + ",\"selectedIndex\":" + __selectedIndex
+        + "," + __commonJson() + "}";
+  }
+}
+
+class JSlider extends Component {
+  int __min, __max, __value;
+  ChangeListener __changeListener = null;
+  public JSlider() { __min = 0; __max = 100; __value = 50; }
+  public JSlider(int min, int max) { __min = min; __max = max; __value = (min + max) / 2; }
+  public JSlider(int min, int max, int value) { __min = min; __max = max; __value = value; }
+  public int getValue() { return __value; }
+  public void setValue(int value) { __value = value; }
+  public int getMinimum() { return __min; }
+  public int getMaximum() { return __max; }
+  public void addChangeListener(ChangeListener l) { __changeListener = l; __SwingRuntime.__interactive = true; }
+  void __setFromHost(String value) { __value = Integer.parseInt(value); }
+  void __onEvent() {
+    if (__changeListener != null) __changeListener.stateChanged(new ChangeEvent(this));
+  }
+  boolean __listens() { return __changeListener != null; }
+  String __json() {
+    return "{\"type\":\"slider\",\"min\":" + __min + ",\"max\":" + __max + ",\"value\":" + __value
         + "," + __commonJson() + "}";
   }
 }
@@ -281,6 +402,34 @@ class ActionEvent {
 
 interface ActionListener {
   void actionPerformed(ActionEvent e);
+}
+
+class ItemEvent {
+  public static final int SELECTED = 1;
+  public static final int DESELECTED = 2;
+  Object __src;
+  int __state;
+  Object __item;
+  public ItemEvent(Object source, int state, Object item) {
+    __src = source; __state = state; __item = item;
+  }
+  public Object getSource() { return __src; }
+  public int getStateChange() { return __state; }
+  public Object getItem() { return __item; }
+}
+
+interface ItemListener {
+  void itemStateChanged(ItemEvent e);
+}
+
+class ChangeEvent {
+  Object __src;
+  public ChangeEvent(Object source) { __src = source; }
+  public Object getSource() { return __src; }
+}
+
+interface ChangeListener {
+  void stateChanged(ChangeEvent e);
 }
 
 // The event pump. setVisible enters __loop, which renders the current tree

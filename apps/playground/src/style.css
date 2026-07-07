@@ -319,7 +319,8 @@ label {
   color: inherit;
 }
 
-.swing-checkbox {
+.swing-checkbox,
+.swing-radio {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -329,11 +330,29 @@ label {
   cursor: pointer;
 }
 
+.swing-combobox {
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+  border-radius: 4px;
+  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
+  background: light-dark(#ffffff, #333333);
+  color: inherit;
+  cursor: pointer;
+}
+
+.swing-slider {
+  vertical-align: middle;
+  cursor: pointer;
+}
+
 /* A clear keyboard-focus ring for every interactive widget. */
 .swing-button:focus-visible,
 .swing-close:focus-visible,
 .swing-textfield:focus-visible,
-.swing-checkbox input:focus-visible {
+.swing-combobox:focus-visible,
+.swing-slider:focus-visible,
+.swing-checkbox input:focus-visible,
+.swing-radio input:focus-visible {
   outline: 2px solid light-dark(#0b57d0, #9db8ff);
   outline-offset: 1px;
 }

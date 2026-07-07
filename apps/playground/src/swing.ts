@@ -13,7 +13,17 @@
  */
 
 interface SwingNode {
-  type: 'frame' | 'panel' | 'label' | 'button' | 'textfield' | 'checkbox' | 'component';
+  type:
+    | 'frame'
+    | 'panel'
+    | 'label'
+    | 'button'
+    | 'textfield'
+    | 'checkbox'
+    | 'radio'
+    | 'combobox'
+    | 'slider'
+    | 'component';
   id: string;
   enabled?: boolean;
   tooltip?: string;
@@ -27,8 +37,22 @@ interface SwingNode {
   columns?: number;
   selected?: boolean;
   for?: string;
+  /** True when the widget has a listener, so its native event dispatches. */
+  listens?: boolean;
+  /** JComboBox option labels. */
+  items?: string[];
+  /** JComboBox selected option index. */
+  selectedIndex?: number;
+  /** JSlider range/value. */
+  min?: number;
+  max?: number;
+  value?: number;
+  /** JRadioButton ButtonGroup id (shared DOM `name` for exclusivity). */
+  group?: string;
   children?: SwingNode[];
 }
+
+type FieldElement = HTMLInputElement | HTMLSelectElement;
 
 /** Turn a `"r,g,b"` triple from the engine into a CSS color. */
 function cssColor(triple: string | undefined): string | null {
@@ -40,6 +64,17 @@ function cssColor(triple: string | undefined): string | null {
     return null;
   }
   return `rgb(${String(parts[0])}, ${String(parts[1])}, ${String(parts[2])})`;
+}
+
+/** The value string for a field element, matching the engine's __setFromHost. */
+function fieldValue(el: FieldElement): string {
+  if (el instanceof HTMLSelectElement) {
+    return String(el.selectedIndex); // JComboBox: selected index
+  }
+  if (el.type === 'checkbox' || el.type === 'radio') {
+    return String(el.checked);
+  }
+  return el.value; // text field / slider
 }
 
 /** CSS for a container, mapping the Swing LayoutManager to flex/grid. */
@@ -67,9 +102,9 @@ export class SwingViz {
   // When set (interactive runs), activating a control calls this with the
   // event payload; when null (Phase 1 batch render) controls are inert.
   #onEvent: ((payload: string) => void) | null = null;
-  // Live field controls by id, so a button click can report every field's
-  // current value back to the program (what the user typed / toggled).
-  #fields = new Map<string, HTMLInputElement>();
+  // Live field controls by id, so any event can report every field's
+  // current value back to the program (what the user typed / toggled / chose).
+  #fields = new Map<string, FieldElement>();
 
   constructor(private readonly mount: HTMLElement) {}
 
@@ -108,10 +143,26 @@ export class SwingViz {
   #payload(clickedId: string): string {
     let payload = clickedId;
     for (const [id, el] of this.#fields) {
-      const value = el.type === 'checkbox' ? String(el.checked) : el.value;
-      payload += `\n${id}=${value}`;
+      payload += `\n${id}=${fieldValue(el)}`;
     }
     return payload;
+  }
+
+  /**
+   * Register a live field and, when it has a listener, dispatch its value to
+   * the program on the given native event. Fields are always registered (so
+   * their value rides along with any event); the event is wired only when the
+   * widget listens, so an input read at submit-time doesn't round-trip.
+   */
+  #field(el: FieldElement, node: SwingNode, event: 'change'): void {
+    this.#fields.set(node.id, el);
+    if (this.#onEvent && node.listens === true) {
+      const onEvent = this.#onEvent;
+      const id = node.id;
+      el.addEventListener(event, () => {
+        onEvent(this.#payload(id));
+      });
+    }
   }
 
   private build(node: SwingNode): HTMLElement {
@@ -128,6 +179,12 @@ export class SwingViz {
         return this.textField(node);
       case 'checkbox':
         return this.checkBox(node);
+      case 'radio':
+        return this.radioButton(node);
+      case 'combobox':
+        return this.comboBox(node);
+      case 'slider':
+        return this.slider(node);
       default: {
         const span = document.createElement('span');
         this.common(span, node);
@@ -236,10 +293,10 @@ export class SwingViz {
     button.id = node.id;
     button.textContent = node.text ?? '';
     button.disabled = node.enabled === false;
-    // The one control that drives events: a click reports the button's id
-    // plus every field's current value to the program's ActionListener.
-    // (Native <button> also fires this on Enter/Space, so keyboard works.)
-    if (this.#onEvent) {
+    // A click reports the button's id plus every field's current value to
+    // the program's ActionListener. (Native <button> also fires on
+    // Enter/Space, so keyboard works.) Only wired when it has a listener.
+    if (this.#onEvent && node.listens === true) {
       const onEvent = this.#onEvent;
       const id = node.id;
       button.addEventListener('click', () => {
@@ -282,8 +339,70 @@ export class SwingViz {
     const text = document.createElement('span');
     text.textContent = node.text ?? '';
     label.append(input, text);
-    this.#fields.set(node.id, input);
+    // Toggling fires the ItemListener/ActionListener (when present).
+    this.#field(input, node, 'change');
     this.common(label, node);
     return label;
+  }
+
+  private radioButton(node: SwingNode): HTMLElement {
+    const label = document.createElement('label');
+    label.className = 'swing-radio';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.id = node.id;
+    // A shared ButtonGroup name lets the browser enforce single-selection.
+    if (node.group !== undefined) {
+      input.name = node.group;
+    }
+    input.checked = node.selected === true;
+    input.disabled = node.enabled === false;
+    const text = document.createElement('span');
+    text.textContent = node.text ?? '';
+    label.append(input, text);
+    this.#field(input, node, 'change');
+    this.common(label, node);
+    return label;
+  }
+
+  private comboBox(node: SwingNode): HTMLElement {
+    const select = document.createElement('select');
+    select.className = 'swing-combobox';
+    select.id = node.id;
+    select.disabled = node.enabled === false;
+    for (const [index, item] of (node.items ?? []).entries()) {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = item;
+      option.selected = index === node.selectedIndex;
+      select.appendChild(option);
+    }
+    // A <select> has no implicit label; fall back to the tooltip when no
+    // JLabel targets it (setLabelFor still gives the strongest name).
+    if (node.tooltip !== undefined) {
+      select.setAttribute('aria-label', node.tooltip);
+    }
+    this.#field(select, node, 'change');
+    this.common(select, node);
+    return select;
+  }
+
+  private slider(node: SwingNode): HTMLElement {
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.className = 'swing-slider';
+    input.id = node.id;
+    input.min = String(node.min ?? 0);
+    input.max = String(node.max ?? 100);
+    input.value = String(node.value ?? 0);
+    input.disabled = node.enabled === false;
+    // Native range inputs expose value/min/max to assistive tech; add a name
+    // from the tooltip when no JLabel targets it.
+    if (node.tooltip !== undefined) {
+      input.setAttribute('aria-label', node.tooltip);
+    }
+    this.#field(input, node, 'change');
+    this.common(input, node);
+    return input;
   }
 }

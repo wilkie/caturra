@@ -229,9 +229,15 @@ fn method_signatures(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec
                 if method.is_constructor {
                     continue;
                 }
-                out.entry(method.name.clone())
-                    .or_default()
-                    .push(method.params.iter().map(|p| p.ty.clone()).collect());
+                // De-duplicate identical signatures so a method declared with
+                // the same parameter types on several classes (e.g.
+                // `addActionListener(ActionListener)` on JButton/JCheckBox/…)
+                // still counts as a single target-typing candidate.
+                let sig: Vec<TypeRef> = method.params.iter().map(|p| p.ty.clone()).collect();
+                let entry = out.entry(method.name.clone()).or_default();
+                if !entry.contains(&sig) {
+                    entry.push(sig);
+                }
             }
         }
     }

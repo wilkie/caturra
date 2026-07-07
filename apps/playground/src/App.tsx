@@ -211,6 +211,58 @@ public class Main {
 `,
   },
   {
+    name: 'Controls demo',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel summary;
+  static JComboBox size;
+  static JSlider quantity;
+  static JCheckBox extraCheese;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Pizza order");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new GridLayout(4, 2));
+
+    JLabel sizeLabel = new JLabel("Size:");
+    size = new JComboBox(new String[]{"Small", "Medium", "Large"});
+    sizeLabel.setLabelFor(size);
+
+    JLabel qtyLabel = new JLabel("Quantity:");
+    quantity = new JSlider(1, 6, 1);
+    qtyLabel.setLabelFor(quantity);
+
+    extraCheese = new JCheckBox("Extra cheese");
+    summary = new JLabel("1 Small pizza");
+
+    // Each control fires its own kind of listener; update() rebuilds the
+    // order summary from the live widget state.
+    size.addActionListener(e -> Main.update());
+    quantity.addChangeListener(e -> Main.update());
+    extraCheese.addItemListener(e -> Main.update());
+
+    frame.add(sizeLabel);
+    frame.add(size);
+    frame.add(qtyLabel);
+    frame.add(quantity);
+    frame.add(new JLabel(""));
+    frame.add(extraCheese);
+    frame.add(new JLabel("Order:"));
+    frame.add(summary);
+    frame.setVisible(true);
+  }
+
+  static void update() {
+    String order = quantity.getValue() + " " + size.getSelectedItem() + " pizza";
+    if (extraCheese.isSelected()) order = order + " with extra cheese";
+    summary.setText(order);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;
