@@ -779,6 +779,35 @@ fn swing_joptionpane_dialogs_block_and_return_responses() {
 }
 
 #[test]
+fn swing_text_area_reads_a_multi_line_value() {
+    // A JTextArea holds multi-line text. The host percent-escapes the value's
+    // newlines (%0A) so it survives the newline-delimited payload; the loop
+    // decodes it, and getText() returns the real multi-line string. Ids:
+    // frame c0, area c1, button c2.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Notes");
+                JTextArea area = new JTextArea(3, 20);
+                JButton save = new JButton("Save");
+                save.addActionListener(e -> System.out.println("[" + area.getText() + "]"));
+                frame.add(area);
+                frame.add(save);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        // Click Save (c2); the area (c1) holds "line one\nline two" (escaped).
+        vec![Some(String::from("c2\nc1=line one%0Aline two"))],
+    );
+    assert_eq!(out, "[line one\nline two]\n");
+}
+
+#[test]
 fn swing_menu_item_click_fires_its_listener() {
     // A menu item fires its ActionListener when activated, like a button.
     // JMenuBar/JMenu are plain holders (no component id); the frame is c0 and

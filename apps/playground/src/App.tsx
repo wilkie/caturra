@@ -531,6 +531,47 @@ public class Main {
 `,
   },
   {
+    name: 'Notepad (JTextArea)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JTextArea notes;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Notepad");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    JLabel prompt = new JLabel("Notes:");
+    notes = new JTextArea(6, 30);
+    notes.setLineWrap(true);
+    prompt.setLabelFor(notes);
+
+    status = new JLabel("Type something, then Count.");
+    JButton count = new JButton("Count");
+    count.addActionListener(e -> {
+      String text = Main.notes.getText();
+      int lines = text.equals("") ? 0 : 1;
+      for (int i = 0; i < text.length(); i++) {
+        if (text.charAt(i) == '\\n') {
+          lines++;
+        }
+      }
+      Main.status.setText(lines + " line(s), " + text.length() + " chars");
+    });
+
+    frame.add(prompt);
+    frame.add(notes);
+    frame.add(count);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

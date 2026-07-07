@@ -271,6 +271,32 @@ class JTextField extends Component {
   }
 }
 
+class JTextArea extends Component {
+  String __text;
+  int __rows, __cols;
+  boolean __editable = true;
+  boolean __wrap = false;
+  public JTextArea() { __text = ""; __rows = 0; __cols = 0; }
+  public JTextArea(int rows, int cols) { __text = ""; __rows = rows; __cols = cols; }
+  public JTextArea(String text) { __text = text; __rows = 0; __cols = 0; }
+  public JTextArea(String text, int rows, int cols) { __text = text; __rows = rows; __cols = cols; }
+  public String getText() { return __text; }
+  public void setText(String text) { __text = text; }
+  public void append(String text) { __text = __text + text; }
+  public void setEditable(boolean editable) { __editable = editable; }
+  public boolean isEditable() { return __editable; }
+  public void setLineWrap(boolean wrap) { __wrap = wrap; }
+  public void setWrapStyleWord(boolean word) {}
+  public int getRows() { return __rows; }
+  public int getColumns() { return __cols; }
+  void __setFromHost(String value) { __text = value; }
+  String __json() {
+    return "{\"type\":\"textarea\",\"text\":\"" + Component.__esc(__text) + "\",\"rows\":" + __rows
+        + ",\"columns\":" + __cols + ",\"editable\":" + __editable + ",\"wrap\":" + __wrap
+        + "," + __commonJson() + "}";
+  }
+}
+
 class JCheckBox extends Component {
   String __text;
   boolean __sel;
@@ -796,7 +822,9 @@ class __SwingRuntime {
       int eq = line.indexOf("=");
       if (eq < 0) continue;
       String id = line.substring(0, eq);
-      String value = line.substring(eq + 1);
+      // Values are percent-escaped (%25 -> %, %0A -> newline) so a multi-line
+      // JTextArea survives the newline-delimited payload. Decode %0A first.
+      String value = line.substring(eq + 1).replace("%0A", "\n").replace("%25", "%");
       Component c = __find(id);
       if (c != null) c.__setFromHost(value);
     }

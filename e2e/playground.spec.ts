@@ -1550,6 +1550,21 @@ test.describe('swing (interactive)', () => {
     await dialog.getByRole('button', { name: 'OK' }).click();
   });
 
+  test('a JTextArea holds multi-line text that a listener reads back', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Notepad (JTextArea)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    // A <textarea> is a multiline textbox; setLabelFor gives it a name.
+    const area = root.getByRole('textbox', { name: 'Notes:' });
+    await expect(area).toBeVisible();
+
+    // The typed value (with newlines) round-trips to the VM intact.
+    await area.fill('first line\nsecond line\nthird');
+    await root.getByRole('button', { name: 'Count' }).click();
+    await expect(root).toContainText('3 line(s)');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

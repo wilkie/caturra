@@ -19,6 +19,7 @@ interface SwingNode {
     | 'label'
     | 'button'
     | 'textfield'
+    | 'textarea'
     | 'checkbox'
     | 'radio'
     | 'combobox'
@@ -35,6 +36,9 @@ interface SwingNode {
   height?: number;
   layout?: string;
   columns?: number;
+  rows?: number;
+  editable?: boolean;
+  wrap?: boolean;
   selected?: boolean;
   for?: string;
   /** True when the widget has a listener, so its native event dispatches. */
@@ -76,7 +80,7 @@ interface SwingMenuEntry {
   listens?: boolean;
 }
 
-type FieldElement = HTMLInputElement | HTMLSelectElement;
+type FieldElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
 /** Turn a `"r,g,b"` triple from the engine into a CSS color. */
 function cssColor(triple: string | undefined): string | null {
@@ -90,15 +94,19 @@ function cssColor(triple: string | undefined): string | null {
   return `rgb(${String(parts[0])}, ${String(parts[1])}, ${String(parts[2])})`;
 }
 
-/** The value string for a field element, matching the engine's __setFromHost. */
+/** The value string for a field element, matching the engine's __setFromHost.
+ * Percent-escapes `%` and newlines so a multi-line JTextArea value survives
+ * the newline-delimited event payload (the engine decodes it). */
 function fieldValue(el: FieldElement): string {
+  let raw: string;
   if (el instanceof HTMLSelectElement) {
-    return String(el.selectedIndex); // JComboBox: selected index
+    raw = String(el.selectedIndex); // JComboBox: selected index
+  } else if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+    raw = String(el.checked);
+  } else {
+    raw = el.value; // text field / text area / slider
   }
-  if (el.type === 'checkbox' || el.type === 'radio') {
-    return String(el.checked);
-  }
-  return el.value; // text field / slider
+  return raw.replace(/%/g, '%25').replace(/\n/g, '%0A');
 }
 
 /** Replay a custom panel's recorded java.awt.Graphics commands onto a canvas. */
@@ -326,6 +334,8 @@ export class SwingViz {
         return this.button(node);
       case 'textfield':
         return this.textField(node);
+      case 'textarea':
+        return this.textArea(node);
       case 'checkbox':
         return this.checkBox(node);
       case 'radio':
@@ -605,6 +615,29 @@ export class SwingViz {
     this.#fields.set(node.id, input);
     this.common(input, node);
     return input;
+  }
+
+  private textArea(node: SwingNode): HTMLElement {
+    const textarea = document.createElement('textarea');
+    textarea.className = 'swing-textarea';
+    textarea.id = node.id;
+    textarea.value = node.text ?? '';
+    textarea.disabled = node.enabled === false;
+    textarea.readOnly = node.editable === false;
+    if (node.rows !== undefined && node.rows > 0) {
+      textarea.rows = node.rows;
+    }
+    if (node.columns !== undefined && node.columns > 0) {
+      textarea.cols = node.columns;
+    }
+    // Soft-wrap follows setLineWrap; off means a horizontally scrolling area.
+    textarea.wrap = node.wrap === true ? 'soft' : 'off';
+    if (node.tooltip !== undefined) {
+      textarea.setAttribute('aria-label', node.tooltip);
+    }
+    this.#fields.set(node.id, textarea);
+    this.common(textarea, node);
+    return textarea;
   }
 
   private checkBox(node: SwingNode): HTMLElement {
