@@ -779,6 +779,39 @@ fn swing_joptionpane_dialogs_block_and_return_responses() {
 }
 
 #[test]
+fn swing_menu_item_click_fires_its_listener() {
+    // A menu item fires its ActionListener when activated, like a button.
+    // JMenuBar/JMenu are plain holders (no component id); the frame is c0 and
+    // the two JMenuItems are c1 (Open) and c2 (Quit).
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                JMenuBar bar = new JMenuBar();
+                JMenu file = new JMenu("File");
+                JMenuItem open = new JMenuItem("Open");
+                open.addActionListener(e -> System.out.println("open!"));
+                JMenuItem quit = new JMenuItem("Quit");
+                quit.addActionListener(e -> System.out.println("quit!"));
+                file.add(open);
+                file.addSeparator();
+                file.add(quit);
+                bar.add(file);
+                frame.setJMenuBar(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("c2")), Some(String::from("c1"))],
+    );
+    assert_eq!(out, "quit!\nopen!\n");
+}
+
+#[test]
 fn swing_mouse_motion_listener_fires_on_drag() {
     // A panel with a MouseMotionListener (an anonymous MouseAdapter, which
     // implements both mouse interfaces) gets mouseDragged with the drag

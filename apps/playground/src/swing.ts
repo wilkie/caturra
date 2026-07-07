@@ -57,7 +57,23 @@ interface SwingNode {
   /** Panel has a MouseListener (wire click) / MouseMotionListener (wire drag). */
   mouse?: boolean;
   drag?: boolean;
+  /** A frame's menu bar (setJMenuBar). */
+  menubar?: SwingMenuBar;
   children?: SwingNode[];
+}
+
+interface SwingMenuBar {
+  menus: SwingMenu[];
+}
+interface SwingMenu {
+  text?: string;
+  items?: SwingMenuEntry[];
+}
+interface SwingMenuEntry {
+  type: 'menuitem' | 'separator';
+  text?: string;
+  id?: string;
+  listens?: boolean;
 }
 
 type FieldElement = HTMLInputElement | HTMLSelectElement;
@@ -381,6 +397,11 @@ export class SwingViz {
     }
     section.appendChild(titlebar);
 
+    // The menu bar sits below the title bar, above the content.
+    if (node.menubar) {
+      section.appendChild(this.menuBar(node.menubar));
+    }
+
     const content = document.createElement('div');
     content.className = 'swing-content';
     applyLayout(content, node.layout);
@@ -390,6 +411,106 @@ export class SwingViz {
     this.children(content, node);
     section.appendChild(content);
     return section;
+  }
+
+  /**
+   * An accessible menu bar (WAI-ARIA menu-button pattern): each menu is a
+   * button that opens a `role="menu"` popup of `role="menuitem"` buttons.
+   * Keyboard: open with Enter/Space, Arrow/Home/End move within the menu,
+   * Escape closes and returns focus to the button; activating an item
+   * dispatches its ActionListener (and closes the menu).
+   */
+  private menuBar(bar: SwingMenuBar): HTMLElement {
+    const menubar = document.createElement('div');
+    menubar.className = 'swing-menubar';
+    menubar.setAttribute('role', 'menubar');
+    let open: { popup: HTMLElement; button: HTMLButtonElement } | null = null;
+    const close = (): void => {
+      if (open) {
+        open.popup.hidden = true;
+        open.button.setAttribute('aria-expanded', 'false');
+        open = null;
+      }
+    };
+
+    for (const menu of bar.menus) {
+      const wrap = document.createElement('div');
+      wrap.className = 'swing-menu';
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'swing-menu-button';
+      button.textContent = menu.text ?? '';
+      button.setAttribute('aria-haspopup', 'true');
+      button.setAttribute('aria-expanded', 'false');
+
+      const popup = document.createElement('div');
+      popup.className = 'swing-menu-popup';
+      popup.setAttribute('role', 'menu');
+      popup.setAttribute('aria-label', menu.text ?? 'Menu');
+      popup.hidden = true;
+
+      for (const entry of menu.items ?? []) {
+        if (entry.type === 'separator') {
+          const separator = document.createElement('div');
+          separator.className = 'swing-menu-separator';
+          separator.setAttribute('role', 'separator');
+          popup.appendChild(separator);
+          continue;
+        }
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'swing-menu-item';
+        item.setAttribute('role', 'menuitem');
+        item.tabIndex = -1; // reached via arrow keys, not Tab
+        item.textContent = entry.text ?? '';
+        if (this.#onEvent && entry.listens === true && entry.id !== undefined) {
+          const onEvent = this.#onEvent;
+          const id = entry.id;
+          item.addEventListener('click', () => {
+            close();
+            onEvent(this.#payload(id));
+          });
+        }
+        popup.appendChild(item);
+      }
+
+      button.addEventListener('click', () => {
+        const wasOpen = open?.button === button;
+        close();
+        if (!wasOpen) {
+          popup.hidden = false;
+          button.setAttribute('aria-expanded', 'true');
+          open = { popup, button };
+          popup.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        }
+      });
+
+      popup.addEventListener('keydown', (event) => {
+        const items = [...popup.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+        const index = items.indexOf(document.activeElement as HTMLElement);
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          items[(index + 1) % items.length]?.focus();
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          items[(index - 1 + items.length) % items.length]?.focus();
+        } else if (event.key === 'Home') {
+          event.preventDefault();
+          items[0]?.focus();
+        } else if (event.key === 'End') {
+          event.preventDefault();
+          items[items.length - 1]?.focus();
+        } else if (event.key === 'Escape') {
+          close();
+          button.focus();
+        }
+      });
+
+      wrap.append(button, popup);
+      menubar.appendChild(wrap);
+    }
+    return menubar;
   }
 
   private panel(node: SwingNode): HTMLElement {

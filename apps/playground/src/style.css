@@ -353,6 +353,82 @@ label {
   max-width: 100%;
 }
 
+/* ----- Swing menu bar ----- */
+
+.swing-menubar {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.15rem 0.3rem;
+  border-bottom: 1px solid light-dark(#c9c9bd, #5a5145);
+  background: light-dark(#eeeee8, #333333);
+}
+
+.swing-menu {
+  position: relative;
+}
+
+.swing-menu-button {
+  font: inherit;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.swing-menu-button:hover,
+.swing-menu-button[aria-expanded='true'] {
+  background: light-dark(#dcdcd2, #4a4a4a);
+}
+
+.swing-menu-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  min-width: 10rem;
+  padding: 0.25rem 0;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid light-dark(#c9c9bd, #5a5145);
+  border-radius: 4px;
+  background: light-dark(#ffffff, #2b2b2b);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
+}
+
+.swing-menu-popup[hidden] {
+  display: none;
+}
+
+.swing-menu-item {
+  font: inherit;
+  text-align: left;
+  padding: 0.3rem 0.9rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.swing-menu-item:hover,
+.swing-menu-item:focus {
+  background: light-dark(#eef0ff, #565676);
+  outline: none;
+}
+
+.swing-menu-separator {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: light-dark(#d0d0c8, #4a4a4a);
+}
+
+.swing-menu-button:focus-visible {
+  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline-offset: 1px;
+}
+
 /* A clear keyboard-focus ring for every interactive widget. */
 .swing-button:focus-visible,
 .swing-close:focus-visible,

@@ -1525,6 +1525,31 @@ test.describe('swing (interactive)', () => {
     await expect(page.getByTestId('run')).toBeEnabled();
   });
 
+  test('a JMenuBar opens accessible menus; items dispatch and open dialogs', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Menus (JMenuBar)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    await expect(root.getByRole('menubar')).toBeVisible();
+
+    // Keyboard: open the File menu, arrow to Open, and activate it — the menu
+    // is a proper ARIA menu (menubar / menu / menuitem) with arrow navigation.
+    await root.getByRole('button', { name: 'File' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(root.getByRole('menuitem', { name: 'New' })).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(root.getByRole('menuitem', { name: 'Open' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(root).toContainText('Opened a file');
+
+    // Mouse: Help > About runs its listener, which opens a JOptionPane dialog.
+    await root.getByRole('button', { name: 'Help' }).click();
+    await root.getByRole('menu', { name: 'Help' }).getByRole('menuitem', { name: 'About' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Notes 1.0');
+    await dialog.getByRole('button', { name: 'OK' }).click();
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

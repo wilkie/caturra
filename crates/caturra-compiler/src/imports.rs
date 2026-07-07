@@ -235,6 +235,9 @@ static JAVAX_SWING: &[&str] = &[
     "ButtonGroup",
     "Timer",
     "JOptionPane",
+    "JMenuBar",
+    "JMenu",
+    "JMenuItem",
 ];
 static JAVA_AWT: &[&str] = &[
     "Color",

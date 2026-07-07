@@ -489,6 +489,48 @@ public class Main {
 `,
   },
   {
+    name: 'Menus (JMenuBar)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Notes");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+    JMenuBar bar = new JMenuBar();
+
+    JMenu file = new JMenu("File");
+    JMenuItem newItem = new JMenuItem("New");
+    newItem.addActionListener(e -> Main.status.setText("New file"));
+    JMenuItem openItem = new JMenuItem("Open");
+    openItem.addActionListener(e -> Main.status.setText("Opened a file"));
+    JMenuItem quitItem = new JMenuItem("Quit");
+    quitItem.addActionListener(e -> Main.status.setText("Bye!"));
+    file.add(newItem);
+    file.add(openItem);
+    file.addSeparator();
+    file.add(quitItem);
+
+    JMenu help = new JMenu("Help");
+    JMenuItem about = new JMenuItem("About");
+    about.addActionListener(e -> JOptionPane.showMessageDialog(null, "Notes 1.0"));
+    help.add(about);
+
+    bar.add(file);
+    bar.add(help);
+    frame.setJMenuBar(bar);
+
+    status = new JLabel("Choose a menu item.");
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

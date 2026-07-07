@@ -403,6 +403,66 @@ class JSlider extends Component {
   }
 }
 
+// ----- Menus -----
+
+class JMenuItem extends Component {
+  String __text;
+  boolean __sep = false;
+  ActionListener __listener = null;
+  public JMenuItem() { __text = ""; }
+  public JMenuItem(String text) { __text = text; }
+  public void setText(String text) { __text = text; }
+  public String getText() { return __text; }
+  public void addActionListener(ActionListener l) { __listener = l; __SwingRuntime.__interactive = true; }
+  void __onEvent() {
+    if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
+  }
+  boolean __listens() { return __listener != null; }
+  String __json() {
+    if (__sep) return "{\"type\":\"separator\"}";
+    return "{\"type\":\"menuitem\",\"text\":\"" + Component.__esc(__text) + "\"," + __commonJson() + "}";
+  }
+}
+
+class JMenu {
+  String __text;
+  java.util.ArrayList<JMenuItem> __items = new java.util.ArrayList<JMenuItem>();
+  public JMenu() { __text = ""; }
+  public JMenu(String text) { __text = text; }
+  public String getText() { return __text; }
+  // Adding an item registers it so a click can find and fire it.
+  public void add(JMenuItem item) { __items.add(item); __SwingRuntime.__register(item); }
+  public void addSeparator() {
+    JMenuItem s = new JMenuItem();
+    s.__sep = true;
+    __items.add(s);
+  }
+  public int getItemCount() { return __items.size(); }
+  String __json() {
+    String s = "{\"text\":\"" + Component.__esc(__text) + "\",\"items\":[";
+    for (int i = 0; i < __items.size(); i++) {
+      if (i > 0) s += ",";
+      s += __items.get(i).__json();
+    }
+    return s + "]}";
+  }
+}
+
+class JMenuBar {
+  java.util.ArrayList<JMenu> __menus = new java.util.ArrayList<JMenu>();
+  public JMenuBar() {}
+  public void add(JMenu menu) { __menus.add(menu); }
+  public int getMenuCount() { return __menus.size(); }
+  String __json() {
+    String s = "{\"menus\":[";
+    for (int i = 0; i < __menus.size(); i++) {
+      if (i > 0) s += ",";
+      s += __menus.get(i).__json();
+    }
+    return s + "]}";
+  }
+}
+
 // javax.swing.JOptionPane: standard modal dialogs. Each show* blocks (via the
 // native System.__uiDialog) until the user answers, then returns the result —
 // a message dialog returns nothing, a confirm returns an option code, an input
@@ -490,12 +550,15 @@ class JFrame extends Container {
   // Real JFrame default: closing hides the window (the program keeps
   // running). Students set EXIT_ON_CLOSE to end it — see __SwingRuntime.
   int __closeOp = 1; // HIDE_ON_CLOSE
+  JMenuBar __menuBar = null;
 
   public void setTitle(String title) { __title = title; }
   public String getTitle() { return __title; }
   public void setSize(int width, int height) { __w = width; __h = height; }
   public void setSize(Dimension d) { __w = d.width; __h = d.height; }
   public void setPreferredSize(Dimension d) { __w = d.width; __h = d.height; }
+  public void setJMenuBar(JMenuBar bar) { __menuBar = bar; }
+  public JMenuBar getJMenuBar() { return __menuBar; }
   public void setDefaultCloseOperation(int op) { __closeOp = op; }
   public int getDefaultCloseOperation() { return __closeOp; }
   public void setResizable(boolean resizable) {}
@@ -518,9 +581,10 @@ class JFrame extends Container {
   }
 
   String __jsonTree() {
+    String menubar = __menuBar == null ? "" : ",\"menubar\":" + __menuBar.__json();
     return "{\"type\":\"frame\",\"title\":\"" + Component.__esc(__title) + "\",\"width\":" + __w
         + ",\"height\":" + __h + ",\"layout\":" + __layoutJson()
-        + ",\"children\":" + __kidsJson()
+        + ",\"children\":" + __kidsJson() + menubar
         + ",\"timers\":" + __SwingRuntime.__timersJson() + "," + __commonJson() + "}";
   }
 
