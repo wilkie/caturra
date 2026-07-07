@@ -808,6 +808,33 @@ fn swing_text_area_reads_a_multi_line_value() {
 }
 
 #[test]
+fn swing_scroll_pane_registers_and_dispatches_its_view() {
+    // A component wrapped directly in a JScrollPane is never added to a
+    // Container, so the scroll pane must register it — otherwise the click
+    // couldn't find the button. Ids: frame c0, button c1, scroll pane c2.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("S");
+                JButton go = new JButton("Go");
+                go.addActionListener(e -> System.out.println("go!"));
+                JScrollPane scroll = new JScrollPane(go);
+                scroll.setPreferredSize(new Dimension(120, 80));
+                frame.add(scroll);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("c1"))],
+    );
+    assert_eq!(out, "go!\n");
+}
+
+#[test]
 fn swing_menu_item_click_fires_its_listener() {
     // A menu item fires its ActionListener when activated, like a button.
     // JMenuBar/JMenu are plain holders (no component id); the frame is c0 and

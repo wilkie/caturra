@@ -572,6 +572,40 @@ public class Main {
 `,
   },
   {
+    name: 'Scroll pane (JScrollPane)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Scroll");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // A tall list of buttons wrapped in a small scroll pane.
+    JPanel list = new JPanel(new GridLayout(20, 1));
+    for (int i = 1; i <= 20; i++) {
+      JButton item = new JButton("Item " + i);
+      item.addActionListener(
+          e -> Main.status.setText("Picked " + ((JButton) e.getSource()).getText()));
+      list.add(item);
+    }
+
+    JScrollPane scroll = new JScrollPane(list);
+    scroll.setPreferredSize(new Dimension(220, 160));
+
+    status = new JLabel("Scroll the list and pick an item.");
+
+    frame.add(scroll);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sign-up form',
     starter: `import javax.swing.*;
 import java.awt.*;

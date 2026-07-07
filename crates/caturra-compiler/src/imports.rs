@@ -225,6 +225,7 @@ static ORG_CODE_VALIDATION: &[&str] = &[
 static JAVAX_SWING: &[&str] = &[
     "JFrame",
     "JPanel",
+    "JScrollPane",
     "JLabel",
     "JButton",
     "JTextField",

@@ -220,6 +220,37 @@ class JPanel extends Container {
   }
 }
 
+// Wraps one component in a fixed-size scrolling viewport. The wrapped view is
+// registered here (it is not added to a Container), so its events dispatch and
+// its value syncs.
+class JScrollPane extends Component {
+  Component __view = null;
+  int __pw = 200;
+  int __ph = 150;
+  int __hpolicy = 30; // HORIZONTAL_SCROLLBAR_AS_NEEDED
+  int __vpolicy = 20; // VERTICAL_SCROLLBAR_AS_NEEDED
+  public static final int HORIZONTAL_SCROLLBAR_AS_NEEDED = 30;
+  public static final int HORIZONTAL_SCROLLBAR_NEVER = 31;
+  public static final int HORIZONTAL_SCROLLBAR_ALWAYS = 32;
+  public static final int VERTICAL_SCROLLBAR_AS_NEEDED = 20;
+  public static final int VERTICAL_SCROLLBAR_NEVER = 21;
+  public static final int VERTICAL_SCROLLBAR_ALWAYS = 22;
+  public JScrollPane() {}
+  public JScrollPane(Component view) { setViewportView(view); }
+  public void setViewportView(Component view) {
+    __view = view;
+    if (view != null) __SwingRuntime.__register(view);
+  }
+  public void setPreferredSize(Dimension d) { __pw = d.width; __ph = d.height; }
+  public void setHorizontalScrollBarPolicy(int policy) { __hpolicy = policy; }
+  public void setVerticalScrollBarPolicy(int policy) { __vpolicy = policy; }
+  String __json() {
+    String view = __view == null ? "null" : __view.__json();
+    return "{\"type\":\"scrollpane\",\"view\":" + view + ",\"pw\":" + __pw + ",\"ph\":" + __ph
+        + ",\"hpolicy\":" + __hpolicy + ",\"vpolicy\":" + __vpolicy + "," + __commonJson() + "}";
+  }
+}
+
 class JLabel extends Component {
   String __text;
   Component __labelFor = null;

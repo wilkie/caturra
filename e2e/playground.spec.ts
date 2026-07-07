@@ -1565,6 +1565,24 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('3 line(s)');
   });
 
+  test('a JScrollPane scrolls a large content region; items still dispatch', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Scroll pane (JScrollPane)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const pane = root.locator('.swing-scrollpane');
+    await expect(pane).toBeVisible();
+
+    // The wrapped list overflows the fixed viewport, so the pane scrolls.
+    const overflows = await pane.evaluate((el) => el.scrollHeight > el.clientHeight + 4);
+    expect(overflows).toBe(true);
+
+    // A button near the bottom needs scrolling; Playwright scrolls it into the
+    // pane and its listener still dispatches.
+    await root.getByRole('button', { name: 'Item 20', exact: true }).click();
+    await expect(root).toContainText('Picked Item 20');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

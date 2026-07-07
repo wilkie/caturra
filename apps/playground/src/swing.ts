@@ -24,6 +24,7 @@ interface SwingNode {
     | 'radio'
     | 'combobox'
     | 'slider'
+    | 'scrollpane'
     | 'component';
   id: string;
   enabled?: boolean;
@@ -63,6 +64,10 @@ interface SwingNode {
   drag?: boolean;
   /** A frame's menu bar (setJMenuBar). */
   menubar?: SwingMenuBar;
+  /** A JScrollPane's wrapped component and scrollbar policies. */
+  view?: SwingNode | null;
+  hpolicy?: number;
+  vpolicy?: number;
   children?: SwingNode[];
 }
 
@@ -170,6 +175,18 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
   }
 }
 
+/** Map a JScrollPane scrollbar policy to a CSS overflow value (NEVER=21/31,
+ * ALWAYS=22/32, else AS_NEEDED). */
+function scrollbarOverflow(policy: number | undefined): string {
+  if (policy === 21 || policy === 31) {
+    return 'hidden';
+  }
+  if (policy === 22 || policy === 32) {
+    return 'scroll';
+  }
+  return 'auto';
+}
+
 /** CSS for a container, mapping the Swing LayoutManager to flex/grid. */
 function applyLayout(el: HTMLElement, layout: string | undefined): void {
   if (layout?.startsWith('grid ')) {
@@ -218,6 +235,15 @@ export class SwingViz {
     const focusedId = this.mount.contains(document.activeElement)
       ? (document.activeElement as HTMLElement).id
       : '';
+    // Remember scroll positions (by component id) so scroll panes don't jump
+    // to the top on every re-render.
+    const scrolls = new Map<string, { top: number; left: number }>();
+    for (const pane of this.mount.querySelectorAll<HTMLElement>('.swing-scrollpane')) {
+      const cid = pane.dataset.cid;
+      if (cid !== undefined) {
+        scrolls.set(cid, { top: pane.scrollTop, left: pane.scrollLeft });
+      }
+    }
     this.#onEvent = onEvent ?? null;
     this.#fields.clear();
     this.mount.replaceChildren();
@@ -225,6 +251,15 @@ export class SwingViz {
     this.mount.appendChild(this.build(root));
     if (focusedId !== '') {
       this.mount.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`)?.focus();
+    }
+    for (const [cid, pos] of scrolls) {
+      const pane = this.mount.querySelector<HTMLElement>(
+        `.swing-scrollpane[data-cid="${CSS.escape(cid)}"]`,
+      );
+      if (pane) {
+        pane.scrollTop = pos.top;
+        pane.scrollLeft = pos.left;
+      }
     }
   }
 
@@ -344,6 +379,8 @@ export class SwingViz {
         return this.comboBox(node);
       case 'slider':
         return this.slider(node);
+      case 'scrollpane':
+        return this.scrollPane(node);
       default: {
         const span = document.createElement('span');
         this.common(span, node);
@@ -535,6 +572,28 @@ export class SwingViz {
     this.common(panel, node);
     this.children(panel, node);
     return panel;
+  }
+
+  /** A JScrollPane: a fixed-size viewport that scrolls its wrapped view. */
+  private scrollPane(node: SwingNode): HTMLElement {
+    const pane = document.createElement('div');
+    pane.className = 'swing-scrollpane';
+    pane.style.width = `${String(node.pw ?? 200)}px`;
+    pane.style.height = `${String(node.ph ?? 150)}px`;
+    pane.style.overflowX = scrollbarOverflow(node.hpolicy);
+    pane.style.overflowY = scrollbarOverflow(node.vpolicy);
+    if (node.view) {
+      pane.appendChild(this.build(node.view));
+      // A textarea scrolls itself; other content needs a focusable, named
+      // scroll region so keyboard users can scroll it (arrow keys).
+      if (node.view.type !== 'textarea') {
+        pane.tabIndex = 0;
+        pane.setAttribute('role', 'region');
+        pane.setAttribute('aria-label', node.tooltip ?? 'Scroll area');
+      }
+    }
+    this.common(pane, node);
+    return pane;
   }
 
   /** A custom-painted JPanel: a canvas replaying its Graphics commands. */
