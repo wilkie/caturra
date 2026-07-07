@@ -618,6 +618,40 @@ fn swing_default_table_model_updates_rows_on_render() {
 }
 
 #[test]
+fn swing_table_cell_edit_updates_the_model() {
+    // A committed cell edit arrives as "edit:<row>,<col>,<value>" on the table's
+    // field line, under the "__edit" sentinel so no selection listener fires;
+    // __setFromHost routes it to setValueAt. Ids: frame c0, table c1, button c2.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static JTable table;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Grid");
+                String[] cols = {"Item", "Qty"};
+                Object[][] data = {{"Apples", "3"}};
+                table = new JTable(new DefaultTableModel(data, cols));
+                JButton show = new JButton("Show");
+                show.addActionListener(e -> System.out.println("qty " + Main.table.getValueAt(0, 1)));
+                frame.add(table);
+                frame.add(show);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        // Edit cell (0,1) to "10" (no listener), then click Show to read it back.
+        vec![
+            Some(String::from("__edit\nc1=edit:0,1,10")),
+            Some(String::from("c2")),
+        ],
+    );
+    assert_eq!(out, "qty 10\n");
+}
+
+#[test]
 fn swing_box_layout_stacks_with_struts() {
     // A Y_AXIS BoxLayout serializes as "box 1"; Box struts/glue become spacers.
     let json = run_swing(

@@ -742,6 +742,8 @@ class DefaultTableModel {
   public void setValueAt(Object value, int row, int col) {
     __cells.set(row * __columns.size() + col, __str(value));
   }
+  // Cells are editable by default; override this to make (some) read-only.
+  public boolean isCellEditable(int row, int col) { return true; }
   public void addRow(Object[] rowData) {
     for (int c = 0; c < __columns.size(); c++) {
       __cells.add(__str(c < rowData.length ? rowData[c] : null));
@@ -801,13 +803,31 @@ class JTable extends Component {
   public void setRowSelectionInterval(int index0, int index1) { __selectedRow = index0; }
   public void clearSelection() { __selectedRow = -1; }
   public ListSelectionModel getSelectionModel() { return __selectionModel; }
-  void __setFromHost(String value) { __selectedRow = Integer.parseInt(value); }
+  public boolean isCellEditable(int row, int col) {
+    return __model != null ? __model.isCellEditable(row, col) : true;
+  }
+  // The host sends either a row index (selection) or "edit:<row>,<col>,<value>"
+  // (a committed cell edit, which updates the value model without firing the
+  // selection listener).
+  void __setFromHost(String value) {
+    if (value.startsWith("edit:")) {
+      String rest = value.substring(5);
+      int c1 = rest.indexOf(",");
+      int c2 = rest.indexOf(",", c1 + 1);
+      int row = Integer.parseInt(rest.substring(0, c1));
+      int col = Integer.parseInt(rest.substring(c1 + 1, c2));
+      setValueAt(rest.substring(c2 + 1), row, col);
+    } else {
+      __selectedRow = Integer.parseInt(value);
+    }
+  }
   void __onEvent() {
     if (__selectionModel.__listener != null) {
       __selectionModel.__listener.valueChanged(new ListSelectionEvent(this));
     }
   }
   boolean __listens() { return __selectionModel.__listener != null; }
+  boolean __editable() { return isCellEditable(0, 0); }
   String __colsJson() {
     StringBuilder s = new StringBuilder("[");
     for (int c = 0; c < getColumnCount(); c++) {
@@ -832,7 +852,8 @@ class JTable extends Component {
   }
   String __json() {
     return "{\"type\":\"table\",\"headers\":" + __colsJson() + ",\"cells\":" + __rowsJson()
-        + ",\"selectedRow\":" + __selectedRow + "," + __commonJson() + "}";
+        + ",\"selectedRow\":" + __selectedRow + ",\"editable\":" + __editable()
+        + "," + __commonJson() + "}";
   }
 }
 

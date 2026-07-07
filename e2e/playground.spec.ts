@@ -1806,6 +1806,30 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Picked Two');
   });
 
+  test('a JTable edits a cell inline and the value reaches the model', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Edit cells (JTable)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const grid = root.getByRole('grid');
+    await expect(grid).toBeVisible();
+
+    // Baseline total: 3 + 1 + 2 = 6.
+    await root.getByRole('button', { name: 'Total qty' }).click();
+    await expect(root).toContainText('Total quantity: 6');
+
+    // Double-click the Apples qty cell, change 3 -> 10, commit with Enter.
+    await grid.getByRole('gridcell', { name: '3', exact: true }).dblclick();
+    const editor = root.locator('.swing-cell-editor');
+    await editor.fill('10');
+    await editor.press('Enter');
+    await expect(grid.getByRole('gridcell', { name: '10', exact: true })).toBeVisible();
+
+    // The edit reached the model: total is now 10 + 1 + 2 = 13.
+    await root.getByRole('button', { name: 'Total qty' }).click();
+    await expect(root).toContainText('Total quantity: 13');
+  });
+
   test('the window close button ends an interactive run cleanly', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });

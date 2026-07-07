@@ -971,6 +971,47 @@ public class Main {
 `,
   },
   {
+    name: 'Edit cells (JTable)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JTable table;
+  static DefaultTableModel model;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Editable");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // JTable cells are editable by default — double-click to edit, Enter to
+    // commit. The edit updates the model, so getValueAt sees the new value.
+    String[] cols = {"Item", "Qty"};
+    Object[][] data = {{"Apples", "3"}, {"Bread", "1"}, {"Milk", "2"}};
+    model = new DefaultTableModel(data, cols);
+    table = new JTable(model);
+
+    status = new JLabel("Double-click a Qty cell to edit it.");
+
+    JButton total = new JButton("Total qty");
+    total.addActionListener(e -> {
+      int sum = 0;
+      for (int r = 0; r < Main.model.getRowCount(); r++) {
+        sum += Integer.parseInt("" + Main.model.getValueAt(r, 1));
+      }
+      Main.status.setText("Total quantity: " + sum);
+    });
+
+    frame.add(total, BorderLayout.NORTH);
+    frame.add(table, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Box layout',
     starter: `import javax.swing.*;
 import java.awt.*;

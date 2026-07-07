@@ -528,6 +528,11 @@ export class SwingViz {
   }
 
   #patchTable(table: HTMLTableElement, node: SwingNode): void {
+    // If a cell is mid-edit, leave the table alone — an unrelated re-render
+    // (e.g. another widget updating) must not destroy the active editor.
+    if (table.querySelector('.swing-cell-editor')) {
+      return;
+    }
     // Rebuild the head/body (rows change with the model) but keep the <table>
     // element itself, so its place in a scroll pane and identity are stable.
     const fresh = this.table(node);
@@ -1225,7 +1230,8 @@ export class SwingViz {
     const cells = node.cells ?? [];
     const selectedRow = node.selectedRow ?? -1;
     const selectable = this.#onEvent !== null && node.listens === true;
-    if (selectable) {
+    const editable = this.#onEvent !== null && node.editable !== false;
+    if (selectable || editable) {
       table.setAttribute('role', 'grid');
     }
     if (node.tooltip !== undefined) {
@@ -1246,9 +1252,19 @@ export class SwingViz {
     const tbody = document.createElement('tbody');
     for (const [r, row] of cells.entries()) {
       const tr = document.createElement('tr');
-      for (const value of row) {
+      for (const [c, value] of row.entries()) {
         const td = document.createElement('td');
         td.textContent = value;
+        if (selectable || editable) {
+          td.setAttribute('role', 'gridcell');
+        }
+        if (editable) {
+          td.classList.add('swing-cell-editable');
+          td.title = 'Double-click to edit';
+          td.addEventListener('dblclick', () => {
+            this.#beginCellEdit(td, node.id, r, c);
+          });
+        }
         tr.appendChild(td);
       }
       if (selectable) {
@@ -1306,6 +1322,47 @@ export class SwingViz {
 
     this.common(table, node);
     return table;
+  }
+
+  /** Inline cell editor: replace a cell with a text input; Enter/blur commits
+   * the value to the model (via an `edit:` payload), Escape cancels. */
+  #beginCellEdit(td: HTMLTableCellElement, tableId: string, row: number, col: number): void {
+    const original = td.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'swing-cell-editor';
+    input.value = original;
+    input.setAttribute('aria-label', 'Cell value');
+    td.replaceChildren(input);
+    input.focus();
+    input.select();
+    let settled = false;
+    const commit = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      const value = input.value;
+      td.textContent = value; // optimistic; the re-render confirms it
+      const encoded = value.replace(/%/g, '%25').replace(/\n/g, '%0A');
+      // The "__edit" sentinel means no selection listener fires — only setValueAt.
+      this.#dispatch(
+        `${this.#payload('__edit')}\n${tableId}=edit:${String(row)},${String(col)},${encoded}`,
+      );
+    };
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        commit();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        settled = true;
+        td.textContent = original;
+      }
+    });
+    input.addEventListener('blur', () => {
+      commit();
+    });
   }
 
   private slider(node: SwingNode): HTMLElement {
