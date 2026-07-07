@@ -34,9 +34,14 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
     let static_methods = static_method_names(units);
     let class_names = class_name_set(units);
 
-    let mut new_classes: Vec<ClassDecl> = Vec::new();
+    // Lambda-class names stay globally unique (one counter), but each
+    // synthesized class is appended to the SAME unit its lambda came from, so
+    // its `SourceFile` matches the line numbers it carries — otherwise a
+    // lambda in a non-first file would get the first file's SourceFile and
+    // its breakpoints/stack traces would point at the wrong file.
     let mut counter = 0usize;
     for (_, unit) in units.iter_mut() {
+        let mut new_classes: Vec<ClassDecl> = Vec::new();
         for class in &mut unit.classes {
             let return_types: Vec<Option<TypeRef>> = class
                 .methods
@@ -84,13 +89,9 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                 }
             }
         }
-    }
-
-    if !new_classes.is_empty() {
-        // Append synthesized lambda classes to the first unit.
-        if let Some((_, unit)) = units.first_mut() {
-            unit.classes.append(&mut new_classes);
-        }
+        // The class iteration's borrow of `unit.classes` is released here, so
+        // this unit's synthesized lambda classes can be appended to it.
+        unit.classes.append(&mut new_classes);
     }
 }
 
@@ -711,5 +712,55 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         type_args: Vec::new(),
         args: Vec::new(),
         span,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use caturra_classfile::ClassFile;
+
+    /// The `SourceFile` a class advertises (how the debugger keys it).
+    fn source_file_of(cf: &ClassFile) -> Option<String> {
+        cf.attributes
+            .iter()
+            .find(|a| {
+                cf.constant_pool.get_utf8(a.name_index)
+                    == Some(caturra_classfile::debug::SOURCE_FILE_ATTRIBUTE)
+            })
+            .and_then(|a| caturra_classfile::debug::decode_source_file(&a.info))
+            .and_then(|index| cf.constant_pool.get_utf8(index))
+            .map(str::to_owned)
+    }
+
+    #[test]
+    fn lambda_in_a_non_first_file_keeps_its_own_source_file() {
+        // The lambda lives in Helper.java (the second unit). Its synthesized
+        // class must carry Helper.java's SourceFile so its line numbers — and
+        // thus its breakpoints and stack traces — point at the right file.
+        let compilation = crate::compile(&[
+            crate::SourceFile {
+                path: "Main.java".to_owned(),
+                text: "public class Main { public static void main(String[] a) {} }".to_owned(),
+            },
+            crate::SourceFile {
+                path: "Helper.java".to_owned(),
+                text: "interface Task { void go(); } public class Helper { void run() { Task t = () -> {}; t.go(); } }"
+                    .to_owned(),
+            },
+        ]);
+        assert!(
+            compilation.success(),
+            "compile failed: {:?}",
+            compilation.diagnostics
+        );
+        let lambda = compilation
+            .classes
+            .iter()
+            .find(|c| c.binary_name.starts_with("Lambda$"))
+            .expect("a synthesized lambda class");
+        assert_eq!(
+            source_file_of(&lambda.class_file).as_deref(),
+            Some("Helper.java"),
+        );
     }
 }

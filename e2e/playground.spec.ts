@@ -1075,6 +1075,43 @@ test.describe('playground', () => {
     await expect(page.getByTestId('console')).toContainText('Hello, Ada!');
   });
 
+  test('a breakpoint inside a lambda in a second file pauses at the right file', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      'public class Main { public static void main(String[] a) { Helper.run(); } }',
+    );
+    // The lambda lives in Helper.java (a non-first unit). Its synthesized
+    // class must advertise Helper.java, or the breakpoint would never match.
+    await setFile(
+      page,
+      'Helper.java',
+      [
+        'interface Task { void go(); }',
+        'public class Helper {',
+        '  static int result = 0;',
+        '  static void run() {',
+        '    Task t = () -> {',
+        '      Helper.result = 42;',
+        '      System.out.println("ran " + Helper.result);',
+        '    };',
+        '    t.go();',
+        '  }',
+        '}',
+      ].join('\n'),
+    );
+    await toggleBreakpoint(page, 6); // Helper.result = 42; — inside the lambda
+    await selectFile(page, 'Main.java');
+    await page.getByTestId('debug').click();
+
+    // It pauses inside the lambda, at Helper.java:6 (not Main.java).
+    await expect(page.getByTestId('frames')).toContainText('Helper.java:6');
+    await page.getByTestId('resume').click();
+    await expect(page.getByTestId('console')).toContainText('ran 42');
+  });
+
   test('diagnostics land in the right file tab', async ({ page }) => {
     await page.goto('/');
     await setFile(page, 'Broken.java', 'public class Broken { int x = nope; }');
