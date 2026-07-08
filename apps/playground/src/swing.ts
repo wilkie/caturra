@@ -1283,6 +1283,18 @@ export class SwingViz {
     // setHorizontalAlignment → text-align (right-aligns a field's text, etc.).
     el.style.textAlign = node.halign === undefined ? '' : horizAlign(node.halign);
     this.applyBorder(el, node.border);
+    // A named plain JPanel becomes an accessible group so assistive tech
+    // actually exposes its name — an aria-label on a role-less div is ignored.
+    // (A titled border already provides a group role via applyBorder; a painted
+    // panel's canvas carries its own name.)
+    if (
+      node.type === 'panel' &&
+      node.paint === undefined &&
+      node.accName !== undefined &&
+      !el.hasAttribute('role')
+    ) {
+      el.setAttribute('role', 'group');
+    }
   }
 
   /** Apply a BorderFactory border as CSS. A compound border layers its inner

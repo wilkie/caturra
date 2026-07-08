@@ -1746,14 +1746,18 @@ test.describe('swing (interactive)', () => {
     await page.getByTestId('run').click();
     const root = page.getByTestId('swing-root');
 
+    // A named JPanel is exposed as a group, so assistive tech announces it.
+    const group = root.getByRole('group', { name: 'Audio settings' });
+    await expect(group).toBeVisible();
+
     // The slider has no visible label, but setAccessibleName makes it reachable
-    // by name to assistive tech (and to getByRole).
-    const volume = root.getByRole('slider', { name: 'Volume' });
+    // by name to assistive tech (and to getByRole) — and it's inside the group.
+    const volume = group.getByRole('slider', { name: 'Volume' });
     await expect(volume).toBeVisible();
     await expect(volume).toHaveAttribute('aria-description', 'Playback level from 0 to 11');
 
     // The text field is named the same way.
-    await expect(root.getByRole('textbox', { name: 'Search' })).toBeVisible();
+    await expect(group.getByRole('textbox', { name: 'Search' })).toBeVisible();
 
     // The named slider still works: changing it fires its listener.
     await volume.fill('8');

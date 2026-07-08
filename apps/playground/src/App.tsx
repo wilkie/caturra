@@ -815,10 +815,15 @@ public class Main {
     JTextField search = new JTextField(12);
     search.getAccessibleContext().setAccessibleName("Search");
 
+    // A named panel groups the controls — screen readers announce the group.
+    JPanel controls = new JPanel();
+    controls.getAccessibleContext().setAccessibleName("Audio settings");
+    controls.add(volume);
+    controls.add(search);
+
     status = new JLabel("Volume: 5");
 
-    frame.add(volume);
-    frame.add(search);
+    frame.add(controls);
     frame.add(status);
     frame.setVisible(true);
   }
