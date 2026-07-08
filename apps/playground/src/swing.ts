@@ -30,6 +30,19 @@ interface TabSpec {
   component: SwingNode;
 }
 
+/** A child's GridBagConstraints under a GridBagLayout parent. */
+interface GbcSpec {
+  gridx: number;
+  gridy: number;
+  gridwidth: number;
+  gridheight: number;
+  weightx: number;
+  weighty: number;
+  anchor: number;
+  fill: number;
+  insets: string; // "top,left,bottom,right"
+}
+
 interface SwingNode {
   type:
     | 'frame'
@@ -73,6 +86,8 @@ interface SwingNode {
   /** This child's BorderLayout region ("North".."Center"), when its parent
    * uses a BorderLayout. */
   region?: string;
+  /** This child's GridBagConstraints, when its parent uses a GridBagLayout. */
+  gbc?: GbcSpec;
   /** setBounds "x,y,w,h", honored when the parent uses a null (absolute) layout. */
   bounds?: string;
   /** setPreferredSize / setMinimumSize / setMaximumSize "w,h" hints. */
@@ -432,6 +447,109 @@ function horizAlign(align: number): string {
   return 'left'; // LEFT / LEADING (2 / 10)
 }
 
+/** Place a GridBagLayout's children into CSS grid cells from their constraints:
+ * resolve grid positions (RELATIVE flows to the next cell, REMAINDER spans to
+ * the row end), size weighted rows/columns as fr tracks, and apply each child's
+ * fill/anchor (as justify/align-self) and insets (as margin). */
+function layoutGridBag(container: HTMLElement, pairs: { el: HTMLElement; node: SwingNode }[]): void {
+  interface Cell {
+    el: HTMLElement;
+    gbc: GbcSpec;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    remainder: boolean;
+  }
+  const cells: Cell[] = [];
+  let curX = 0;
+  let curY = 0;
+  for (const { el, node } of pairs) {
+    const gbc = node.gbc ?? DEFAULT_GBC;
+    const x = gbc.gridx < 0 ? curX : gbc.gridx; // RELATIVE = -1 → next in row
+    const y = gbc.gridy < 0 ? curY : gbc.gridy;
+    const remainder = gbc.gridwidth === 0; // REMAINDER: span to the row's end
+    const w = remainder || gbc.gridwidth < 0 ? 1 : gbc.gridwidth;
+    const h = gbc.gridheight <= 0 ? 1 : gbc.gridheight;
+    cells.push({ el, gbc, x, y, w, h, remainder });
+    if (remainder) {
+      curX = 0;
+      curY = y + 1; // REMAINDER ends the row
+    } else {
+      curX = x + w;
+      curY = y;
+    }
+  }
+  // Grid extent: REMAINDER cells then span from their x to the last column.
+  let maxCol = 0;
+  let maxRow = 0;
+  for (const c of cells) {
+    maxCol = Math.max(maxCol, c.x + (c.remainder ? 1 : c.w));
+    maxRow = Math.max(maxRow, c.y + c.h);
+  }
+  for (const c of cells) {
+    if (c.remainder) {
+      c.w = Math.max(1, maxCol - c.x);
+    }
+  }
+  // A column/row is an fr track when a child in it carries weight, else auto.
+  const colWeighted = new Array<boolean>(maxCol).fill(false);
+  const rowWeighted = new Array<boolean>(maxRow).fill(false);
+  for (const c of cells) {
+    if (c.gbc.weightx > 0 && c.x < maxCol) {
+      colWeighted[c.x] = true;
+    }
+    if (c.gbc.weighty > 0 && c.y < maxRow) {
+      rowWeighted[c.y] = true;
+    }
+  }
+  container.style.gridTemplateColumns = colWeighted.map((wt) => (wt ? '1fr' : 'auto')).join(' ') || 'auto';
+  container.style.gridTemplateRows = rowWeighted.map((wt) => (wt ? '1fr' : 'auto')).join(' ') || 'auto';
+  for (const c of cells) {
+    c.el.style.gridColumn = `${String(c.x + 1)} / span ${String(c.w)}`;
+    c.el.style.gridRow = `${String(c.y + 1)} / span ${String(c.h)}`;
+    const fill = c.gbc.fill;
+    c.el.style.justifySelf = fill === 1 || fill === 2 ? 'stretch' : gbJustify(c.gbc.anchor);
+    c.el.style.alignSelf = fill === 1 || fill === 3 ? 'stretch' : gbAlign(c.gbc.anchor);
+    const [t, l, b, r] = c.gbc.insets.split(',').map(Number);
+    c.el.style.margin = `${String(t)}px ${String(r)}px ${String(b)}px ${String(l)}px`;
+  }
+}
+
+const DEFAULT_GBC: GbcSpec = {
+  gridx: -1,
+  gridy: -1,
+  gridwidth: 1,
+  gridheight: 1,
+  weightx: 0,
+  weighty: 0,
+  anchor: 10,
+  fill: 0,
+  insets: '0,0,0,0',
+};
+
+/** A GridBag anchor's horizontal justify-self (EAST-ish → end, WEST-ish → start). */
+function gbJustify(anchor: number): string {
+  if (anchor === 12 || anchor === 13 || anchor === 14) {
+    return 'end'; // NORTHEAST / EAST / SOUTHEAST
+  }
+  if (anchor === 16 || anchor === 17 || anchor === 18) {
+    return 'start'; // SOUTHWEST / WEST / NORTHWEST
+  }
+  return 'center';
+}
+
+/** A GridBag anchor's vertical align-self (NORTH-ish → start, SOUTH-ish → end). */
+function gbAlign(anchor: number): string {
+  if (anchor === 11 || anchor === 12 || anchor === 18) {
+    return 'start'; // NORTH / NORTHEAST / NORTHWEST
+  }
+  if (anchor === 14 || anchor === 15 || anchor === 16) {
+    return 'end'; // SOUTHEAST / SOUTH / SOUTHWEST
+  }
+  return 'center';
+}
+
 /** Absolutely position a child from its setBounds "x,y,w,h" under a null layout,
  * returning the running max extent so the parent can be sized to fit. */
 function placeAbsolute(
@@ -493,6 +611,14 @@ function applyLayout(el: HTMLElement, layout: string | undefined): void {
     el.style.position = 'relative';
     el.style.flexWrap = '';
     el.style.gap = '';
+    return;
+  }
+  if (layout === 'gridbag') {
+    // The grid template + per-child placement come from each child's
+    // GridBagConstraints (applied in layoutGridBag); just establish the grid.
+    el.style.display = 'grid';
+    el.style.gap = '0';
+    el.style.flexWrap = '';
     return;
   }
   // FlowLayout (the default) lays out inline.
@@ -600,6 +726,8 @@ export class SwingViz {
     const nodes = node.children ?? [];
     const border = node.layout === 'border';
     const absolute = node.layout === 'none';
+    const gridbag = node.layout === 'gridbag';
+    const gbPairs: { el: HTMLElement; node: SwingNode }[] = [];
     let extent = { w: 0, h: 0 };
     for (const [i, child] of nodes.entries()) {
       const el = this.#reconcile(child, prev);
@@ -607,6 +735,8 @@ export class SwingViz {
         el.style.gridArea = (child.region ?? 'Center').toLowerCase();
       } else if (absolute) {
         extent = placeAbsolute(el, child, extent);
+      } else if (gridbag) {
+        gbPairs.push({ el, node: child });
       }
       const current = host.children[i];
       if (current !== el) {
@@ -615,6 +745,9 @@ export class SwingViz {
     }
     while (host.children.length > nodes.length) {
       host.lastElementChild?.remove();
+    }
+    if (gridbag) {
+      layoutGridBag(host, gbPairs);
     }
     if (absolute) {
       // Floor to the container's own size (e.g. a frame's setSize) so the null
@@ -1123,6 +1256,8 @@ export class SwingViz {
   private children(container: HTMLElement, node: SwingNode): void {
     const border = node.layout === 'border';
     const absolute = node.layout === 'none';
+    const gridbag = node.layout === 'gridbag';
+    const gbPairs: { el: HTMLElement; node: SwingNode }[] = [];
     let extent = { w: 0, h: 0 };
     for (const child of node.children ?? []) {
       const el = this.build(child);
@@ -1132,8 +1267,13 @@ export class SwingViz {
         el.style.gridArea = (child.region ?? 'Center').toLowerCase();
       } else if (absolute) {
         extent = placeAbsolute(el, child, extent);
+      } else if (gridbag) {
+        gbPairs.push({ el, node: child });
       }
       container.appendChild(el);
+    }
+    if (gridbag) {
+      layoutGridBag(container, gbPairs);
     }
     if (absolute) {
       // Absolute children don't stretch the container, so floor its size to the

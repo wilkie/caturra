@@ -873,6 +873,48 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_grid_bag_layout_serializes_per_child_constraints() {
+    // A GridBagLayout serializes each child's GridBagConstraints. A reused
+    // constraints object is COPIED on add, so each child keeps its own cell
+    // (mutating gbc after the first add must not change the first child).
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Grid");
+                frame.setLayout(new GridBagLayout());
+                GridBagConstraints gbc = new GridBagConstraints();
+                gbc.gridx = 0;
+                gbc.gridy = 0;
+                gbc.insets = new Insets(4, 4, 4, 4);
+                frame.add(new JLabel("Name:"), gbc);
+                gbc.gridx = 1;
+                gbc.weightx = 1.0;
+                gbc.fill = GridBagConstraints.HORIZONTAL;
+                frame.add(new JTextField(10), gbc);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""layout":"gridbag""#), "not gridbag: {json}");
+    // First child: (0,0), no weight, no fill — its own copy (proving the add
+    // took a copy, not a reference to the later-mutated gbc).
+    assert!(
+        json.contains(r#""gbc":{"gridx":0,"gridy":0,"gridwidth":1,"gridheight":1,"weightx":0.0,"weighty":0.0,"anchor":10,"fill":0,"insets":"4,4,4,4"}"#),
+        "no label gbc (copy failed?): {json}"
+    );
+    // Second child: (1,0), weightx 1, HORIZONTAL fill.
+    assert!(
+        json.contains(r#""gridx":1,"gridy":0,"gridwidth":1,"gridheight":1,"weightx":1.0,"weighty":0.0,"anchor":10,"fill":2"#),
+        "no field gbc: {json}"
+    );
+}
+
+#[test]
 fn swing_button_action_command_and_do_click() {
     // setActionCommand flows to ActionEvent.getActionCommand(); doClick() fires
     // the listener programmatically (before the event loop even starts).

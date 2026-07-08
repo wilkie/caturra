@@ -198,6 +198,73 @@ interface LayoutManager {
   String __desc();
 }
 
+// java.awt.Insets: the margin around a component in its cell.
+class Insets {
+  public int top, left, bottom, right;
+  public Insets(int top, int left, int bottom, int right) {
+    this.top = top; this.left = left; this.bottom = bottom; this.right = right;
+  }
+}
+
+// java.awt.GridBagConstraints: where and how a component sits in a GridBagLayout
+// grid. Fields are set directly (gbc.gridx = 0; gbc.fill = ...), so they're
+// public. Copied on add() (real Swing does too) so a reused constraints object
+// doesn't retroactively change earlier components.
+class GridBagConstraints {
+  public static final int RELATIVE = -1;
+  public static final int REMAINDER = 0;
+  public static final int NONE = 0;
+  public static final int BOTH = 1;
+  public static final int HORIZONTAL = 2;
+  public static final int VERTICAL = 3;
+  public static final int CENTER = 10;
+  public static final int NORTH = 11;
+  public static final int NORTHEAST = 12;
+  public static final int EAST = 13;
+  public static final int SOUTHEAST = 14;
+  public static final int SOUTH = 15;
+  public static final int SOUTHWEST = 16;
+  public static final int WEST = 17;
+  public static final int NORTHWEST = 18;
+
+  public int gridx = RELATIVE;
+  public int gridy = RELATIVE;
+  public int gridwidth = 1;
+  public int gridheight = 1;
+  public double weightx = 0;
+  public double weighty = 0;
+  public int anchor = CENTER;
+  public int fill = NONE;
+  public Insets insets = new Insets(0, 0, 0, 0);
+  public int ipadx = 0;
+  public int ipady = 0;
+
+  public GridBagConstraints() {}
+  public GridBagConstraints(int gridx, int gridy, int gridwidth, int gridheight,
+      double weightx, double weighty, int anchor, int fill, Insets insets, int ipadx, int ipady) {
+    this.gridx = gridx; this.gridy = gridy; this.gridwidth = gridwidth; this.gridheight = gridheight;
+    this.weightx = weightx; this.weighty = weighty; this.anchor = anchor; this.fill = fill;
+    this.insets = insets; this.ipadx = ipadx; this.ipady = ipady;
+  }
+
+  GridBagConstraints __copy() {
+    Insets i = new Insets(insets.top, insets.left, insets.bottom, insets.right);
+    return new GridBagConstraints(gridx, gridy, gridwidth, gridheight, weightx, weighty,
+        anchor, fill, i, ipadx, ipady);
+  }
+  String __json() {
+    return "{\"gridx\":" + gridx + ",\"gridy\":" + gridy + ",\"gridwidth\":" + gridwidth
+        + ",\"gridheight\":" + gridheight + ",\"weightx\":" + weightx + ",\"weighty\":" + weighty
+        + ",\"anchor\":" + anchor + ",\"fill\":" + fill
+        + ",\"insets\":\"" + insets.top + "," + insets.left + "," + insets.bottom + "," + insets.right + "\"}";
+  }
+}
+
+class GridBagLayout implements LayoutManager {
+  public GridBagLayout() {}
+  public String __desc() { return "gridbag"; }
+}
+
 class FlowLayout implements LayoutManager {
   public FlowLayout() {}
   public String __desc() { return "flow"; }
@@ -277,6 +344,9 @@ class Component {
   // The BorderLayout region ("North".."Center") this component was added with,
   // or null when it carries no layout constraint.
   String __region = null;
+  // The GridBagConstraints this component was added with (a copy), when its
+  // parent uses a GridBagLayout.
+  GridBagConstraints __gbc = null;
   // Explicit bounds (setBounds/setSize/setLocation). Honored only under a null
   // (absolute) layout — a managed layout ignores them, as in real Swing.
   int __bx = 0, __by = 0, __bw = 0, __bh = 0;
@@ -348,6 +418,7 @@ class Component {
     }
     if (__border != null) s += ",\"border\":" + __border.__json();
     if (__region != null) s += ",\"region\":\"" + Component.__esc(__region) + "\"";
+    if (__gbc != null) s += ",\"gbc\":" + __gbc.__json();
     // Absolute bounds "x,y,w,h" (honored by the renderer under a null layout).
     if (__hasBounds) s += ",\"bounds\":\"" + __bx + "," + __by + "," + __bw + "," + __bh + "\"";
     if (__prefSize != null) s += ",\"psize\":\"" + __prefSize.width + "," + __prefSize.height + "\"";
@@ -380,10 +451,12 @@ class Container extends Component {
   boolean __absolute = false;
 
   public void add(Component c) { __kids.add(c); __SwingRuntime.__register(c); }
-  // A BorderLayout constraint (e.g. BorderLayout.NORTH) records the region the
-  // renderer places the child in; other layouts ignore it.
+  // A layout constraint: a GridBagConstraints (copied, so a reused one doesn't
+  // retroactively change earlier children) for a GridBagLayout, else a
+  // BorderLayout region string (BorderLayout.NORTH).
   public void add(Component c, Object constraints) {
-    if (constraints != null) c.__region = "" + constraints;
+    if (constraints instanceof GridBagConstraints) c.__gbc = ((GridBagConstraints) constraints).__copy();
+    else if (constraints != null) c.__region = "" + constraints;
     add(c);
   }
   public void remove(Component c) { __kids.remove(c); }

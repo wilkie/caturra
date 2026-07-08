@@ -284,6 +284,9 @@ static JAVA_AWT: &[&str] = &[
     "FlowLayout",
     "GridLayout",
     "BorderLayout",
+    "GridBagLayout",
+    "GridBagConstraints",
+    "Insets",
     "Container",
     "Component",
 ];

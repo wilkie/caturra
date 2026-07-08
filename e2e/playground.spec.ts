@@ -1603,6 +1603,33 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('a GridBagLayout places labelled fields in a grid', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'GridBag form' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // Two labelled rows of fields.
+    await expect(root.getByText('Name:')).toBeVisible();
+    await expect(root.getByText('Email:')).toBeVisible();
+    const fields = root.locator('input[type="text"]');
+    await expect(fields).toHaveCount(2);
+
+    // The submit button spans both columns (gridwidth = 2).
+    const submit = root.getByRole('button', { name: 'Submit' });
+    const gridColumn = await submit.evaluate((el) => el.style.gridColumn);
+    expect(gridColumn).toBe('1 / span 2');
+
+    // The name field sits in column 2 (gridx = 1), its label in column 1.
+    const nameCol = await fields.first().evaluate((el) => el.style.gridColumn);
+    expect(nameCol).toBe('2 / span 1');
+
+    // It still works: submitting reads the field and updates the status.
+    await fields.first().fill('Ada');
+    await submit.click();
+    await expect(root).toContainText('Submitted: Ada');
+  });
+
   test('a JToggleButton stays pressed and reports its state', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Toggle buttons' });

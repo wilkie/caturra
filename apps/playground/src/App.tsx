@@ -652,6 +652,52 @@ public class Main {
 `,
   },
   {
+    name: 'GridBag form',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("GridBag form");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new GridBagLayout());
+
+    // One reusable GridBagConstraints, mutated between adds (each add copies
+    // it, so every component keeps its own cell).
+    GridBagConstraints gbc = new GridBagConstraints();
+    gbc.insets = new Insets(4, 4, 4, 4);
+
+    gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.EAST;
+    frame.add(new JLabel("Name:"), gbc);
+    gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+    JTextField name = new JTextField(12);
+    frame.add(name, gbc);
+
+    gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0;
+    gbc.fill = GridBagConstraints.NONE; gbc.anchor = GridBagConstraints.EAST;
+    frame.add(new JLabel("Email:"), gbc);
+    gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
+    frame.add(new JTextField(12), gbc);
+
+    // A submit button spanning both columns.
+    gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2; gbc.weightx = 0;
+    gbc.fill = GridBagConstraints.NONE; gbc.anchor = GridBagConstraints.CENTER;
+    JButton submit = new JButton("Submit");
+    submit.addActionListener(e -> Main.status.setText("Submitted: " + name.getText()));
+    frame.add(submit, gbc);
+
+    gbc.gridy = 3;
+    status = new JLabel("Fill in the form");
+    frame.add(status, gbc);
+
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Toggle buttons',
     starter: `import javax.swing.*;
 import java.awt.*;
