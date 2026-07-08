@@ -199,6 +199,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "javax.swing" => Some(JAVAX_SWING),
         "javax.swing.event" => Some(JAVAX_SWING_EVENT),
         "javax.swing.border" => Some(JAVAX_SWING_BORDER),
+        "javax.swing.text" => Some(JAVAX_SWING_TEXT),
         "javax.accessibility" => Some(JAVAX_ACCESSIBILITY),
         "java.awt" => Some(JAVA_AWT),
         "java.awt.event" => Some(JAVA_AWT_EVENT),
@@ -321,7 +322,12 @@ static JAVAX_SWING_EVENT: &[&str] = &[
     "ChangeEvent",
     "ListSelectionListener",
     "ListSelectionEvent",
+    "DocumentListener",
+    "DocumentEvent",
 ];
+
+/// `javax.swing.text`: the `Document` handle (getDocument).
+static JAVAX_SWING_TEXT: &[&str] = &["Document"];
 
 /// Public classes of the bundled theater/media library.
 static ORG_CODE_THEATER: &[&str] = &["Scene", "Theater", "Instrument"];

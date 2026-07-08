@@ -906,6 +906,45 @@ public class Main {
 `,
   },
   {
+    name: 'Live counter',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JTextField field;
+  static JLabel count;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Live counter");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    JLabel prompt = new JLabel("Type — the count updates as you go:");
+
+    // A DocumentListener fires on every edit (not just on Enter/blur).
+    field = new JTextField(20);
+    field.getDocument().addDocumentListener(new DocumentListener() {
+      public void insertUpdate(DocumentEvent e) { Main.update(); }
+      public void removeUpdate(DocumentEvent e) { Main.update(); }
+      public void changedUpdate(DocumentEvent e) { Main.update(); }
+    });
+
+    count = new JLabel("0 characters");
+
+    frame.add(prompt, BorderLayout.NORTH);
+    frame.add(field, BorderLayout.CENTER);
+    frame.add(count, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+
+  static void update() {
+    Main.count.setText(Main.field.getText().length() + " characters");
+  }
+}
+`,
+  },
+  {
     name: 'Styled widgets',
     starter: `import javax.swing.*;
 import java.awt.*;

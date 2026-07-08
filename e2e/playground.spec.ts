@@ -1773,6 +1773,23 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Volume: 8');
   });
 
+  test('a DocumentListener updates a counter live as you type', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Live counter' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const field = root.getByRole('textbox');
+    await expect(field).toBeVisible();
+
+    // Typing fires insertUpdate on each edit — no Enter needed.
+    await field.fill('hello');
+    await expect(root).toContainText('5 characters');
+
+    // Clearing fires removeUpdate.
+    await field.fill('');
+    await expect(root).toContainText('0 characters');
+  });
+
   test('a JTextField ActionListener fires on Enter', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Search box' });

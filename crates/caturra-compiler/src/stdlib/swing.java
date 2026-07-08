@@ -359,8 +359,22 @@ class Component {
   // assistive tech, overriding a widget's default (text-content) name.
   String __accName = null, __accDesc = null;
   AccessibleContext __accCtx = null;
+  // A text component's Document (getDocument) carries its DocumentListener,
+  // which fires on every edit. __lastText tracks the prior value so __onDoc can
+  // tell an insert from a remove.
+  Document __document = null;
+  String __lastText = "";
 
   Component() { __cid = "c" + __nextId(); }
+
+  // The text Document — the model behind a text field/area. Lazily created.
+  public Document getDocument() {
+    if (__document == null) __document = new Document(this);
+    return __document;
+  }
+  // Fires the DocumentListener after the text synced from the host; overridden
+  // by the text components (which hold the text to diff).
+  void __onDoc() {}
 
   // The component's AccessibleContext — the Swing accessibility API. Lazily
   // created; setAccessibleName / setAccessibleDescription flow to the renderer
@@ -425,6 +439,7 @@ class Component {
     // wires a control's native event to the VM only when this is set, so an
     // input read at submit-time (no listener) doesn't round-trip on every key.
     if (__listens()) s += ",\"listens\":true";
+    if (__document != null && __document.__listener != null) s += ",\"docListen\":true";
     if (!__visible) s += ",\"hidden\":true";
     if (__accName != null) s += ",\"accName\":\"" + Component.__esc(__accName) + "\"";
     if (__accDesc != null) s += ",\"accDesc\":\"" + Component.__esc(__accDesc) + "\"";
@@ -967,6 +982,15 @@ class JTextField extends Component {
   void __onEvent() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this, getActionCommand()));
   }
+  // The text synced into __text before this; fire insert/remove by length delta.
+  void __onDoc() {
+    if (__document == null || __document.__listener == null) return;
+    DocumentEvent e = new DocumentEvent(__document);
+    if (__text.length() > __lastText.length()) __document.__listener.insertUpdate(e);
+    else if (__text.length() < __lastText.length()) __document.__listener.removeUpdate(e);
+    else __document.__listener.changedUpdate(e);
+    __lastText = __text;
+  }
   void __setFromHost(String value) { __text = value; }
   String __json() {
     String pw = __password ? ",\"password\":true" : "";
@@ -1005,6 +1029,14 @@ class JTextArea extends Component {
   public void setWrapStyleWord(boolean word) {}
   public int getRows() { return __rows; }
   public int getColumns() { return __cols; }
+  void __onDoc() {
+    if (__document == null || __document.__listener == null) return;
+    DocumentEvent e = new DocumentEvent(__document);
+    if (__text.length() > __lastText.length()) __document.__listener.insertUpdate(e);
+    else if (__text.length() < __lastText.length()) __document.__listener.removeUpdate(e);
+    else __document.__listener.changedUpdate(e);
+    __lastText = __text;
+  }
   void __setFromHost(String value) { __text = value; }
   String __json() {
     return "{\"type\":\"textarea\",\"text\":\"" + Component.__esc(__text) + "\",\"rows\":" + __rows
@@ -1876,6 +1908,33 @@ interface ChangeListener {
   void stateChanged(ChangeEvent e);
 }
 
+// javax.swing.event.DocumentEvent / DocumentListener + javax.swing.text.Document:
+// the text-change model. addDocumentListener fires insertUpdate / removeUpdate
+// on every edit (changedUpdate is for attribute changes — not used for plain
+// text, but included for source compatibility).
+class DocumentEvent {
+  Object __src;
+  public DocumentEvent(Object source) { __src = source; }
+  public Object getSource() { return __src; }
+}
+
+interface DocumentListener {
+  void insertUpdate(DocumentEvent e);
+  void removeUpdate(DocumentEvent e);
+  void changedUpdate(DocumentEvent e);
+}
+
+class Document {
+  Component __owner;
+  DocumentListener __listener = null;
+  Document(Component owner) { __owner = owner; }
+  public void addDocumentListener(DocumentListener l) {
+    __listener = l;
+    __SwingRuntime.__interactive = true;
+  }
+  public int getLength() { return __owner.__lastText.length(); }
+}
+
 class ListSelectionEvent {
   Object __src;
   public ListSelectionEvent(Object source) { __src = source; }
@@ -2103,12 +2162,27 @@ class __SwingRuntime {
         int[] key = __keyOf(body);
         int[] drag = __coordOf(body, "__drag=");
         int[] click = __coordOf(body, "__mouse=");
-        if (key != null) c.__onKey(key[0], key[1], (char) key[2]);
+        // A "__doc=" line marks a per-keystroke DocumentListener edit (fires
+        // insert/remove) vs a normal control activation (button/Enter/...).
+        if (__hasLine(body, "__doc=")) c.__onDoc();
+        else if (key != null) c.__onKey(key[0], key[1], (char) key[2]);
         else if (drag != null) c.__onDrag(drag[0], drag[1]);
         else if (click != null) c.__onMouse(click[0], click[1]);
         else c.__onEvent();
       }
     }
+  }
+
+  // Whether the event body contains a line with the given prefix.
+  static boolean __hasLine(String body, String prefix) {
+    String rest = body;
+    while (rest.length() > 0) {
+      int nl = rest.indexOf("\n");
+      String line = nl < 0 ? rest : rest.substring(0, nl);
+      rest = nl < 0 ? "" : rest.substring(nl + 1);
+      if (line.startsWith(prefix)) return true;
+    }
+    return false;
   }
 
   // Parse a "__key=type,code,char" line into {type, code, char}, or null.

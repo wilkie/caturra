@@ -899,6 +899,45 @@ fn swing_request_focus_serializes_a_focus_request() {
 }
 
 #[test]
+fn swing_document_listener_fires_insert_and_remove() {
+    // getDocument().addDocumentListener fires per edit: insertUpdate when the
+    // text grows, removeUpdate when it shrinks. The host marks each with a
+    // "__doc=" line. Ids: frame c0, field c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        public class Main {
+            static JTextField field;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Live");
+                field = new JTextField(16);
+                field.getDocument().addDocumentListener(new DocumentListener() {
+                    public void insertUpdate(DocumentEvent e) {
+                        System.out.println("insert len=" + Main.field.getText().length());
+                    }
+                    public void removeUpdate(DocumentEvent e) {
+                        System.out.println("remove len=" + Main.field.getText().length());
+                    }
+                    public void changedUpdate(DocumentEvent e) {}
+                });
+                frame.add(field);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\nc1=ab\n__doc=c1")),  // typed "ab" (insert)
+            Some(String::from("c1\nc1=abc\n__doc=c1")), // typed "c" (insert)
+            Some(String::from("c1\nc1=ab\n__doc=c1")),  // deleted (remove)
+        ],
+    );
+    assert_eq!(out, "insert len=2\ninsert len=3\nremove len=2\n");
+}
+
+#[test]
 fn swing_text_field_action_listener_fires_on_enter() {
     // A JTextField with an ActionListener fires on Enter; the listener reads the
     // typed value (synced from the host before dispatch). Ids: frame c0, field

@@ -114,6 +114,8 @@ interface SwingNode {
   for?: string;
   /** True when the widget has a listener, so its native event dispatches. */
   listens?: boolean;
+  /** A text component has a DocumentListener (fire on every keystroke). */
+  docListen?: boolean;
   /** JComboBox option labels. */
   items?: string[];
   /** JComboBox selected option index. */
@@ -1084,6 +1086,19 @@ export class SwingViz {
         this.#dispatch(this.#payload(id));
       });
     }
+  }
+
+  /** A text component with a DocumentListener dispatches on every input, so the
+   * listener fires per keystroke (the engine picks insert vs remove by the
+   * text-length delta). Marked with a "__doc=" line so it routes to __onDoc. */
+  #documentInput(el: FieldElement, node: SwingNode): void {
+    if (node.docListen !== true) {
+      return;
+    }
+    const id = node.id;
+    el.addEventListener('input', () => {
+      this.#dispatch(`${this.#payload(id)}\n__doc=${id}`);
+    });
   }
 
   /** Component-relative coordinates of a pointer event (mapped to the
@@ -2204,6 +2219,7 @@ export class SwingViz {
         }
       });
     }
+    this.#documentInput(input, node);
     this.common(input, node);
     return input;
   }
@@ -2227,6 +2243,7 @@ export class SwingViz {
       textarea.setAttribute('aria-label', node.tooltip);
     }
     this.#fields.set(node.id, textarea);
+    this.#documentInput(textarea, node);
     this.common(textarea, node);
     return textarea;
   }
