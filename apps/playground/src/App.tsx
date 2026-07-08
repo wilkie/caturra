@@ -531,6 +531,38 @@ class ShapePanel extends JPanel {
 `,
   },
   {
+    name: 'Bordered form',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.border.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Bordered form");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // A titled border groups related controls into a labelled group box
+    // (rendered as an accessible role=group named by its title).
+    JPanel group = new JPanel();
+    group.setLayout(new BoxLayout(group, BoxLayout.Y_AXIS));
+    group.setBorder(BorderFactory.createTitledBorder("Preferences"));
+    group.add(new JCheckBox("Enable sound"));
+    group.add(new JCheckBox("Dark mode"));
+    group.add(new JCheckBox("Autosave"));
+
+    // A line border draws a coloured frame; an empty border adds padding.
+    JLabel note = new JLabel("Pick your settings above.");
+    note.setBorder(BorderFactory.createLineBorder(new Color(60, 120, 220), 2));
+
+    frame.add(group, BorderLayout.CENTER);
+    frame.add(note, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sketch pad',
     starter: `import javax.swing.*;
 import java.awt.*;

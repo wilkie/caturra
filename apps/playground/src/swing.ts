@@ -12,6 +12,15 @@
  * is Phase 2; Phase 1 renders the declarative UI.
  */
 
+/** A component border (BorderFactory), applied as CSS in common(). */
+interface BorderSpec {
+  type: 'line' | 'empty' | 'titled' | 'etched';
+  thickness: number;
+  color?: string; // "r,g,b"
+  title?: string;
+  insets: string; // "top,left,bottom,right"
+}
+
 interface SwingNode {
   type:
     | 'frame'
@@ -38,6 +47,8 @@ interface SwingNode {
   fg?: string;
   /** Component.setFont: "<style> <size> <family>". */
   font?: string;
+  /** Component.setBorder (BorderFactory). */
+  border?: BorderSpec;
   text?: string;
   title?: string;
   width?: number;
@@ -881,6 +892,46 @@ export class SwingViz {
       el.style.font = cssFont(Number(parts[0]), Number(parts[1]), parts.slice(2).join(' '));
     } else {
       el.style.font = '';
+    }
+    this.applyBorder(el, node.border);
+  }
+
+  /** Apply a BorderFactory border as CSS (line/empty/etched) or a titled group
+   * box. Resets prior border styling first so a reconciled element doesn't keep
+   * a stale border. */
+  private applyBorder(el: HTMLElement, border: BorderSpec | undefined): void {
+    // Undo any titled-group state from a previous render before reapplying.
+    if (el.dataset.borderTitle !== undefined && border?.type !== 'titled') {
+      el.classList.remove('swing-titled');
+      delete el.dataset.borderTitle;
+      el.removeAttribute('role');
+      el.removeAttribute('aria-label');
+    }
+    el.style.border = '';
+    el.style.padding = '';
+    if (border === undefined) {
+      return;
+    }
+    switch (border.type) {
+      case 'line':
+        el.style.border = `${String(border.thickness)}px solid ${cssColor(border.color) ?? 'currentColor'}`;
+        break;
+      case 'empty': {
+        const [t, l, b, r] = border.insets.split(',').map(Number);
+        el.style.padding = `${String(t)}px ${String(r)}px ${String(b)}px ${String(l)}px`;
+        break;
+      }
+      case 'etched':
+        el.style.border = `${String(border.thickness)}px groove light-dark(#c8c8c0, #5a5a5a)`;
+        break;
+      case 'titled':
+        // A group box: an accessible region named by its caption, with the
+        // caption drawn over the top border via the ::before rule.
+        el.classList.add('swing-titled');
+        el.dataset.borderTitle = border.title ?? '';
+        el.setAttribute('role', 'group');
+        el.setAttribute('aria-label', border.title ?? '');
+        break;
     }
   }
 

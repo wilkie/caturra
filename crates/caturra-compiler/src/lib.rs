@@ -363,6 +363,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // serializes to `swing.json` on `setVisible(true)`.
     if imports_package(&units, &["javax", "swing"])
         || imports_package(&units, &["javax", "swing", "event"])
+        || imports_package(&units, &["javax", "swing", "border"])
         || imports_package(&units, &["java", "awt"])
         || imports_package(&units, &["java", "awt", "event"])
     {

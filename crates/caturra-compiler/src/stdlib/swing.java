@@ -61,6 +61,65 @@ class Font {
   public boolean isItalic() { return (__style & ITALIC) != 0; }
 }
 
+// A component border (javax.swing.border.Border), built by BorderFactory. A
+// single class tagged by __type carries every variant's fields; the renderer
+// styles the element from the serialized descriptor.
+class Border {
+  String __type;   // "line" | "empty" | "titled" | "etched"
+  Color __color = null;
+  int __thickness = 1;
+  String __title = null;
+  int __top = 0, __left = 0, __bottom = 0, __right = 0;
+
+  String __json() {
+    StringBuilder s = new StringBuilder("{\"type\":\"");
+    s.append(__type).append("\",\"thickness\":").append(__thickness);
+    if (__color != null) {
+      s.append(",\"color\":\"").append(__color.__r).append(",").append(__color.__g)
+          .append(",").append(__color.__b).append("\"");
+    }
+    if (__title != null) s.append(",\"title\":\"").append(Component.__esc(__title)).append("\"");
+    s.append(",\"insets\":\"").append(__top).append(",").append(__left)
+        .append(",").append(__bottom).append(",").append(__right).append("\"");
+    return s.append("}").toString();
+  }
+}
+
+// javax.swing.BorderFactory: the shared factory for the common border kinds.
+class BorderFactory {
+  public static Border createLineBorder(Color color) { return createLineBorder(color, 1); }
+  public static Border createLineBorder(Color color, int thickness) {
+    Border b = new Border();
+    b.__type = "line";
+    b.__color = color;
+    b.__thickness = thickness;
+    return b;
+  }
+  // A transparent margin (padding) of the given insets — no visible line.
+  public static Border createEmptyBorder(int top, int left, int bottom, int right) {
+    Border b = new Border();
+    b.__type = "empty";
+    b.__top = top;
+    b.__left = left;
+    b.__bottom = bottom;
+    b.__right = right;
+    return b;
+  }
+  // A titled group box: an etched line with a caption in the top-left.
+  public static Border createTitledBorder(String title) {
+    Border b = new Border();
+    b.__type = "titled";
+    b.__title = title;
+    return b;
+  }
+  public static Border createEtchedBorder() {
+    Border b = new Border();
+    b.__type = "etched";
+    b.__thickness = 2;
+    return b;
+  }
+}
+
 interface LayoutManager {
   String __desc();
 }
@@ -139,6 +198,7 @@ class Component {
   Color __bg = null;
   Color __fg = null;
   Font __font = null;
+  Border __border = null;
   // The BorderLayout region ("North".."Center") this component was added with,
   // or null when it carries no layout constraint.
   String __region = null;
@@ -152,6 +212,8 @@ class Component {
   public void setForeground(Color c) { __fg = c; }
   public void setFont(Font f) { __font = f; }
   public Font getFont() { return __font; }
+  public void setBorder(Border b) { __border = b; }
+  public Border getBorder() { return __border; }
 
   // JSON escaping. Uses a StringBuilder (not `out += ...`): appending to a
   // String in a loop is O(n^2), and this runs over the whole serialized paint
@@ -183,6 +245,7 @@ class Component {
     if (__font != null) {
       s += ",\"font\":\"" + __font.__style + " " + __font.__size + " " + Component.__esc(__font.__name) + "\"";
     }
+    if (__border != null) s += ",\"border\":" + __border.__json();
     if (__region != null) s += ",\"region\":\"" + Component.__esc(__region) + "\"";
     return s;
   }

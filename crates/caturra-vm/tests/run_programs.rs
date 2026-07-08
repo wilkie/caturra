@@ -836,6 +836,49 @@ fn swing_graphics_records_font_polygon_and_arc() {
 }
 
 #[test]
+fn swing_border_factory_serializes_border_descriptors() {
+    // BorderFactory borders serialize as a descriptor on the component: a line
+    // border (colour + thickness), an empty padding border (insets), and a
+    // titled group box (caption). Ids: frame c0, then the three panels.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.border.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Borders");
+                JPanel a = new JPanel();
+                a.setBorder(BorderFactory.createLineBorder(new Color(200, 40, 40), 3));
+                JPanel b = new JPanel();
+                b.setBorder(BorderFactory.createEmptyBorder(5, 10, 15, 20));
+                JPanel c = new JPanel();
+                Border titled = BorderFactory.createTitledBorder("Options");
+                c.setBorder(titled);
+                frame.add(a);
+                frame.add(b);
+                frame.add(c);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""border":{"type":"line","thickness":3,"color":"200,40,40""#),
+        "no line border: {json}"
+    );
+    assert!(
+        json.contains(r#""border":{"type":"empty","thickness":1,"insets":"5,10,15,20"}"#),
+        "no empty border: {json}"
+    );
+    assert!(
+        json.contains(r#""border":{"type":"titled","thickness":1,"title":"Options""#),
+        "no titled border: {json}"
+    );
+}
+
+#[test]
 fn swing_component_font_serializes() {
     // Component.setFont serializes "<style> <size> <family>" on the widget so
     // the renderer can style its text (JLabel here; applies to any component).

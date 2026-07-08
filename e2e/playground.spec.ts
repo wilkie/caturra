@@ -1603,6 +1603,31 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('BorderFactory titled and line borders render as a group and a frame', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Bordered form' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // A titled border is an accessible group box named by its caption, holding
+    // the three checkboxes.
+    const group = root.getByRole('group', { name: 'Preferences' });
+    await expect(group).toBeVisible();
+    await expect(group.getByRole('checkbox')).toHaveCount(3);
+    // The caption is drawn via the ::before rule from the data attribute.
+    await expect(group).toHaveAttribute('data-border-title', 'Preferences');
+
+    // The line border on the note is a 2px solid frame in the given colour.
+    const note = root.locator('span.swing-label', { hasText: 'Pick your settings above.' });
+    const border = await note.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { width: s.borderTopWidth, style: s.borderTopStyle, color: s.borderTopColor };
+    });
+    expect(border.width).toBe('2px');
+    expect(border.style).toBe('solid');
+    expect(border.color).toBe('rgb(60, 120, 220)');
+  });
+
   test('JOptionPane shows accessible modal dialogs (input, confirm, message)', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Dialogs (JOptionPane)' });

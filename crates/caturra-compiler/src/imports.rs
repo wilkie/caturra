@@ -198,6 +198,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "org.code.media" => Some(ORG_CODE_MEDIA),
         "javax.swing" => Some(JAVAX_SWING),
         "javax.swing.event" => Some(JAVAX_SWING_EVENT),
+        "javax.swing.border" => Some(JAVAX_SWING_BORDER),
         "java.awt" => Some(JAVA_AWT),
         "java.awt.event" => Some(JAVA_AWT_EVENT),
         _ => None,
@@ -250,7 +251,12 @@ static JAVAX_SWING: &[&str] = &[
     "JMenuBar",
     "JMenu",
     "JMenuItem",
+    "BorderFactory",
+    "Border",
 ];
+/// `javax.swing.border`: the `Border` handle returned by `BorderFactory`
+/// (kept here too so `import javax.swing.border.Border;` resolves).
+static JAVAX_SWING_BORDER: &[&str] = &["Border"];
 static JAVA_AWT: &[&str] = &[
     "Color",
     "Dimension",
