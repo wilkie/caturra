@@ -1584,11 +1584,13 @@ public class Main {
     name: 'To-do list (DefaultListModel)',
     starter: `import javax.swing.*;
 import java.awt.*;
+import javax.swing.event.*;
 
 public class Main {
   static DefaultListModel model;
   static JList list;
   static JTextField field;
+  static JLabel status;
 
   public static void main(String[] args) {
     JFrame frame = new JFrame("To-do");
@@ -1599,6 +1601,14 @@ public class Main {
     model = new DefaultListModel();
     model.addElement("Buy milk");
     model.addElement("Walk the dog");
+
+    // A ListDataListener fires whenever the model changes, so a summary label
+    // stays in sync without the buttons updating it directly.
+    model.addListDataListener(new ListDataListener() {
+      public void intervalAdded(ListDataEvent e) { Main.summarize("added"); }
+      public void intervalRemoved(ListDataEvent e) { Main.summarize("removed"); }
+      public void contentsChanged(ListDataEvent e) { Main.summarize("changed"); }
+    });
 
     list = new JList(model);
     list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -1618,7 +1628,7 @@ public class Main {
     top.add(field);
     top.add(add);
 
-    // SOUTH: remove the selected item.
+    // SOUTH: remove the selected item, plus the listener-driven summary.
     JButton remove = new JButton("Remove selected");
     remove.addActionListener(e -> {
       int i = Main.list.getSelectedIndex();
@@ -1626,11 +1636,19 @@ public class Main {
         Main.model.remove(i);
       }
     });
+    status = new JLabel("2 items");
+    JPanel bottom = new JPanel();
+    bottom.add(remove);
+    bottom.add(status);
 
     frame.add(top, BorderLayout.NORTH);
     frame.add(list, BorderLayout.CENTER);
-    frame.add(remove, BorderLayout.SOUTH);
+    frame.add(bottom, BorderLayout.SOUTH);
     frame.setVisible(true);
+  }
+
+  static void summarize(String what) {
+    status.setText(model.getSize() + " items (last: " + what + ")");
   }
 }
 `,

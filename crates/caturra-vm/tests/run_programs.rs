@@ -1015,6 +1015,47 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_list_model_fires_data_listener_events() {
+    // A DefaultListModel notifies its ListDataListener on every mutation, with
+    // the right event type and interval — synchronously, like AbstractListModel.
+    let (result, console) = compile_and_run(
+        r#"
+        import javax.swing.*;
+        import javax.swing.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                DefaultListModel model = new DefaultListModel();
+                model.addListDataListener(new ListDataListener() {
+                    public void intervalAdded(ListDataEvent e) {
+                        System.out.println("added [" + e.getIndex0() + "," + e.getIndex1()
+                            + "] size=" + ((DefaultListModel) e.getSource()).getSize());
+                    }
+                    public void intervalRemoved(ListDataEvent e) {
+                        System.out.println("removed [" + e.getIndex0() + "," + e.getIndex1() + "]");
+                    }
+                    public void contentsChanged(ListDataEvent e) {
+                        System.out.println("changed [" + e.getIndex0() + "]");
+                    }
+                });
+                model.addElement("a");
+                model.addElement("b");
+                model.add(1, "x");
+                model.set(0, "A");
+                model.remove(2);
+                model.removeAllElements();
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "added [0,0] size=1\nadded [1,1] size=2\nadded [1,1] size=3\nchanged [0]\nremoved [2,2]\nremoved [0,1]\n"
+    );
+}
+
+#[test]
 fn swing_text_area_text_operations() {
     // JTextArea's text ops: line queries, offsets, insert, replaceRange, and a
     // bounds error raising the checked BadLocationException (like the JDK).

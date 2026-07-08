@@ -2308,17 +2308,22 @@ test.describe('swing (interactive)', () => {
     const list = root.getByRole('listbox');
     await expect(list.getByRole('option')).toHaveCount(2);
 
-    // Adding to the model re-renders the list with the new item.
+    await expect(root).toContainText('2 items');
+
+    // Adding to the model re-renders the list with the new item — and the
+    // model's ListDataListener updates the summary label (intervalAdded).
     await root.getByRole('textbox').fill('Water plants');
     await root.getByRole('button', { name: 'Add' }).click();
     await expect(list.getByRole('option')).toHaveCount(3);
     await expect(list.getByRole('option', { name: 'Water plants' })).toBeVisible();
+    await expect(root).toContainText('3 items (last: added)');
 
-    // Removing the selected item shrinks the model-backed list.
+    // Removing the selected item shrinks the model — intervalRemoved fires.
     await list.selectOption({ label: 'Buy milk' });
     await root.getByRole('button', { name: 'Remove selected' }).click();
     await expect(list.getByRole('option')).toHaveCount(2);
     await expect(list.getByRole('option', { name: 'Buy milk' })).toHaveCount(0);
+    await expect(root).toContainText('2 items (last: removed)');
   });
 
   test('a JTable shows a grid, selects a row, and reads/writes cells', async ({ page }) => {

@@ -1304,19 +1304,61 @@ class ListSelectionModel {
 // addElement/remove/clear appear as soon as the event loop repaints.
 class DefaultListModel {
   java.util.ArrayList<String> __elements = new java.util.ArrayList<String>();
+  java.util.ArrayList<ListDataListener> __dataListeners = new java.util.ArrayList<ListDataListener>();
   public DefaultListModel() {}
-  public void addElement(String element) { __elements.add(element); }
-  public void add(int index, String element) { __elements.add(index, element); }
+  public void addListDataListener(ListDataListener l) { __dataListeners.add(l); }
+  public void removeListDataListener(ListDataListener l) { __dataListeners.remove(l); }
+  // Notify listeners of an add / remove / change over [i0, i1], as real Swing's
+  // AbstractListModel does when the model is mutated.
+  void __fireAdded(int i0, int i1) {
+    ListDataEvent e = new ListDataEvent(this, ListDataEvent.INTERVAL_ADDED, i0, i1);
+    for (ListDataListener l : __dataListeners) l.intervalAdded(e);
+  }
+  void __fireRemoved(int i0, int i1) {
+    ListDataEvent e = new ListDataEvent(this, ListDataEvent.INTERVAL_REMOVED, i0, i1);
+    for (ListDataListener l : __dataListeners) l.intervalRemoved(e);
+  }
+  void __fireChanged(int i0, int i1) {
+    ListDataEvent e = new ListDataEvent(this, ListDataEvent.CONTENTS_CHANGED, i0, i1);
+    for (ListDataListener l : __dataListeners) l.contentsChanged(e);
+  }
+  public void addElement(String element) {
+    __elements.add(element);
+    __fireAdded(__elements.size() - 1, __elements.size() - 1);
+  }
+  public void add(int index, String element) {
+    __elements.add(index, element);
+    __fireAdded(index, index);
+  }
   public String get(int index) { return __elements.get(index); }
   public String getElementAt(int index) { return __elements.get(index); }
   public String elementAt(int index) { return __elements.get(index); }
-  public String set(int index, String element) { return __elements.set(index, element); }
-  public String remove(int index) { return __elements.remove(index); }
+  public String set(int index, String element) {
+    String previous = __elements.set(index, element);
+    __fireChanged(index, index);
+    return previous;
+  }
+  public String remove(int index) {
+    String removed = __elements.remove(index);
+    __fireRemoved(index, index);
+    return removed;
+  }
   // Element params are String (the model holds Strings), where real Swing uses
   // Object — the bundled ArrayList types these overloads by element type.
-  public boolean removeElement(String element) { return __elements.remove(element); }
-  public void removeAllElements() { __elements.clear(); }
-  public void clear() { __elements.clear(); }
+  public boolean removeElement(String element) {
+    int index = __elements.indexOf(element);
+    if (index < 0) return false;
+    __elements.remove(index);
+    __fireRemoved(index, index);
+    return true;
+  }
+  public void removeAllElements() { __clearAndFire(); }
+  public void clear() { __clearAndFire(); }
+  void __clearAndFire() {
+    int last = __elements.size() - 1;
+    __elements.clear();
+    if (last >= 0) __fireRemoved(0, last);
+  }
   public int getSize() { return __elements.size(); }
   public int size() { return __elements.size(); }
   public boolean isEmpty() { return __elements.isEmpty(); }
@@ -2119,6 +2161,31 @@ class ListSelectionEvent {
   public ListSelectionEvent(Object source) { __src = source; }
   public Object getSource() { return __src; }
   public boolean getValueIsAdjusting() { return false; }
+}
+
+// Fired by a ListModel (DefaultListModel) when its contents change.
+class ListDataEvent {
+  public static final int CONTENTS_CHANGED = 0;
+  public static final int INTERVAL_ADDED = 1;
+  public static final int INTERVAL_REMOVED = 2;
+  Object __src;
+  int __type, __i0, __i1;
+  public ListDataEvent(Object source, int type, int index0, int index1) {
+    __src = source;
+    __type = type;
+    __i0 = index0;
+    __i1 = index1;
+  }
+  public Object getSource() { return __src; }
+  public int getType() { return __type; }
+  public int getIndex0() { return __i0; }
+  public int getIndex1() { return __i1; }
+}
+
+interface ListDataListener {
+  void intervalAdded(ListDataEvent e);
+  void intervalRemoved(ListDataEvent e);
+  void contentsChanged(ListDataEvent e);
 }
 
 interface ListSelectionListener {
