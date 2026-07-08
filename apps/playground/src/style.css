@@ -715,6 +715,21 @@ label {
   margin-left: auto;
 }
 
+/* A checkable menu item's indicator (aria-hidden): a check or bullet when set. */
+.swing-menu-indicator {
+  width: 1em;
+  display: inline-block;
+  text-align: center;
+}
+
+.swing-menu-checkable[aria-checked='true'] > .swing-menu-indicator::before {
+  content: '✓';
+}
+
+.swing-menu-checkable[role='menuitemradio'][aria-checked='true'] > .swing-menu-indicator::before {
+  content: '●';
+}
+
 .swing-menu-item:hover,
 .swing-menu-item:focus {
   background: light-dark(#eef0ff, #565676);

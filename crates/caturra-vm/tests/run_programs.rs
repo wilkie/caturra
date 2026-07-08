@@ -873,6 +873,83 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_check_and_radio_menu_items_toggle_and_group() {
+    // A JCheckBoxMenuItem toggles on each activation; JRadioButtonMenuItems in a
+    // ButtonGroup are mutually exclusive (selecting one deselects the others).
+    // Ids: frame c0, menu c1, wrap c2, light c3, dark c4.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            static JCheckBoxMenuItem wrap;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                JMenuBar bar = new JMenuBar();
+                JMenu view = new JMenu("View");
+                wrap = new JCheckBoxMenuItem("Word Wrap");
+                wrap.addActionListener(e -> System.out.println("wrap " + Main.wrap.isSelected()));
+                view.add(wrap);
+
+                JRadioButtonMenuItem light = new JRadioButtonMenuItem("Light", true);
+                JRadioButtonMenuItem dark = new JRadioButtonMenuItem("Dark");
+                ButtonGroup group = new ButtonGroup();
+                group.add(light);
+                group.add(dark);
+                light.addActionListener(e ->
+                    System.out.println("light=" + light.isSelected() + " dark=" + dark.isSelected()));
+                dark.addActionListener(e ->
+                    System.out.println("light=" + light.isSelected() + " dark=" + dark.isSelected()));
+                view.add(light);
+                view.add(dark);
+
+                bar.add(view);
+                frame.setJMenuBar(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c2")), // toggle Word Wrap on
+            Some(String::from("c2")), // toggle it off
+            Some(String::from("c4")), // pick Dark
+            Some(String::from("c3")), // pick Light
+        ],
+    );
+    assert_eq!(
+        out,
+        "wrap true\nwrap false\nlight=false dark=true\nlight=true dark=false\n"
+    );
+}
+
+#[test]
+fn swing_check_menu_item_serializes_selected_state() {
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                JMenuBar bar = new JMenuBar();
+                JMenu view = new JMenu("View");
+                view.add(new JCheckBoxMenuItem("Word Wrap", true));
+                view.add(new JRadioButtonMenuItem("Light", true));
+                bar.add(view);
+                frame.setJMenuBar(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""type":"checkmenuitem","text":"Word Wrap","selected":true"#), "no check item: {json}");
+    assert!(json.contains(r#""type":"radiomenuitem","text":"Light","selected":true"#), "no radio item: {json}");
+}
+
+#[test]
 fn swing_grid_bag_layout_serializes_per_child_constraints() {
     // A GridBagLayout serializes each child's GridBagConstraints. A reused
     // constraints object is COPIED on add, so each child keeps its own cell

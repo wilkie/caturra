@@ -1603,6 +1603,34 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('check and radio menu items toggle state and stay mutually exclusive', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Menu options' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // Open the View menu: a checkbox item (unchecked) toggles on click.
+    await root.getByRole('button', { name: 'View' }).click();
+    const wrap = root.getByRole('menuitemcheckbox', { name: 'Word Wrap' });
+    await expect(wrap).toHaveAttribute('aria-checked', 'false');
+    await wrap.click();
+    await expect(root).toContainText('Wrap: on');
+
+    // Reopen: Light is the selected radio; picking Dark switches the selection.
+    await root.getByRole('button', { name: 'View' }).click();
+    await expect(root.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true');
+    const dark = root.getByRole('menuitemradio', { name: 'Dark' });
+    await expect(dark).toHaveAttribute('aria-checked', 'false');
+    await dark.click();
+    await expect(root).toContainText('Theme: Dark');
+
+    // Reopen: the group is now Dark-selected, Light cleared, and Wrap still on.
+    await root.getByRole('button', { name: 'View' }).click();
+    await expect(root.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
+    await expect(root.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute('aria-checked', 'false');
+    await expect(root.getByRole('menuitemcheckbox', { name: 'Word Wrap' })).toHaveAttribute('aria-checked', 'true');
+  });
+
   test('a GridBagLayout places labelled fields in a grid', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'GridBag form' });

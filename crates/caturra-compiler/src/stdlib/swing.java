@@ -1036,9 +1036,18 @@ class JRadioButton extends Component {
 class ButtonGroup {
   String __gid;
   java.util.ArrayList<JRadioButton> __buttons = new java.util.ArrayList<JRadioButton>();
+  java.util.ArrayList<JRadioButtonMenuItem> __menuItems = new java.util.ArrayList<JRadioButtonMenuItem>();
   public ButtonGroup() { __gid = "g" + Component.__nextId(); }
   public void add(JRadioButton b) { b.__group = __gid; __buttons.add(b); }
-  public int getButtonCount() { return __buttons.size(); }
+  public void add(JRadioButtonMenuItem m) { m.__bgroup = this; __menuItems.add(m); }
+  public int getButtonCount() { return __buttons.size() + __menuItems.size(); }
+  // Select `chosen` and deselect its group siblings (menu radios have no shared
+  // DOM name, so the VM enforces exclusivity).
+  void __selectRadioMenu(JRadioButtonMenuItem chosen) {
+    for (int i = 0; i < __menuItems.size(); i++) {
+      __menuItems.get(i).__sel = (__menuItems.get(i) == chosen);
+    }
+  }
 }
 
 class JComboBox extends Component {
@@ -1463,6 +1472,55 @@ class JMenuItem extends Component {
   String __json() {
     if (__sep) return "{\"type\":\"separator\"}";
     return "{\"type\":\"menuitem\",\"text\":\"" + Component.__esc(__text) + "\"," + __commonJson() + "}";
+  }
+}
+
+// A menu item with a checkbox. Clicking toggles it and fires the listeners.
+class JCheckBoxMenuItem extends JMenuItem {
+  boolean __sel = false;
+  ItemListener __itemListener = null;
+  public JCheckBoxMenuItem() {}
+  public JCheckBoxMenuItem(String text) { __text = text; }
+  public JCheckBoxMenuItem(String text, boolean selected) { __text = text; __sel = selected; }
+  public boolean isSelected() { return __sel; }
+  public void setSelected(boolean selected) { __sel = selected; }
+  public boolean getState() { return __sel; }
+  public void setState(boolean state) { __sel = state; }
+  public void addItemListener(ItemListener l) { __itemListener = l; __SwingRuntime.__interactive = true; }
+  boolean __listens() { return __listener != null || __itemListener != null; }
+  void __onEvent() {
+    __sel = !__sel; // activating a check item toggles it
+    if (__itemListener != null) {
+      int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
+      __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
+    }
+    if (__listener != null) __listener.actionPerformed(new ActionEvent(this, __text));
+  }
+  String __json() {
+    return "{\"type\":\"checkmenuitem\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
+        + "," + __commonJson() + "}";
+  }
+}
+
+// A menu item radio button; a ButtonGroup makes a set of them mutually
+// exclusive. Selecting one deselects its group siblings.
+class JRadioButtonMenuItem extends JMenuItem {
+  boolean __sel = false;
+  ButtonGroup __bgroup = null;
+  public JRadioButtonMenuItem() {}
+  public JRadioButtonMenuItem(String text) { __text = text; }
+  public JRadioButtonMenuItem(String text, boolean selected) { __text = text; __sel = selected; }
+  public boolean isSelected() { return __sel; }
+  public void setSelected(boolean selected) { __sel = selected; }
+  boolean __listens() { return true; } // always dispatches (to update the selection)
+  void __onEvent() {
+    if (__bgroup != null) __bgroup.__selectRadioMenu(this);
+    else __sel = true;
+    if (__listener != null) __listener.actionPerformed(new ActionEvent(this, __text));
+  }
+  String __json() {
+    return "{\"type\":\"radiomenuitem\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
+        + "," + __commonJson() + "}";
   }
 }
 

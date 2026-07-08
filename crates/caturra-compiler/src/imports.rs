@@ -256,6 +256,8 @@ static JAVAX_SWING: &[&str] = &[
     "JMenuBar",
     "JMenu",
     "JMenuItem",
+    "JCheckBoxMenuItem",
+    "JRadioButtonMenuItem",
     "BorderFactory",
     "Border",
     "SwingUtilities",

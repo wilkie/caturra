@@ -175,10 +175,11 @@ interface SwingMenu {
 // A menu entry is a leaf item, a separator, or a nested submenu (which is
 // itself a SwingMenu with its own items).
 interface SwingMenuEntry {
-  type: 'menuitem' | 'separator' | 'menu';
+  type: 'menuitem' | 'checkmenuitem' | 'radiomenuitem' | 'separator' | 'menu';
   text?: string;
   id?: string;
   listens?: boolean;
+  selected?: boolean;
   items?: SwingMenuEntry[];
 }
 
@@ -1504,9 +1505,24 @@ export class SwingViz {
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'swing-menu-item';
-      item.setAttribute('role', 'menuitem');
+      // A check/radio item announces its state (menuitemcheckbox / menuitemradio
+      // with aria-checked); a plain item is a menuitem.
+      const check = entry.type === 'checkmenuitem';
+      const radio = entry.type === 'radiomenuitem';
+      item.setAttribute('role', check ? 'menuitemcheckbox' : radio ? 'menuitemradio' : 'menuitem');
       item.tabIndex = -1; // reached via arrow keys, not Tab
-      item.textContent = entry.text ?? '';
+      if (check || radio) {
+        item.setAttribute('aria-checked', String(entry.selected === true));
+        item.classList.add('swing-menu-checkable');
+        // A hidden indicator carries the check/bullet (via CSS), kept OUT of the
+        // accessible name — aria-checked already conveys state to a reader.
+        const indicator = document.createElement('span');
+        indicator.className = 'swing-menu-indicator';
+        indicator.setAttribute('aria-hidden', 'true');
+        item.append(indicator, document.createTextNode(entry.text ?? ''));
+      } else {
+        item.textContent = entry.text ?? '';
+      }
       // Moving onto a plain item closes any sibling submenu that was open.
       item.addEventListener('mouseenter', () => {
         closeChild();

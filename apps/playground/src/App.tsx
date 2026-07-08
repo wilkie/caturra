@@ -652,6 +652,59 @@ public class Main {
 `,
   },
   {
+    name: 'Menu options',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+
+public class Main {
+  static JCheckBoxMenuItem wrap;
+  static JRadioButtonMenuItem light;
+  static JRadioButtonMenuItem dark;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Menu options");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    JMenuBar bar = new JMenuBar();
+    JMenu view = new JMenu("View");
+
+    // A checkbox menu item toggles on each click.
+    wrap = new JCheckBoxMenuItem("Word Wrap");
+    wrap.addActionListener(e -> Main.update());
+    view.add(wrap);
+    view.addSeparator();
+
+    // Radio menu items in a ButtonGroup are mutually exclusive.
+    ButtonGroup themes = new ButtonGroup();
+    light = new JRadioButtonMenuItem("Light", true);
+    dark = new JRadioButtonMenuItem("Dark");
+    themes.add(light);
+    themes.add(dark);
+    light.addActionListener(e -> Main.update());
+    dark.addActionListener(e -> Main.update());
+    view.add(light);
+    view.add(dark);
+
+    bar.add(view);
+    frame.setJMenuBar(bar);
+
+    status = new JLabel("Wrap: off, Theme: Light");
+    frame.add(status, BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+
+  static void update() {
+    String theme = Main.light.isSelected() ? "Light" : "Dark";
+    String w = Main.wrap.isSelected() ? "on" : "off";
+    Main.status.setText("Wrap: " + w + ", Theme: " + theme);
+  }
+}
+`,
+  },
+  {
     name: 'GridBag form',
     starter: `import javax.swing.*;
 import java.awt.*;
