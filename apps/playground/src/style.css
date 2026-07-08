@@ -733,12 +733,13 @@ label {
 }
 
 .swing-combobox-input {
+  flex: 1 1 0; /* grow to fill the box so the arrow sits at the right edge */
   border: none;
   background: transparent;
   color: inherit;
   font: inherit;
   padding: 0.25rem 0.4rem;
-  min-width: 8rem;
+  min-width: 6rem;
   outline: none;
 }
 
