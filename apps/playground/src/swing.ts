@@ -55,6 +55,8 @@ interface SwingNode {
     | 'component';
   id: string;
   enabled?: boolean;
+  /** Component.setVisible(false): the component is hidden (display:none). */
+  hidden?: boolean;
   tooltip?: string;
   bg?: string;
   fg?: string;
@@ -961,6 +963,7 @@ export class SwingViz {
   private common(el: HTMLElement, node: SwingNode): void {
     el.dataset.cid = node.id;
     el.dataset.kind = node.type; // reconcile reuses an element only if kind matches
+    el.hidden = node.hidden === true; // Component.setVisible(false)
     if (node.tooltip !== undefined) {
       el.title = node.tooltip;
     }

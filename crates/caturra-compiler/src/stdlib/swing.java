@@ -233,6 +233,7 @@ class Component {
 
   String __cid;
   boolean __enabled = true;
+  boolean __visible = true;
   String __ttip = null;
   Color __bg = null;
   Color __fg = null;
@@ -250,6 +251,8 @@ class Component {
 
   public void setEnabled(boolean enabled) { __enabled = enabled; }
   public boolean isEnabled() { return __enabled; }
+  public void setVisible(boolean visible) { __visible = visible; }
+  public boolean isVisible() { return __visible; }
   public void setToolTipText(String text) { __ttip = text; }
   public void setBackground(Color c) { __bg = c; }
   public void setForeground(Color c) { __fg = c; }
@@ -290,6 +293,7 @@ class Component {
     // wires a control's native event to the VM only when this is set, so an
     // input read at submit-time (no listener) doesn't round-trip on every key.
     if (__listens()) s += ",\"listens\":true";
+    if (!__visible) s += ",\"hidden\":true";
     if (__ttip != null) s += ",\"tooltip\":\"" + Component.__esc(__ttip) + "\"";
     if (__bg != null) s += ",\"bg\":\"" + __bg.__r + "," + __bg.__g + "," + __bg.__b + "\"";
     if (__fg != null) s += ",\"fg\":\"" + __fg.__r + "," + __fg.__g + "," + __fg.__b + "\"";
@@ -333,6 +337,15 @@ class Container extends Component {
     if (constraints != null) c.__region = "" + constraints;
     add(c);
   }
+  public void remove(Component c) { __kids.remove(c); }
+  public void remove(int index) { __kids.remove(index); }
+  public void removeAll() { __kids.clear(); }
+  public int getComponentCount() { return __kids.size(); }
+  public Component getComponent(int index) { return __kids.get(index); }
+  // The layout re-runs every event-loop tick, so these need do nothing.
+  public void revalidate() {}
+  public void validate() {}
+  public void repaint() {}
   public void setLayout(LayoutManager m) { __layout = m; __absolute = (m == null); }
 
   String __layoutJson() {
@@ -1364,6 +1377,21 @@ class Timer {
   }
 }
 
+// java.lang.Runnable — the target of SwingUtilities.invokeLater and friends.
+interface Runnable {
+  void run();
+}
+
+// javax.swing.SwingUtilities. caturra runs single-threaded and synchronously,
+// so there is no separate event-dispatch thread: invokeLater / invokeAndWait
+// simply run the task now (the common pattern is to build the UI and call
+// setVisible inside it, which then enters the event loop as usual).
+class SwingUtilities {
+  public static void invokeLater(Runnable r) { if (r != null) r.run(); }
+  public static void invokeAndWait(Runnable r) { if (r != null) r.run(); }
+  public static boolean isEventDispatchThread() { return true; }
+}
+
 class JFrame extends Container {
   String __title;
   int __w = 0;
@@ -1389,6 +1417,10 @@ class JFrame extends Container {
   public void setResizable(boolean resizable) {}
   public void setLocationRelativeTo(Object o) {}
   public void pack() {}
+  // A JFrame IS its content pane here, so getContentPane().add(...) / setLayout
+  // work as students expect.
+  public Container getContentPane() { return this; }
+  public void setContentPane(Container c) {}
 
   public static final int EXIT_ON_CLOSE = 3;
   public static final int DISPOSE_ON_CLOSE = 2;

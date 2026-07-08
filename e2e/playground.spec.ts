@@ -1603,6 +1603,24 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('SwingUtilities.invokeLater bootstraps and setVisible toggles a component', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Show / hide' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // The UI was built inside invokeLater and added via getContentPane().
+    const secret = root.getByText('Now you see me!');
+    await expect(secret).toBeVisible();
+
+    // Toggling calls setVisible(false)/(true), hiding and showing the label.
+    const toggle = root.getByRole('button', { name: 'Toggle' });
+    await toggle.click();
+    await expect(secret).toBeHidden();
+    await toggle.click();
+    await expect(secret).toBeVisible();
+  });
+
   test('setLayout(null) positions children absolutely with setBounds', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Absolute layout' });

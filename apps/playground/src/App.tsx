@@ -616,6 +616,42 @@ public class Main {
 `,
   },
   {
+    name: 'Show / hide',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel secret;
+  static boolean shown = true;
+
+  public static void main(String[] args) {
+    // The idiomatic bootstrap: build the UI on the event thread. caturra runs
+    // it right away (there is no separate thread).
+    SwingUtilities.invokeLater(() -> { Main.buildUi(); });
+  }
+
+  static void buildUi() {
+    JFrame frame = new JFrame("Show / hide");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    secret = new JLabel("Now you see me!");
+
+    JButton toggle = new JButton("Toggle");
+    toggle.addActionListener(e -> {
+      Main.shown = !Main.shown;
+      Main.secret.setVisible(Main.shown); // setVisible(false) hides it
+    });
+
+    // getContentPane() returns the frame's content area (the frame itself here).
+    frame.getContentPane().add(toggle, BorderLayout.NORTH);
+    frame.getContentPane().add(secret, BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Absolute layout',
     starter: `import javax.swing.*;
 

@@ -873,6 +873,93 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_invoke_later_content_pane_and_visibility() {
+    // The common tutorial bootstrap: SwingUtilities.invokeLater builds the UI,
+    // getContentPane().add adds to the frame, and a hidden component serializes
+    // its hidden flag. invokeLater runs synchronously (no separate EDT).
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                SwingUtilities.invokeLater(new Runnable() {
+                    public void run() {
+                        JFrame f = new JFrame("Boot");
+                        f.getContentPane().add(new JButton("Go"));
+                        JLabel secret = new JLabel("hidden");
+                        secret.setVisible(false);
+                        f.getContentPane().add(secret);
+                        f.setVisible(true);
+                    }
+                });
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""text":"Go""#), "content pane add failed: {json}");
+    assert!(json.contains(r#""text":"hidden","hidden":true"#)
+        || json.contains(r#""hidden":true"#), "no hidden flag: {json}");
+}
+
+#[test]
+fn swing_container_remove_and_component_count() {
+    // Container.remove / removeAll / getComponentCount manage children.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static JPanel panel;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Dyn");
+                panel = new JPanel();
+                JButton a = new JButton("A");
+                panel.add(a);
+                panel.add(new JButton("B"));
+                JButton report = new JButton("Report");
+                report.addActionListener(e -> {
+                    System.out.println("count " + Main.panel.getComponentCount());
+                    Main.panel.remove(0);
+                    System.out.println("after remove " + Main.panel.getComponentCount());
+                    Main.panel.removeAll();
+                    System.out.println("after clear " + Main.panel.getComponentCount());
+                });
+                frame.add(panel);
+                frame.add(report);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("c4"))],
+    );
+    assert_eq!(out, "count 2\nafter remove 1\nafter clear 0\n");
+}
+
+#[test]
+fn swing_invoke_later_with_lambda_runs_the_ui() {
+    // SwingUtilities.invokeLater(() -> ...) — the lambda targets Runnable.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        public class Main {
+            public static void main(String[] args) {
+                SwingUtilities.invokeLater(() -> {
+                    JFrame f = new JFrame("Lambda");
+                    f.add(new JLabel("ready"));
+                    f.setVisible(true);
+                });
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""text":"ready""#), "lambda invokeLater failed: {json}");
+}
+
+#[test]
 fn swing_set_bounds_and_null_layout_serialize_for_absolute_positioning() {
     // setLayout(null) requests absolute positioning ("none"); a child's
     // setBounds serializes its x,y,w,h so the renderer can place it. Mirrors

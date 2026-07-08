@@ -256,6 +256,7 @@ static JAVAX_SWING: &[&str] = &[
     "JMenuItem",
     "BorderFactory",
     "Border",
+    "SwingUtilities",
 ];
 /// `javax.swing.border`: the `Border` handle returned by `BorderFactory` plus
 /// the concrete subtypes (constructible directly, e.g. `new LineBorder(...)`).
