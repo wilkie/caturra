@@ -652,6 +652,42 @@ public class Main {
 `,
   },
   {
+    name: 'Styled widgets',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Styled widgets");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // setHorizontalAlignment + a preferred size give the label a fixed box
+    // with right-aligned text.
+    JLabel title = new JLabel("Right aligned", SwingConstants.RIGHT);
+    title.setPreferredSize(new Dimension(240, 30));
+
+    // setPreferredSize sizes the button; Color.darker() shades a base colour.
+    JButton big = new JButton("Big button");
+    big.setPreferredSize(new Dimension(200, 60));
+    Color base = new Color(60, 120, 220);
+    big.setBackground(base.darker());
+    big.setForeground(Color.WHITE);
+    big.addActionListener(e -> title.setText("Clicked!"));
+
+    // A right-aligned numeric field.
+    JTextField amount = new JTextField("42", 10);
+    amount.setHorizontalAlignment(JTextField.RIGHT);
+
+    frame.add(title, BorderLayout.NORTH);
+    frame.add(big, BorderLayout.CENTER);
+    frame.add(amount, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Absolute layout',
     starter: `import javax.swing.*;
 

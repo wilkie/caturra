@@ -873,6 +873,55 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_color_helpers_sizing_and_alignment() {
+    // Color(int), getRed/Green/Blue, darker(); setPreferredSize on a plain
+    // widget; JLabel horizontal alignment (JLabel.CENTER via SwingConstants).
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                Color c = new Color(0x3366CC);
+                System.out.println(c.getRed() + "," + c.getGreen() + "," + c.getBlue());
+                Color d = new Color(200, 100, 50).darker();
+                System.out.println(d.getRed() + "," + d.getGreen() + "," + d.getBlue());
+                System.out.println("center " + JLabel.CENTER + " right " + SwingConstants.RIGHT);
+            }
+        }
+        "#,
+        "Main",
+        vec![],
+    );
+    assert_eq!(out, "51,102,204\n140,70,35\ncenter 0 right 4\n");
+}
+
+#[test]
+fn swing_preferred_size_and_alignment_serialize() {
+    // A widget's preferred size and a label's alignment reach the tree.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Sized");
+                JButton big = new JButton("Big");
+                big.setPreferredSize(new Dimension(160, 50));
+                JLabel title = new JLabel("Centered", SwingConstants.CENTER);
+                frame.add(big);
+                frame.add(title);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""psize":"160,50""#), "no preferred size: {json}");
+    assert!(json.contains(r#""halign":0"#), "no alignment: {json}");
+}
+
+#[test]
 fn swing_invoke_later_content_pane_and_visibility() {
     // The common tutorial bootstrap: SwingUtilities.invokeLater builds the UI,
     // getContentPane().add adds to the frame, and a hidden component serializes

@@ -74,6 +74,12 @@ interface SwingNode {
   region?: string;
   /** setBounds "x,y,w,h", honored when the parent uses a null (absolute) layout. */
   bounds?: string;
+  /** setPreferredSize / setMinimumSize / setMaximumSize "w,h" hints. */
+  psize?: string;
+  minsize?: string;
+  maxsize?: string;
+  /** setHorizontalAlignment (SwingConstants): 0 center, 2/10 left, 4/11 right. */
+  halign?: number;
   columns?: number;
   rows?: number;
   editable?: boolean;
@@ -401,6 +407,26 @@ function scrollbarOverflow(policy: number | undefined): string {
 }
 
 /** CSS for a container, mapping the Swing LayoutManager to flex/grid. */
+/** One dimension ("w,h"[index]) of a size hint as a px string, or '' if absent. */
+function sizeDim(size: string | undefined, index: 0 | 1): string {
+  if (size === undefined) {
+    return '';
+  }
+  const n = Number(size.split(',')[index] ?? 0);
+  return `${String(n)}px`;
+}
+
+/** A SwingConstants horizontal alignment as a CSS text-align. */
+function horizAlign(align: number): string {
+  if (align === 0) {
+    return 'center'; // CENTER
+  }
+  if (align === 4 || align === 11) {
+    return 'right'; // RIGHT / TRAILING
+  }
+  return 'left'; // LEFT / LEADING (2 / 10)
+}
+
 /** Absolutely position a child from its setBounds "x,y,w,h" under a null layout,
  * returning the running max extent so the parent can be sized to fit. */
 function placeAbsolute(
@@ -983,6 +1009,23 @@ export class SwingViz {
     } else {
       el.style.font = '';
     }
+    // Size hints (setPreferredSize / setMinimumSize / setMaximumSize). Applied
+    // only when set — a container's builder (scroll/split panes) sizes itself,
+    // so clearing here would clobber it.
+    if (node.psize !== undefined) {
+      el.style.width = sizeDim(node.psize, 0);
+      el.style.height = sizeDim(node.psize, 1);
+    }
+    if (node.minsize !== undefined) {
+      el.style.minWidth = sizeDim(node.minsize, 0);
+      el.style.minHeight = sizeDim(node.minsize, 1);
+    }
+    if (node.maxsize !== undefined) {
+      el.style.maxWidth = sizeDim(node.maxsize, 0);
+      el.style.maxHeight = sizeDim(node.maxsize, 1);
+    }
+    // setHorizontalAlignment → text-align (right-aligns a field's text, etc.).
+    el.style.textAlign = node.halign === undefined ? '' : horizAlign(node.halign);
     this.applyBorder(el, node.border);
   }
 

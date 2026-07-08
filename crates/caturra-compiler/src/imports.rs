@@ -257,6 +257,7 @@ static JAVAX_SWING: &[&str] = &[
     "BorderFactory",
     "Border",
     "SwingUtilities",
+    "SwingConstants",
 ];
 /// `javax.swing.border`: the `Border` handle returned by `BorderFactory` plus
 /// the concrete subtypes (constructible directly, e.g. `new LineBorder(...)`).

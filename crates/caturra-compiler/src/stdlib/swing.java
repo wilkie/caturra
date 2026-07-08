@@ -13,9 +13,28 @@
 class Color {
   int __r, __g, __b;
   public Color(int r, int g, int b) { this.__r = r; this.__g = g; this.__b = b; }
+  // A packed 0xRRGGBB int (alpha byte ignored).
+  public Color(int rgb) { __r = (rgb >> 16) & 255; __g = (rgb >> 8) & 255; __b = rgb & 255; }
   public int getRed() { return __r; }
   public int getGreen() { return __g; }
   public int getBlue() { return __b; }
+  // Opaque ARGB, as java.awt.Color.getRGB (top byte 0xFF).
+  public int getRGB() { return (255 << 24) | (__r << 16) | (__g << 8) | __b; }
+  // A darker/brighter shade, following java.awt.Color's factor-0.7 algorithm.
+  public Color darker() {
+    return new Color(Math.max((int) (__r * 0.7), 0), Math.max((int) (__g * 0.7), 0),
+        Math.max((int) (__b * 0.7), 0));
+  }
+  public Color brighter() {
+    int r = __r, g = __g, b = __b;
+    int i = 3; // (int)(1/(1-0.7))
+    if (r == 0 && g == 0 && b == 0) return new Color(i, i, i);
+    if (r > 0 && r < i) r = i;
+    if (g > 0 && g < i) g = i;
+    if (b > 0 && b < i) b = i;
+    return new Color(Math.min((int) (r / 0.7), 255), Math.min((int) (g / 0.7), 255),
+        Math.min((int) (b / 0.7), 255));
+  }
   public static final Color WHITE = new Color(255, 255, 255);
   public static final Color LIGHT_GRAY = new Color(192, 192, 192);
   public static final Color GRAY = new Color(128, 128, 128);
@@ -35,6 +54,22 @@ class Dimension {
   public int width;
   public int height;
   public Dimension(int width, int height) { this.width = width; this.height = height; }
+}
+
+// javax.swing.SwingConstants: shared alignment/position constants (the values
+// components like JLabel and JTextField also expose, e.g. JLabel.CENTER).
+class SwingConstants {
+  public static final int CENTER = 0;
+  public static final int TOP = 1;
+  public static final int LEFT = 2;
+  public static final int BOTTOM = 3;
+  public static final int RIGHT = 4;
+  public static final int NORTH = 1;
+  public static final int EAST = 3;
+  public static final int SOUTH = 5;
+  public static final int WEST = 7;
+  public static final int LEADING = 10;
+  public static final int TRAILING = 11;
 }
 
 // java.awt.Font: a logical font for custom painting (Graphics.setFont). The
@@ -246,6 +281,10 @@ class Component {
   // (absolute) layout — a managed layout ignores them, as in real Swing.
   int __bx = 0, __by = 0, __bw = 0, __bh = 0;
   boolean __hasBounds = false;
+  // Size hints (setPreferredSize / setMinimumSize / setMaximumSize) and the
+  // horizontal text alignment (SwingConstants); -1 = unset.
+  Dimension __prefSize = null, __minSize = null, __maxSize = null;
+  int __halign = -1;
 
   Component() { __cid = "c" + __nextId(); }
 
@@ -269,6 +308,12 @@ class Component {
   public int getY() { return __by; }
   public int getWidth() { return __bw; }
   public int getHeight() { return __bh; }
+  public void setPreferredSize(Dimension d) { __prefSize = d; }
+  public Dimension getPreferredSize() { return __prefSize == null ? new Dimension(0, 0) : __prefSize; }
+  public void setMinimumSize(Dimension d) { __minSize = d; }
+  public Dimension getMinimumSize() { return __minSize == null ? new Dimension(0, 0) : __minSize; }
+  public void setMaximumSize(Dimension d) { __maxSize = d; }
+  public Dimension getMaximumSize() { return __maxSize == null ? new Dimension(0, 0) : __maxSize; }
 
   // JSON escaping. Uses a StringBuilder (not `out += ...`): appending to a
   // String in a loop is O(n^2), and this runs over the whole serialized paint
@@ -305,6 +350,10 @@ class Component {
     if (__region != null) s += ",\"region\":\"" + Component.__esc(__region) + "\"";
     // Absolute bounds "x,y,w,h" (honored by the renderer under a null layout).
     if (__hasBounds) s += ",\"bounds\":\"" + __bx + "," + __by + "," + __bw + "," + __bh + "\"";
+    if (__prefSize != null) s += ",\"psize\":\"" + __prefSize.width + "," + __prefSize.height + "\"";
+    if (__minSize != null) s += ",\"minsize\":\"" + __minSize.width + "," + __minSize.height + "\"";
+    if (__maxSize != null) s += ",\"maxsize\":\"" + __maxSize.width + "," + __maxSize.height + "\"";
+    if (__halign >= 0) s += ",\"halign\":" + __halign;
     return s;
   }
 
@@ -688,13 +737,26 @@ class JToolBar extends Container {
 }
 
 class JLabel extends Component {
+  // Alignment constants (JLabel implements SwingConstants in real Swing).
+  public static final int LEFT = 2;
+  public static final int CENTER = 0;
+  public static final int RIGHT = 4;
+  public static final int LEADING = 10;
+  public static final int TRAILING = 11;
+  public static final int TOP = 1;
+  public static final int BOTTOM = 3;
+
   String __text;
   Component __labelFor = null;
   public JLabel() { __text = ""; }
   public JLabel(String text) { __text = text; }
+  public JLabel(String text, int horizontalAlignment) { __text = text; __halign = horizontalAlignment; }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
   public void setLabelFor(Component c) { __labelFor = c; }
+  public void setHorizontalAlignment(int alignment) { __halign = alignment; }
+  public int getHorizontalAlignment() { return __halign < 0 ? LEADING : __halign; }
+  public void setVerticalAlignment(int alignment) {}
   String __json() {
     String f = __labelFor == null ? "" : ",\"for\":\"" + __labelFor.__cid + "\"";
     return "{\"type\":\"label\",\"text\":\"" + Component.__esc(__text) + "\"" + f + "," + __commonJson() + "}";
@@ -722,6 +784,12 @@ class JButton extends Component {
 }
 
 class JTextField extends Component {
+  public static final int LEFT = 2;
+  public static final int CENTER = 0;
+  public static final int RIGHT = 4;
+  public static final int LEADING = 10;
+  public static final int TRAILING = 11;
+
   String __text;
   int __cols;
   public JTextField() { __text = ""; __cols = 0; }
@@ -731,6 +799,8 @@ class JTextField extends Component {
   public String getText() { return __text; }
   public void setText(String text) { __text = text; }
   public int getColumns() { return __cols; }
+  public void setHorizontalAlignment(int alignment) { __halign = alignment; }
+  public int getHorizontalAlignment() { return __halign < 0 ? LEADING : __halign; }
   void __setFromHost(String value) { __text = value; }
   String __json() {
     return "{\"type\":\"textfield\",\"text\":\"" + Component.__esc(__text) + "\",\"columns\":" + __cols

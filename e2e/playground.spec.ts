@@ -1603,6 +1603,31 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('preferred size, Color.darker, and horizontal alignment style widgets', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Styled widgets' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // setPreferredSize(200, 60) sizes the button; darker() shades (60,120,220).
+    const big = root.getByRole('button', { name: 'Big button' });
+    const style = await big.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { w: s.width, h: s.height, bg: s.backgroundColor };
+    });
+    expect(style.w).toBe('200px');
+    expect(style.h).toBe('60px');
+    expect(style.bg).toBe('rgb(42, 84, 154)'); // (60,120,220) * 0.7
+
+    // JTextField.RIGHT right-aligns the field's text.
+    const amount = root.getByRole('textbox');
+    await expect(amount).toHaveCSS('text-align', 'right');
+
+    // The button still dispatches; the label updates.
+    await big.click();
+    await expect(root.getByText('Clicked!')).toBeVisible();
+  });
+
   test('SwingUtilities.invokeLater bootstraps and setVisible toggles a component', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Show / hide' });
