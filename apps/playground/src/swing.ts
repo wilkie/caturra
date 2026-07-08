@@ -36,6 +36,8 @@ interface SwingNode {
   tooltip?: string;
   bg?: string;
   fg?: string;
+  /** Component.setFont: "<style> <size> <family>". */
+  font?: string;
   text?: string;
   title?: string;
   width?: number;
@@ -211,6 +213,11 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   let color = 'rgb(0,0,0)'; // Graphics current color (fills and strokes)
   let font = '14px system-ui, sans-serif'; // Graphics current font (drawString)
+  // Stroke state persists on the retained context, so reset it each frame to
+  // the Graphics default (a 1px pen); Graphics2D.setStroke overrides it.
+  ctx.lineWidth = 1;
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
   const oval = (x: number, y: number, w: number, h: number): void => {
     ctx.beginPath();
     ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
@@ -254,6 +261,13 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
       case 'setFont':
         // `setFont <style> <size> <family...>`; family is the rest of the line.
         font = cssFont(n(0), n(1), rest.slice(2).join(' '));
+        break;
+      case 'setStroke':
+        // `setStroke <width> <cap> <join>` (java.awt.BasicStroke). Applies to
+        // subsequent stroke operations until changed.
+        ctx.lineWidth = Math.max(1, n(0));
+        ctx.lineCap = (['butt', 'round', 'square'] as const)[n(1)] ?? 'butt';
+        ctx.lineJoin = (['miter', 'round', 'bevel'] as const)[n(2)] ?? 'miter';
         break;
       case 'fillRect':
         ctx.fillStyle = color;
@@ -859,6 +873,14 @@ export class SwingViz {
     const fg = cssColor(node.fg);
     if (fg !== null) {
       el.style.color = fg;
+    }
+    // Component.setFont: "<style> <size> <family>". Cleared on reconcile when a
+    // later render drops the font, so a reused element doesn't keep a stale one.
+    if (node.font !== undefined) {
+      const parts = node.font.split(' ');
+      el.style.font = cssFont(Number(parts[0]), Number(parts[1]), parts.slice(2).join(' '));
+    } else {
+      el.style.font = '';
     }
   }
 

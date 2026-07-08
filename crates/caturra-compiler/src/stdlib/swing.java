@@ -138,6 +138,7 @@ class Component {
   String __ttip = null;
   Color __bg = null;
   Color __fg = null;
+  Font __font = null;
   // The BorderLayout region ("North".."Center") this component was added with,
   // or null when it carries no layout constraint.
   String __region = null;
@@ -149,6 +150,8 @@ class Component {
   public void setToolTipText(String text) { __ttip = text; }
   public void setBackground(Color c) { __bg = c; }
   public void setForeground(Color c) { __fg = c; }
+  public void setFont(Font f) { __font = f; }
+  public Font getFont() { return __font; }
 
   // JSON escaping. Uses a StringBuilder (not `out += ...`): appending to a
   // String in a loop is O(n^2), and this runs over the whole serialized paint
@@ -176,6 +179,10 @@ class Component {
     if (__ttip != null) s += ",\"tooltip\":\"" + Component.__esc(__ttip) + "\"";
     if (__bg != null) s += ",\"bg\":\"" + __bg.__r + "," + __bg.__g + "," + __bg.__b + "\"";
     if (__fg != null) s += ",\"fg\":\"" + __fg.__r + "," + __fg.__g + "," + __fg.__b + "\"";
+    // Font: "<style> <size> <family>" (family last so a spaced name survives).
+    if (__font != null) {
+      s += ",\"font\":\"" + __font.__style + " " + __font.__size + " " + Component.__esc(__font.__name) + "\"";
+    }
     if (__region != null) s += ",\"region\":\"" + Component.__esc(__region) + "\"";
     return s;
   }
@@ -273,6 +280,40 @@ class Graphics {
   }
 }
 
+// java.awt.BasicStroke: a pen width and end/join style for Graphics2D drawing.
+// The width is a float (real API), so `new BasicStroke(3)` and `2.5f` both work.
+class BasicStroke {
+  public static final int CAP_BUTT = 0;
+  public static final int CAP_ROUND = 1;
+  public static final int CAP_SQUARE = 2;
+  public static final int JOIN_MITER = 0;
+  public static final int JOIN_ROUND = 1;
+  public static final int JOIN_BEVEL = 2;
+
+  float __width;
+  int __cap;
+  int __join;
+
+  public BasicStroke() { __width = 1; __cap = CAP_SQUARE; __join = JOIN_MITER; }
+  public BasicStroke(float width) { __width = width; __cap = CAP_SQUARE; __join = JOIN_MITER; }
+  public BasicStroke(float width, int cap, int join) { __width = width; __cap = cap; __join = join; }
+  public float getLineWidth() { return __width; }
+  public int getEndCap() { return __cap; }
+  public int getLineJoin() { return __join; }
+}
+
+// java.awt.Graphics2D: the concrete Graphics that paintComponent receives (a
+// cast `(Graphics2D) g` succeeds — the panel builds one). Adds stroke control;
+// the width/cap/join apply to subsequent draw* (stroke) operations.
+class Graphics2D extends Graphics {
+  public void setStroke(BasicStroke s) {
+    // Round the float width to an int for the command stream (sub-pixel widths
+    // aren't meaningful on the integer canvas grid these drawings use).
+    int w = (int) (s.__width + 0.5);
+    __cmds.add("setStroke " + w + " " + s.__cap + " " + s.__join);
+  }
+}
+
 class JPanel extends Container {
   int __pw = 200;
   int __ph = 150;
@@ -327,7 +368,9 @@ class JPanel extends Container {
   // during serialization so the recorded commands go to the canvas.
   public void paintComponent(Graphics g) {}
   String __json() {
-    Graphics g = new Graphics();
+    // A Graphics2D (the real paintComponent argument type) so a subclass can
+    // cast `(Graphics2D) g` to set the stroke; it upcasts to the Graphics param.
+    Graphics g = new Graphics2D();
     paintComponent(g); // virtual dispatch: a subclass draws into g
     String paint = "";
     if (!g.__empty()) {

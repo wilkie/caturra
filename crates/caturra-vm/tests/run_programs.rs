@@ -836,6 +836,66 @@ fn swing_graphics_records_font_polygon_and_arc() {
 }
 
 #[test]
+fn swing_component_font_serializes() {
+    // Component.setFont serializes "<style> <size> <family>" on the widget so
+    // the renderer can style its text (JLabel here; applies to any component).
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Fonts");
+                JLabel label = new JLabel("Title");
+                label.setFont(new Font("Serif", Font.BOLD, 22));
+                frame.add(label);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""font":"1 22 Serif""#), "no widget font: {json}");
+}
+
+#[test]
+fn swing_graphics2d_set_stroke_records_line_width() {
+    // A custom panel casts the Graphics to Graphics2D and sets a wider pen; the
+    // stroke width/cap/join serialize for the canvas renderer. The cast must
+    // succeed (the panel builds a Graphics2D), and BasicStroke(3) widens int→float.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Pen");
+                Sketch s = new Sketch();
+                s.setPreferredSize(new Dimension(120, 80));
+                frame.add(s);
+                frame.setVisible(true);
+            }
+        }
+        class Sketch extends JPanel {
+            public void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2 = (Graphics2D) g;
+                g2.setStroke(new BasicStroke(3));
+                g2.setColor(new Color(255, 0, 0));
+                g2.drawLine(10, 10, 100, 60);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains("setStroke 3 2 0"),
+        "no stroke (width 3, cap square, join miter): {json}"
+    );
+    assert!(json.contains("drawLine 10 10 100 60"), "no line: {json}");
+}
+
+#[test]
 fn swing_key_listener_fires_pressed_typed_released() {
     // A KeyListener on a focusable panel: keydown delivers keyPressed (and, for
     // a printable char, keyTyped); keyup delivers keyReleased. The host reports

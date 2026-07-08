@@ -483,10 +483,18 @@ public class Main {
   public static void main(String[] args) {
     JFrame frame = new JFrame("Shapes and fonts");
     frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // setFont styles a widget's text, too — not just custom drawing.
+    JLabel title = new JLabel("Shapes and Fonts");
+    title.setFont(new Font("SansSerif", Font.BOLD, 20));
+
     ShapePanel panel = new ShapePanel();
     panel.setPreferredSize(new Dimension(320, 220));
     panel.setToolTipText("A drawing with a polygon, an arc, and sized text");
-    frame.add(panel);
+
+    frame.add(title, BorderLayout.NORTH);
+    frame.add(panel, BorderLayout.CENTER);
     frame.setVisible(true);
   }
 }
@@ -507,6 +515,12 @@ class ShapePanel extends JPanel {
     // counterclockwise from 3 o'clock).
     g.setColor(new Color(255, 180, 60));
     g.fillArc(160, 30, 90, 90, 40, 260);
+
+    // A thick pen via Graphics2D.setStroke (a 6px line, not the default 1px).
+    Graphics2D g2 = (Graphics2D) g;
+    g2.setStroke(new BasicStroke(6));
+    g2.setColor(new Color(255, 90, 90));
+    g2.drawLine(30, 205, 290, 205);
 
     // Sized, bold text via setFont — no longer a fixed 14px.
     g.setColor(new Color(240, 240, 240));

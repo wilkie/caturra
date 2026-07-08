@@ -1567,6 +1567,42 @@ test.describe('swing (interactive)', () => {
     await expect.poll(() => sample(205, 55)).toEqual([255, 180, 60]);
   });
 
+  test('setFont styles a widget and Graphics2D.setStroke widens a line', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Shapes and fonts' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // The title JLabel's text is styled by setFont(SansSerif, BOLD, 20).
+    // Scope to the label element so it isn't confused with the window titlebar.
+    const title = root.locator('span.swing-label', { hasText: 'Shapes and Fonts' });
+    await expect(title).toBeVisible();
+    const style = await title.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { size: s.fontSize, weight: s.fontWeight };
+    });
+    expect(style.size).toBe('20px');
+    expect(Number(style.weight)).toBeGreaterThanOrEqual(700);
+
+    // The 6px red line is thick: a pixel 2px off its centre line (y=205) is
+    // still on the stroke, which a 1px pen would not cover.
+    const red = (x: number, y: number): Promise<boolean> =>
+      page.evaluate(
+        ([px, py]) => {
+          const c = document.querySelector<HTMLCanvasElement>('[data-testid="swing-root"] canvas');
+          const ctx = c?.getContext('2d');
+          if (!ctx) {
+            return false;
+          }
+          const d = ctx.getImageData(px, py, 1, 1).data;
+          return (d[0] ?? 0) > 200 && (d[1] ?? 0) < 140 && (d[2] ?? 0) < 140;
+        },
+        [x, y],
+      );
+    await expect.poll(() => red(160, 205)).toBe(true); // centre of the line
+    expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
+  });
+
   test('JOptionPane shows accessible modal dialogs (input, confirm, message)', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Dialogs (JOptionPane)' });

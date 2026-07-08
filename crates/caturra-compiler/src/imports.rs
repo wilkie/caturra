@@ -256,6 +256,8 @@ static JAVA_AWT: &[&str] = &[
     "Dimension",
     "Font",
     "Graphics",
+    "Graphics2D",
+    "BasicStroke",
     "LayoutManager",
     "FlowLayout",
     "GridLayout",
