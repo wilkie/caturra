@@ -70,6 +70,8 @@ interface SwingNode {
   /** This child's BorderLayout region ("North".."Center"), when its parent
    * uses a BorderLayout. */
   region?: string;
+  /** setBounds "x,y,w,h", honored when the parent uses a null (absolute) layout. */
+  bounds?: string;
   columns?: number;
   rows?: number;
   editable?: boolean;
@@ -397,6 +399,30 @@ function scrollbarOverflow(policy: number | undefined): string {
 }
 
 /** CSS for a container, mapping the Swing LayoutManager to flex/grid. */
+/** Absolutely position a child from its setBounds "x,y,w,h" under a null layout,
+ * returning the running max extent so the parent can be sized to fit. */
+function placeAbsolute(
+  el: HTMLElement,
+  child: SwingNode,
+  extent: { w: number; h: number },
+): { w: number; h: number } {
+  el.style.position = 'absolute';
+  if (child.bounds === undefined) {
+    return extent; // no bounds: left at 0,0 (real Swing would too)
+  }
+  const parts = child.bounds.split(',').map(Number);
+  const x = parts[0] ?? 0;
+  const y = parts[1] ?? 0;
+  const w = parts[2] ?? 0;
+  const h = parts[3] ?? 0;
+  el.style.left = `${String(x)}px`;
+  el.style.top = `${String(y)}px`;
+  el.style.width = `${String(w)}px`;
+  el.style.height = `${String(h)}px`;
+  el.style.margin = '0';
+  return { w: Math.max(extent.w, x + w), h: Math.max(extent.h, y + h) };
+}
+
 function applyLayout(el: HTMLElement, layout: string | undefined): void {
   if (layout?.startsWith('grid ')) {
     const cols = Number(layout.split(' ')[2] ?? 1);
@@ -425,6 +451,15 @@ function applyLayout(el: HTMLElement, layout: string | undefined): void {
     el.style.flexDirection = axis === 1 || axis === 3 ? 'column' : 'row';
     el.style.alignItems = 'flex-start';
     el.style.gap = '0';
+    return;
+  }
+  if (layout === 'none') {
+    // A null layout: children are positioned absolutely by their setBounds
+    // (applied in children()/#reconcileChildren); the container is the origin.
+    el.style.display = 'block';
+    el.style.position = 'relative';
+    el.style.flexWrap = '';
+    el.style.gap = '';
     return;
   }
   // FlowLayout (the default) lays out inline.
@@ -531,10 +566,14 @@ export class SwingViz {
   #reconcileChildren(host: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
     const nodes = node.children ?? [];
     const border = node.layout === 'border';
+    const absolute = node.layout === 'none';
+    let extent = { w: 0, h: 0 };
     for (const [i, child] of nodes.entries()) {
       const el = this.#reconcile(child, prev);
       if (border) {
         el.style.gridArea = (child.region ?? 'Center').toLowerCase();
+      } else if (absolute) {
+        extent = placeAbsolute(el, child, extent);
       }
       const current = host.children[i];
       if (current !== el) {
@@ -543,6 +582,12 @@ export class SwingViz {
     }
     while (host.children.length > nodes.length) {
       host.lastElementChild?.remove();
+    }
+    if (absolute) {
+      // Floor to the container's own size (e.g. a frame's setSize) so the null
+      // layout shows the intended area, not just a box around the children.
+      host.style.minWidth = `${String(Math.max(extent.w, node.width ?? 0))}px`;
+      host.style.minHeight = `${String(Math.max(extent.h, node.height ?? 0))}px`;
     }
   }
 
@@ -1020,14 +1065,25 @@ export class SwingViz {
 
   private children(container: HTMLElement, node: SwingNode): void {
     const border = node.layout === 'border';
+    const absolute = node.layout === 'none';
+    let extent = { w: 0, h: 0 };
     for (const child of node.children ?? []) {
       const el = this.build(child);
       if (border) {
         // Place the child in its BorderLayout region; unconstrained children
         // default to the center, as real BorderLayout does.
         el.style.gridArea = (child.region ?? 'Center').toLowerCase();
+      } else if (absolute) {
+        extent = placeAbsolute(el, child, extent);
       }
       container.appendChild(el);
+    }
+    if (absolute) {
+      // Absolute children don't stretch the container, so floor its size to the
+      // furthest child edge (and the container's own size, e.g. a frame's
+      // setSize) — otherwise it would collapse to nothing.
+      container.style.minWidth = `${String(Math.max(extent.w, node.width ?? 0))}px`;
+      container.style.minHeight = `${String(Math.max(extent.h, node.height ?? 0))}px`;
     }
   }
 

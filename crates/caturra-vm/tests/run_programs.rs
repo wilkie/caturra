@@ -873,6 +873,33 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_set_bounds_and_null_layout_serialize_for_absolute_positioning() {
+    // setLayout(null) requests absolute positioning ("none"); a child's
+    // setBounds serializes its x,y,w,h so the renderer can place it. Mirrors
+    // the classic null-layout tutorial. Ids: frame c0, button c1.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame f = new JFrame();
+                JButton b1 = new JButton("Hello, World!");
+                b1.setBounds(90, 100, 180, 40);
+                f.add(b1);
+                f.setSize(400, 400);
+                f.setLayout(null);
+                f.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""layout":"none""#), "not absolute: {json}");
+    assert!(json.contains(r#""width":400,"height":400"#), "no frame size: {json}");
+    assert!(json.contains(r#""bounds":"90,100,180,40""#), "no bounds: {json}");
+}
+
+#[test]
 fn swing_tool_bar_serializes_buttons_separator_and_dispatches() {
     // A JToolBar serializes its name, orientation, and child controls (with a
     // separator between groups); a toolbar button's ActionListener fires on

@@ -616,6 +616,37 @@ public class Main {
 `,
   },
   {
+    name: 'Absolute layout',
+    starter: `import javax.swing.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame f = new JFrame("Absolute layout");
+    f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    // setLayout(null) turns off the layout manager: every child is placed by
+    // its own setBounds(x, y, width, height).
+    f.setLayout(null);
+
+    JLabel title = new JLabel("Placed with setBounds");
+    title.setBounds(20, 20, 260, 24);
+    f.add(title);
+
+    JButton b1 = new JButton("Hello, World!");
+    b1.setBounds(90, 100, 180, 40);
+    b1.addActionListener(e -> title.setText("Clicked the button!"));
+    f.add(b1);
+
+    JButton b2 = new JButton("Down here");
+    b2.setBounds(40, 200, 140, 30);
+    f.add(b2);
+
+    f.setSize(360, 300);
+    f.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Toolbar',
     starter: `import javax.swing.*;
 import java.awt.*;

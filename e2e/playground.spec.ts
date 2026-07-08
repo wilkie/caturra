@@ -1603,6 +1603,30 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('setLayout(null) positions children absolutely with setBounds', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Absolute layout' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // The button is placed by setBounds(90, 100, 180, 40): absolute at 90,100.
+    const button = root.getByRole('button', { name: 'Hello, World!' });
+    await expect(button).toBeVisible();
+    const box = await button.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { position: s.position, left: s.left, top: s.top, width: s.width, height: s.height };
+    });
+    expect(box.position).toBe('absolute');
+    expect(box.left).toBe('90px');
+    expect(box.top).toBe('100px');
+    expect(box.width).toBe('180px');
+    expect(box.height).toBe('40px');
+
+    // It still dispatches under the null layout: clicking updates the label.
+    await button.click();
+    await expect(root.getByText('Clicked the button!')).toBeVisible();
+  });
+
   test('a JToolBar is an accessible strip with roving arrow-key focus', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Toolbar' });

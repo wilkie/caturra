@@ -241,6 +241,10 @@ class Component {
   // The BorderLayout region ("North".."Center") this component was added with,
   // or null when it carries no layout constraint.
   String __region = null;
+  // Explicit bounds (setBounds/setSize/setLocation). Honored only under a null
+  // (absolute) layout — a managed layout ignores them, as in real Swing.
+  int __bx = 0, __by = 0, __bw = 0, __bh = 0;
+  boolean __hasBounds = false;
 
   Component() { __cid = "c" + __nextId(); }
 
@@ -253,6 +257,15 @@ class Component {
   public Font getFont() { return __font; }
   public void setBorder(Border b) { __border = b; }
   public Border getBorder() { return __border; }
+  public void setBounds(int x, int y, int width, int height) {
+    __bx = x; __by = y; __bw = width; __bh = height; __hasBounds = true;
+  }
+  public void setLocation(int x, int y) { __bx = x; __by = y; __hasBounds = true; }
+  public void setSize(int width, int height) { __bw = width; __bh = height; __hasBounds = true; }
+  public int getX() { return __bx; }
+  public int getY() { return __by; }
+  public int getWidth() { return __bw; }
+  public int getHeight() { return __bh; }
 
   // JSON escaping. Uses a StringBuilder (not `out += ...`): appending to a
   // String in a loop is O(n^2), and this runs over the whole serialized paint
@@ -286,6 +299,8 @@ class Component {
     }
     if (__border != null) s += ",\"border\":" + __border.__json();
     if (__region != null) s += ",\"region\":\"" + Component.__esc(__region) + "\"";
+    // Absolute bounds "x,y,w,h" (honored by the renderer under a null layout).
+    if (__hasBounds) s += ",\"bounds\":\"" + __bx + "," + __by + "," + __bw + "," + __bh + "\"";
     return s;
   }
 
@@ -307,6 +322,9 @@ class Component {
 class Container extends Component {
   java.util.ArrayList<Component> __kids = new java.util.ArrayList<Component>();
   LayoutManager __layout = null;
+  // setLayout(null) requests absolute positioning (children placed by setBounds).
+  // Distinct from never calling setLayout (which defaults to flow).
+  boolean __absolute = false;
 
   public void add(Component c) { __kids.add(c); __SwingRuntime.__register(c); }
   // A BorderLayout constraint (e.g. BorderLayout.NORTH) records the region the
@@ -315,9 +333,10 @@ class Container extends Component {
     if (constraints != null) c.__region = "" + constraints;
     add(c);
   }
-  public void setLayout(LayoutManager m) { __layout = m; }
+  public void setLayout(LayoutManager m) { __layout = m; __absolute = (m == null); }
 
   String __layoutJson() {
+    if (__absolute) return "\"none\"";
     if (__layout == null) return "\"flow\"";
     return "\"" + __layout.__desc() + "\"";
   }
@@ -425,8 +444,9 @@ class JPanel extends Container {
   public JPanel() {}
   public JPanel(LayoutManager m) { __layout = m; }
   public void setPreferredSize(Dimension d) { __pw = d.width; __ph = d.height; }
-  public int getWidth() { return __pw; }
-  public int getHeight() { return __ph; }
+  // Explicit bounds (setBounds under a null layout) win over the preferred size.
+  public int getWidth() { return __hasBounds ? __bw : __pw; }
+  public int getHeight() { return __hasBounds ? __bh : __ph; }
   public void addMouseListener(MouseListener l) { __mouseListener = l; __SwingRuntime.__interactive = true; }
   public void addMouseMotionListener(MouseMotionListener l) { __motionListener = l; __SwingRuntime.__interactive = true; }
   public void addKeyListener(KeyListener l) { __keyListener = l; __SwingRuntime.__interactive = true; }
