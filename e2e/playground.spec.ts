@@ -1538,6 +1538,35 @@ test.describe('swing (interactive)', () => {
     expect(await sample(140, 90)).not.toEqual([80, 200, 255]);
   });
 
+  test('Graphics draws a filled polygon and arc with the fill colour', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Shapes and fonts' });
+    await page.getByTestId('run').click();
+    const canvas = page
+      .getByTestId('swing-root')
+      .getByRole('img', { name: 'A drawing with a polygon, an arc, and sized text' });
+    await expect(canvas).toBeVisible();
+
+    const sample = (x: number, y: number): Promise<number[]> =>
+      page.evaluate(
+        ([px, py]) => {
+          const c = document.querySelector<HTMLCanvasElement>('[data-testid="swing-root"] canvas');
+          const ctx = c?.getContext('2d');
+          if (!ctx) {
+            return [-1, -1, -1];
+          }
+          const d = ctx.getImageData(px, py, 1, 1).data;
+          return [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0];
+        },
+        [x, y],
+      );
+
+    // Inside the blue triangle (fillPolygon, exact fill colour).
+    await expect.poll(() => sample(60, 90)).toEqual([80, 200, 255]);
+    // Inside the orange pie slice (fillArc), above its centre (205, 75).
+    await expect.poll(() => sample(205, 55)).toEqual([255, 180, 60]);
+  });
+
   test('JOptionPane shows accessible modal dialogs (input, confirm, message)', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Dialogs (JOptionPane)' });

@@ -37,6 +37,30 @@ class Dimension {
   public Dimension(int width, int height) { this.width = width; this.height = height; }
 }
 
+// java.awt.Font: a logical font for custom painting (Graphics.setFont). The
+// logical family names (SansSerif / Serif / Monospaced / Dialog) map to CSS
+// families in the renderer; the style is PLAIN / BOLD / ITALIC (bit flags, so
+// BOLD | ITALIC is allowed, matching real java.awt.Font).
+class Font {
+  public static final int PLAIN = 0;
+  public static final int BOLD = 1;
+  public static final int ITALIC = 2;
+
+  String __name;
+  int __style;
+  int __size;
+
+  public Font(String name, int style, int size) { __name = name; __style = style; __size = size; }
+  public String getName() { return __name; }
+  public String getFontName() { return __name; }
+  public String getFamily() { return __name; }
+  public int getStyle() { return __style; }
+  public int getSize() { return __size; }
+  public boolean isPlain() { return __style == PLAIN; }
+  public boolean isBold() { return (__style & BOLD) != 0; }
+  public boolean isItalic() { return (__style & ITALIC) != 0; }
+}
+
 interface LayoutManager {
   String __desc();
 }
@@ -206,6 +230,7 @@ class Container extends Component {
 // and the current color follow java.awt.Graphics (draw* strokes, fill* fills).
 class Graphics {
   java.util.ArrayList<String> __cmds = new java.util.ArrayList<String>();
+  Font __font = null;
   public void setColor(Color c) { __cmds.add("setColor " + c.__r + " " + c.__g + " " + c.__b); }
   public void fillRect(int x, int y, int w, int h) { __cmds.add("fillRect " + x + " " + y + " " + w + " " + h); }
   public void drawRect(int x, int y, int w, int h) { __cmds.add("drawRect " + x + " " + y + " " + w + " " + h); }
@@ -213,6 +238,27 @@ class Graphics {
   public void drawOval(int x, int y, int w, int h) { __cmds.add("drawOval " + x + " " + y + " " + w + " " + h); }
   public void drawLine(int x1, int y1, int x2, int y2) { __cmds.add("drawLine " + x1 + " " + y1 + " " + x2 + " " + y2); }
   public void drawString(String s, int x, int y) { __cmds.add("drawString \"" + s + "\" " + x + " " + y); }
+  // The current font applies to subsequent drawString calls. The family name is
+  // the last field so the renderer can take the rest of the line (a name may
+  // contain spaces).
+  public void setFont(Font f) { __font = f; __cmds.add("setFont " + f.__style + " " + f.__size + " " + f.__name); }
+  public Font getFont() { return __font; }
+  // Polygons: nPoints (x,y) pairs, serialized flat after the op.
+  public void fillPolygon(int[] xs, int[] ys, int n) { __cmds.add(__poly("fillPolygon", xs, ys, n)); }
+  public void drawPolygon(int[] xs, int[] ys, int n) { __cmds.add(__poly("drawPolygon", xs, ys, n)); }
+  String __poly(String op, int[] xs, int[] ys, int n) {
+    StringBuilder b = new StringBuilder(op);
+    for (int i = 0; i < n; i++) b.append(" ").append(xs[i]).append(" ").append(ys[i]);
+    return b.toString();
+  }
+  // Arcs bounded by (x,y,w,h); angles in degrees, 0 at 3 o'clock, CCW positive
+  // (java.awt.Graphics). fillArc is a pie slice; drawArc strokes the open arc.
+  public void fillArc(int x, int y, int w, int h, int start, int arc) {
+    __cmds.add("fillArc " + x + " " + y + " " + w + " " + h + " " + start + " " + arc);
+  }
+  public void drawArc(int x, int y, int w, int h, int start, int arc) {
+    __cmds.add("drawArc " + x + " " + y + " " + w + " " + h + " " + start + " " + arc);
+  }
   boolean __empty() { return __cmds.size() == 0; }
   String __joined() {
     // StringBuilder, not `out += ...`: appending to a String in a loop is

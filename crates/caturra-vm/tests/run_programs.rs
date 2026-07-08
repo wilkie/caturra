@@ -794,6 +794,48 @@ fn swing_custom_painting_records_graphics_commands() {
 }
 
 #[test]
+fn swing_graphics_records_font_polygon_and_arc() {
+    // The richer Graphics ops serialize into swing.json for the canvas
+    // renderer: a set font (style/size/family), a filled polygon (flat x,y
+    // pairs), and a pie-slice arc (bounds + angles).
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Draw");
+                Art art = new Art();
+                art.setPreferredSize(new Dimension(200, 160));
+                frame.add(art);
+                frame.setVisible(true);
+            }
+        }
+        class Art extends JPanel {
+            public void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                int[] xs = {60, 20, 100};
+                int[] ys = {40, 110, 110};
+                g.setColor(new Color(80, 200, 255));
+                g.fillPolygon(xs, ys, 3);
+                g.setColor(new Color(255, 180, 60));
+                g.fillArc(120, 40, 60, 60, 30, 220);
+                g.setFont(new Font("SansSerif", Font.BOLD, 26));
+                g.drawString("Hi", 40, 150);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains("fillPolygon 60 40 20 110 100 110"),
+        "no polygon: {json}"
+    );
+    assert!(json.contains("fillArc 120 40 60 60 30 220"), "no arc: {json}");
+    assert!(json.contains("setFont 1 26 SansSerif"), "no font: {json}");
+}
+
+#[test]
 fn swing_key_listener_fires_pressed_typed_released() {
     // A KeyListener on a focusable panel: keydown delivers keyPressed (and, for
     // a printable char, keyTyped); keyup delivers keyReleased. The host reports

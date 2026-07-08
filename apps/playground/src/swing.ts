@@ -210,9 +210,27 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
   // across ticks, so without this the previous frame would show through.
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   let color = 'rgb(0,0,0)'; // Graphics current color (fills and strokes)
+  let font = '14px system-ui, sans-serif'; // Graphics current font (drawString)
   const oval = (x: number, y: number, w: number, h: number): void => {
     ctx.beginPath();
     ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  };
+  // Trace an AWT arc (degrees, 0 at 3 o'clock, CCW positive) as a canvas
+  // ellipse arc. Canvas angles are clockwise (y-down), so negate; the sweep
+  // sign follows arcAngle.
+  const arcPath = (
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    start: number,
+    sweep: number,
+  ): void => {
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    const a0 = (-start * Math.PI) / 180;
+    const a1 = (-(start + sweep) * Math.PI) / 180;
+    ctx.ellipse(cx, cy, w / 2, h / 2, 0, a0, a1, sweep > 0);
   };
   for (const command of paint.split('\n')) {
     if (command === '') {
@@ -222,7 +240,7 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
     const text = /^drawString "(.*)" (-?\d+) (-?\d+)$/.exec(command);
     if (text) {
       ctx.fillStyle = color;
-      ctx.font = '14px system-ui, sans-serif';
+      ctx.font = font;
       ctx.textBaseline = 'alphabetic';
       ctx.fillText(text[1] ?? '', Number(text[2]), Number(text[3]));
       continue;
@@ -232,6 +250,10 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
     switch (op) {
       case 'setColor':
         color = `rgb(${String(n(0))},${String(n(1))},${String(n(2))})`;
+        break;
+      case 'setFont':
+        // `setFont <style> <size> <family...>`; family is the rest of the line.
+        font = cssFont(n(0), n(1), rest.slice(2).join(' '));
         break;
       case 'fillRect':
         ctx.fillStyle = color;
@@ -258,10 +280,59 @@ function paintCanvas(canvas: HTMLCanvasElement, paint: string): void {
         ctx.lineTo(n(2), n(3));
         ctx.stroke();
         break;
+      case 'fillPolygon':
+      case 'drawPolygon': {
+        if (rest.length < 6) {
+          break; // need at least 3 (x,y) points
+        }
+        ctx.beginPath();
+        ctx.moveTo(n(0), n(1));
+        for (let i = 2; i + 1 < rest.length; i += 2) {
+          ctx.lineTo(n(i), n(i + 1));
+        }
+        ctx.closePath();
+        if (op === 'fillPolygon') {
+          ctx.fillStyle = color;
+          ctx.fill();
+        } else {
+          ctx.strokeStyle = color;
+          ctx.stroke();
+        }
+        break;
+      }
+      case 'fillArc':
+        ctx.beginPath();
+        ctx.moveTo(n(0) + n(2) / 2, n(1) + n(3) / 2); // center: a pie slice
+        arcPath(n(0), n(1), n(2), n(3), n(4), n(5));
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+        break;
+      case 'drawArc':
+        ctx.beginPath();
+        arcPath(n(0), n(1), n(2), n(3), n(4), n(5));
+        ctx.strokeStyle = color;
+        ctx.stroke();
+        break;
       default:
         break;
     }
   }
+}
+
+/** Build a CSS font from an AWT Font (style bit flags, size px, logical family). */
+function cssFont(style: number, size: number, family: string): string {
+  const families: Record<string, string> = {
+    SansSerif: 'system-ui, sans-serif',
+    Dialog: 'system-ui, sans-serif',
+    DialogInput: 'ui-monospace, monospace',
+    Serif: 'Georgia, serif',
+    Monospaced: 'ui-monospace, monospace',
+  };
+  const css = families[family] ?? `${family}, system-ui, sans-serif`;
+  const weight = (style & 1) !== 0 ? 'bold ' : ''; // Font.BOLD
+  const slant = (style & 2) !== 0 ? 'italic ' : ''; // Font.ITALIC
+  return `${slant}${weight}${String(size)}px ${css}`;
 }
 
 /** Map a JScrollPane scrollbar policy to a CSS overflow value (NEVER=21/31,

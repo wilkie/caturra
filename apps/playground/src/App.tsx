@@ -475,6 +475,48 @@ class Board extends JPanel {
 `,
   },
   {
+    name: 'Shapes and fonts',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Shapes and fonts");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    ShapePanel panel = new ShapePanel();
+    panel.setPreferredSize(new Dimension(320, 220));
+    panel.setToolTipText("A drawing with a polygon, an arc, and sized text");
+    frame.add(panel);
+    frame.setVisible(true);
+  }
+}
+
+class ShapePanel extends JPanel {
+  public void paintComponent(Graphics g) {
+    super.paintComponent(g);
+    g.setColor(new Color(18, 22, 34));
+    g.fillRect(0, 0, getWidth(), getHeight());
+
+    // A filled triangle (drawPolygon/fillPolygon take parallel x/y arrays).
+    int[] xs = {60, 20, 100};
+    int[] ys = {40, 110, 110};
+    g.setColor(new Color(80, 200, 255));
+    g.fillPolygon(xs, ys, 3);
+
+    // A pie-slice arc: bounds (x, y, w, h) + start and sweep angles (degrees,
+    // counterclockwise from 3 o'clock).
+    g.setColor(new Color(255, 180, 60));
+    g.fillArc(160, 30, 90, 90, 40, 260);
+
+    // Sized, bold text via setFont — no longer a fixed 14px.
+    g.setColor(new Color(240, 240, 240));
+    g.setFont(new Font("SansSerif", Font.BOLD, 26));
+    g.drawString("Score: 42", 30, 185);
+  }
+}
+`,
+  },
+  {
     name: 'Sketch pad',
     starter: `import javax.swing.*;
 import java.awt.*;
