@@ -45,6 +45,7 @@ interface SwingNode {
     | 'slider'
     | 'scrollpane'
     | 'tabbedpane'
+    | 'splitpane'
     | 'table'
     | 'progressbar'
     | 'spinner'
@@ -116,6 +117,12 @@ interface SwingNode {
   /** A JTabbedPane's tabs (title + component) and tab placement (TOP=1..RIGHT=4). */
   tabs?: TabSpec[];
   placement?: number;
+  /** A JSplitPane's two components, orientation (HORIZONTAL_SPLIT=1), and
+   * divider location in px (<=0 = even split). */
+  left?: SwingNode | null;
+  right?: SwingNode | null;
+  orientation?: number;
+  divider?: number;
   /** JTable column names, row-major cell text, and the selected row (-1 none). */
   headers?: string[];
   cells?: string[][];
@@ -551,6 +558,9 @@ export class SwingViz {
       case 'tabbedpane':
         this.#buildTabs(el, node, prev);
         break;
+      case 'splitpane':
+        this.#buildSplit(el, node, prev);
+        break;
       case 'label':
         el.textContent = node.text ?? '';
         break;
@@ -872,6 +882,8 @@ export class SwingViz {
         return this.scrollPane(node);
       case 'tabbedpane':
         return this.tabbedPane(node);
+      case 'splitpane':
+        return this.splitPaneSplit(node);
       case 'table':
         return this.table(node);
       case 'progressbar':
@@ -1420,6 +1432,108 @@ export class SwingViz {
     // Placement: TOP/LEFT put the tablist first; BOTTOM/RIGHT put it last.
     const tabsLast = placement === 3 || placement === 4; // BOTTOM / RIGHT
     el.replaceChildren(...(tabsLast ? [panels, tablist] : [tablist, panels]));
+  }
+
+  /** A JSplitPane: two panes separated by a draggable divider. Built fresh;
+   * #buildSplit reconciles on patch and preserves a user-dragged divider. */
+  private splitPaneSplit(node: SwingNode): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'swing-splitpane';
+    this.common(el, node);
+    this.#buildSplit(el, node, new Map());
+    return el;
+  }
+
+  /** (Re)build a split pane's two panes + divider, reconciling each side's
+   * component against `prev`. A divider the user has dragged (recorded in a data
+   * attribute) is preserved across re-renders; otherwise the set location seeds
+   * it, and <=0 means an even split. */
+  #buildSplit(el: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
+    const vertical = node.orientation === 0; // VERTICAL_SPLIT
+    el.classList.toggle('swing-split-vertical', vertical);
+
+    const pane1 = document.createElement('div');
+    pane1.className = 'swing-split-pane1';
+    const pane2 = document.createElement('div');
+    pane2.className = 'swing-split-pane2';
+    const divider = document.createElement('div');
+    divider.className = 'swing-split-divider';
+    divider.setAttribute('role', 'separator');
+    divider.setAttribute('aria-orientation', vertical ? 'horizontal' : 'vertical');
+    divider.setAttribute('aria-label', 'Resize panes');
+    divider.setAttribute('aria-valuemin', '0');
+    divider.tabIndex = 0;
+
+    if (node.left) {
+      pane1.appendChild(this.#reconcile(node.left, prev));
+    }
+    if (node.right) {
+      pane2.appendChild(this.#reconcile(node.right, prev));
+    }
+
+    // Size pane1: a dragged basis wins; else the set location; else an even split.
+    const dragged = el.dataset.splitBasis;
+    const loc = node.divider ?? -1;
+    if (dragged !== undefined) {
+      pane1.style.flex = `0 0 ${dragged}px`;
+      pane2.style.flex = '1 1 0';
+      divider.setAttribute('aria-valuenow', dragged);
+    } else if (loc > 0) {
+      pane1.style.flex = `0 0 ${String(loc)}px`;
+      pane2.style.flex = '1 1 0';
+      divider.setAttribute('aria-valuenow', String(loc));
+    } else {
+      pane1.style.flex = '1 1 0';
+      pane2.style.flex = '1 1 0';
+    }
+
+    this.#splitDrag(el, pane1, pane2, divider, vertical);
+    el.replaceChildren(pane1, divider, pane2);
+  }
+
+  /** Wire the divider: drag or arrow-key resize of the first pane, clamped to
+   * the container and recorded so it survives re-renders. */
+  #splitDrag(
+    el: HTMLElement,
+    pane1: HTMLElement,
+    pane2: HTMLElement,
+    divider: HTMLElement,
+    vertical: boolean,
+  ): void {
+    const setSize = (size: number): void => {
+      const rect = el.getBoundingClientRect();
+      const max = (vertical ? rect.height : rect.width) - 8;
+      const clamped = Math.round(Math.max(20, Math.min(size, Math.max(20, max))));
+      pane1.style.flex = `0 0 ${String(clamped)}px`;
+      pane2.style.flex = '1 1 0';
+      el.dataset.splitBasis = String(clamped);
+      divider.setAttribute('aria-valuenow', String(clamped));
+    };
+    divider.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      divider.setPointerCapture(event.pointerId);
+      const rect = el.getBoundingClientRect();
+      const onMove = (ev: PointerEvent): void => {
+        setSize(vertical ? ev.clientY - rect.top : ev.clientX - rect.left);
+      };
+      const onUp = (): void => {
+        divider.removeEventListener('pointermove', onMove);
+        divider.removeEventListener('pointerup', onUp);
+      };
+      divider.addEventListener('pointermove', onMove);
+      divider.addEventListener('pointerup', onUp);
+    });
+    divider.addEventListener('keydown', (event) => {
+      const dec = vertical ? 'ArrowUp' : 'ArrowLeft';
+      const inc = vertical ? 'ArrowDown' : 'ArrowRight';
+      if (event.key !== dec && event.key !== inc) {
+        return;
+      }
+      event.preventDefault();
+      const cur = pane1.getBoundingClientRect();
+      const size = (vertical ? cur.height : cur.width) + (event.key === inc ? 10 : -10);
+      setSize(size);
+    });
   }
 
   /** A custom-painted JPanel: a canvas replaying its Graphics commands. */

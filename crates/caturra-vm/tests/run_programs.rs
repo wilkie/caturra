@@ -873,6 +873,36 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_split_pane_serializes_both_sides_and_divider() {
+    // A JSplitPane serializes its orientation, divider location, and the two
+    // nested components. Constructing with the (orientation, left, right) ctor
+    // and setting the divider both reflect in the tree.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Split");
+                JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
+                    new JLabel("nav"), new JButton("content"));
+                split.setDividerLocation(120);
+                frame.add(split);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""type":"splitpane","orientation":1,"divider":120"#),
+        "no splitpane: {json}"
+    );
+    assert!(json.contains(r#""left":{"type":"label""#), "no left component: {json}");
+    assert!(json.contains(r#""right":{"type":"button""#), "no right component: {json}");
+}
+
+#[test]
 fn swing_tabbed_pane_serializes_tabs_and_selection() {
     // The serialized tree carries each tab's title and nested component plus the
     // current selection and placement, for the tablist/tabpanel renderer.

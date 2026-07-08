@@ -1603,6 +1603,31 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('a JSplitPane separates two panes with a resizable divider', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Split pane' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // A horizontal split has a vertical, keyboard-operable divider.
+    const divider = root.getByRole('separator');
+    await expect(divider).toBeVisible();
+    await expect(divider).toHaveAttribute('aria-orientation', 'vertical');
+
+    // Both panes render; a nav button on the left updates the content on the
+    // right (proving each pane's components dispatch).
+    await expect(root.getByText('Showing: Inbox')).toBeVisible();
+    await root.getByRole('button', { name: 'Sent' }).click();
+    await expect(root.getByText('Showing: Sent')).toBeVisible();
+
+    // Arrow keys resize the first pane (client-side, no VM round trip).
+    const before = Number(await divider.getAttribute('aria-valuenow'));
+    await divider.press('ArrowRight');
+    await divider.press('ArrowRight');
+    const after = Number(await divider.getAttribute('aria-valuenow'));
+    expect(after).toBeGreaterThan(before);
+  });
+
   test('a JTabbedPane switches panels and fires its ChangeListener', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Tabbed pane' });

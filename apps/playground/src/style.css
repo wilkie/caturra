@@ -285,6 +285,42 @@ label {
   padding: 0.6rem;
 }
 
+/* JSplitPane: two panes with a draggable divider. */
+.swing-splitpane {
+  display: flex;
+  flex-direction: row;
+  min-height: 140px;
+  min-width: 220px;
+  border: 1px solid light-dark(#c8c8c0, #555);
+}
+
+.swing-splitpane.swing-split-vertical {
+  flex-direction: column;
+}
+
+.swing-split-pane1,
+.swing-split-pane2 {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.4rem;
+}
+
+.swing-split-divider {
+  flex: 0 0 6px;
+  background: light-dark(#c8c8c0, #555);
+  cursor: col-resize;
+}
+
+.swing-split-divider:focus-visible {
+  outline: 2px solid light-dark(#3b78e7, #5a86d6);
+  outline-offset: -2px;
+}
+
+.swing-split-vertical .swing-split-divider {
+  cursor: row-resize;
+}
+
 /* JTabbedPane: a tablist of tab buttons over the selected tabpanel. */
 .swing-tabbedpane {
   display: flex;

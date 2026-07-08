@@ -616,6 +616,43 @@ public class Main {
 `,
   },
   {
+    name: 'Split pane',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel content;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Split pane");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // Left: a folder list. Each button updates the content on the right.
+    JPanel nav = new JPanel();
+    nav.setLayout(new BoxLayout(nav, BoxLayout.Y_AXIS));
+    String[] folders = {"Inbox", "Sent", "Drafts"};
+    for (String folder : folders) {
+      JButton b = new JButton(folder);
+      b.addActionListener(e -> {
+        Main.content.setText("Showing: " + ((JButton) e.getSource()).getText());
+      });
+      nav.add(b);
+    }
+
+    content = new JLabel("Showing: Inbox");
+
+    // A draggable divider separates the two — drag it or use the arrow keys.
+    JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, nav, content);
+    split.setDividerLocation(120);
+
+    frame.add(split, BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sketch pad',
     starter: `import javax.swing.*;
 import java.awt.*;

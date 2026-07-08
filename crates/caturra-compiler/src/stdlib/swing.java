@@ -571,6 +571,54 @@ class JTabbedPane extends Component {
   }
 }
 
+// Two components separated by a draggable divider. HORIZONTAL_SPLIT places them
+// side by side (left/right) with a vertical divider; VERTICAL_SPLIT stacks them
+// (top/bottom). Dragging the divider is client-side (no VM round trip); a set
+// divider location seeds the initial split.
+class JSplitPane extends Component {
+  public static final int HORIZONTAL_SPLIT = 1;
+  public static final int VERTICAL_SPLIT = 0;
+
+  int __orientation = HORIZONTAL_SPLIT;
+  Component __left = null;   // left (horizontal) / top (vertical)
+  Component __right = null;  // right (horizontal) / bottom (vertical)
+  int __divider = -1;        // divider location in px; <=0 = even split
+
+  public JSplitPane() {}
+  public JSplitPane(int orientation) { __orientation = orientation; }
+  public JSplitPane(int orientation, Component left, Component right) {
+    __orientation = orientation;
+    setLeftComponent(left);
+    setRightComponent(right);
+  }
+
+  public void setLeftComponent(Component c) { __left = c; if (c != null) __SwingRuntime.__register(c); }
+  public void setRightComponent(Component c) { __right = c; if (c != null) __SwingRuntime.__register(c); }
+  public void setTopComponent(Component c) { setLeftComponent(c); }
+  public void setBottomComponent(Component c) { setRightComponent(c); }
+  public Component getLeftComponent() { return __left; }
+  public Component getRightComponent() { return __right; }
+  public Component getTopComponent() { return __left; }
+  public Component getBottomComponent() { return __right; }
+  public void setOrientation(int o) { __orientation = o; }
+  public int getOrientation() { return __orientation; }
+  public void setDividerLocation(int loc) { __divider = loc; }
+  public int getDividerLocation() { return __divider; }
+  // Accepted for source compatibility; they don't change the flex layout.
+  public void setResizeWeight(double w) {}
+  public void setContinuousLayout(boolean b) {}
+  public void setOneTouchExpandable(boolean b) {}
+  public void setDividerSize(int s) {}
+
+  String __json() {
+    String left = __left == null ? "null" : __left.__json();
+    String right = __right == null ? "null" : __right.__json();
+    return "{\"type\":\"splitpane\",\"orientation\":" + __orientation
+        + ",\"divider\":" + __divider
+        + ",\"left\":" + left + ",\"right\":" + right + "," + __commonJson() + "}";
+  }
+}
+
 class JLabel extends Component {
   String __text;
   Component __labelFor = null;
