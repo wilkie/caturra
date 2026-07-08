@@ -2330,62 +2330,179 @@ export class SwingViz {
     return select;
   }
 
-  /** An editable JComboBox: an <input list> + <datalist> wrapped in one element
-   * (so reconcile tracks a single node). The user can type a custom value or
-   * pick a suggestion; the value is the text, not an index. */
+  /** An editable JComboBox: a text input + a drop arrow that toggles a listbox
+   * of all the items (a real JComboBox-style dropdown, not native autocomplete).
+   * Type a custom value or pick one; the value is the text. The listbox is a
+   * top-layer popover so it isn't clipped by the window. */
   private editableComboBox(node: SwingNode): HTMLElement {
     const wrap = document.createElement('span');
     wrap.className = 'swing-combobox-wrap';
+
     const input = document.createElement('input');
     input.type = 'text';
-    input.className = 'swing-combobox swing-combobox-editable';
+    input.className = 'swing-combobox-input';
     input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-expanded', 'false');
     input.value = node.text ?? '';
     input.disabled = node.enabled === false;
-    const listId = `${node.id}-datalist`;
-    input.setAttribute('list', listId);
-    const datalist = document.createElement('datalist');
-    datalist.id = listId;
-    this.#fillComboOptions(datalist, node.items ?? []);
+    const listId = `${node.id}-listbox`;
+    input.setAttribute('aria-controls', listId);
     if (node.tooltip !== undefined) {
       input.setAttribute('aria-label', node.tooltip);
     }
-    // The input carries the value; register it as the field for this combo id.
-    this.#fields.set(node.id, input);
+
+    const arrow = document.createElement('button');
+    arrow.type = 'button';
+    arrow.className = 'swing-combobox-arrow';
+    arrow.tabIndex = -1;
+    arrow.setAttribute('aria-label', 'Show options');
+    arrow.textContent = '▾';
+
+    const list = document.createElement('ul');
+    list.className = 'swing-combobox-list';
+    list.id = listId;
+    list.setAttribute('role', 'listbox');
+    list.popover = 'manual';
+
+    this.#buildComboOptions(list, input, node);
+
+    // The arrow keeps the input focused and toggles the list.
+    arrow.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
+    arrow.addEventListener('click', () => {
+      if (list.matches(':popover-open')) {
+        this.#closeComboList(list, input);
+      } else {
+        this.#openComboList(list, input, wrap);
+        input.focus();
+      }
+    });
+
     if (node.listens === true) {
       const id = node.id;
       input.addEventListener('change', () => {
         this.#dispatch(this.#payload(id));
       });
     }
-    wrap.append(input, datalist);
-    this.common(wrap, node); // dataset.cid/kind + colours/border/size on the wrapper
+    input.addEventListener('keydown', (event) => {
+      const options = [...list.querySelectorAll<HTMLElement>('[role="option"]')];
+      const current = options.findIndex((o) => o.classList.contains('swing-combobox-active'));
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (!list.matches(':popover-open')) {
+          this.#openComboList(list, input, wrap);
+        }
+        const next =
+          event.key === 'ArrowDown'
+            ? Math.min(current + 1, options.length - 1)
+            : Math.max(current - 1, 0);
+        this.#highlightComboOption(input, options, next < 0 ? 0 : next);
+      } else if (event.key === 'Enter') {
+        if (list.matches(':popover-open') && current >= 0) {
+          event.preventDefault();
+          input.value = options[current]?.textContent ?? input.value;
+          this.#closeComboList(list, input);
+        }
+        // Enter also commits (the native change fires); dispatch happens there.
+      } else if (event.key === 'Escape' && list.matches(':popover-open')) {
+        event.preventDefault();
+        this.#closeComboList(list, input);
+      }
+    });
+
+    // Click outside the combo closes the list.
+    const onOutside = (event: Event): void => {
+      if (!wrap.contains(event.target as Node)) {
+        this.#closeComboList(list, input);
+      }
+    };
+    document.addEventListener('click', onOutside);
+    this.#teardown.push(() => {
+      document.removeEventListener('click', onOutside);
+    });
+
+    this.#fields.set(node.id, input); // the input carries the value
+    wrap.append(input, arrow, list);
+    this.common(wrap, node);
     return wrap;
   }
 
   #patchEditableCombo(wrap: HTMLElement, node: SwingNode): void {
-    const input = wrap.querySelector('input');
-    const datalist = wrap.querySelector('datalist');
+    const input = wrap.querySelector<HTMLInputElement>('.swing-combobox-input');
+    const list = wrap.querySelector<HTMLElement>('.swing-combobox-list');
     if (input) {
       if (input.value !== (node.text ?? '')) {
         input.value = node.text ?? '';
       }
       input.disabled = node.enabled === false;
       this.#fields.set(node.id, input);
-    }
-    if (datalist) {
-      this.#fillComboOptions(datalist, node.items ?? []);
+      if (list) {
+        this.#buildComboOptions(list, input, node);
+      }
     }
   }
 
-  #fillComboOptions(datalist: HTMLDataListElement, items: string[]): void {
-    datalist.replaceChildren(
-      ...items.map((item) => {
-        const option = document.createElement('option');
-        option.value = item;
+  /** (Re)build the listbox's options and wire each to fill the input on click. */
+  #buildComboOptions(list: HTMLElement, input: HTMLInputElement, node: SwingNode): void {
+    list.replaceChildren(
+      ...(node.items ?? []).map((item, i) => {
+        const option = document.createElement('li');
+        option.className = 'swing-combobox-option';
+        option.id = `${node.id}-opt${String(i)}`;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', String(item === input.value));
+        option.textContent = item;
+        option.addEventListener('mousedown', (event) => {
+          event.preventDefault(); // don't blur the input before the click lands
+        });
+        option.addEventListener('click', () => {
+          input.value = item;
+          this.#closeComboList(list, input);
+          input.focus();
+          if (node.listens === true) {
+            this.#dispatch(this.#payload(node.id));
+          }
+        });
         return option;
       }),
     );
+  }
+
+  #openComboList(list: HTMLElement, input: HTMLElement, wrap: HTMLElement): void {
+    if (!list.matches(':popover-open')) {
+      list.showPopover();
+    }
+    input.setAttribute('aria-expanded', 'true');
+    const rect = wrap.getBoundingClientRect();
+    list.style.left = `${String(rect.left)}px`;
+    list.style.minWidth = `${String(rect.width)}px`;
+    // Drop below, or flip above if it would overflow the viewport.
+    const below = rect.bottom;
+    list.style.top = `${String(below)}px`;
+    if (below + list.offsetHeight > window.innerHeight) {
+      list.style.top = `${String(Math.max(4, rect.top - list.offsetHeight))}px`;
+    }
+  }
+
+  #closeComboList(list: HTMLElement, input: HTMLElement): void {
+    if (list.matches(':popover-open')) {
+      list.hidePopover();
+    }
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  }
+
+  #highlightComboOption(input: HTMLElement, options: HTMLElement[], index: number): void {
+    options.forEach((option, i) => {
+      option.classList.toggle('swing-combobox-active', i === index);
+    });
+    const active = options[index];
+    if (active) {
+      input.setAttribute('aria-activedescendant', active.id);
+      active.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   /** A JList: a sized <select> renders as a native, accessible list box

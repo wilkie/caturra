@@ -1796,13 +1796,20 @@ test.describe('swing (interactive)', () => {
     await page.getByTestId('run').click();
     const root = page.getByTestId('swing-root');
 
-    // Editable → a role=combobox text input backed by a datalist of presets.
+    // Editable → a role=combobox text input with a drop arrow.
     const combo = root.getByRole('combobox');
     await expect(combo).toBeVisible();
-    const presetCount = await page.evaluate(
-      () => document.querySelectorAll('[data-testid="swing-root"] datalist option').length,
-    );
-    expect(presetCount).toBe(3);
+
+    // Clicking the arrow opens a real dropdown listbox of all the presets.
+    await root.getByRole('button', { name: 'Show options' }).click();
+    const listbox = root.getByRole('listbox');
+    await expect(listbox).toBeVisible();
+    await expect(listbox.getByRole('option')).toHaveCount(3);
+
+    // Picking one fills the combo and fires the listener.
+    await listbox.getByRole('option', { name: 'Large' }).click();
+    await expect(combo).toHaveValue('Large');
+    await expect(root).toContainText('Size: Large');
 
     // Typing a value not in the list still works (getSelectedItem returns it).
     await combo.fill('Huge');
