@@ -2079,8 +2079,15 @@ export class SwingViz {
       this.common(label, node);
       return label;
     }
+    // A standalone label is the classic status/output widget (captions use
+    // setLabelFor → the <label> above). Make it a polite live region so a
+    // screen reader announces changes to its text — the reused element is
+    // patched in place, so only labels that actually change ever speak, and
+    // "polite" coalesces rapid updates rather than reading every intermediate.
     const span = document.createElement('span');
     span.className = 'swing-label';
+    span.setAttribute('aria-live', 'polite');
+    span.setAttribute('aria-atomic', 'true');
     span.textContent = node.text ?? '';
     this.common(span, node);
     return span;

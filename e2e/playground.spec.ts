@@ -1720,6 +1720,26 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Style: plain');
   });
 
+  test('a status JLabel is a polite live region that announces its updates', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Toggle buttons' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // A standalone JLabel is a polite live region (captions with setLabelFor
+    // are not — they're field names, not output).
+    const status = root.getByText('Style: plain');
+    await expect(status).toHaveAttribute('aria-live', 'polite');
+    await expect(status).toHaveAttribute('aria-atomic', 'true');
+
+    // Its text updates in place (the reused element) — the change a screen
+    // reader would announce.
+    await root.getByRole('button', { name: 'Bold' }).click();
+    const updated = root.getByText('Style: bold');
+    await expect(updated).toBeVisible();
+    await expect(updated).toHaveAttribute('aria-live', 'polite');
+  });
+
   test('getAccessibleContext names and describes unlabelled controls', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Accessible controls' });
