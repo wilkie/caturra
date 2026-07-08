@@ -24,6 +24,12 @@ interface BorderSpec {
   inner?: BorderSpec; // compound inside, or a titled border's frame
 }
 
+/** One tab of a JTabbedPane: a caption and the component it shows. */
+interface TabSpec {
+  title: string;
+  component: SwingNode;
+}
+
 interface SwingNode {
   type:
     | 'frame'
@@ -38,6 +44,7 @@ interface SwingNode {
     | 'list'
     | 'slider'
     | 'scrollpane'
+    | 'tabbedpane'
     | 'table'
     | 'progressbar'
     | 'spinner'
@@ -106,6 +113,9 @@ interface SwingNode {
   view?: SwingNode | null;
   hpolicy?: number;
   vpolicy?: number;
+  /** A JTabbedPane's tabs (title + component) and tab placement (TOP=1..RIGHT=4). */
+  tabs?: TabSpec[];
+  placement?: number;
   /** JTable column names, row-major cell text, and the selected row (-1 none). */
   headers?: string[];
   cells?: string[][];
@@ -538,6 +548,9 @@ export class SwingViz {
       case 'scrollpane':
         this.#patchScroll(el, node, prev);
         break;
+      case 'tabbedpane':
+        this.#buildTabs(el, node, prev);
+        break;
       case 'label':
         el.textContent = node.text ?? '';
         break;
@@ -857,6 +870,8 @@ export class SwingViz {
         return this.slider(node);
       case 'scrollpane':
         return this.scrollPane(node);
+      case 'tabbedpane':
+        return this.tabbedPane(node);
       case 'table':
         return this.table(node);
       case 'progressbar':
@@ -1311,6 +1326,100 @@ export class SwingViz {
     }
     this.common(pane, node);
     return pane;
+  }
+
+  /** A JTabbedPane: an ARIA tablist of tabs, each controlling a tabpanel; only
+   * the selected panel shows. Built fresh; #buildTabs reconciles on patch. */
+  private tabbedPane(node: SwingNode): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'swing-tabbedpane';
+    this.common(el, node);
+    this.#buildTabs(el, node, new Map());
+    return el;
+  }
+
+  /** (Re)build a tabbed pane's tablist + panels, reconciling each tab's
+   * component against `prev` so its state survives a tab switch / re-render. */
+  #buildTabs(el: HTMLElement, node: SwingNode, prev: Map<string, HTMLElement>): void {
+    const tabs = node.tabs ?? [];
+    const selected = node.selectedIndex ?? 0;
+    const placement = node.placement ?? 1; // TOP
+    const vertical = placement === 2 || placement === 4; // LEFT / RIGHT
+    el.classList.toggle('swing-tabs-vertical', vertical);
+
+    const tablist = document.createElement('div');
+    tablist.className = 'swing-tablist';
+    tablist.setAttribute('role', 'tablist');
+    if (vertical) {
+      tablist.setAttribute('aria-orientation', 'vertical');
+    }
+    const panels = document.createElement('div');
+    panels.className = 'swing-tabpanels';
+
+    tabs.forEach((tab, i) => {
+      const tabId = `${node.id}-tab${String(i)}`;
+      const panelId = `${node.id}-panel${String(i)}`;
+      const isSelected = i === selected;
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'swing-tab';
+      button.id = tabId;
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(isSelected));
+      button.setAttribute('aria-controls', panelId);
+      button.classList.toggle('swing-tab-selected', isSelected);
+      button.tabIndex = isSelected ? 0 : -1; // roving: only the active tab tabs in
+      button.textContent = tab.title;
+      button.addEventListener('click', () => {
+        this.#dispatch(`${this.#payload(node.id)}\n${node.id}=${String(i)}`);
+      });
+      tablist.appendChild(button);
+
+      const panel = document.createElement('div');
+      panel.className = 'swing-tabpanel';
+      panel.id = panelId;
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', tabId);
+      panel.hidden = !isSelected;
+      panel.appendChild(this.#reconcile(tab.component, prev));
+      panels.appendChild(panel);
+    });
+
+    // Manual-activation ARIA tabs: arrows move focus between tabs; Enter/Space
+    // (or click) activates. Manual activation avoids a VM round-trip per arrow.
+    tablist.addEventListener('keydown', (event) => {
+      const buttons = [...tablist.querySelectorAll<HTMLElement>('[role="tab"]')];
+      const current = buttons.indexOf(document.activeElement as HTMLElement);
+      if (current < 0) {
+        return;
+      }
+      const nextKey = vertical ? 'ArrowDown' : 'ArrowRight';
+      const prevKey = vertical ? 'ArrowUp' : 'ArrowLeft';
+      let next: number;
+      if (event.key === nextKey) {
+        next = (current + 1) % buttons.length;
+      } else if (event.key === prevKey) {
+        next = (current - 1 + buttons.length) % buttons.length;
+      } else if (event.key === 'Home') {
+        next = 0;
+      } else if (event.key === 'End') {
+        next = buttons.length - 1;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      buttons[current]?.setAttribute('tabindex', '-1');
+      const target = buttons[next];
+      if (target) {
+        target.tabIndex = 0;
+        target.focus();
+      }
+    });
+
+    // Placement: TOP/LEFT put the tablist first; BOTTOM/RIGHT put it last.
+    const tabsLast = placement === 3 || placement === 4; // BOTTOM / RIGHT
+    el.replaceChildren(...(tabsLast ? [panels, tablist] : [tablist, panels]));
   }
 
   /** A custom-painted JPanel: a canvas replaying its Graphics commands. */

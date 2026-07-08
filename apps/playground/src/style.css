@@ -285,6 +285,51 @@ label {
   padding: 0.6rem;
 }
 
+/* JTabbedPane: a tablist of tab buttons over the selected tabpanel. */
+.swing-tabbedpane {
+  display: flex;
+  flex-direction: column;
+}
+
+.swing-tabbedpane.swing-tabs-vertical {
+  flex-direction: row;
+}
+
+.swing-tablist {
+  display: flex;
+  gap: 2px;
+}
+
+.swing-tabs-vertical .swing-tablist {
+  flex-direction: column;
+}
+
+.swing-tab {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid light-dark(#c8c8c0, #555);
+  background: light-dark(#e9e9e2, #3a3a3a);
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.swing-tabs-vertical .swing-tab {
+  border-radius: 6px 0 0 6px;
+}
+
+.swing-tab-selected {
+  background: light-dark(#ffffff, #4a4a4a);
+  font-weight: 600;
+}
+
+.swing-tabpanels {
+  flex: 1;
+  border: 1px solid light-dark(#c8c8c0, #555);
+  padding: 0.6rem;
+  background: light-dark(#ffffff, #4a4a4a);
+}
+
 /* A titled BorderFactory group box: an etched frame with its caption drawn
    over the top border. The caption's background matches the window surface so
    it "cuts" the border line behind it. */

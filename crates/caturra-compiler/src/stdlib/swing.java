@@ -520,6 +520,57 @@ class JScrollPane extends Component {
   }
 }
 
+// A tabbed container: each tab has a title and a component; only the selected
+// one shows. Switching tabs is always interactive (it round-trips to update the
+// selection and fire any ChangeListener), so a JTabbedPane makes the app live.
+class JTabbedPane extends Component {
+  public static final int TOP = 1;
+  public static final int LEFT = 2;
+  public static final int BOTTOM = 3;
+  public static final int RIGHT = 4;
+
+  int __placement = TOP;
+  java.util.ArrayList<String> __titles = new java.util.ArrayList<String>();
+  java.util.ArrayList<Component> __tabs = new java.util.ArrayList<Component>();
+  int __selected = 0;
+  ChangeListener __listener = null;
+
+  public JTabbedPane() { __SwingRuntime.__interactive = true; }
+  public JTabbedPane(int placement) { __placement = placement; __SwingRuntime.__interactive = true; }
+
+  public void addTab(String title, Component c) {
+    __titles.add(title);
+    __tabs.add(c);
+    if (c != null) __SwingRuntime.__register(c);
+  }
+  public void add(String title, Component c) { addTab(title, c); }
+  public int getTabCount() { return __tabs.size(); }
+  public int getSelectedIndex() { return __selected; }
+  public void setSelectedIndex(int i) { __selected = i; }
+  public String getTitleAt(int i) { return __titles.get(i); }
+  public void setTitleAt(int i, String title) { __titles.set(i, title); }
+  public Component getComponentAt(int i) { return __tabs.get(i); }
+  public void setTabPlacement(int placement) { __placement = placement; }
+  public void addChangeListener(ChangeListener l) { __listener = l; __SwingRuntime.__interactive = true; }
+
+  boolean __listens() { return __listener != null; }
+  void __setFromHost(String value) { __selected = Integer.parseInt(value); }
+  void __onEvent() { if (__listener != null) __listener.stateChanged(new ChangeEvent(this)); }
+
+  String __json() {
+    StringBuilder tabs = new StringBuilder("[");
+    for (int i = 0; i < __tabs.size(); i++) {
+      if (i > 0) tabs.append(",");
+      tabs.append("{\"title\":\"").append(Component.__esc(__titles.get(i)))
+          .append("\",\"component\":").append(__tabs.get(i).__json()).append("}");
+    }
+    tabs.append("]");
+    return "{\"type\":\"tabbedpane\",\"placement\":" + __placement
+        + ",\"selectedIndex\":" + __selected
+        + ",\"tabs\":" + tabs.toString() + "," + __commonJson() + "}";
+  }
+}
+
 class JLabel extends Component {
   String __text;
   Component __labelFor = null;

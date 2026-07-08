@@ -836,6 +836,70 @@ fn swing_graphics_records_font_polygon_and_arc() {
 }
 
 #[test]
+fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
+    // A JTabbedPane serializes its tabs (title + component) and selected index.
+    // Selecting a tab reports its index; the ChangeListener reads the new
+    // selection via getSelectedIndex(). Ids: frame c0, tabbedpane c1, then the
+    // tab components (labels c2, c3, c4).
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        public class Main {
+            static JTabbedPane tabs;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Tabs");
+                tabs = new JTabbedPane();
+                tabs.addTab("One", new JLabel("first"));
+                tabs.addTab("Two", new JLabel("second"));
+                tabs.addTab("Three", new JLabel("third"));
+                tabs.addChangeListener(e -> {
+                    System.out.println("tab " + Main.tabs.getSelectedIndex()
+                        + " = " + Main.tabs.getTitleAt(Main.tabs.getSelectedIndex()));
+                });
+                frame.add(tabs);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\nc1=2")),
+            Some(String::from("c1\nc1=0")),
+        ],
+    );
+    assert_eq!(out, "tab 2 = Three\ntab 0 = One\n");
+}
+
+#[test]
+fn swing_tabbed_pane_serializes_tabs_and_selection() {
+    // The serialized tree carries each tab's title and nested component plus the
+    // current selection and placement, for the tablist/tabpanel renderer.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Tabs");
+                JTabbedPane tabs = new JTabbedPane();
+                tabs.addTab("Alpha", new JLabel("a"));
+                tabs.addTab("Beta", new JButton("b"));
+                tabs.setSelectedIndex(1);
+                frame.add(tabs);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""type":"tabbedpane","placement":1,"selectedIndex":1"#), "no tabbedpane: {json}");
+    assert!(json.contains(r#""title":"Alpha","component":{"type":"label""#), "no alpha tab: {json}");
+    assert!(json.contains(r#""title":"Beta","component":{"type":"button""#), "no beta tab: {json}");
+}
+
+#[test]
 fn swing_border_factory_serializes_border_descriptors() {
     // BorderFactory borders serialize as a descriptor on the component: a line
     // border (colour + thickness), an empty padding border (insets), and a

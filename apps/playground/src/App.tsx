@@ -570,6 +570,52 @@ public class Main {
 `,
   },
   {
+    name: 'Tabbed pane',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JTabbedPane tabs;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Tabbed pane");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    tabs = new JTabbedPane();
+
+    // Each tab holds its own panel of controls; only the selected one shows.
+    JPanel home = new JPanel();
+    home.add(new JLabel("Welcome home!"));
+    tabs.addTab("Home", home);
+
+    JPanel profile = new JPanel();
+    profile.setLayout(new BoxLayout(profile, BoxLayout.Y_AXIS));
+    profile.add(new JLabel("Name:"));
+    profile.add(new JTextField("Ada", 12));
+    tabs.addTab("Profile", profile);
+
+    JPanel about = new JPanel();
+    about.add(new JLabel("Version 1.0"));
+    tabs.addTab("About", about);
+
+    // A ChangeListener fires when the selected tab changes.
+    status = new JLabel("On tab: Home");
+    tabs.addChangeListener(e -> {
+      int i = Main.tabs.getSelectedIndex();
+      Main.status.setText("On tab: " + Main.tabs.getTitleAt(i));
+    });
+
+    frame.add(tabs, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sketch pad',
     starter: `import javax.swing.*;
 import java.awt.*;

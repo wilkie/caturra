@@ -1603,6 +1603,31 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('a JTabbedPane switches panels and fires its ChangeListener', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Tabbed pane' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // An accessible tablist of three tabs; the first is selected and its panel
+    // (Welcome home!) is the only one shown.
+    const tablist = root.getByRole('tablist');
+    await expect(tablist).toBeVisible();
+    await expect(tablist.getByRole('tab')).toHaveCount(3);
+    const home = root.getByRole('tab', { name: 'Home' });
+    await expect(home).toHaveAttribute('aria-selected', 'true');
+    await expect(root.getByText('Welcome home!')).toBeVisible();
+    await expect(root.getByText('Version 1.0')).toBeHidden();
+
+    // Selecting the About tab switches the visible panel and fires the
+    // ChangeListener, which updates the status label.
+    await root.getByRole('tab', { name: 'About' }).click();
+    await expect(root.getByText('Version 1.0')).toBeVisible();
+    await expect(root.getByText('Welcome home!')).toBeHidden();
+    await expect(root.getByRole('tab', { name: 'About' })).toHaveAttribute('aria-selected', 'true');
+    await expect(root).toContainText('On tab: About');
+  });
+
   test('BorderFactory renders titled, matte, and compound borders', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Bordered form' });
