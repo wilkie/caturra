@@ -1729,8 +1729,12 @@ export class SwingViz {
     }
 
     popup.addEventListener('keydown', (event) => {
-      const items = [...popup.querySelectorAll<HTMLElement>(':scope > [role="menuitem"]')];
-      const index = items.indexOf(document.activeElement as HTMLElement);
+      // Skip disabled items — a disabled <button> can't take focus, so it would
+      // otherwise trap arrow navigation.
+      const items = [...popup.querySelectorAll<HTMLButtonElement>(':scope > [role="menuitem"]')].filter(
+        (item) => !item.disabled,
+      );
+      const index = items.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         event.stopPropagation();
@@ -1800,7 +1804,9 @@ export class SwingViz {
 
   /** Focus a popup's first menu item (its direct children only). */
   #focusFirst(popup: HTMLElement): void {
-    popup.querySelector<HTMLElement>(':scope > [role="menuitem"]')?.focus();
+    // The first item that can actually take focus (skip disabled ones).
+    const items = [...popup.querySelectorAll<HTMLButtonElement>(':scope > [role="menuitem"]')];
+    items.find((item) => !item.disabled)?.focus();
   }
 
   private panel(node: SwingNode): HTMLElement {

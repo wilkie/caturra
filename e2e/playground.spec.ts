@@ -1939,7 +1939,11 @@ test.describe('swing (interactive)', () => {
     // ...and so is the File > Save menu item.
     const fileButton = root.getByRole('button', { name: 'File' });
     await fileButton.click();
-    await expect(root.getByRole('menuitem', { name: 'Save' })).toBeDisabled();
+    const menuSave = root.getByRole('menuitem', { name: 'Save' });
+    await expect(menuSave).toBeDisabled();
+    // A disabled item reads as dimmed (not the full-opacity active look).
+    const opacity = await menuSave.evaluate((el) => Number(getComputedStyle(el).opacity));
+    expect(opacity).toBeLessThan(1);
     await fileButton.click(); // close the menu
 
     // Editing re-enables the shared action, restoring both components.

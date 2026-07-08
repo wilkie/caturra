@@ -817,6 +817,16 @@ label {
   outline: none;
 }
 
+/* A disabled item (e.g. from a disabled Action) reads as dimmed and inert. */
+.swing-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.swing-menu-item:disabled:hover {
+  background: transparent;
+}
+
 .swing-menu-separator {
   height: 1px;
   margin: 0.25rem 0;
