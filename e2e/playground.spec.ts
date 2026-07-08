@@ -1752,6 +1752,8 @@ test.describe('swing (interactive)', () => {
     await expect(pw).toBeVisible();
     const user = root.locator('input[type="text"]');
     await expect(user).toBeVisible();
+    // user.requestFocus() put keyboard focus on the first field, ready to type.
+    await expect(user).toBeFocused();
 
     // Fill both; logging in reads user.getText() and pass.getPassword().
     await user.fill('ada');

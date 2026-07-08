@@ -145,6 +145,8 @@ interface SwingNode {
   key?: boolean;
   /** A frame's menu bar (setJMenuBar). */
   menubar?: SwingMenuBar;
+  /** A pending requestFocus target, "<cid>:<seq>". */
+  focus?: string;
   /** A JScrollPane's wrapped component and scrollbar policies. */
   view?: SwingNode | null;
   hpolicy?: number;
@@ -693,6 +695,8 @@ export class SwingViz {
   // instead of tearing down and rebuilding the whole tree each tick — the
   // window persists, the canvas keeps its pixels, and focus/scroll survive.
   #byId = new Map<string, HTMLElement>();
+  // The last requestFocus token honored, so a repeat render doesn't refocus.
+  #lastFocusRequest = '';
 
   constructor(private readonly mount: HTMLElement) {}
 
@@ -754,6 +758,34 @@ export class SwingViz {
       // reused, not rebuilt), so this fires only on the first frame — and it
       // won't yank focus back if the user has since moved to another control.
       this.mount.querySelector<HTMLElement>('[data-key-surface]')?.focus();
+    }
+    // Component.requestFocus(): the engine sends "<cid>:<seq>" while a request
+    // is pending; honor a NEW one (by moving focus), then remember it so a
+    // repeat render doesn't keep yanking focus back. Deferred to a task so the
+    // focus lands after the host has made the Swing view visible — focus() on a
+    // still-hidden (display:none) element is a no-op.
+    if (root.focus !== undefined && root.focus !== this.#lastFocusRequest) {
+      this.#lastFocusRequest = root.focus;
+      this.#applyFocusRequest(root.focus.split(':')[0] ?? '', 20);
+    }
+  }
+
+  /** Move focus to the requested component, retrying across frames until the
+   * host has made the Swing view visible — focus() on an element inside a
+   * hidden (display:none) subtree is a no-op, and the view un-hides a tick or
+   * two after render() (React flushes its state update asynchronously). */
+  #applyFocusRequest(cid: string, attempts: number): void {
+    const target = this.mount.querySelector<HTMLElement>(`#${CSS.escape(cid)}`);
+    if (target !== null) {
+      if (target.closest('[hidden]') === null) {
+        target.focus(); // visible now — apply it
+        return;
+      }
+    }
+    if (attempts > 0) {
+      requestAnimationFrame(() => {
+        this.#applyFocusRequest(cid, attempts - 1);
+      });
     }
   }
 

@@ -374,6 +374,11 @@ class Component {
   public boolean isEnabled() { return __enabled; }
   public void setVisible(boolean visible) { __visible = visible; }
   public boolean isVisible() { return __visible; }
+  public void setFocusable(boolean focusable) {}
+  // Move keyboard focus here. Records a one-shot request the renderer honors on
+  // the next paint (a sequence lets the same component be re-requested).
+  public void requestFocus() { __SwingRuntime.__requestFocus(__cid); }
+  public boolean requestFocusInWindow() { __SwingRuntime.__requestFocus(__cid); return true; }
   public void setToolTipText(String text) { __ttip = text; }
   public void setBackground(Color c) { __bg = c; }
   public void setForeground(Color c) { __fg = c; }
@@ -611,12 +616,6 @@ class JPanel extends Container {
   public void addMouseListener(MouseListener l) { __mouseListener = l; __SwingRuntime.__interactive = true; }
   public void addMouseMotionListener(MouseMotionListener l) { __motionListener = l; __SwingRuntime.__interactive = true; }
   public void addKeyListener(KeyListener l) { __keyListener = l; __SwingRuntime.__interactive = true; }
-  // A panel receiving key events must be focusable and hold focus. The renderer
-  // handles both when a key listener is attached, so these are accepted no-ops
-  // for source compatibility with real Swing.
-  public void setFocusable(boolean b) {}
-  public void requestFocus() {}
-  public void requestFocusInWindow() {}
   boolean __listens() {
     return __mouseListener != null || __motionListener != null || __keyListener != null;
   }
@@ -1739,9 +1738,11 @@ class JFrame extends Container {
 
   String __jsonTree() {
     String menubar = __menuBar == null ? "" : ",\"menubar\":" + __menuBar.__json();
+    String focus = __SwingRuntime.__focusRequest == null ? ""
+        : ",\"focus\":\"" + __SwingRuntime.__focusRequest + "\"";
     return "{\"type\":\"frame\",\"title\":\"" + Component.__esc(__title) + "\",\"width\":" + __w
         + ",\"height\":" + __h + ",\"layout\":" + __layoutJson()
-        + ",\"children\":" + __kidsJson() + menubar
+        + ",\"children\":" + __kidsJson() + menubar + focus
         + ",\"timers\":" + __SwingRuntime.__timersJson() + "," + __commonJson() + "}";
   }
 
@@ -1997,6 +1998,17 @@ class __SwingRuntime {
   static boolean __interactive = false;
   static java.util.ArrayList<Component> __live = new java.util.ArrayList<Component>();
   static java.util.ArrayList<Timer> __timers = new java.util.ArrayList<Timer>();
+  // A pending requestFocus target ("<cid>:<seq>"); the seq lets the same
+  // component be focused again after focus moved away.
+  static String __focusRequest = null;
+  static int __focusSeq = 0;
+
+  static void __requestFocus(String cid) {
+    // Not marked interactive: even a static form's single (batch) render honors
+    // the request, and an interactive app's live render does too.
+    __focusSeq = __focusSeq + 1;
+    __focusRequest = cid + ":" + __focusSeq;
+  }
 
   static void __register(Component c) {
     for (int i = 0; i < __live.size(); i++) {

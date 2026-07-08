@@ -858,6 +858,7 @@ public class Main {
     status = new JLabel("Enter credentials");
     frame.add(status);
 
+    user.requestFocus(); // focus the first field, ready to type
     frame.setVisible(true);
   }
 }

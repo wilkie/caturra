@@ -873,6 +873,32 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_request_focus_serializes_a_focus_request() {
+    // requestFocus() records a one-shot focus request ("<cid>:<seq>") on the
+    // tree; the renderer moves keyboard focus there. Ids: frame c0, name c1,
+    // email c2 — focusing email yields "c2:1".
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Form");
+                JTextField name = new JTextField(12);
+                JTextField email = new JTextField(12);
+                frame.add(name);
+                frame.add(email);
+                email.requestFocus();
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""focus":"c2:1""#), "no focus request: {json}");
+}
+
+#[test]
 fn swing_accessible_context_names_and_describes_a_component() {
     // getAccessibleContext().setAccessibleName / setAccessibleDescription flow
     // to the tree as accName / accDesc (the renderer maps them to aria-*).
