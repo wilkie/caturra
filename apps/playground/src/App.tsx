@@ -417,6 +417,64 @@ class BallPanel extends JPanel {
 `,
   },
   {
+    name: 'Keyboard mover',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+
+public class Main {
+  static int x = 140;
+  static int y = 90;
+  static Board board;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Keyboard mover");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    board = new Board();
+    board.setPreferredSize(new Dimension(300, 180));
+    board.setToolTipText("Use the arrow keys or WASD to move the square");
+    status = new JLabel("at (140, 90)");
+
+    // A KeyListener on the focusable board: each arrow (or WASD) key press
+    // nudges the square, clamps it to the board, and repaints. The board is
+    // focused automatically, so the keys work as soon as the program runs.
+    board.addKeyListener(new KeyAdapter() {
+      public void keyPressed(KeyEvent e) {
+        int code = e.getKeyCode();
+        if (code == KeyEvent.VK_LEFT || code == KeyEvent.VK_A) Main.x = Main.x - 10;
+        if (code == KeyEvent.VK_RIGHT || code == KeyEvent.VK_D) Main.x = Main.x + 10;
+        if (code == KeyEvent.VK_UP || code == KeyEvent.VK_W) Main.y = Main.y - 10;
+        if (code == KeyEvent.VK_DOWN || code == KeyEvent.VK_S) Main.y = Main.y + 10;
+        if (Main.x < 15) Main.x = 15;
+        if (Main.x > 285) Main.x = 285;
+        if (Main.y < 15) Main.y = 15;
+        if (Main.y > 165) Main.y = 165;
+        Main.status.setText("at (" + Main.x + ", " + Main.y + ")");
+        Main.board.repaint();
+      }
+    });
+
+    frame.add(board, BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+
+class Board extends JPanel {
+  public void paintComponent(Graphics g) {
+    super.paintComponent(g);
+    g.setColor(new Color(24, 28, 44));
+    g.fillRect(0, 0, getWidth(), getHeight());
+    g.setColor(new Color(80, 200, 255));
+    g.fillRect(Main.x - 12, Main.y - 12, 24, 24);
+  }
+}
+`,
+  },
+  {
     name: 'Sketch pad',
     starter: `import javax.swing.*;
 import java.awt.*;

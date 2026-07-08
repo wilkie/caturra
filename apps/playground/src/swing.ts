@@ -82,6 +82,8 @@ interface SwingNode {
   /** Panel has a MouseListener (wire click) / MouseMotionListener (wire drag). */
   mouse?: boolean;
   drag?: boolean;
+  /** Panel has a KeyListener (make it focusable and wire keydown/keyup). */
+  key?: boolean;
   /** A frame's menu bar (setJMenuBar). */
   menubar?: SwingMenuBar;
   /** A JScrollPane's wrapped component and scrollbar policies. */
@@ -144,6 +146,57 @@ function fieldValue(el: FieldElement): string {
     raw = el.value; // text field / text area / slider
   }
   return raw.replace(/%/g, '%25').replace(/\n/g, '%0A');
+}
+
+/** Keys that scroll the page; suppressed while a keyboard surface is focused. */
+const SCROLL_KEYS = new Set([
+  'ArrowLeft',
+  'ArrowUp',
+  'ArrowRight',
+  'ArrowDown',
+  ' ',
+  'PageUp',
+  'PageDown',
+  'Home',
+  'End',
+]);
+
+/** DOM key names → AWT virtual-key codes (java.awt.event.KeyEvent). */
+const AWT_KEY_CODES: Record<string, number> = {
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+  Enter: 10,
+  ' ': 32,
+  Escape: 27,
+  Tab: 9,
+  Backspace: 8,
+  Delete: 127,
+  Shift: 16,
+  Control: 17,
+  Alt: 18,
+};
+
+/** The AWT virtual-key code for a DOM keyboard event (VK_A == 'A' == 65). */
+function awtKeyCode(event: KeyboardEvent): number {
+  const mapped = AWT_KEY_CODES[event.key];
+  if (mapped !== undefined) {
+    return mapped;
+  }
+  if (event.key.length === 1) {
+    return event.key.toUpperCase().charCodeAt(0);
+  }
+  return 0; // VK_UNDEFINED
+}
+
+/** The AWT key character for a DOM keyboard event (CHAR_UNDEFINED for action keys). */
+function awtKeyChar(event: KeyboardEvent): number {
+  if (event.key.length === 1) {
+    return event.key.charCodeAt(0);
+  }
+  const named: Record<string, number> = { Enter: 10, Tab: 9, Backspace: 8, Escape: 27 };
+  return named[event.key] ?? 65535; // CHAR_UNDEFINED
 }
 
 /** Replay a custom panel's recorded java.awt.Graphics commands onto a canvas. */
@@ -307,8 +360,9 @@ export class SwingViz {
   render(json: string, onEvent?: (payload: string) => void): void {
     // Focus can still be lost when an element's CONTENT is rebuilt (table
     // rows); note it so we can put it back afterward.
+    const hadFocusInMount = this.mount.contains(document.activeElement);
     const focusedId =
-      this.mount.contains(document.activeElement) && document.activeElement instanceof HTMLElement
+      hadFocusInMount && document.activeElement instanceof HTMLElement
         ? document.activeElement.id
         : '';
     for (const cleanup of this.#teardown) {
@@ -329,6 +383,12 @@ export class SwingViz {
       if (again && document.activeElement !== again) {
         again.focus();
       }
+    } else if (!hadFocusInMount) {
+      // Nothing was focused: put focus on the keyboard surface (if any) so a
+      // game is immediately playable. It persists across ticks (the canvas is
+      // reused, not rebuilt), so this fires only on the first frame — and it
+      // won't yank focus back if the user has since moved to another control.
+      this.mount.querySelector<HTMLElement>('[data-key-surface]')?.focus();
     }
   }
 
@@ -634,6 +694,42 @@ export class SwingViz {
       const { x, y } = this.#pointer(el, event);
       this.#dispatch(this.#pointerPayload(id, '__drag', x, y));
     });
+  }
+
+  /** The event payload for a keyboard event: `<cid>\n__key=type,code,char` + field state. */
+  #keyPayload(id: string, type: number, code: number, ch: number): string {
+    let payload = `${id}\n__key=${String(type)},${String(code)},${String(ch)}`;
+    for (const [fieldId, field] of this.#fields) {
+      payload += `\n${fieldId}=${fieldValue(field)}`;
+    }
+    return payload;
+  }
+
+  /**
+   * Wire a panel with a KeyListener: make it focusable and report each
+   * keydown (type 0) / keyup (type 1) with the AWT key code and character.
+   * Arrow/space/paging keys are prevented from scrolling the page while the
+   * surface is focused, so a game reads them cleanly.
+   */
+  #keys(el: HTMLElement, node: SwingNode): void {
+    if (node.key !== true) {
+      return;
+    }
+    const id = node.id;
+    el.tabIndex = 0;
+    // Marks the keyboard surface so render() can focus it on the first frame.
+    el.dataset.keySurface = 'true';
+    if (el instanceof HTMLCanvasElement) {
+      el.style.outline = 'none';
+    }
+    const send = (type: number) => (event: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(event.key)) {
+        event.preventDefault(); // don't let a game's controls scroll the page
+      }
+      this.#dispatch(this.#keyPayload(id, type, awtKeyCode(event), awtKeyChar(event)));
+    };
+    el.addEventListener('keydown', send(0));
+    el.addEventListener('keyup', send(1));
   }
 
   private build(node: SwingNode): HTMLElement {
@@ -1001,6 +1097,7 @@ export class SwingViz {
     applyLayout(panel, node.layout);
     this.#mouse(panel, node);
     this.#motion(panel, node);
+    this.#keys(panel, node);
     this.common(panel, node);
     this.children(panel, node);
     return panel;
@@ -1043,6 +1140,7 @@ export class SwingViz {
     paintCanvas(canvas, node.paint ?? '');
     this.#mouse(canvas, node);
     this.#motion(canvas, node);
+    this.#keys(canvas, node);
     wrap.appendChild(canvas);
     // A painted panel rarely also holds child widgets, but honor them.
     this.children(wrap, node);

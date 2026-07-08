@@ -794,6 +794,78 @@ fn swing_custom_painting_records_graphics_commands() {
 }
 
 #[test]
+fn swing_key_listener_fires_pressed_typed_released() {
+    // A KeyListener on a focusable panel: keydown delivers keyPressed (and, for
+    // a printable char, keyTyped); keyup delivers keyReleased. The host reports
+    // "__key=<type>,<code>,<char>" (type 0 = down, 1 = up). Ids: frame c0,
+    // panel c1. An arrow key has no character (CHAR_UNDEFINED), so it fires no
+    // keyTyped; the letter 'a' (code 65, char 97) fires both pressed and typed.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Move");
+                KeyPanel panel = new KeyPanel();
+                frame.add(panel);
+                frame.setVisible(true);
+            }
+        }
+        class KeyPanel extends JPanel {
+            public KeyPanel() {
+                addKeyListener(new KeyAdapter() {
+                    public void keyPressed(KeyEvent e) {
+                        System.out.println("pressed " + e.getKeyCode());
+                    }
+                    public void keyReleased(KeyEvent e) {
+                        System.out.println("released " + e.getKeyCode());
+                    }
+                    public void keyTyped(KeyEvent e) {
+                        System.out.println("typed " + e.getKeyChar());
+                    }
+                });
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\n__key=0,39,65535")), // keydown ArrowRight (VK_RIGHT)
+            Some(String::from("c1\n__key=1,39,65535")), // keyup ArrowRight
+            Some(String::from("c1\n__key=0,65,97")),    // keydown 'a'
+        ],
+    );
+    assert_eq!(out, "pressed 39\nreleased 39\npressed 65\ntyped a\n");
+}
+
+#[test]
+fn swing_key_listener_serializes_focusable_flag() {
+    // A panel with a KeyListener advertises "key":true so the renderer makes it
+    // focusable and wires keydown/keyup; a plain panel does not.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Move");
+                JPanel panel = new JPanel();
+                panel.addKeyListener(new KeyAdapter() {
+                    public void keyPressed(KeyEvent e) {}
+                });
+                frame.add(panel);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""key":true"#), "no key flag: {json}");
+}
+
+#[test]
 fn swing_interactive_program_compiles_and_renders_initial_frame() {
     // A listener-driven program. With no interactive host (BufferedConsole's
     // ui_await_event returns None), the event loop ends at once — but the

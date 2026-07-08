@@ -1499,6 +1499,45 @@ test.describe('swing (interactive)', () => {
     await expect.poll(() => strokeNear(140, 95, 125)).toBe(true);
   });
 
+  test('a KeyListener moves a square with the arrow keys', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Keyboard mover' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const canvas = root.getByRole('img', { name: 'Use the arrow keys or WASD to move the square' });
+    await expect(canvas).toBeVisible();
+    // Starts centred; the board is focusable so the keys work immediately.
+    await expect(root).toContainText('at (140, 90)');
+
+    const sample = (x: number, y: number): Promise<number[]> =>
+      page.evaluate(
+        ([px, py]) => {
+          const c = document.querySelector<HTMLCanvasElement>('[data-testid="swing-root"] canvas');
+          const ctx = c?.getContext('2d');
+          if (!ctx) {
+            return [-1, -1, -1];
+          }
+          const d = ctx.getImageData(px, py, 1, 1).data;
+          return [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0];
+        },
+        [x, y],
+      );
+
+    // Each keydown nudges the square 10px right; poll the label between presses
+    // so each event registers (the loop parks before the next press).
+    for (const x of [150, 160, 170]) {
+      await canvas.press('ArrowRight');
+      await expect(root).toContainText(`at (${String(x)}, 90)`);
+    }
+    await canvas.press('ArrowDown');
+    await expect(root).toContainText('at (170, 100)');
+
+    // The blue square (fillRect, exact colour) now sits at its new centre, and
+    // the old centre is background again.
+    await expect.poll(() => sample(170, 100)).toEqual([80, 200, 255]);
+    expect(await sample(140, 90)).not.toEqual([80, 200, 255]);
+  });
+
   test('JOptionPane shows accessible modal dialogs (input, confirm, message)', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Dialogs (JOptionPane)' });

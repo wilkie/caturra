@@ -274,6 +274,9 @@ static JAVA_AWT_EVENT: &[&str] = &[
     "MouseMotionListener",
     "MouseAdapter",
     "MouseEvent",
+    "KeyListener",
+    "KeyAdapter",
+    "KeyEvent",
 ];
 /// `javax.swing.event`: the `ChangeListener` (`JSlider`) and
 /// `ListSelectionListener` (`JList`) plus their events.

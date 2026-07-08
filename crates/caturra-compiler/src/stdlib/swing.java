@@ -167,6 +167,7 @@ class Component {
   void __onEvent() {}
   void __onMouse(int x, int y) {}
   void __onDrag(int x, int y) {}
+  void __onKey(int type, int code, char ch) {}
   boolean __listens() { return false; }
 }
 
@@ -231,6 +232,7 @@ class JPanel extends Container {
   int __ph = 150;
   MouseListener __mouseListener = null;
   MouseMotionListener __motionListener = null;
+  KeyListener __keyListener = null;
   public JPanel() {}
   public JPanel(LayoutManager m) { __layout = m; }
   public void setPreferredSize(Dimension d) { __pw = d.width; __ph = d.height; }
@@ -238,7 +240,16 @@ class JPanel extends Container {
   public int getHeight() { return __ph; }
   public void addMouseListener(MouseListener l) { __mouseListener = l; __SwingRuntime.__interactive = true; }
   public void addMouseMotionListener(MouseMotionListener l) { __motionListener = l; __SwingRuntime.__interactive = true; }
-  boolean __listens() { return __mouseListener != null || __motionListener != null; }
+  public void addKeyListener(KeyListener l) { __keyListener = l; __SwingRuntime.__interactive = true; }
+  // A panel receiving key events must be focusable and hold focus. The renderer
+  // handles both when a key listener is attached, so these are accepted no-ops
+  // for source compatibility with real Swing.
+  public void setFocusable(boolean b) {}
+  public void requestFocus() {}
+  public void requestFocusInWindow() {}
+  boolean __listens() {
+    return __mouseListener != null || __motionListener != null || __keyListener != null;
+  }
   void __onMouse(int x, int y) {
     if (__mouseListener != null) {
       // A real click fires press, then release, then clicked.
@@ -250,6 +261,18 @@ class JPanel extends Container {
   }
   void __onDrag(int x, int y) {
     if (__motionListener != null) __motionListener.mouseDragged(new MouseEvent(this, x, y));
+  }
+  void __onKey(int type, int code, char ch) {
+    if (__keyListener == null) return;
+    KeyEvent e = new KeyEvent(this, code, ch);
+    if (type == 0) {
+      // keydown: keyPressed, then keyTyped for a printable character (matching
+      // real Java's ordering) — both delivered in one host round trip.
+      __keyListener.keyPressed(e);
+      if (ch != KeyEvent.CHAR_UNDEFINED && ch >= 32) __keyListener.keyTyped(e);
+    } else {
+      __keyListener.keyReleased(e);
+    }
   }
   // The event loop re-renders (and so re-paints) after every event, so a
   // repaint request is implicit; this exists so student code compiles.
@@ -265,10 +288,11 @@ class JPanel extends Container {
       paint = ",\"paint\":\"" + Component.__esc(g.__joined()) + "\",\"pw\":" + __pw
           + ",\"ph\":" + __ph;
     }
-    // Which pointer events to wire: mouse (click) and/or drag (motion).
+    // Which input events to wire: mouse (click), drag (motion), key (keyboard).
     String pointer = "";
     if (__mouseListener != null) pointer += ",\"mouse\":true";
     if (__motionListener != null) pointer += ",\"drag\":true";
+    if (__keyListener != null) pointer += ",\"key\":true";
     return "{\"type\":\"panel\",\"layout\":" + __layoutJson()
         + ",\"children\":" + __kidsJson() + paint + pointer + "," + __commonJson() + "}";
   }
@@ -1141,6 +1165,88 @@ class MouseAdapter implements MouseListener, MouseMotionListener {
   public void mouseMoved(MouseEvent e) {}
 }
 
+// A key press on the focused surface. getKeyCode() returns the AWT virtual-key
+// code (VK_LEFT, VK_A, …, matching real java.awt.event.KeyEvent constants) and
+// getKeyChar() the character typed (CHAR_UNDEFINED for action keys like arrows).
+class KeyEvent {
+  Object __src;
+  int __code;
+  char __ch;
+
+  public static final char CHAR_UNDEFINED = (char) 65535;
+
+  // Arrow / action keys (VK codes match java.awt.event.KeyEvent).
+  public static final int VK_LEFT = 37;
+  public static final int VK_UP = 38;
+  public static final int VK_RIGHT = 39;
+  public static final int VK_DOWN = 40;
+  public static final int VK_ENTER = 10;
+  public static final int VK_SPACE = 32;
+  public static final int VK_ESCAPE = 27;
+  public static final int VK_TAB = 9;
+  public static final int VK_BACK_SPACE = 8;
+  public static final int VK_SHIFT = 16;
+  public static final int VK_CONTROL = 17;
+  public static final int VK_ALT = 18;
+  // Letters and digits share their uppercase ASCII value with the VK code
+  // (VK_A == 'A' == 65, VK_0 == '0' == 48), so common WASD/arrow games work.
+  public static final int VK_A = 65;
+  public static final int VK_B = 66;
+  public static final int VK_C = 67;
+  public static final int VK_D = 68;
+  public static final int VK_E = 69;
+  public static final int VK_F = 70;
+  public static final int VK_G = 71;
+  public static final int VK_H = 72;
+  public static final int VK_I = 73;
+  public static final int VK_J = 74;
+  public static final int VK_K = 75;
+  public static final int VK_L = 76;
+  public static final int VK_M = 77;
+  public static final int VK_N = 78;
+  public static final int VK_O = 79;
+  public static final int VK_P = 80;
+  public static final int VK_Q = 81;
+  public static final int VK_R = 82;
+  public static final int VK_S = 83;
+  public static final int VK_T = 84;
+  public static final int VK_U = 85;
+  public static final int VK_V = 86;
+  public static final int VK_W = 87;
+  public static final int VK_X = 88;
+  public static final int VK_Y = 89;
+  public static final int VK_Z = 90;
+  public static final int VK_0 = 48;
+  public static final int VK_1 = 49;
+  public static final int VK_2 = 50;
+  public static final int VK_3 = 51;
+  public static final int VK_4 = 52;
+  public static final int VK_5 = 53;
+  public static final int VK_6 = 54;
+  public static final int VK_7 = 55;
+  public static final int VK_8 = 56;
+  public static final int VK_9 = 57;
+
+  public KeyEvent(Object source, int code, char ch) { __src = source; __code = code; __ch = ch; }
+  public Object getSource() { return __src; }
+  public int getKeyCode() { return __code; }
+  public char getKeyChar() { return __ch; }
+}
+
+interface KeyListener {
+  void keyPressed(KeyEvent e);
+  void keyReleased(KeyEvent e);
+  void keyTyped(KeyEvent e);
+}
+
+// KeyListener isn't functional (three methods), so students subclass this
+// adapter — usually `new KeyAdapter() { public void keyPressed(...) {...} }`.
+class KeyAdapter implements KeyListener {
+  public void keyPressed(KeyEvent e) {}
+  public void keyReleased(KeyEvent e) {}
+  public void keyTyped(KeyEvent e) {}
+}
+
 // The event pump. setVisible enters __loop, which renders the current tree
 // and blocks on System.__uiAwait for the next event. The host returns the
 // clicked component's id plus newline-separated "id=value" field states;
@@ -1221,15 +1327,40 @@ class __SwingRuntime {
       }
       Component c = __find(cid);
       if (c != null) {
-        // A "__drag=x,y" line is a mouse drag; "__mouse=x,y" is a click; a
-        // component with neither is a control activation (button/checkbox/…).
+        // A "__key=type,code,char" line is a keyboard event; "__drag=x,y" a
+        // mouse drag; "__mouse=x,y" a click; a component with none of these is
+        // a control activation (button/checkbox/…).
+        int[] key = __keyOf(body);
         int[] drag = __coordOf(body, "__drag=");
         int[] click = __coordOf(body, "__mouse=");
-        if (drag != null) c.__onDrag(drag[0], drag[1]);
+        if (key != null) c.__onKey(key[0], key[1], (char) key[2]);
+        else if (drag != null) c.__onDrag(drag[0], drag[1]);
         else if (click != null) c.__onMouse(click[0], click[1]);
         else c.__onEvent();
       }
     }
+  }
+
+  // Parse a "__key=type,code,char" line into {type, code, char}, or null.
+  static int[] __keyOf(String body) {
+    String rest = body;
+    while (rest.length() > 0) {
+      int nl = rest.indexOf("\n");
+      String line = nl < 0 ? rest : rest.substring(0, nl);
+      rest = nl < 0 ? "" : rest.substring(nl + 1);
+      if (line.startsWith("__key=")) {
+        String v = line.substring(6);
+        int c1 = v.indexOf(",");
+        if (c1 < 0) return null;
+        int c2 = v.indexOf(",", c1 + 1);
+        if (c2 < 0) return null;
+        int type = Integer.parseInt(v.substring(0, c1));
+        int code = Integer.parseInt(v.substring(c1 + 1, c2));
+        int ch = Integer.parseInt(v.substring(c2 + 1));
+        return new int[]{type, code, ch};
+      }
+    }
+    return null;
   }
 
   // Parse an "<prefix>x,y" line out of the event body, or null if absent.
