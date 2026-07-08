@@ -1773,6 +1773,20 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Volume: 8');
   });
 
+  test('a JTextField ActionListener fires on Enter', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Search box' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const query = root.getByRole('textbox');
+    await expect(query).toBeVisible();
+
+    // Typing then pressing Enter fires the ActionListener, which reads getText().
+    await query.fill('penguins');
+    await query.press('Enter');
+    await expect(root).toContainText('You searched for: penguins');
+  });
+
   test('a JPasswordField masks input and getPassword() reads it back', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Login form' });

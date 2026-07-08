@@ -899,6 +899,33 @@ fn swing_request_focus_serializes_a_focus_request() {
 }
 
 #[test]
+fn swing_text_field_action_listener_fires_on_enter() {
+    // A JTextField with an ActionListener fires on Enter; the listener reads the
+    // typed value (synced from the host before dispatch). Ids: frame c0, field
+    // c1. The host reports the field's value with the activation ("c1\nc1=...").
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            static JTextField search;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Search");
+                search = new JTextField(16);
+                search.addActionListener(e -> System.out.println("search: " + Main.search.getText()));
+                frame.add(search);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("c1\nc1=hello world"))],
+    );
+    assert_eq!(out, "search: hello world\n");
+}
+
+#[test]
 fn swing_label_displayed_mnemonic_serializes() {
     // JLabel.setDisplayedMnemonic + setLabelFor: the label carries its mnemonic
     // and the target field's id, so the renderer can underline the letter and

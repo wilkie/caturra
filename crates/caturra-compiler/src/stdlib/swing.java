@@ -945,6 +945,8 @@ class JTextField extends Component {
   int __cols;
   boolean __editable = true;
   boolean __password = false;
+  String __command = null;
+  ActionListener __actionListener = null;
   public JTextField() { __text = ""; __cols = 0; }
   public JTextField(int cols) { __text = ""; __cols = cols; }
   public JTextField(String text) { __text = text; __cols = 0; }
@@ -957,6 +959,14 @@ class JTextField extends Component {
   public boolean isEditable() { return __editable; }
   public void setHorizontalAlignment(int alignment) { __halign = alignment; }
   public int getHorizontalAlignment() { return __halign < 0 ? LEADING : __halign; }
+  // The ActionListener fires when the user presses Enter in the field.
+  public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
+  public void setActionCommand(String command) { __command = command; }
+  public String getActionCommand() { return __command == null ? __text : __command; }
+  boolean __listens() { return __actionListener != null; }
+  void __onEvent() {
+    if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this, getActionCommand()));
+  }
   void __setFromHost(String value) { __text = value; }
   String __json() {
     String pw = __password ? ",\"password\":true" : "";

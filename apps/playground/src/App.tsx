@@ -875,6 +875,37 @@ public class Main {
 `,
   },
   {
+    name: 'Search box',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JTextField query;
+  static JLabel result;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Search");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    JLabel prompt = new JLabel("Type a query and press Enter:");
+
+    // A JTextField's ActionListener fires when the user presses Enter.
+    query = new JTextField(20);
+    query.addActionListener(e ->
+        Main.result.setText("You searched for: " + Main.query.getText()));
+
+    result = new JLabel("No search yet");
+
+    frame.add(prompt, BorderLayout.NORTH);
+    frame.add(query, BorderLayout.CENTER);
+    frame.add(result, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Styled widgets',
     starter: `import javax.swing.*;
 import java.awt.*;

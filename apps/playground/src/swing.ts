@@ -2193,6 +2193,17 @@ export class SwingViz {
       input.setAttribute('aria-label', node.tooltip);
     }
     this.#fields.set(node.id, input);
+    // A JTextField with an ActionListener fires on Enter (Swing-accurate, not
+    // on blur); its typed value rides along in the payload.
+    if (node.listens === true) {
+      const id = node.id;
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          this.#dispatch(this.#payload(id));
+        }
+      });
+    }
     this.common(input, node);
     return input;
   }
