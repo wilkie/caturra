@@ -883,7 +883,12 @@ export class SwingViz {
         this.#toolbarRoving(el);
         break;
       case 'label':
-        el.textContent = node.text ?? '';
+        // A <label for> may carry a mnemonic (underline + accessKey); a plain
+        // status label just updates its text (setMnemonicLabel handles both).
+        setMnemonicLabel(el, node.text ?? '', node.mnemonic);
+        if (el instanceof HTMLLabelElement) {
+          el.accessKey = node.mnemonic ?? '';
+        }
         break;
       case 'button':
         setMnemonicLabel(el, node.text ?? '', node.mnemonic);
@@ -2106,7 +2111,10 @@ export class SwingViz {
       const label = document.createElement('label');
       label.className = 'swing-label';
       label.htmlFor = node.for;
-      label.textContent = node.text ?? '';
+      // setDisplayedMnemonic: underline the letter; an accessKey on a <label>
+      // moves focus to its associated control on Alt+letter (native).
+      setMnemonicLabel(label, node.text ?? '', node.mnemonic);
+      label.accessKey = node.mnemonic ?? '';
       this.common(label, node);
       return label;
     }

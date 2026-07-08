@@ -1693,6 +1693,15 @@ test.describe('swing (interactive)', () => {
     const nameCol = await fields.first().evaluate((el) => el.style.gridColumn);
     expect(nameCol).toBe('2 / span 1');
 
+    // JLabel.setDisplayedMnemonic('N'): the Name label underlines the N and
+    // carries an accessKey (the platform's Alt+N shortcut). It targets the name
+    // field via setLabelFor — so activating the label focuses that field.
+    const nameLabel = root.locator('label.swing-label', { hasText: 'Name:' });
+    await expect(nameLabel.locator('u')).toHaveText('N');
+    await expect(nameLabel).toHaveAttribute('accesskey', 'N');
+    await nameLabel.click();
+    await expect(fields.first()).toBeFocused();
+
     // It still works: submitting reads the field and updates the status.
     await fields.first().fill('Ada');
     await submit.click();

@@ -899,6 +899,36 @@ fn swing_request_focus_serializes_a_focus_request() {
 }
 
 #[test]
+fn swing_label_displayed_mnemonic_serializes() {
+    // JLabel.setDisplayedMnemonic + setLabelFor: the label carries its mnemonic
+    // and the target field's id, so the renderer can underline the letter and
+    // wire Alt+letter to focus the field. Ids: frame c0, field c1, label c2.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Form");
+                JTextField name = new JTextField(12);
+                JLabel label = new JLabel("Name:");
+                label.setLabelFor(name);
+                label.setDisplayedMnemonic('N');
+                frame.add(label);
+                frame.add(name);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""type":"label","text":"Name:","for":"c1","mnemonic":"N""#),
+        "no label mnemonic: {json}"
+    );
+}
+
+#[test]
 fn swing_accessible_context_names_and_describes_a_component() {
     // getAccessibleContext().setAccessibleName / setAccessibleDescription flow
     // to the tree as accName / accDesc (the renderer maps them to aria-*).

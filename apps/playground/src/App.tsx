@@ -723,9 +723,13 @@ public class Main {
     gbc.insets = new Insets(4, 4, 4, 4);
 
     gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.EAST;
-    frame.add(new JLabel("Name:"), gbc);
-    gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
     JTextField name = new JTextField(12);
+    // A label mnemonic: Alt+N underlines the N and focuses the name field.
+    JLabel nameLabel = new JLabel("Name:");
+    nameLabel.setLabelFor(name);
+    nameLabel.setDisplayedMnemonic('N');
+    frame.add(nameLabel, gbc);
+    gbc.gridx = 1; gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL;
     frame.add(name, gbc);
 
     gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 0;

@@ -846,18 +846,26 @@ class JLabel extends Component {
 
   String __text;
   Component __labelFor = null;
+  char __mnemonic = 0; // displayed mnemonic (Alt-shortcut → focus the labelFor)
   public JLabel() { __text = ""; }
   public JLabel(String text) { __text = text; }
   public JLabel(String text, int horizontalAlignment) { __text = text; __halign = horizontalAlignment; }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
   public void setLabelFor(Component c) { __labelFor = c; }
+  // A mnemonic underlines its letter; with setLabelFor, Alt+letter focuses the
+  // associated component (int form takes a KeyEvent.VK_* code == the char).
+  public void setDisplayedMnemonic(int key) { __mnemonic = (char) key; }
+  public void setDisplayedMnemonic(char key) { __mnemonic = key; }
+  public int getDisplayedMnemonic() { return __mnemonic; }
+  public void setDisplayedMnemonicIndex(int index) {}
   public void setHorizontalAlignment(int alignment) { __halign = alignment; }
   public int getHorizontalAlignment() { return __halign < 0 ? LEADING : __halign; }
   public void setVerticalAlignment(int alignment) {}
   String __json() {
     String f = __labelFor == null ? "" : ",\"for\":\"" + __labelFor.__cid + "\"";
-    return "{\"type\":\"label\",\"text\":\"" + Component.__esc(__text) + "\"" + f + "," + __commonJson() + "}";
+    String m = __mnemonic == 0 ? "" : ",\"mnemonic\":\"" + __mnemonic + "\"";
+    return "{\"type\":\"label\",\"text\":\"" + Component.__esc(__text) + "\"" + f + m + "," + __commonJson() + "}";
   }
 }
 
