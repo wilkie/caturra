@@ -329,7 +329,7 @@ static JAVAX_SWING_EVENT: &[&str] = &[
 ];
 
 /// `javax.swing.text`: the `Document` handle (getDocument).
-static JAVAX_SWING_TEXT: &[&str] = &["Document"];
+static JAVAX_SWING_TEXT: &[&str] = &["Document", "BadLocationException"];
 
 /// Public classes of the bundled theater/media library.
 static ORG_CODE_THEATER: &[&str] = &["Scene", "Theater", "Instrument"];

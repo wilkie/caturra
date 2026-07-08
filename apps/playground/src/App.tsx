@@ -1417,6 +1417,55 @@ public class Main {
 `,
   },
   {
+    name: 'Text area ops',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JTextArea area;
+  static JLabel info;
+  static int added = 0;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Text ops");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    area = new JTextArea("Line 1", 6, 24);
+
+    // append and insert edit the text; getLineCount() reports how many lines.
+    JButton addLine = new JButton("Add line");
+    addLine.addActionListener(e -> {
+      Main.added = Main.added + 1;
+      Main.area.append("\\nLine " + (Main.added + 1));
+      Main.updateInfo();
+    });
+
+    JButton insertTop = new JButton("Insert at top");
+    insertTop.addActionListener(e -> {
+      Main.area.insert("== TOP ==\\n", 0);
+      Main.updateInfo();
+    });
+
+    info = new JLabel("Lines: 1");
+
+    JPanel buttons = new JPanel();
+    buttons.add(addLine);
+    buttons.add(insertTop);
+
+    frame.add(buttons, BorderLayout.NORTH);
+    frame.add(new JScrollPane(area), BorderLayout.CENTER);
+    frame.add(info, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+
+  static void updateInfo() {
+    info.setText("Lines: " + area.getLineCount());
+  }
+}
+`,
+  },
+  {
     name: 'Scroll pane (JScrollPane)',
     starter: `import javax.swing.*;
 import java.awt.*;

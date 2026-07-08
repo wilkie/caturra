@@ -1015,6 +1015,43 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_text_area_text_operations() {
+    // JTextArea's text ops: line queries, offsets, insert, replaceRange, and a
+    // bounds error raising the checked BadLocationException (like the JDK).
+    let (result, console) = compile_and_run(
+        r#"
+        import javax.swing.*;
+        import javax.swing.text.BadLocationException;
+        public class Main {
+            public static void main(String[] args) throws BadLocationException {
+                JTextArea area = new JTextArea("hello\nworld");
+                System.out.println("lines=" + area.getLineCount());
+                System.out.println("start1=" + area.getLineStartOffset(1));
+                System.out.println("end0=" + area.getLineEndOffset(0));
+                System.out.println("lineOf8=" + area.getLineOfOffset(8));
+                System.out.println("get=" + area.getText(0, 5));
+                area.insert("!", 5);
+                System.out.println("afterInsert=" + area.getText(0, 6));
+                area.replaceRange("Earth", 7, 12);
+                System.out.println("full=" + area.getText().replace("\n", "|"));
+                try {
+                    area.getLineStartOffset(99);
+                } catch (BadLocationException e) {
+                    System.out.println("bad=" + e.getMessage());
+                }
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "lines=2\nstart1=6\nend0=6\nlineOf8=1\nget=hello\nafterInsert=hello!\nfull=hello!|Earth\nbad=No such line\n"
+    );
+}
+
+#[test]
 fn swing_editable_combo_box_custom_values_and_item_management() {
     // An editable JComboBox: runtime addItem/removeItem, and getSelectedItem
     // returns the current text — a listed value (with its index) or a custom

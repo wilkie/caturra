@@ -1790,6 +1790,26 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('0 characters');
   });
 
+  test('JTextArea append/insert edit the text and getLineCount tracks lines', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Text area ops' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const area = root.getByRole('textbox');
+    await expect(area).toHaveValue('Line 1');
+    await expect(root).toContainText('Lines: 1');
+
+    // append adds a line; getLineCount() reflects it.
+    await root.getByRole('button', { name: 'Add line' }).click();
+    await expect(area).toHaveValue('Line 1\nLine 2');
+    await expect(root).toContainText('Lines: 2');
+
+    // insert(str, 0) prepends; the count grows by the inserted newline.
+    await root.getByRole('button', { name: 'Insert at top' }).click();
+    await expect(area).toHaveValue('== TOP ==\nLine 1\nLine 2');
+    await expect(root).toContainText('Lines: 3');
+  });
+
   test('an editable JComboBox accepts a custom value and offers presets', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Editable combo' });

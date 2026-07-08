@@ -1045,6 +1045,68 @@ class JTextArea extends Component {
   public String getText() { return __text; }
   public void setText(String text) { __text = text; }
   public void append(String text) { __text = __text + text; }
+  // Insert str at position pos (0..length); shifts the rest right.
+  public void insert(String str, int pos) {
+    if (pos < 0 || pos > __text.length()) {
+      throw new IllegalArgumentException("Invalid insert position: " + pos);
+    }
+    __text = __text.substring(0, pos) + str + __text.substring(pos);
+  }
+  // Replace the text in [start, end) with str.
+  public void replaceRange(String str, int start, int end) {
+    if (start > end) throw new IllegalArgumentException("end before start");
+    if (start < 0 || end > __text.length()) {
+      throw new IllegalArgumentException("Invalid range: " + start + ".." + end);
+    }
+    __text = __text.substring(0, start) + str + __text.substring(end);
+  }
+  // Number of lines: an empty area has 1 line; each '\n' starts another.
+  public int getLineCount() {
+    int lines = 1;
+    for (int i = 0; i < __text.length(); i++) {
+      if (__text.charAt(i) == '\n') lines++;
+    }
+    return lines;
+  }
+  // Offset where a line begins (0-indexed line).
+  public int getLineStartOffset(int line) throws BadLocationException {
+    if (line < 0) throw new BadLocationException("Negative line", -1);
+    if (line >= getLineCount()) throw new BadLocationException("No such line", __text.length() + 1);
+    int seen = 0;
+    if (line == 0) return 0;
+    for (int i = 0; i < __text.length(); i++) {
+      if (__text.charAt(i) == '\n') {
+        seen++;
+        if (seen == line) return i + 1;
+      }
+    }
+    return __text.length();
+  }
+  // Offset just past a line's end (its terminator, or the document end).
+  public int getLineEndOffset(int line) throws BadLocationException {
+    if (line < 0) throw new BadLocationException("Negative line", -1);
+    if (line >= getLineCount()) throw new BadLocationException("No such line", __text.length() + 1);
+    if (line == getLineCount() - 1) return __text.length();
+    return getLineStartOffset(line + 1);
+  }
+  // The line that contains the given offset (0..length).
+  public int getLineOfOffset(int offset) throws BadLocationException {
+    if (offset < 0 || offset > __text.length()) {
+      throw new BadLocationException("Can't translate offset to line", offset);
+    }
+    int line = 0;
+    for (int i = 0; i < offset; i++) {
+      if (__text.charAt(i) == '\n') line++;
+    }
+    return line;
+  }
+  // The substring of `length` chars starting at `offset`.
+  public String getText(int offset, int length) throws BadLocationException {
+    if (offset < 0 || length < 0 || offset + length > __text.length()) {
+      throw new BadLocationException("Invalid range", offset);
+    }
+    return __text.substring(offset, offset + length);
+  }
   public void setEditable(boolean editable) { __editable = editable; }
   public boolean isEditable() { return __editable; }
   public void setLineWrap(boolean wrap) { __wrap = wrap; }
@@ -2042,6 +2104,14 @@ class Document {
     __SwingRuntime.__interactive = true;
   }
   public int getLength() { return __owner.__lastText.length(); }
+}
+
+// A checked exception thrown by the text-offset queries (getLineStartOffset,
+// getText, ...) when an offset or line is out of range — like the real JDK.
+class BadLocationException extends Exception {
+  int __offset;
+  public BadLocationException(String message, int offset) { super(message); __offset = offset; }
+  public int offsetRequested() { return __offset; }
 }
 
 class ListSelectionEvent {
