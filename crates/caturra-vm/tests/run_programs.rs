@@ -873,6 +873,40 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_menu_item_accelerator_serializes_shortcut_text() {
+    // setAccelerator(KeyStroke) serializes a shortcut string used both as the
+    // menu hint and the key the renderer matches. Both the modern *_DOWN_MASK
+    // and the legacy ActionEvent.*_MASK forms render the same.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                JMenuBar bar = new JMenuBar();
+                JMenu file = new JMenu("File");
+                JMenuItem save = new JMenuItem("Save");
+                save.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK));
+                file.add(save);
+                JMenuItem saveAs = new JMenuItem("Save As");
+                saveAs.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S,
+                    ActionEvent.CTRL_MASK | ActionEvent.SHIFT_MASK));
+                file.add(saveAs);
+                bar.add(file);
+                frame.setJMenuBar(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""text":"Save","accel":"Ctrl+S""#), "no Ctrl+S: {json}");
+    assert!(json.contains(r#""text":"Save As","accel":"Ctrl+Shift+S""#), "no Ctrl+Shift+S: {json}");
+}
+
+#[test]
 fn swing_check_and_radio_menu_items_toggle_and_group() {
     // A JCheckBoxMenuItem toggles on each activation; JRadioButtonMenuItems in a
     // ButtonGroup are mutually exclusive (selecting one deselects the others).

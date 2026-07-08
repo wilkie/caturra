@@ -262,6 +262,7 @@ static JAVAX_SWING: &[&str] = &[
     "Border",
     "SwingUtilities",
     "SwingConstants",
+    "KeyStroke",
 ];
 /// `javax.swing.border`: the `Border` handle returned by `BorderFactory` plus
 /// the concrete subtypes (constructible directly, e.g. `new LineBorder(...)`).
@@ -307,6 +308,7 @@ static JAVA_AWT_EVENT: &[&str] = &[
     "KeyListener",
     "KeyAdapter",
     "KeyEvent",
+    "InputEvent",
 ];
 /// `javax.swing.event`: the `ChangeListener` (`JSlider`) and
 /// `ListSelectionListener` (`JList`) plus their events.

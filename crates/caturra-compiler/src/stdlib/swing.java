@@ -1460,10 +1460,19 @@ class JMenuItem extends Component {
   String __text;
   boolean __sep = false;
   ActionListener __listener = null;
+  KeyStroke __accel = null;
   public JMenuItem() { __text = ""; }
   public JMenuItem(String text) { __text = text; }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
+  public void setAccelerator(KeyStroke k) { __accel = k; __SwingRuntime.__interactive = true; }
+  public KeyStroke getAccelerator() { return __accel; }
+  // The ",\"accel\":\"Ctrl+S\"" fragment (both the display hint and the key the
+  // renderer matches a keydown against), or "" when there's no accelerator.
+  String __accelJson() {
+    if (__accel == null) return "";
+    return ",\"accel\":\"" + Component.__esc(__accel.__text()) + "\"";
+  }
   public void addActionListener(ActionListener l) { __listener = l; __SwingRuntime.__interactive = true; }
   void __onEvent() {
     if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
@@ -1471,7 +1480,8 @@ class JMenuItem extends Component {
   boolean __listens() { return __listener != null; }
   String __json() {
     if (__sep) return "{\"type\":\"separator\"}";
-    return "{\"type\":\"menuitem\",\"text\":\"" + Component.__esc(__text) + "\"," + __commonJson() + "}";
+    return "{\"type\":\"menuitem\",\"text\":\"" + Component.__esc(__text) + "\""
+        + __accelJson() + "," + __commonJson() + "}";
   }
 }
 
@@ -1498,7 +1508,7 @@ class JCheckBoxMenuItem extends JMenuItem {
   }
   String __json() {
     return "{\"type\":\"checkmenuitem\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
-        + "," + __commonJson() + "}";
+        + __accelJson() + "," + __commonJson() + "}";
   }
 }
 
@@ -1520,7 +1530,7 @@ class JRadioButtonMenuItem extends JMenuItem {
   }
   String __json() {
     return "{\"type\":\"radiomenuitem\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
-        + "," + __commonJson() + "}";
+        + __accelJson() + "," + __commonJson() + "}";
   }
 }
 
@@ -1721,12 +1731,72 @@ class JFrame extends Container {
 // ----- java.awt.event + the Phase 2 event loop -----
 
 class ActionEvent {
+  // Modifier masks (java.awt.event.ActionEvent), used with KeyStroke too.
+  public static final int SHIFT_MASK = 1;
+  public static final int CTRL_MASK = 2;
+  public static final int META_MASK = 4;
+  public static final int ALT_MASK = 8;
   Object __src;
   String __command = null;
   public ActionEvent(Object source) { __src = source; }
   public ActionEvent(Object source, String command) { __src = source; __command = command; }
   public Object getSource() { return __src; }
   public String getActionCommand() { return __command; }
+}
+
+// java.awt.event.InputEvent modifier masks (the newer *_DOWN_MASK forms and the
+// legacy ones); both are accepted by KeyStroke.
+class InputEvent {
+  public static final int SHIFT_DOWN_MASK = 64;
+  public static final int CTRL_DOWN_MASK = 128;
+  public static final int META_DOWN_MASK = 256;
+  public static final int ALT_DOWN_MASK = 512;
+  public static final int SHIFT_MASK = 1;
+  public static final int CTRL_MASK = 2;
+  public static final int META_MASK = 4;
+  public static final int ALT_MASK = 8;
+}
+
+// javax.swing.KeyStroke: a key + modifiers, used as a menu accelerator. Its
+// display text (e.g. "Ctrl+S") is also the match string the renderer compares a
+// keydown against.
+class KeyStroke {
+  int __code;
+  int __mod;
+  KeyStroke(int code, int mod) { __code = code; __mod = mod; }
+  public static KeyStroke getKeyStroke(int keyCode, int modifiers) { return new KeyStroke(keyCode, modifiers); }
+  public static KeyStroke getKeyStroke(char keyChar) {
+    int c = keyChar;
+    if (c >= 97 && c <= 122) c -= 32; // upper-case a letter
+    return new KeyStroke(c, 0);
+  }
+  public int getKeyCode() { return __code; }
+  public int getModifiers() { return __mod; }
+  String __text() {
+    boolean ctrl = (__mod & 128) != 0 || (__mod & 2) != 0;
+    boolean shift = (__mod & 64) != 0 || (__mod & 1) != 0;
+    boolean alt = (__mod & 512) != 0 || (__mod & 8) != 0;
+    String s = "";
+    if (ctrl) s += "Ctrl+";
+    if (shift) s += "Shift+";
+    if (alt) s += "Alt+";
+    return s + __keyText();
+  }
+  String __keyText() {
+    if (__code >= 65 && __code <= 90) return "" + (char) __code;  // A-Z
+    if (__code >= 48 && __code <= 57) return "" + (char) __code;  // 0-9
+    if (__code == 10) return "Enter";
+    if (__code == 32) return "Space";
+    if (__code == 27) return "Esc";
+    if (__code == 37) return "Left";
+    if (__code == 38) return "Up";
+    if (__code == 39) return "Right";
+    if (__code == 40) return "Down";
+    if (__code == 8) return "Backspace";
+    if (__code == 9) return "Tab";
+    if (__code == 127) return "Delete";
+    return "" + (char) __code;
+  }
 }
 
 interface ActionListener {

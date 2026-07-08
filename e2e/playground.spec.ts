@@ -1603,6 +1603,24 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('a menu accelerator fires its item from the keyboard', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Menus (JMenuBar)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    await expect(root.getByRole('menubar')).toBeVisible();
+
+    // Ctrl+N triggers File > New without the menu ever being opened.
+    await page.keyboard.press('Control+n');
+    await expect(root).toContainText('New file');
+
+    // The accelerator hint shows alongside the item. getByRole matching the
+    // exact name "Open" proves the aria-hidden hint stays out of the name.
+    await root.getByRole('button', { name: 'File' }).click();
+    const open = root.getByRole('menuitem', { name: 'Open', exact: true });
+    await expect(open).toContainText('Ctrl+O');
+  });
+
   test('check and radio menu items toggle state and stay mutually exclusive', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Menu options' });

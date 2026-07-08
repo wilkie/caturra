@@ -180,10 +180,57 @@ interface SwingMenuEntry {
   id?: string;
   listens?: boolean;
   selected?: boolean;
+  /** setAccelerator hint/match string, e.g. "Ctrl+S". */
+  accel?: string;
   items?: SwingMenuEntry[];
 }
 
 type FieldElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+
+/** Collect every menu item's accelerator (and its id) from a menu tree. */
+function collectAccelerators(menus: SwingMenu[]): { accel: string; id: string }[] {
+  const out: { accel: string; id: string }[] = [];
+  const walk = (items: SwingMenuEntry[] | undefined): void => {
+    for (const entry of items ?? []) {
+      if (entry.type === 'menu') {
+        walk(entry.items);
+      } else if (entry.accel !== undefined && entry.id !== undefined) {
+        out.push({ accel: entry.accel, id: entry.id });
+      }
+    }
+  };
+  for (const menu of menus) {
+    walk(menu.items);
+  }
+  return out;
+}
+
+/** A keydown as an accelerator string ("Ctrl+Shift+S"), matching KeyStroke's. */
+function keyComboString(event: KeyboardEvent): string {
+  let s = '';
+  if (event.ctrlKey || event.metaKey) {
+    s += 'Ctrl+'; // treat Cmd as Ctrl so Mac accelerators match
+  }
+  if (event.shiftKey) {
+    s += 'Shift+';
+  }
+  if (event.altKey) {
+    s += 'Alt+';
+  }
+  const named: Record<string, string> = {
+    Enter: 'Enter',
+    ' ': 'Space',
+    Escape: 'Esc',
+    ArrowLeft: 'Left',
+    ArrowUp: 'Up',
+    ArrowRight: 'Right',
+    ArrowDown: 'Down',
+    Backspace: 'Backspace',
+    Tab: 'Tab',
+    Delete: 'Delete',
+  };
+  return s + (named[event.key] ?? (event.key.length === 1 ? event.key.toUpperCase() : event.key));
+}
 
 /** Turn a `"r,g,b"` triple from the engine into a CSS color. */
 function cssColor(triple: string | undefined): string | null {
@@ -1419,6 +1466,30 @@ export class SwingViz {
       document.removeEventListener('focusin', onOutside);
     });
 
+    // Menu accelerators (setAccelerator): a document key handler fires the
+    // matching item so e.g. Ctrl+S works without opening the menu. Only combos
+    // with a modifier are handled globally (a bare-letter accelerator would
+    // hijack typing).
+    const accelerators = collectAccelerators(bar.menus);
+    if (accelerators.length > 0) {
+      const onKey = (event: KeyboardEvent): void => {
+        const combo = keyComboString(event);
+        if (!combo.includes('+')) {
+          return;
+        }
+        const match = accelerators.find((a) => a.accel.toUpperCase() === combo.toUpperCase());
+        if (match) {
+          event.preventDefault();
+          closeTop();
+          this.#dispatch(this.#payload(match.id));
+        }
+      };
+      document.addEventListener('keydown', onKey);
+      this.#teardown.push(() => {
+        document.removeEventListener('keydown', onKey);
+      });
+    }
+
     return menubar;
   }
 
@@ -1522,6 +1593,16 @@ export class SwingViz {
         item.append(indicator, document.createTextNode(entry.text ?? ''));
       } else {
         item.textContent = entry.text ?? '';
+      }
+      // setAccelerator: a right-aligned shortcut hint (aria-hidden — the actual
+      // shortcut works via the document key handler, and aria-checked/name stay
+      // clean).
+      if (entry.accel !== undefined) {
+        const accel = document.createElement('span');
+        accel.className = 'swing-menu-accel';
+        accel.setAttribute('aria-hidden', 'true');
+        accel.textContent = entry.accel;
+        item.appendChild(accel);
       }
       // Moving onto a plain item closes any sibling submenu that was open.
       item.addEventListener('mouseenter', () => {

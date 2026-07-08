@@ -1085,6 +1085,7 @@ public class Main {
     name: 'Menus (JMenuBar)',
     starter: `import javax.swing.*;
 import java.awt.*;
+import java.awt.event.*;
 
 public class Main {
   static JLabel status;
@@ -1097,8 +1098,11 @@ public class Main {
 
     JMenu file = new JMenu("File");
     JMenuItem newItem = new JMenuItem("New");
+    // A keyboard accelerator: Ctrl+N works even without opening the menu.
+    newItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_N, InputEvent.CTRL_DOWN_MASK));
     newItem.addActionListener(e -> Main.status.setText("New file"));
     JMenuItem openItem = new JMenuItem("Open");
+    openItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK));
     openItem.addActionListener(e -> Main.status.setText("Opened a file"));
 
     // A nested submenu: File > Export > (PNG | JPEG).

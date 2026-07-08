@@ -715,6 +715,14 @@ label {
   margin-left: auto;
 }
 
+/* An accelerator hint sits right-aligned and muted. */
+.swing-menu-accel {
+  margin-left: auto;
+  padding-left: 1.5rem;
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
 /* A checkable menu item's indicator (aria-hidden): a check or bullet when set. */
 .swing-menu-indicator {
   width: 1em;
