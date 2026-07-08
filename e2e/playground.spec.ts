@@ -2132,6 +2132,12 @@ test.describe('swing (interactive)', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('Notes 1.0');
     await dialog.getByRole('button', { name: 'OK' }).click();
+
+    // File > Quit calls System.exit(0): the run ends and the frame is stopped.
+    await root.getByRole('button', { name: 'File' }).click();
+    await root.getByRole('menu', { name: 'File' }).getByRole('menuitem', { name: 'Quit' }).click();
+    await expect(page.getByTestId('run')).toBeEnabled();
+    await expect(page.getByTestId('swing-stopped-badge')).toBeVisible();
   });
 
   test('BorderLayout places children north/south/east/west/center; they dispatch', async ({

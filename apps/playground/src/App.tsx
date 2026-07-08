@@ -1347,8 +1347,9 @@ public class Main {
     export.add(png);
     export.add(jpeg);
 
+    // File > Quit ends the program with System.exit(0); the frame then dims.
     JMenuItem quitItem = new JMenuItem("Quit");
-    quitItem.addActionListener(e -> Main.status.setText("Bye!"));
+    quitItem.addActionListener(e -> System.exit(0));
     file.add(newItem);
     file.add(openItem);
     file.add(export);
