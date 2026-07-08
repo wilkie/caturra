@@ -1720,6 +1720,26 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Style: plain');
   });
 
+  test('getAccessibleContext names and describes unlabelled controls', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Accessible controls' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // The slider has no visible label, but setAccessibleName makes it reachable
+    // by name to assistive tech (and to getByRole).
+    const volume = root.getByRole('slider', { name: 'Volume' });
+    await expect(volume).toBeVisible();
+    await expect(volume).toHaveAttribute('aria-description', 'Playback level from 0 to 11');
+
+    // The text field is named the same way.
+    await expect(root.getByRole('textbox', { name: 'Search' })).toBeVisible();
+
+    // The named slider still works: changing it fires its listener.
+    await volume.fill('8');
+    await expect(root).toContainText('Volume: 8');
+  });
+
   test('a JPasswordField masks input and getPassword() reads it back', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Login form' });

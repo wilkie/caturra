@@ -364,6 +364,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     if imports_package(&units, &["javax", "swing"])
         || imports_package(&units, &["javax", "swing", "event"])
         || imports_package(&units, &["javax", "swing", "border"])
+        || imports_package(&units, &["javax", "accessibility"])
         || imports_package(&units, &["java", "awt"])
         || imports_package(&units, &["java", "awt", "event"])
     {

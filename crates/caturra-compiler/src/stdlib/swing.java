@@ -355,8 +355,20 @@ class Component {
   // horizontal text alignment (SwingConstants); -1 = unset.
   Dimension __prefSize = null, __minSize = null, __maxSize = null;
   int __halign = -1;
+  // Accessibility (via getAccessibleContext): an explicit name/description for
+  // assistive tech, overriding a widget's default (text-content) name.
+  String __accName = null, __accDesc = null;
+  AccessibleContext __accCtx = null;
 
   Component() { __cid = "c" + __nextId(); }
+
+  // The component's AccessibleContext — the Swing accessibility API. Lazily
+  // created; setAccessibleName / setAccessibleDescription flow to the renderer
+  // as aria-label / aria-description.
+  public AccessibleContext getAccessibleContext() {
+    if (__accCtx == null) __accCtx = new AccessibleContext(this);
+    return __accCtx;
+  }
 
   public void setEnabled(boolean enabled) { __enabled = enabled; }
   public boolean isEnabled() { return __enabled; }
@@ -409,6 +421,8 @@ class Component {
     // input read at submit-time (no listener) doesn't round-trip on every key.
     if (__listens()) s += ",\"listens\":true";
     if (!__visible) s += ",\"hidden\":true";
+    if (__accName != null) s += ",\"accName\":\"" + Component.__esc(__accName) + "\"";
+    if (__accDesc != null) s += ",\"accDesc\":\"" + Component.__esc(__accDesc) + "\"";
     if (__ttip != null) s += ",\"tooltip\":\"" + Component.__esc(__ttip) + "\"";
     if (__bg != null) s += ",\"bg\":\"" + __bg.__r + "," + __bg.__g + "," + __bg.__b + "\"";
     if (__fg != null) s += ",\"fg\":\"" + __fg.__r + "," + __fg.__g + "," + __fg.__b + "\"";
@@ -441,6 +455,18 @@ class Component {
   void __onDrag(int x, int y) {}
   void __onKey(int type, int code, char ch) {}
   boolean __listens() { return false; }
+}
+
+// javax.accessibility.AccessibleContext: the Swing accessibility handle. Setting
+// the accessible name/description on any component surfaces it to assistive tech
+// (the renderer maps them to aria-label / aria-description).
+class AccessibleContext {
+  Component __owner;
+  AccessibleContext(Component owner) { __owner = owner; }
+  public void setAccessibleName(String name) { __owner.__accName = name; }
+  public String getAccessibleName() { return __owner.__accName; }
+  public void setAccessibleDescription(String description) { __owner.__accDesc = description; }
+  public String getAccessibleDescription() { return __owner.__accDesc; }
 }
 
 class Container extends Component {

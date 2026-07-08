@@ -873,6 +873,35 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_accessible_context_names_and_describes_a_component() {
+    // getAccessibleContext().setAccessibleName / setAccessibleDescription flow
+    // to the tree as accName / accDesc (the renderer maps them to aria-*).
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.accessibility.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("A11y");
+                JSlider volume = new JSlider(0, 11);
+                AccessibleContext ctx = volume.getAccessibleContext();
+                ctx.setAccessibleName("Volume");
+                ctx.setAccessibleDescription("Playback level, 0 to 11");
+                frame.add(volume);
+                // The name round-trips through the same handle.
+                System.out.println(volume.getAccessibleContext().getAccessibleName());
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""accName":"Volume""#), "no accessible name: {json}");
+    assert!(json.contains(r#""accDesc":"Playback level, 0 to 11""#), "no accessible description: {json}");
+}
+
+#[test]
 fn swing_menu_item_accelerator_serializes_shortcut_text() {
     // setAccelerator(KeyStroke) serializes a shortcut string used both as the
     // menu hint and the key the renderer matches. Both the modern *_DOWN_MASK

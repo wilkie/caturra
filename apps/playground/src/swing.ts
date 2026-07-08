@@ -71,6 +71,9 @@ interface SwingNode {
   enabled?: boolean;
   /** Component.setVisible(false): the component is hidden (display:none). */
   hidden?: boolean;
+  /** AccessibleContext name/description → aria-label / aria-description. */
+  accName?: string;
+  accDesc?: string;
   tooltip?: string;
   bg?: string;
   fg?: string;
@@ -1184,6 +1187,16 @@ export class SwingViz {
     el.hidden = node.hidden === true; // Component.setVisible(false)
     if (node.tooltip !== undefined) {
       el.title = node.tooltip;
+    }
+    // AccessibleContext.setAccessibleName / setAccessibleDescription. An
+    // explicit accessible name is authoritative, so it overrides a widget's
+    // default (text-content or tooltip) name; common() runs last, after the
+    // builder's own aria-label, so this wins.
+    if (node.accName !== undefined) {
+      el.setAttribute('aria-label', node.accName);
+    }
+    if (node.accDesc !== undefined) {
+      el.setAttribute('aria-description', node.accDesc);
     }
     const bg = cssColor(node.bg);
     if (bg !== null) {

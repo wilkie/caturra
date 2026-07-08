@@ -199,6 +199,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "javax.swing" => Some(JAVAX_SWING),
         "javax.swing.event" => Some(JAVAX_SWING_EVENT),
         "javax.swing.border" => Some(JAVAX_SWING_BORDER),
+        "javax.accessibility" => Some(JAVAX_ACCESSIBILITY),
         "java.awt" => Some(JAVA_AWT),
         "java.awt.event" => Some(JAVA_AWT_EVENT),
         _ => None,
@@ -264,6 +265,9 @@ static JAVAX_SWING: &[&str] = &[
     "SwingConstants",
     "KeyStroke",
 ];
+/// `javax.accessibility`: the `AccessibleContext` handle (getAccessibleContext).
+static JAVAX_ACCESSIBILITY: &[&str] = &["AccessibleContext"];
+
 /// `javax.swing.border`: the `Border` handle returned by `BorderFactory` plus
 /// the concrete subtypes (constructible directly, e.g. `new LineBorder(...)`).
 static JAVAX_SWING_BORDER: &[&str] = &[

@@ -792,6 +792,40 @@ public class Main {
 `,
   },
   {
+    name: 'Accessible controls',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Accessible controls");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new FlowLayout());
+
+    // A slider with no visible JLabel — named for assistive tech the Swing way,
+    // via getAccessibleContext() (maps to aria-label / aria-description).
+    JSlider volume = new JSlider(0, 11, 5);
+    volume.getAccessibleContext().setAccessibleName("Volume");
+    volume.getAccessibleContext().setAccessibleDescription("Playback level from 0 to 11");
+    volume.addChangeListener(e -> Main.status.setText("Volume: " + volume.getValue()));
+
+    // A search field, likewise named without a separate label.
+    JTextField search = new JTextField(12);
+    search.getAccessibleContext().setAccessibleName("Search");
+
+    status = new JLabel("Volume: 5");
+
+    frame.add(volume);
+    frame.add(search);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Login form',
     starter: `import javax.swing.*;
 import java.awt.*;
