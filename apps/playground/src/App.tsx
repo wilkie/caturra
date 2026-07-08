@@ -849,6 +849,7 @@ public class Main {
     frame.add(pass);
 
     JButton login = new JButton("Log in");
+    login.setMnemonic('L'); // underlines the L; Alt+L activates
     login.addActionListener(e -> {
       String p = new String(Main.pass.getPassword());
       Main.status.setText("Welcome, " + Main.user.getText() + " (" + p.length() + " chars)");

@@ -489,6 +489,25 @@ function sizeDim(size: string | undefined, index: 0 | 1): string {
   return `${String(n)}px`;
 }
 
+/** Set a control's label text, underlining the mnemonic letter and exposing
+ * its Alt-shortcut (setMnemonic). The full text remains the accessible name. */
+function setMnemonicLabel(el: HTMLElement, text: string, mnemonic: string | undefined): void {
+  const at = mnemonic === undefined || mnemonic === '' ? -1 : text.toUpperCase().indexOf(mnemonic.toUpperCase());
+  if (at < 0) {
+    el.textContent = text;
+    el.removeAttribute('aria-keyshortcuts');
+    return;
+  }
+  const underline = document.createElement('u');
+  underline.textContent = text.charAt(at);
+  el.replaceChildren(
+    document.createTextNode(text.slice(0, at)),
+    underline,
+    document.createTextNode(text.slice(at + 1)),
+  );
+  el.setAttribute('aria-keyshortcuts', `Alt+${mnemonic?.toUpperCase() ?? ''}`);
+}
+
 /** A SwingConstants horizontal alignment as a CSS text-align. */
 function horizAlign(align: number): string {
   if (align === 0) {
@@ -867,7 +886,7 @@ export class SwingViz {
         el.textContent = node.text ?? '';
         break;
       case 'button':
-        el.textContent = node.text ?? '';
+        setMnemonicLabel(el, node.text ?? '', node.mnemonic);
         (el as HTMLButtonElement).disabled = node.enabled === false;
         (el as HTMLButtonElement).accessKey = node.mnemonic ?? '';
         break;
@@ -2098,9 +2117,10 @@ export class SwingViz {
     button.type = 'button';
     button.className = 'swing-button';
     button.id = node.id;
-    button.textContent = node.text ?? '';
     button.disabled = node.enabled === false;
-    // setMnemonic → an accessKey (the platform's Alt-shortcut for the button).
+    // setMnemonic → the underlined letter + an accessKey (the platform's
+    // Alt-shortcut) + aria-keyshortcuts so it's announced.
+    setMnemonicLabel(button, node.text ?? '', node.mnemonic);
     button.accessKey = node.mnemonic ?? '';
     // A click reports the button's id plus every field's current value to
     // the program's ActionListener. (Native <button> also fires on

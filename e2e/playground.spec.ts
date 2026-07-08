@@ -1775,10 +1775,16 @@ test.describe('swing (interactive)', () => {
     // user.requestFocus() put keyboard focus on the first field, ready to type.
     await expect(user).toBeFocused();
 
+    // setMnemonic('L') underlines the L and exposes the Alt-shortcut, while the
+    // button's accessible name stays "Log in".
+    const login = root.getByRole('button', { name: 'Log in' });
+    await expect(login).toHaveAttribute('aria-keyshortcuts', 'Alt+L');
+    await expect(login.locator('u')).toHaveText('L');
+
     // Fill both; logging in reads user.getText() and pass.getPassword().
     await user.fill('ada');
     await pw.fill('secret');
-    await root.getByRole('button', { name: 'Log in' }).click();
+    await login.click();
     await expect(root).toContainText('Welcome, ada (6 chars)');
   });
 
