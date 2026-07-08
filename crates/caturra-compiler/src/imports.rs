@@ -326,6 +326,8 @@ static JAVAX_SWING_EVENT: &[&str] = &[
     "ListSelectionEvent",
     "ListDataListener",
     "ListDataEvent",
+    "TableModelListener",
+    "TableModelEvent",
     "DocumentListener",
     "DocumentEvent",
 ];

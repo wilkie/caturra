@@ -1742,6 +1742,18 @@ public class Main {
       }
     });
 
+    // A TableModelListener fires on every model change — adding or removing a
+    // row, or editing a cell inline — reporting what happened.
+    model.addTableModelListener(new TableModelListener() {
+      public void tableChanged(TableModelEvent e) {
+        String kind = "changed";
+        if (e.getType() == TableModelEvent.INSERT) kind = "row added";
+        else if (e.getType() == TableModelEvent.DELETE) kind = "row removed";
+        else if (e.getType() == TableModelEvent.UPDATE) kind = "cell edited";
+        Main.status.setText(kind + " (" + Main.model.getRowCount() + " rows)");
+      }
+    });
+
     // NORTH: a small form to append a row.
     nameField = new JTextField(8);
     qtyField = new JTextField(3);

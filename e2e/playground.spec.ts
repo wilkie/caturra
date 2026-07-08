@@ -2361,18 +2361,21 @@ test.describe('swing (interactive)', () => {
     const table = root.getByRole('grid');
     await expect(table.getByRole('row')).toHaveCount(3); // header + 2 rows
 
-    // Append a row through the form; the model update re-renders the grid.
+    // Append a row through the form; the model update re-renders the grid and
+    // the model's TableModelListener reports the insert.
     await root.getByRole('textbox', { name: 'Item:' }).fill('Cherries');
     await root.getByRole('textbox', { name: 'Qty:' }).fill('5');
     await root.getByRole('button', { name: 'Add' }).click();
     await expect(table.getByRole('row')).toHaveCount(4);
     await expect(table.getByRole('row', { name: /Cherries/ })).toContainText('5');
+    await expect(root).toContainText('row added (3 rows)');
 
-    // Select a row and remove it.
+    // Select a row and remove it — the listener reports the delete.
     await table.getByRole('row', { name: /Apples/ }).click();
     await root.getByRole('button', { name: 'Remove selected' }).click();
     await expect(table.getByRole('row')).toHaveCount(3);
     await expect(table.getByRole('row', { name: /Apples/ })).toHaveCount(0);
+    await expect(root).toContainText('row removed (2 rows)');
   });
 
   test('a JSpinner drives a JProgressBar (spinbutton + progressbar roles)', async ({ page }) => {

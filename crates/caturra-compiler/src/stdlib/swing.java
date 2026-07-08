@@ -1564,47 +1564,71 @@ class JSpinner extends Component {
 class DefaultTableModel {
   java.util.ArrayList<String> __columns = new java.util.ArrayList<String>();
   java.util.ArrayList<String> __cells = new java.util.ArrayList<String>();
+  java.util.ArrayList<TableModelListener> __tableListeners = new java.util.ArrayList<TableModelListener>();
   public DefaultTableModel() {}
   public DefaultTableModel(Object[][] data, Object[] columnNames) {
     for (int c = 0; c < columnNames.length; c++) __columns.add(__str(columnNames[c]));
     for (int r = 0; r < data.length; r++) addRow(data[r]);
   }
   static String __str(Object v) { return v == null ? "" : "" + v; }
+  public void addTableModelListener(TableModelListener l) { __tableListeners.add(l); }
+  public void removeTableModelListener(TableModelListener l) { __tableListeners.remove(l); }
+  // Notify listeners of a change over rows [first, last] (of the given type),
+  // as real Swing's AbstractTableModel does when the model is mutated.
+  void __fireTable(int firstRow, int lastRow, int column, int type) {
+    TableModelEvent e = new TableModelEvent(this, firstRow, lastRow, column, type);
+    for (TableModelListener l : __tableListeners) l.tableChanged(e);
+  }
   public int getColumnCount() { return __columns.size(); }
   public int getRowCount() { return __columns.isEmpty() ? 0 : __cells.size() / __columns.size(); }
   public String getColumnName(int col) { return __columns.get(col); }
   public Object getValueAt(int row, int col) { return __cells.get(row * __columns.size() + col); }
   public void setValueAt(Object value, int row, int col) {
     __cells.set(row * __columns.size() + col, __str(value));
+    __fireTable(row, row, col, TableModelEvent.UPDATE);
   }
   // Cells are editable by default; override this to make (some) read-only.
   public boolean isCellEditable(int row, int col) { return true; }
   public void addRow(Object[] rowData) {
+    int row = getRowCount();
     for (int c = 0; c < __columns.size(); c++) {
       __cells.add(__str(c < rowData.length ? rowData[c] : null));
     }
+    __fireTable(row, row, TableModelEvent.ALL_COLUMNS, TableModelEvent.INSERT);
   }
   public void insertRow(int row, Object[] rowData) {
     int base = row * __columns.size();
     for (int c = 0; c < __columns.size(); c++) {
       __cells.add(base + c, __str(c < rowData.length ? rowData[c] : null));
     }
+    __fireTable(row, row, TableModelEvent.ALL_COLUMNS, TableModelEvent.INSERT);
   }
   public void removeRow(int row) {
     int cols = __columns.size();
     for (int c = 0; c < cols; c++) __cells.remove(row * cols);
+    __fireTable(row, row, TableModelEvent.ALL_COLUMNS, TableModelEvent.DELETE);
   }
   public void addColumn(Object columnName) {
     int oldCols = __columns.size();
     int rows = oldCols == 0 ? 0 : __cells.size() / oldCols;
     __columns.add(__str(columnName));
     for (int r = rows - 1; r >= 0; r--) __cells.add((r + 1) * oldCols, "");
+    // A new column is a structure change (HEADER_ROW), like fireTableStructureChanged.
+    __fireTable(TableModelEvent.HEADER_ROW, TableModelEvent.HEADER_ROW,
+        TableModelEvent.ALL_COLUMNS, TableModelEvent.UPDATE);
   }
   public void setRowCount(int rowCount) {
     int cols = __columns.size();
+    int oldRows = getRowCount();
     int target = rowCount * cols;
     while (__cells.size() > target) __cells.remove(__cells.size() - 1);
     while (__cells.size() < target) __cells.add("");
+    int newRows = getRowCount();
+    if (newRows > oldRows) {
+      __fireTable(oldRows, newRows - 1, TableModelEvent.ALL_COLUMNS, TableModelEvent.INSERT);
+    } else if (newRows < oldRows) {
+      __fireTable(newRows, oldRows - 1, TableModelEvent.ALL_COLUMNS, TableModelEvent.DELETE);
+    }
   }
 }
 
@@ -2186,6 +2210,33 @@ interface ListDataListener {
   void intervalAdded(ListDataEvent e);
   void intervalRemoved(ListDataEvent e);
   void contentsChanged(ListDataEvent e);
+}
+
+// Fired by a TableModel (DefaultTableModel) when its data or structure changes.
+class TableModelEvent {
+  public static final int INSERT = 1;
+  public static final int UPDATE = 0;
+  public static final int DELETE = -1;
+  public static final int HEADER_ROW = -1;
+  public static final int ALL_COLUMNS = -1;
+  Object __src;
+  int __firstRow, __lastRow, __column, __type;
+  public TableModelEvent(Object source, int firstRow, int lastRow, int column, int type) {
+    __src = source;
+    __firstRow = firstRow;
+    __lastRow = lastRow;
+    __column = column;
+    __type = type;
+  }
+  public Object getSource() { return __src; }
+  public int getFirstRow() { return __firstRow; }
+  public int getLastRow() { return __lastRow; }
+  public int getColumn() { return __column; }
+  public int getType() { return __type; }
+}
+
+interface TableModelListener {
+  void tableChanged(TableModelEvent e);
 }
 
 interface ListSelectionListener {

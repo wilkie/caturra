@@ -1015,6 +1015,41 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_table_model_fires_table_model_listener_events() {
+    // A DefaultTableModel notifies its TableModelListener on every mutation with
+    // the right type (INSERT=1, UPDATE=0, DELETE=-1), row range, and column.
+    let (result, console) = compile_and_run(
+        r#"
+        import javax.swing.*;
+        import javax.swing.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                String[] cols = {"Name", "Score"};
+                Object[][] data = {{"Ada", "10"}};
+                DefaultTableModel model = new DefaultTableModel(data, cols);
+                model.addTableModelListener(new TableModelListener() {
+                    public void tableChanged(TableModelEvent e) {
+                        System.out.println("type=" + e.getType()
+                            + " rows=" + e.getFirstRow() + ".." + e.getLastRow()
+                            + " col=" + e.getColumn());
+                    }
+                });
+                model.addRow(new Object[]{"Bo", "7"});
+                model.setValueAt("99", 0, 1);
+                model.removeRow(0);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "type=1 rows=1..1 col=-1\ntype=0 rows=0..0 col=1\ntype=-1 rows=0..0 col=-1\n"
+    );
+}
+
+#[test]
 fn swing_list_model_fires_data_listener_events() {
     // A DefaultListModel notifies its ListDataListener on every mutation, with
     // the right event type and interval — synchronously, like AbstractListModel.
