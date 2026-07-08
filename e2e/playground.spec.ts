@@ -2442,6 +2442,26 @@ test.describe('swing (interactive)', () => {
     expect(opacity).toBeLessThan(1);
   });
 
+  test('System.exit ends an interactive app and marks it stopped', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Quit button' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // The app is live: Bump works, Run is disabled, Stop is offered.
+    await root.getByRole('button', { name: 'Bump' }).click();
+    await expect(root).toContainText('Clicks: 1');
+    await expect(page.getByTestId('run')).toBeDisabled();
+    await expect(page.getByTestId('stop-run')).toBeVisible();
+
+    // Quit calls System.exit(0): the run ends and the frame is marked stopped.
+    await root.getByRole('button', { name: 'Quit' }).click();
+    await expect(page.getByTestId('run')).toBeEnabled();
+    await expect(page.getByTestId('stop-run')).toBeHidden();
+    await expect(page.getByTestId('swing-stopped-badge')).toBeVisible();
+    await expect(page.getByTestId('console')).toContainText('(exit code 0)');
+  });
+
   test('a listener reads the current value typed into a text field', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Greeter form' });

@@ -3667,6 +3667,8 @@ const LONG_METHODS: &[BuiltinMethod] = &[
 const SYSTEM_METHODS: &[BuiltinMethod] = &[
     bm("currentTimeMillis", &[], BRet::Long, "()J"),
     bm("nanoTime", &[], BRet::Long, "()J"),
+    // Terminate the program with the given status code (Java's System.exit).
+    bm("exit", &[I], BRet::Void, "(I)V"),
     // Internal standard-out capture, used only by the bundled
     // SystemOutTestRunner (org.code.validation): one String per print/println.
     bm("__captureStart", &[], BRet::Void, "()V"),

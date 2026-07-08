@@ -184,6 +184,40 @@ public class Main {
 `,
   },
   {
+    name: 'Quit button',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static int clicks = 0;
+  static JLabel label;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Quit demo");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new FlowLayout());
+
+    label = new JLabel("Clicks: 0");
+    JButton bump = new JButton("Bump");
+    bump.addActionListener(e -> {
+      Main.clicks = Main.clicks + 1;
+      Main.label.setText("Clicks: " + Main.clicks);
+    });
+
+    // System.exit(0) ends the program right away — the window stops
+    // responding and the frame dims to show it is no longer running.
+    JButton quit = new JButton("Quit");
+    quit.addActionListener(e -> System.exit(0));
+
+    frame.add(label);
+    frame.add(bump);
+    frame.add(quit);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Greeter form',
     starter: `import javax.swing.*;
 import java.awt.*;

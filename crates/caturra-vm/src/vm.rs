@@ -37,6 +37,11 @@ pub enum VmError {
     StackUnderflow,
     #[error("the program was stopped by the debugger")]
     Stopped,
+    /// The program called `System.exit(code)`. Not a failure — it unwinds
+    /// the whole call stack uncatchably (bypassing `catch`/`finally`, like the
+    /// real JVM) and `run_main` turns it into [`ExitStatus::Exited`].
+    #[error("the program called System.exit({0})")]
+    SystemExit(i32),
 }
 
 /// Options controlling a VM instance.
@@ -189,6 +194,8 @@ impl<'host> Vm<'host> {
 
         match interpreter.execute(class, main, locals) {
             Ok(_) => Ok(ExitStatus::Completed),
+            // System.exit unwound the stack: a clean, coded termination.
+            Err(VmError::SystemExit(code)) => Ok(ExitStatus::Exited(code)),
             Err(VmError::UncaughtException(message)) => {
                 // Match the shape of the real `java` launcher's output.
                 self.console

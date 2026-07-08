@@ -136,6 +136,51 @@ fn compile_and_run(source: &str, main: &str) -> (Result<ExitStatus, VmError>, Bu
 }
 
 #[test]
+fn system_exit_terminates_with_a_status_code() {
+    // System.exit(code) ends the program immediately — the code returns the
+    // given status and nothing after the call runs.
+    let (result, console) = compile_and_run(
+        r#"
+        public class Main {
+            public static void main(String[] args) {
+                System.out.println("before");
+                System.exit(3);
+                System.out.println("after");
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Exited(3))), "{result:?}");
+    assert_eq!(console.stdout_text(), "before\n");
+}
+
+#[test]
+fn system_exit_is_uncatchable_and_skips_finally() {
+    // Like the real JVM, System.exit unwinds past catch and finally — neither
+    // the handler nor the finally block runs.
+    let (result, console) = compile_and_run(
+        r#"
+        public class Main {
+            public static void main(String[] args) {
+                try {
+                    System.exit(0);
+                } catch (Throwable t) {
+                    System.out.println("caught");
+                } finally {
+                    System.out.println("finally");
+                }
+                System.out.println("returned");
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Exited(0))), "{result:?}");
+    assert_eq!(console.stdout_text(), "");
+}
+
+#[test]
 fn runs_hand_assembled_hello_world() {
     let (result, console) = run_class(hand_assembled_hello(), "Fixture");
     assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");

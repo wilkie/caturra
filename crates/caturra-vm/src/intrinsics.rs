@@ -1864,6 +1864,15 @@ pub fn invoke_static(
             "nanoTime" => Ok(Some(JValue::Long(
                 console.now_millis().wrapping_mul(1_000_000),
             ))),
+            // Terminate the program: unwind the whole stack uncatchably (no
+            // catch/finally runs, matching the real JVM) with the status code.
+            "exit" => {
+                let code = match args.first() {
+                    Some(JValue::Int(code)) => *code,
+                    _ => 0,
+                };
+                Err(VmError::SystemExit(code))
+            }
             // Standard-out capture for org.code.validation's SystemOutTestRunner.
             "__captureStart" => {
                 console.begin_capture();
