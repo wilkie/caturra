@@ -1899,6 +1899,27 @@ test.describe('swing (interactive)', () => {
     await expect(root.getByText('Clicked the button!')).toBeVisible();
   });
 
+  test('an AbstractAction drives both a toolbar button and a menu item', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Shared action' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // The toolbar button was built from the action: it takes its name and its
+    // tooltip (SHORT_DESCRIPTION) from the action.
+    const toolbarSave = root.getByRole('toolbar').getByRole('button', { name: 'Save' });
+    await expect(toolbarSave).toBeVisible();
+    await expect(toolbarSave).toHaveAttribute('title', 'Save the document');
+    await toolbarSave.click();
+    await expect(root).toContainText('Saved 1 time(s)');
+
+    // The menu item shares the same action — activating it runs the same
+    // handler (the count keeps climbing).
+    await root.getByRole('button', { name: 'File' }).click();
+    await root.getByRole('menuitem', { name: 'Save' }).click();
+    await expect(root).toContainText('Saved 2 time(s)');
+  });
+
   test('a JToolBar is an accessible strip with roving arrow-key focus', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Toolbar' });

@@ -899,6 +899,46 @@ fn swing_request_focus_serializes_a_focus_request() {
 }
 
 #[test]
+fn swing_abstract_action_shared_by_button_and_menu_item() {
+    // One AbstractAction drives both a JButton and a JMenuItem: each takes its
+    // text/tooltip from the action, and activating either fires the same
+    // actionPerformed. Ids: frame c0, button c1, menu c2, item c3.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                Action save = new AbstractAction("Save") {
+                    public void actionPerformed(ActionEvent e) {
+                        System.out.println("saved via " + e.getActionCommand());
+                    }
+                };
+                save.putValue(Action.SHORT_DESCRIPTION, "Save the document");
+                JButton button = new JButton(save);
+                System.out.println("button text=" + button.getText());
+                JMenuBar bar = new JMenuBar();
+                JMenu file = new JMenu("File");
+                file.add(new JMenuItem(save));
+                bar.add(file);
+                frame.setJMenuBar(bar);
+                frame.add(button);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1")), // click the button
+            Some(String::from("c3")), // click the menu item
+        ],
+    );
+    assert_eq!(out, "button text=Save\nsaved via Save\nsaved via Save\n");
+}
+
+#[test]
 fn swing_document_listener_fires_insert_and_remove() {
     // getDocument().addDocumentListener fires per edit: insertUpdate when the
     // text grows, removeUpdate when it shrinks. The host marks each with a

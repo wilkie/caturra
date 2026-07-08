@@ -840,6 +840,8 @@ class JToolBar extends Container {
   public void setFloatable(boolean b) {}
   public void setRollover(boolean b) {}
   public void addSeparator() { add(new __ToolBarSeparator()); }
+  // toolbar.add(action) creates a button for the action (real Swing).
+  public JButton add(Action a) { JButton b = new JButton(a); add(b); return b; }
 
   String __json() {
     String name = __name == null ? "null" : "\"" + Component.__esc(__name) + "\"";
@@ -891,6 +893,20 @@ class JButton extends Component {
   ActionListener __listener = null;
   public JButton() { __text = ""; }
   public JButton(String text) { __text = text; }
+  // Build from an Action: pull the name/tooltip/mnemonic/enabled and fire the
+  // action on click. The action is shared, so a menu item built from the same
+  // Action stays in sync.
+  public JButton(Action a) {
+    Object n = a.getValue(Action.NAME);
+    __text = n == null ? "" : "" + n;
+    Object sd = a.getValue(Action.SHORT_DESCRIPTION);
+    if (sd != null) __ttip = "" + sd;
+    Object mn = a.getValue(Action.MNEMONIC_KEY);
+    if (mn != null) { int code = (Integer) mn; __mnemonic = (char) code; }
+    __enabled = a.isEnabled();
+    __listener = a;
+    __SwingRuntime.__interactive = true;
+  }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
   public void setActionCommand(String command) { __command = command; }
@@ -1538,6 +1554,18 @@ class JMenuItem extends Component {
   KeyStroke __accel = null;
   public JMenuItem() { __text = ""; }
   public JMenuItem(String text) { __text = text; }
+  // Build from an Action: name/tooltip/accelerator/enabled + fire the action.
+  public JMenuItem(Action a) {
+    Object n = a.getValue(Action.NAME);
+    __text = n == null ? "" : "" + n;
+    Object sd = a.getValue(Action.SHORT_DESCRIPTION);
+    if (sd != null) __ttip = "" + sd;
+    Object ac = a.getValue(Action.ACCELERATOR_KEY);
+    if (ac != null) __accel = (KeyStroke) ac;
+    __enabled = a.isEnabled();
+    __listener = a;
+    __SwingRuntime.__interactive = true;
+  }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
   public void setAccelerator(KeyStroke k) { __accel = k; __SwingRuntime.__interactive = true; }
@@ -1550,7 +1578,7 @@ class JMenuItem extends Component {
   }
   public void addActionListener(ActionListener l) { __listener = l; __SwingRuntime.__interactive = true; }
   void __onEvent() {
-    if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
+    if (__listener != null) __listener.actionPerformed(new ActionEvent(this, __text));
   }
   boolean __listens() { return __listener != null; }
   String __json() {
@@ -1878,6 +1906,44 @@ class KeyStroke {
 
 interface ActionListener {
   void actionPerformed(ActionEvent e);
+}
+
+// javax.swing.Action + AbstractAction: a reusable command that can drive a
+// JButton, JMenuItem, or JToolBar at once — sharing its name, tooltip
+// (SHORT_DESCRIPTION), mnemonic, accelerator, enabled state, and its
+// actionPerformed. Values are indexed by the string keys below (putValue /
+// getValue), matching real Swing.
+interface Action extends ActionListener {
+  public static final String NAME = "Name";
+  public static final String SHORT_DESCRIPTION = "ShortDescription";
+  public static final String LONG_DESCRIPTION = "LongDescription";
+  public static final String MNEMONIC_KEY = "MnemonicKey";
+  public static final String ACCELERATOR_KEY = "AcceleratorKey";
+  public static final String ACTION_COMMAND_KEY = "ActionCommandKey";
+  public static final String SELECTED_KEY = "SwingSelectedKey";
+  Object getValue(String key);
+  void putValue(String key, Object value);
+  boolean isEnabled();
+  void setEnabled(boolean b);
+}
+
+abstract class AbstractAction implements Action {
+  java.util.ArrayList<String> __keys = new java.util.ArrayList<String>();
+  java.util.ArrayList<Object> __values = new java.util.ArrayList<Object>();
+  boolean __enabled = true;
+  public AbstractAction() {}
+  public AbstractAction(String name) { putValue(Action.NAME, name); }
+  public Object getValue(String key) {
+    int i = __keys.indexOf(key);
+    return i >= 0 ? __values.get(i) : null;
+  }
+  public void putValue(String key, Object value) {
+    int i = __keys.indexOf(key);
+    if (i >= 0) __values.set(i, value);
+    else { __keys.add(key); __values.add(value); }
+  }
+  public boolean isEnabled() { return __enabled; }
+  public void setEnabled(boolean b) { __enabled = b; }
 }
 
 class ItemEvent {

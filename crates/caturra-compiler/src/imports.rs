@@ -265,6 +265,8 @@ static JAVAX_SWING: &[&str] = &[
     "SwingUtilities",
     "SwingConstants",
     "KeyStroke",
+    "Action",
+    "AbstractAction",
 ];
 /// `javax.accessibility`: the `AccessibleContext` handle (getAccessibleContext).
 static JAVAX_ACCESSIBILITY: &[&str] = &["AccessibleContext"];

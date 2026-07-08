@@ -1012,6 +1012,49 @@ public class Main {
 `,
   },
   {
+    name: 'Shared action',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+
+public class Main {
+  static JLabel status;
+  static int saves = 0;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Shared action");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // One Action drives BOTH the toolbar button and the menu item: they share
+    // its name, tooltip, and actionPerformed.
+    Action save = new AbstractAction("Save") {
+      public void actionPerformed(ActionEvent e) {
+        Main.saves = Main.saves + 1;
+        Main.status.setText("Saved " + Main.saves + " time(s)");
+      }
+    };
+    save.putValue(Action.SHORT_DESCRIPTION, "Save the document");
+
+    JToolBar bar = new JToolBar("Actions");
+    bar.add(save);
+
+    JMenuBar menuBar = new JMenuBar();
+    JMenu file = new JMenu("File");
+    file.add(new JMenuItem(save));
+    menuBar.add(file);
+
+    status = new JLabel("Not saved yet");
+
+    frame.setJMenuBar(menuBar);
+    frame.add(bar, BorderLayout.NORTH);
+    frame.add(status, BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Toolbar',
     starter: `import javax.swing.*;
 import java.awt.*;
