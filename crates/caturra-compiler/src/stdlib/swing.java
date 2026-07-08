@@ -364,6 +364,10 @@ class Component {
   // tell an insert from a remove.
   Document __document = null;
   String __lastText = "";
+  // When built from an Action, the component's enabled state tracks the action
+  // LIVE (re-read each serialization), so action.setEnabled propagates even
+  // after the component exists — real Swing does this via a PropertyChangeListener.
+  Action __action = null;
 
   Component() { __cid = "c" + __nextId(); }
 
@@ -385,7 +389,7 @@ class Component {
   }
 
   public void setEnabled(boolean enabled) { __enabled = enabled; }
-  public boolean isEnabled() { return __enabled; }
+  public boolean isEnabled() { return __action != null ? __action.isEnabled() : __enabled; }
   public void setVisible(boolean visible) { __visible = visible; }
   public boolean isVisible() { return __visible; }
   public void setFocusable(boolean focusable) {}
@@ -434,7 +438,9 @@ class Component {
 
   // The shared trailing fields every node carries (no braces, no leading comma).
   String __commonJson() {
-    String s = "\"id\":\"" + __cid + "\",\"enabled\":" + __enabled;
+    // An action-bound component's enabled tracks its Action live.
+    boolean enabled = __action != null ? __action.isEnabled() : __enabled;
+    String s = "\"id\":\"" + __cid + "\",\"enabled\":" + enabled;
     // Only widgets with a listener dispatch on interaction; the renderer
     // wires a control's native event to the VM only when this is set, so an
     // input read at submit-time (no listener) doesn't round-trip on every key.
@@ -903,7 +909,7 @@ class JButton extends Component {
     if (sd != null) __ttip = "" + sd;
     Object mn = a.getValue(Action.MNEMONIC_KEY);
     if (mn != null) { int code = (Integer) mn; __mnemonic = (char) code; }
-    __enabled = a.isEnabled();
+    __action = a; // enabled tracks the action live
     __listener = a;
     __SwingRuntime.__interactive = true;
   }
@@ -1562,7 +1568,7 @@ class JMenuItem extends Component {
     if (sd != null) __ttip = "" + sd;
     Object ac = a.getValue(Action.ACCELERATOR_KEY);
     if (ac != null) __accel = (KeyStroke) ac;
-    __enabled = a.isEnabled();
+    __action = a; // enabled tracks the action live
     __listener = a;
     __SwingRuntime.__interactive = true;
   }

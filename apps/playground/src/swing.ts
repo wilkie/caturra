@@ -185,6 +185,7 @@ interface SwingMenuEntry {
   type: 'menuitem' | 'checkmenuitem' | 'radiomenuitem' | 'separator' | 'menu';
   text?: string;
   id?: string;
+  enabled?: boolean;
   listens?: boolean;
   selected?: boolean;
   /** setAccelerator hint/match string, e.g. "Ctrl+S". */
@@ -1701,11 +1702,15 @@ export class SwingViz {
         accel.textContent = entry.accel;
         item.appendChild(accel);
       }
+      // A disabled item (e.g. from a disabled Action) can't be activated.
+      const enabled = entry.enabled !== false;
+      item.disabled = !enabled;
+      item.setAttribute('aria-disabled', String(!enabled));
       // Moving onto a plain item closes any sibling submenu that was open.
       item.addEventListener('mouseenter', () => {
         closeChild();
       });
-      if (entry.listens === true && entry.id !== undefined) {
+      if (enabled && entry.listens === true && entry.id !== undefined) {
         const id = entry.id;
         item.addEventListener('click', (event) => {
           event.stopPropagation();

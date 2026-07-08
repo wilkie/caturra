@@ -1018,6 +1018,7 @@ import java.awt.*;
 import java.awt.event.*;
 
 public class Main {
+  static Action save;
   static JLabel status;
   static int saves = 0;
 
@@ -1027,17 +1028,26 @@ public class Main {
     frame.setLayout(new BorderLayout());
 
     // One Action drives BOTH the toolbar button and the menu item: they share
-    // its name, tooltip, and actionPerformed.
-    Action save = new AbstractAction("Save") {
+    // its name, tooltip, actionPerformed — and its enabled state.
+    save = new AbstractAction("Save") {
       public void actionPerformed(ActionEvent e) {
         Main.saves = Main.saves + 1;
         Main.status.setText("Saved " + Main.saves + " time(s)");
+        Main.save.setEnabled(false); // nothing more to save — disables BOTH
       }
     };
     save.putValue(Action.SHORT_DESCRIPTION, "Save the document");
 
+    // Editing re-enables the shared Save (and both its components).
+    JButton edit = new JButton("Edit");
+    edit.addActionListener(e -> {
+      Main.save.setEnabled(true);
+      Main.status.setText("Edited — Save re-enabled");
+    });
+
     JToolBar bar = new JToolBar("Actions");
     bar.add(save);
+    bar.add(edit);
 
     JMenuBar menuBar = new JMenuBar();
     JMenu file = new JMenu("File");

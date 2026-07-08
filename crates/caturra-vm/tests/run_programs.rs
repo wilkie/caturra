@@ -899,6 +899,37 @@ fn swing_request_focus_serializes_a_focus_request() {
 }
 
 #[test]
+fn swing_action_set_enabled_propagates_to_its_components() {
+    // action.setEnabled(false) disables every component built from it — even
+    // after they exist (their enabled tracks the action live).
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                Action save = new AbstractAction("Save") {
+                    public void actionPerformed(ActionEvent e) {}
+                };
+                JButton button = new JButton(save);
+                JMenuItem item = new JMenuItem(save);
+                System.out.println("before " + button.isEnabled() + " " + item.isEnabled());
+                save.setEnabled(false);
+                System.out.println("after " + button.isEnabled() + " " + item.isEnabled());
+                frame.add(button);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![],
+    );
+    assert_eq!(out, "before true true\nafter false false\n");
+}
+
+#[test]
 fn swing_abstract_action_shared_by_button_and_menu_item() {
     // One AbstractAction drives both a JButton and a JMenuItem: each takes its
     // text/tooltip from the action, and activating either fires the same

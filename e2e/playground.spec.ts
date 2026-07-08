@@ -1913,11 +1913,18 @@ test.describe('swing (interactive)', () => {
     await toolbarSave.click();
     await expect(root).toContainText('Saved 1 time(s)');
 
-    // The menu item shares the same action — activating it runs the same
-    // handler (the count keeps climbing).
-    await root.getByRole('button', { name: 'File' }).click();
-    await root.getByRole('menuitem', { name: 'Save' }).click();
-    await expect(root).toContainText('Saved 2 time(s)');
+    // The handler called save.setEnabled(false) — which propagates LIVE to every
+    // component built from the action: the toolbar button is now disabled...
+    await expect(toolbarSave).toBeDisabled();
+    // ...and so is the File > Save menu item.
+    const fileButton = root.getByRole('button', { name: 'File' });
+    await fileButton.click();
+    await expect(root.getByRole('menuitem', { name: 'Save' })).toBeDisabled();
+    await fileButton.click(); // close the menu
+
+    // Editing re-enables the shared action, restoring both components.
+    await root.getByRole('button', { name: 'Edit' }).click();
+    await expect(toolbarSave).toBeEnabled();
   });
 
   test('a JToolBar is an accessible strip with roving arrow-key focus', async ({ page }) => {
