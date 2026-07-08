@@ -1302,45 +1302,60 @@ class ListSelectionModel {
 
 // A mutable list model. A JList built on one re-reads it on every render, so
 // addElement/remove/clear appear as soon as the event loop repaints.
-class DefaultListModel {
-  java.util.ArrayList<String> __elements = new java.util.ArrayList<String>();
+// The data model behind a JList. Students usually subclass AbstractListModel
+// (implementing the two abstract queries) or use DefaultListModel.
+interface ListModel {
+  int getSize();
+  Object getElementAt(int index);
+  void addListDataListener(ListDataListener l);
+  void removeListDataListener(ListDataListener l);
+}
+
+// A convenience base: manages listeners and the fireXxx notifications, so a
+// subclass only has to implement getSize and getElementAt.
+abstract class AbstractListModel implements ListModel {
   java.util.ArrayList<ListDataListener> __dataListeners = new java.util.ArrayList<ListDataListener>();
-  public DefaultListModel() {}
   public void addListDataListener(ListDataListener l) { __dataListeners.add(l); }
   public void removeListDataListener(ListDataListener l) { __dataListeners.remove(l); }
-  // Notify listeners of an add / remove / change over [i0, i1], as real Swing's
-  // AbstractListModel does when the model is mutated.
-  void __fireAdded(int i0, int i1) {
-    ListDataEvent e = new ListDataEvent(this, ListDataEvent.INTERVAL_ADDED, i0, i1);
-    for (ListDataListener l : __dataListeners) l.intervalAdded(e);
-  }
-  void __fireRemoved(int i0, int i1) {
-    ListDataEvent e = new ListDataEvent(this, ListDataEvent.INTERVAL_REMOVED, i0, i1);
-    for (ListDataListener l : __dataListeners) l.intervalRemoved(e);
-  }
-  void __fireChanged(int i0, int i1) {
-    ListDataEvent e = new ListDataEvent(this, ListDataEvent.CONTENTS_CHANGED, i0, i1);
+  protected void fireContentsChanged(Object source, int index0, int index1) {
+    ListDataEvent e = new ListDataEvent(source, ListDataEvent.CONTENTS_CHANGED, index0, index1);
     for (ListDataListener l : __dataListeners) l.contentsChanged(e);
   }
+  protected void fireIntervalAdded(Object source, int index0, int index1) {
+    ListDataEvent e = new ListDataEvent(source, ListDataEvent.INTERVAL_ADDED, index0, index1);
+    for (ListDataListener l : __dataListeners) l.intervalAdded(e);
+  }
+  protected void fireIntervalRemoved(Object source, int index0, int index1) {
+    ListDataEvent e = new ListDataEvent(source, ListDataEvent.INTERVAL_REMOVED, index0, index1);
+    for (ListDataListener l : __dataListeners) l.intervalRemoved(e);
+  }
+  // getSize / getElementAt stay abstract (from ListModel).
+}
+
+class DefaultListModel extends AbstractListModel {
+  java.util.ArrayList<String> __elements = new java.util.ArrayList<String>();
+  public DefaultListModel() {}
   public void addElement(String element) {
     __elements.add(element);
-    __fireAdded(__elements.size() - 1, __elements.size() - 1);
+    fireIntervalAdded(this, __elements.size() - 1, __elements.size() - 1);
   }
   public void add(int index, String element) {
     __elements.add(index, element);
-    __fireAdded(index, index);
+    fireIntervalAdded(this, index, index);
   }
   public String get(int index) { return __elements.get(index); }
-  public String getElementAt(int index) { return __elements.get(index); }
+  // Object (not String) so it overrides ListModel.getElementAt exactly; use
+  // get(int) when you want a String back.
+  public Object getElementAt(int index) { return __elements.get(index); }
   public String elementAt(int index) { return __elements.get(index); }
   public String set(int index, String element) {
     String previous = __elements.set(index, element);
-    __fireChanged(index, index);
+    fireContentsChanged(this, index, index);
     return previous;
   }
   public String remove(int index) {
     String removed = __elements.remove(index);
-    __fireRemoved(index, index);
+    fireIntervalRemoved(this, index, index);
     return removed;
   }
   // Element params are String (the model holds Strings), where real Swing uses
@@ -1349,7 +1364,7 @@ class DefaultListModel {
     int index = __elements.indexOf(element);
     if (index < 0) return false;
     __elements.remove(index);
-    __fireRemoved(index, index);
+    fireIntervalRemoved(this, index, index);
     return true;
   }
   public void removeAllElements() { __clearAndFire(); }
@@ -1357,7 +1372,7 @@ class DefaultListModel {
   void __clearAndFire() {
     int last = __elements.size() - 1;
     __elements.clear();
-    if (last >= 0) __fireRemoved(0, last);
+    if (last >= 0) fireIntervalRemoved(this, 0, last);
   }
   public int getSize() { return __elements.size(); }
   public int size() { return __elements.size(); }
@@ -1370,7 +1385,7 @@ class DefaultListModel {
 
 class JList extends Component {
   java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
-  DefaultListModel __model = null;
+  ListModel __model = null;
   // Selected indices, in the order the host reports them.
   java.util.ArrayList<Integer> __selected = new java.util.ArrayList<Integer>();
   int __visibleRows = 8;
@@ -1378,16 +1393,22 @@ class JList extends Component {
   ListSelectionListener __listener = null;
   public JList() {}
   public JList(String[] items) { setListData(items); }
-  public JList(DefaultListModel model) { __model = model; }
-  public void setModel(DefaultListModel model) { __model = model; }
-  public DefaultListModel getModel() { return __model; }
+  public JList(ListModel model) { __model = model; }
+  public void setModel(ListModel model) { __model = model; }
+  public ListModel getModel() { return __model; }
   public void setListData(String[] items) {
     __model = null;
     __items = new java.util.ArrayList<String>();
     for (int i = 0; i < items.length; i++) __items.add(items[i]);
   }
-  // The live element list: the model's when model-backed, else the static data.
-  java.util.ArrayList<String> __data() { return __model != null ? __model.__elements : __items; }
+  // The live elements: read through the model when model-backed (so ANY
+  // ListModel works), else the static data set by setListData.
+  int __size() { return __model != null ? __model.getSize() : __items.size(); }
+  String __elementAt(int index) {
+    if (__model == null) return __items.get(index);
+    Object value = __model.getElementAt(index);
+    return value == null ? "" : "" + value;
+  }
   public int getSelectedIndex() { return __selected.isEmpty() ? -1 : __selected.get(0); }
   public void setSelectedIndex(int index) {
     __selected = new java.util.ArrayList<Integer>();
@@ -1401,12 +1422,12 @@ class JList extends Component {
   public Object getSelectedValue() {
     if (__selected.isEmpty()) return null;
     int index = __selected.get(0);
-    if (index < 0 || index >= __data().size()) return null;
-    return __data().get(index);
+    if (index < 0 || index >= __size()) return null;
+    return __elementAt(index);
   }
   public Object[] getSelectedValues() {
     Object[] out = new Object[__selected.size()];
-    for (int i = 0; i < __selected.size(); i++) out[i] = __data().get(__selected.get(i));
+    for (int i = 0; i < __selected.size(); i++) out[i] = __elementAt(__selected.get(i));
     return out;
   }
   public boolean isSelectedIndex(int index) { return __selected.contains(index); }
@@ -1439,11 +1460,10 @@ class JList extends Component {
   }
   boolean __listens() { return __listener != null; }
   String __json() {
-    java.util.ArrayList<String> data = __data();
     StringBuilder opts = new StringBuilder("[");
-    for (int i = 0; i < data.size(); i++) {
+    for (int i = 0; i < __size(); i++) {
       if (i > 0) opts.append(",");
-      opts.append("\"").append(Component.__esc(data.get(i))).append("\"");
+      opts.append("\"").append(Component.__esc(__elementAt(i))).append("\"");
     }
     opts.append("]");
     StringBuilder sel = new StringBuilder("[");

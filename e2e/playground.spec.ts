@@ -2300,6 +2300,26 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('3 topping(s): Cheese, Pepperoni, Olive');
   });
 
+  test('a custom AbstractListModel subclass backs a JList and fires on add', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Custom list model' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const list = root.getByRole('listbox');
+
+    // The subclass's getSize / getElementAt drive the list (squares of 1, 2).
+    await expect(list.getByRole('option')).toHaveCount(2);
+    await expect(list.getByRole('option', { name: '4' })).toBeVisible();
+    await expect(root).toContainText('2 squares');
+
+    // Adding calls fireIntervalAdded → the option appears and the listener
+    // updates the count.
+    await root.getByRole('button', { name: 'Add square' }).click();
+    await expect(list.getByRole('option')).toHaveCount(3);
+    await expect(list.getByRole('option', { name: '9' })).toBeVisible();
+    await expect(root).toContainText('3 squares');
+  });
+
   test('a DefaultListModel-backed JList adds and removes items live', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'To-do list (DefaultListModel)' });

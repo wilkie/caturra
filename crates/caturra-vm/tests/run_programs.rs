@@ -1094,6 +1094,55 @@ fn swing_table_model_fires_table_model_listener_events() {
 }
 
 #[test]
+fn swing_custom_abstract_list_model_subclass() {
+    // A student subclasses AbstractListModel, implementing only getSize and
+    // getElementAt; the base supplies listener management and the protected
+    // fireXxx notifications. A JList accepts any ListModel.
+    let (result, console) = compile_and_run(
+        r#"
+        import javax.swing.*;
+        import javax.swing.event.*;
+        import java.util.ArrayList;
+        class SquaresModel extends AbstractListModel {
+            ArrayList<Integer> values = new ArrayList<Integer>();
+            public int getSize() { return values.size(); }
+            public Object getElementAt(int index) { return values.get(index); }
+            public void addSquare(int n) {
+                values.add(n * n);
+                fireIntervalAdded(this, values.size() - 1, values.size() - 1);
+            }
+        }
+        public class Main {
+            public static void main(String[] args) {
+                SquaresModel model = new SquaresModel();
+                model.addListDataListener(new ListDataListener() {
+                    public void intervalAdded(ListDataEvent e) {
+                        System.out.println("added [" + e.getIndex0() + "] size=" + e.getSource());
+                    }
+                    public void intervalRemoved(ListDataEvent e) {}
+                    public void contentsChanged(ListDataEvent e) {}
+                });
+                model.addSquare(3);
+                model.addSquare(4);
+                System.out.println("size=" + model.getSize() + " at1=" + model.getElementAt(1));
+                // A JList reads any ListModel through getSize/getElementAt.
+                JList list = new JList(model);
+                list.setSelectedIndex(1);
+                System.out.println("selected=" + list.getSelectedValue());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    let out = console.stdout_text();
+    assert!(out.contains("added [0]"), "{out}");
+    assert!(out.contains("added [1]"), "{out}");
+    assert!(out.contains("size=2 at1=16"), "{out}");
+    assert!(out.contains("selected=16"), "{out}");
+}
+
+#[test]
 fn swing_list_model_fires_data_listener_events() {
     // A DefaultListModel notifies its ListDataListener on every mutation, with
     // the right event type and interval — synchronously, like AbstractListModel.

@@ -1654,6 +1654,69 @@ public class Main {
 `,
   },
   {
+    name: 'Custom list model',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.util.ArrayList;
+import javax.swing.event.*;
+
+// A custom AbstractListModel: implement getSize/getElementAt over your own
+// data, and call fireIntervalAdded to notify listeners of a new element.
+class SquaresModel extends AbstractListModel {
+  ArrayList<Integer> values = new ArrayList<Integer>();
+  public int getSize() { return values.size(); }
+  public Object getElementAt(int index) { return values.get(index); }
+  public void addSquare(int n) {
+    values.add(n * n);
+    fireIntervalAdded(this, values.size() - 1, values.size() - 1);
+  }
+}
+
+public class Main {
+  static SquaresModel model;
+  static JList list;
+  static JLabel status;
+  static int next = 1;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Squares");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    model = new SquaresModel();
+    model.addSquare(1);
+    model.addSquare(2);
+    next = 3;
+
+    // The JList accepts any ListModel. A listener tracks the size.
+    status = new JLabel("2 squares");
+    model.addListDataListener(new ListDataListener() {
+      public void intervalAdded(ListDataEvent e) {
+        Main.status.setText(Main.model.getSize() + " squares");
+      }
+      public void intervalRemoved(ListDataEvent e) {}
+      public void contentsChanged(ListDataEvent e) {}
+    });
+
+    list = new JList(model);
+    list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    list.setVisibleRowCount(6);
+
+    JButton add = new JButton("Add square");
+    add.addActionListener(e -> {
+      Main.model.addSquare(Main.next);
+      Main.next = Main.next + 1;
+    });
+
+    frame.add(add, BorderLayout.NORTH);
+    frame.add(new JScrollPane(list), BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Table (JTable)',
     starter: `import javax.swing.*;
 import java.awt.*;
