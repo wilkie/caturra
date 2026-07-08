@@ -1729,6 +1729,8 @@ export function App(): React.JSX.Element {
   const [levelValue, setLevelValue] = useState('');
   const [theaterValue, setTheaterValue] = useState('');
   const [swingValue, setSwingValue] = useState('');
+  // The Swing look-and-feel (skins every widget via the --swing-* token layer).
+  const [laf, setLaf] = useState('system');
   const [levels, setLevels] = useState<CsaLevelMeta[]>([]);
   const [view, setView] = useState<'none' | 'neighborhood' | 'theater' | 'swing'>('none');
   const [swingDialog, setSwingDialog] = useState<{ kind: string; message: string } | null>(null);
@@ -2849,10 +2851,41 @@ export function App(): React.JSX.Element {
             <canvas id="theater-canvas" data-testid="theater-canvas" ref={theaterCanvasRef} />
           </Box>
           <Box id="swing-viz" data-testid="swing-viz" hidden={view !== 'swing'}>
-            <Typography variant="subtitle2" id="swing-heading">
-              Swing UI
-            </Typography>
-            <div id="swing-root" data-testid="swing-root" ref={swingMountRef} />
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 1,
+              }}
+            >
+              <Typography variant="subtitle2" id="swing-heading">
+                Swing UI
+              </Typography>
+              <TextField
+                select
+                size="small"
+                label="Look and Feel"
+                value={laf}
+                onChange={(event) => {
+                  setLaf(event.target.value);
+                }}
+                slotProps={{
+                  select: {
+                    native: true,
+                    inputProps: { id: 'swing-laf', 'data-testid': 'swing-laf', 'aria-label': 'Look and Feel' },
+                  },
+                  inputLabel: { shrink: true },
+                }}
+                sx={{ minWidth: 150 }}
+              >
+                <option value="system">System (theme)</option>
+                <option value="metal">Metal</option>
+                <option value="nimbus">Nimbus</option>
+                <option value="contrast">High Contrast</option>
+              </TextField>
+            </Box>
+            <div id="swing-root" data-testid="swing-root" data-laf={laf} ref={swingMountRef} />
           </Box>
 
           <Box

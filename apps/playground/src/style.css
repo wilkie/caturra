@@ -240,12 +240,92 @@ label {
   margin-bottom: 0.75rem;
 }
 
+/* ----- Swing look-and-feel tokens -----
+   Every Swing widget draws from these custom properties, so a whole "look and
+   feel" swaps by setting one attribute (data-laf) on #swing-root — the web
+   analogue of Swing's pluggable L&Fs (Metal, Nimbus, ...). The default
+   ("system") follows the page's light/dark theme; the named skins are fixed
+   palettes, like choosing a L&F regardless of the OS. */
+#swing-root {
+  --swing-surface: light-dark(#f3f3ee, #2b2b2b); /* window content */
+  --swing-raised: light-dark(#dcdcd2, #3a3a3a); /* titlebar / menubar / tab strip */
+  --swing-control: light-dark(#ffffff, #4a4a4a); /* button / panel / selected tab */
+  --swing-field: light-dark(#ffffff, #333333); /* text input / spinner */
+  --swing-control-hover: light-dark(#eef0ff, #565676);
+  --swing-border: light-dark(#c9c9bd, #5a5145); /* structural borders */
+  --swing-control-border: light-dark(#8a8a7e, #6a6a6a);
+  --swing-accent: light-dark(#3b78e7, #5a86d6); /* pressed / progress / highlight */
+  --swing-accent-border: light-dark(#2a5cb8, #4a6cb0);
+  --swing-on-accent: #ffffff;
+  --swing-selection: light-dark(#d6e2ff, #3b4a6b); /* selected row */
+  --swing-focus: light-dark(#0b57d0, #9db8ff);
+  --swing-radius: 4px;
+  --swing-radius-lg: 6px;
+}
+
+/* Metal: the classic Java default L&F — steel blue-gray, nearly square. */
+#swing-root[data-laf='metal'] {
+  --swing-surface: #eeeef4;
+  --swing-raised: #c8d0e2;
+  --swing-control: #dfe2ee;
+  --swing-field: #ffffff;
+  --swing-control-hover: #c3cee4;
+  --swing-border: #8592ad;
+  --swing-control-border: #6d7c9c;
+  --swing-accent: #4a6d9e;
+  --swing-accent-border: #35507a;
+  --swing-on-accent: #ffffff;
+  --swing-selection: #b7c4dd;
+  --swing-focus: #35507a;
+  --swing-radius: 2px;
+  --swing-radius-lg: 2px;
+  color: #1a1a2a;
+}
+
+/* Nimbus: the other Java L&F — glossy blue, generously rounded. */
+#swing-root[data-laf='nimbus'] {
+  --swing-surface: #e6e9ef;
+  --swing-raised: #d3d9e3;
+  --swing-control: #f4f6fa;
+  --swing-field: #ffffff;
+  --swing-control-hover: #e0e8f6;
+  --swing-border: #9aa6ba;
+  --swing-control-border: #8794aa;
+  --swing-accent: #3a8ad4;
+  --swing-accent-border: #2b6ba6;
+  --swing-on-accent: #ffffff;
+  --swing-selection: #cfe3f7;
+  --swing-focus: #2b6ba6;
+  --swing-radius: 8px;
+  --swing-radius-lg: 10px;
+  color: #26303c;
+}
+
+/* High Contrast: black on white with a yellow highlight — an accessibility L&F. */
+#swing-root[data-laf='contrast'] {
+  --swing-surface: #ffffff;
+  --swing-raised: #f2f2f2;
+  --swing-control: #ffffff;
+  --swing-field: #ffffff;
+  --swing-control-hover: #ffff00;
+  --swing-border: #000000;
+  --swing-control-border: #000000;
+  --swing-accent: #000000;
+  --swing-accent-border: #000000;
+  --swing-on-accent: #ffffff;
+  --swing-selection: #ffff00;
+  --swing-focus: #0000ee;
+  --swing-radius: 0;
+  --swing-radius-lg: 0;
+  color: #000000;
+}
+
 .swing-window {
   align-self: start;
   max-width: 100%;
-  border: 1px solid light-dark(#c9c9bd, #5a5145);
-  border-radius: 6px;
-  background: light-dark(#f3f3ee, #2b2b2b);
+  border: 1px solid var(--swing-border);
+  border-radius: var(--swing-radius-lg);
+  background: var(--swing-surface);
   overflow: hidden;
 }
 
@@ -257,8 +337,8 @@ label {
   padding: 0.3rem 0.6rem;
   font-size: 0.8rem;
   font-weight: 600;
-  background: light-dark(#dcdcd2, #3a3a3a);
-  border-bottom: 1px solid light-dark(#c9c9bd, #5a5145);
+  background: var(--swing-raised);
+  border-bottom: 1px solid var(--swing-border);
 }
 
 .swing-close {
@@ -269,7 +349,7 @@ label {
   padding: 0;
   font-size: 1rem;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--swing-radius);
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -292,9 +372,9 @@ label {
   align-items: center;
   gap: 4px;
   padding: 4px;
-  border: 1px solid light-dark(#c8c8c0, #555);
-  border-radius: 4px;
-  background: light-dark(#f0f0ea, #3a3a3a);
+  border: 1px solid var(--swing-border);
+  border-radius: var(--swing-radius);
+  background: var(--swing-raised);
 }
 
 .swing-toolbar.swing-toolbar-vertical {
@@ -307,7 +387,7 @@ label {
   align-self: stretch;
   width: 1px;
   margin: 2px 4px;
-  background: light-dark(#c0c0b8, #666);
+  background: var(--swing-border);
 }
 
 .swing-toolbar-vertical .swing-toolbar-sep {
@@ -323,7 +403,7 @@ label {
   flex-direction: row;
   min-height: 140px;
   min-width: 220px;
-  border: 1px solid light-dark(#c8c8c0, #555);
+  border: 1px solid var(--swing-border);
 }
 
 .swing-splitpane.swing-split-vertical {
@@ -340,12 +420,12 @@ label {
 
 .swing-split-divider {
   flex: 0 0 6px;
-  background: light-dark(#c8c8c0, #555);
+  background: var(--swing-border);
   cursor: col-resize;
 }
 
 .swing-split-divider:focus-visible {
-  outline: 2px solid light-dark(#3b78e7, #5a86d6);
+  outline: 2px solid var(--swing-accent);
   outline-offset: -2px;
 }
 
@@ -374,8 +454,8 @@ label {
 
 .swing-tab {
   padding: 0.35rem 0.85rem;
-  border: 1px solid light-dark(#c8c8c0, #555);
-  background: light-dark(#e9e9e2, #3a3a3a);
+  border: 1px solid var(--swing-border);
+  background: var(--swing-raised);
   border-radius: 6px 6px 0 0;
   cursor: pointer;
   font: inherit;
@@ -387,15 +467,15 @@ label {
 }
 
 .swing-tab-selected {
-  background: light-dark(#ffffff, #4a4a4a);
+  background: var(--swing-control);
   font-weight: 600;
 }
 
 .swing-tabpanels {
   flex: 1;
-  border: 1px solid light-dark(#c8c8c0, #555);
+  border: 1px solid var(--swing-border);
   padding: 0.6rem;
-  background: light-dark(#ffffff, #4a4a4a);
+  background: var(--swing-control);
 }
 
 /* A titled BorderFactory group box: an etched frame with its caption drawn
@@ -403,8 +483,8 @@ label {
    it "cuts" the border line behind it. */
 .swing-titled {
   position: relative;
-  border: 2px groove light-dark(#c8c8c0, #5a5a5a);
-  border-radius: 4px;
+  border: 2px groove var(--swing-border);
+  border-radius: var(--swing-radius);
   padding: 0.8rem 0.6rem 0.6rem;
   margin-top: 0.4rem;
 }
@@ -418,7 +498,7 @@ label {
   padding: 0 0.35rem;
   font-size: 0.78rem;
   font-weight: 600;
-  background: light-dark(#f3f3ee, #2b2b2b);
+  background: var(--swing-surface);
 }
 
 .swing-label {
@@ -430,15 +510,15 @@ label {
 .swing-button {
   padding: 0.3rem 0.9rem;
   font: inherit;
-  border-radius: 4px;
-  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
-  background: light-dark(#ffffff, #4a4a4a);
+  border-radius: var(--swing-radius);
+  border: 1px solid var(--swing-control-border);
+  background: var(--swing-control);
   color: inherit;
   cursor: pointer;
 }
 
 .swing-button:hover:not(:disabled) {
-  background: light-dark(#eef0ff, #565676);
+  background: var(--swing-control-hover);
 }
 
 .swing-button:disabled {
@@ -448,8 +528,8 @@ label {
 
 /* A pressed JToggleButton reads as sunken and highlighted. */
 .swing-toggle[aria-pressed='true'] {
-  background: light-dark(#3b78e7, #5a86d6);
-  border-color: light-dark(#2a5cb8, #4a6cb0);
+  background: var(--swing-accent);
+  border-color: var(--swing-accent-border);
   color: #ffffff;
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
@@ -458,9 +538,9 @@ label {
 .swing-textarea {
   padding: 0.25rem 0.4rem;
   font: inherit;
-  border-radius: 4px;
-  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
-  background: light-dark(#ffffff, #333333);
+  border-radius: var(--swing-radius);
+  border: 1px solid var(--swing-control-border);
+  background: var(--swing-field);
   color: inherit;
 }
 
@@ -471,9 +551,9 @@ label {
 
 .swing-scrollpane {
   box-sizing: border-box;
-  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
-  border-radius: 4px;
-  background: light-dark(#ffffff, #2b2b2b);
+  border: 1px solid var(--swing-control-border);
+  border-radius: var(--swing-radius);
+  background: var(--swing-control);
 }
 
 /* A textarea fills its scroll pane and does its own scrolling. */
@@ -486,7 +566,7 @@ label {
 }
 
 .swing-scrollpane:focus-visible {
-  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline: 2px solid var(--swing-focus);
   outline-offset: 1px;
 }
 
@@ -496,15 +576,15 @@ label {
   position: relative;
   width: 12rem;
   height: 1.1rem;
-  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
-  border-radius: 4px;
-  background: light-dark(#e9e9e2, #333333);
+  border: 1px solid var(--swing-control-border);
+  border-radius: var(--swing-radius);
+  background: var(--swing-raised);
   overflow: hidden;
 }
 
 .swing-progress-fill {
   height: 100%;
-  background: light-dark(#3b78e7, #5a86d6);
+  background: var(--swing-accent);
   transition: width 0.1s linear;
 }
 
@@ -515,7 +595,7 @@ label {
   align-items: center;
   justify-content: center;
   font-size: 0.75rem;
-  color: light-dark(#1a1a1a, #f0f0f0);
+  color: inherit;
 }
 
 /* Indeterminate: a sliver sweeps back and forth. */
@@ -537,14 +617,14 @@ label {
   padding: 0.25rem 0.4rem;
   font: inherit;
   width: 5rem;
-  border-radius: 4px;
-  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
-  background: light-dark(#ffffff, #333333);
+  border-radius: var(--swing-radius);
+  border: 1px solid var(--swing-control-border);
+  background: var(--swing-field);
   color: inherit;
 }
 
 .swing-spinner:focus-visible {
-  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline: 2px solid var(--swing-focus);
   outline-offset: 1px;
 }
 
@@ -559,11 +639,11 @@ label {
 .swing-table td {
   padding: 0.25rem 0.7rem;
   text-align: left;
-  border: 1px solid light-dark(#c9c9bd, #5a5145);
+  border: 1px solid var(--swing-border);
 }
 
 .swing-table th {
-  background: light-dark(#eeeee8, #333333);
+  background: var(--swing-raised);
   font-weight: 600;
 }
 
@@ -576,11 +656,11 @@ label {
 }
 
 .swing-table tbody tr.swing-row-selected {
-  background: light-dark(#d6e2ff, #3b4a6b);
+  background: var(--swing-selection);
 }
 
 .swing-table tbody tr:focus-visible {
-  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline: 2px solid var(--swing-focus);
   outline-offset: -2px;
 }
 
@@ -594,9 +674,9 @@ label {
   padding: 0.15rem 0.3rem;
   margin: -0.1rem 0;
   font: inherit;
-  border: 1px solid light-dark(#0b57d0, #9db8ff);
+  border: 1px solid var(--swing-focus);
   border-radius: 2px;
-  background: light-dark(#ffffff, #2b2b2b);
+  background: var(--swing-control);
   color: inherit;
 }
 
@@ -615,9 +695,9 @@ label {
 .swing-list {
   padding: 0.25rem 0.4rem;
   font: inherit;
-  border-radius: 4px;
-  border: 1px solid light-dark(#8a8a7e, #6a6a6a);
-  background: light-dark(#ffffff, #333333);
+  border-radius: var(--swing-radius);
+  border: 1px solid var(--swing-control-border);
+  background: var(--swing-field);
   color: inherit;
   cursor: pointer;
 }
@@ -634,8 +714,8 @@ label {
 .swing-canvas {
   display: block;
   background: #ffffff;
-  border: 1px solid light-dark(#c9c9bd, #5a5145);
-  border-radius: 4px;
+  border: 1px solid var(--swing-border);
+  border-radius: var(--swing-radius);
   max-width: 100%;
 }
 
@@ -645,8 +725,8 @@ label {
   display: flex;
   gap: 0.15rem;
   padding: 0.15rem 0.3rem;
-  border-bottom: 1px solid light-dark(#c9c9bd, #5a5145);
-  background: light-dark(#eeeee8, #333333);
+  border-bottom: 1px solid var(--swing-border);
+  background: var(--swing-raised);
 }
 
 .swing-menu {
@@ -657,7 +737,7 @@ label {
   font: inherit;
   padding: 0.2rem 0.6rem;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--swing-radius);
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -665,7 +745,7 @@ label {
 
 .swing-menu-button:hover,
 .swing-menu-button[aria-expanded='true'] {
-  background: light-dark(#dcdcd2, #4a4a4a);
+  background: var(--swing-raised);
 }
 
 /* Rendered as a top-layer popover (escapes the window's overflow clip). Its
@@ -678,10 +758,10 @@ label {
   min-width: 10rem;
   padding: 0.25rem 0;
   flex-direction: column;
-  border: 1px solid light-dark(#c9c9bd, #5a5145);
-  border-radius: 4px;
-  background: light-dark(#ffffff, #2b2b2b);
-  color: light-dark(#1a1a1a, #f0f0f0);
+  border: 1px solid var(--swing-border);
+  border-radius: var(--swing-radius);
+  background: var(--swing-control);
+  color: inherit;
   box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
 }
 
@@ -733,18 +813,18 @@ label {
 
 .swing-menu-item:hover,
 .swing-menu-item:focus {
-  background: light-dark(#eef0ff, #565676);
+  background: var(--swing-control-hover);
   outline: none;
 }
 
 .swing-menu-separator {
   height: 1px;
   margin: 0.25rem 0;
-  background: light-dark(#d0d0c8, #4a4a4a);
+  background: var(--swing-border);
 }
 
 .swing-menu-button:focus-visible {
-  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline: 2px solid var(--swing-focus);
   outline-offset: 1px;
 }
 
@@ -758,7 +838,7 @@ label {
 .swing-slider:focus-visible,
 .swing-checkbox input:focus-visible,
 .swing-radio input:focus-visible {
-  outline: 2px solid light-dark(#0b57d0, #9db8ff);
+  outline: 2px solid var(--swing-focus);
   outline-offset: 1px;
 }
 

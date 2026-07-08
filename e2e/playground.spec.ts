@@ -1603,6 +1603,29 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('the Look and Feel picker re-skins every Swing widget via the token layer', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const button = root.getByRole('button', { name: 'Click me' });
+    await expect(button).toBeVisible();
+
+    const radius = (): Promise<string> => button.evaluate((el) => getComputedStyle(el).borderTopLeftRadius);
+    // Default (system) look: 4px radius.
+    expect(await radius()).toBe('4px');
+
+    // Metal: nearly square (2px) — no re-run needed, just the token swap.
+    await page.getByTestId('swing-laf').selectOption('metal');
+    await expect.poll(radius).toBe('2px');
+
+    // High Contrast: square with a black border.
+    await page.getByTestId('swing-laf').selectOption('contrast');
+    await expect.poll(radius).toBe('0px');
+    const border = await button.evaluate((el) => getComputedStyle(el).borderTopColor);
+    expect(border).toBe('rgb(0, 0, 0)');
+  });
+
   test('a menu accelerator fires its item from the keyboard', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Menus (JMenuBar)' });
