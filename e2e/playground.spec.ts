@@ -2351,6 +2351,31 @@ test.describe('swing (interactive)', () => {
     await expect(table.getByRole('row', { name: /Bo/ })).toContainText('8');
   });
 
+  test('a custom AbstractTableModel subclass backs a JTable and fires on insert', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Custom table model' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    // Read-only + non-selectable → role=table (an interactive one would be grid).
+    const table = root.getByRole('table');
+
+    // The subclass's getColumnName / getRowCount / getValueAt drive the table.
+    await expect(table.getByRole('columnheader', { name: 'Name' })).toBeVisible();
+    await expect(table.getByRole('columnheader', { name: 'Age' })).toBeVisible();
+    await expect(table.getByRole('row')).toHaveCount(3); // header + 2 people
+    await expect(root).toContainText('2 people');
+
+    // Adding through the model calls fireTableRowsInserted → the row appears
+    // and the TableModelListener updates the count.
+    await root.getByRole('textbox', { name: 'Name:' }).fill('Carol');
+    await root.getByRole('button', { name: 'Add person' }).click();
+    await expect(table.getByRole('row')).toHaveCount(4);
+    await expect(table.getByRole('row', { name: /Carol/ })).toContainText('5');
+    await expect(root).toContainText('3 people');
+  });
+
   test('a DefaultTableModel-backed JTable adds and removes rows live', async ({ page }) => {
     await page.goto('/');
     await page

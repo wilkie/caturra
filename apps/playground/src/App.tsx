@@ -1799,6 +1799,82 @@ public class Main {
 `,
   },
   {
+    name: 'Custom table model',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.util.ArrayList;
+import javax.swing.event.*;
+
+// A custom AbstractTableModel: implement getRowCount/getColumnCount/getValueAt
+// over your own data, and call fireTableRowsInserted to refresh listeners.
+class PeopleModel extends AbstractTableModel {
+  ArrayList<String> names = new ArrayList<String>();
+  ArrayList<Integer> ages = new ArrayList<Integer>();
+  String[] cols = {"Name", "Age"};
+  public int getRowCount() { return names.size(); }
+  public int getColumnCount() { return 2; }
+  public String getColumnName(int c) { return cols[c]; }
+  public Object getValueAt(int r, int c) {
+    if (c == 0) return names.get(r);
+    return ages.get(r);
+  }
+  public void addPerson(String name, int age) {
+    names.add(name);
+    ages.add(age);
+    fireTableRowsInserted(names.size() - 1, names.size() - 1);
+  }
+}
+
+public class Main {
+  static PeopleModel model;
+  static JTextField nameField;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("People");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    model = new PeopleModel();
+    model.addPerson("Ada", 36);
+    model.addPerson("Bo", 29);
+
+    // The JTable accepts any TableModel. A listener tracks the row count.
+    status = new JLabel("2 people");
+    model.addTableModelListener(new TableModelListener() {
+      public void tableChanged(TableModelEvent e) {
+        Main.status.setText(Main.model.getRowCount() + " people");
+      }
+    });
+
+    JTable table = new JTable(model);
+
+    nameField = new JTextField(10);
+    JLabel nameLabel = new JLabel("Name:");
+    nameLabel.setLabelFor(nameField);
+    JButton add = new JButton("Add person");
+    add.addActionListener(e -> {
+      String name = Main.nameField.getText();
+      if (!name.equals("")) {
+        Main.model.addPerson(name, name.length());
+        Main.nameField.setText("");
+      }
+    });
+
+    JPanel top = new JPanel();
+    top.add(nameLabel);
+    top.add(nameField);
+    top.add(add);
+
+    frame.add(top, BorderLayout.NORTH);
+    frame.add(new JScrollPane(table), BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Progress + spinner',
     starter: `import javax.swing.*;
 import java.awt.*;

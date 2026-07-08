@@ -1561,31 +1561,80 @@ class JSpinner extends Component {
 // addRow/removeRow/setValueAt appear as soon as the event loop repaints. Cells
 // are stored in row-major order as their string form (this subset shows cells
 // as text) — real Swing keeps Objects, and its element params are Object.
-class DefaultTableModel {
+// The data model behind a JTable. Students usually subclass AbstractTableModel
+// (implementing the three abstract queries) or use DefaultTableModel.
+interface TableModel {
+  int getRowCount();
+  int getColumnCount();
+  String getColumnName(int col);
+  Object getValueAt(int row, int col);
+  boolean isCellEditable(int row, int col);
+  void setValueAt(Object value, int row, int col);
+  void addTableModelListener(TableModelListener l);
+  void removeTableModelListener(TableModelListener l);
+}
+
+// A convenience base: manages listeners and the fireTableXxx notifications, and
+// supplies sensible defaults — a subclass only has to implement getRowCount,
+// getColumnCount, and getValueAt.
+abstract class AbstractTableModel implements TableModel {
+  java.util.ArrayList<TableModelListener> __tableListeners = new java.util.ArrayList<TableModelListener>();
+  public void addTableModelListener(TableModelListener l) { __tableListeners.add(l); }
+  public void removeTableModelListener(TableModelListener l) { __tableListeners.remove(l); }
+  // Default column names: spreadsheet-style A, B, ... Z, AA, AB, ...
+  public String getColumnName(int col) {
+    String name = "";
+    int n = col;
+    while (n >= 0) {
+      name = ((char) ('A' + n % 26)) + name;
+      n = n / 26 - 1;
+    }
+    return name;
+  }
+  public boolean isCellEditable(int row, int col) { return false; }
+  public void setValueAt(Object value, int row, int col) {}
+  void __fire(int firstRow, int lastRow, int column, int type) {
+    TableModelEvent e = new TableModelEvent(this, firstRow, lastRow, column, type);
+    for (TableModelListener l : __tableListeners) l.tableChanged(e);
+  }
+  public void fireTableDataChanged() {
+    __fire(0, Integer.MAX_VALUE, TableModelEvent.ALL_COLUMNS, TableModelEvent.UPDATE);
+  }
+  public void fireTableStructureChanged() {
+    __fire(TableModelEvent.HEADER_ROW, TableModelEvent.HEADER_ROW,
+        TableModelEvent.ALL_COLUMNS, TableModelEvent.UPDATE);
+  }
+  public void fireTableRowsInserted(int firstRow, int lastRow) {
+    __fire(firstRow, lastRow, TableModelEvent.ALL_COLUMNS, TableModelEvent.INSERT);
+  }
+  public void fireTableRowsUpdated(int firstRow, int lastRow) {
+    __fire(firstRow, lastRow, TableModelEvent.ALL_COLUMNS, TableModelEvent.UPDATE);
+  }
+  public void fireTableRowsDeleted(int firstRow, int lastRow) {
+    __fire(firstRow, lastRow, TableModelEvent.ALL_COLUMNS, TableModelEvent.DELETE);
+  }
+  public void fireTableCellUpdated(int row, int column) {
+    __fire(row, row, column, TableModelEvent.UPDATE);
+  }
+  // getRowCount / getColumnCount / getValueAt stay abstract (from TableModel).
+}
+
+class DefaultTableModel extends AbstractTableModel {
   java.util.ArrayList<String> __columns = new java.util.ArrayList<String>();
   java.util.ArrayList<String> __cells = new java.util.ArrayList<String>();
-  java.util.ArrayList<TableModelListener> __tableListeners = new java.util.ArrayList<TableModelListener>();
   public DefaultTableModel() {}
   public DefaultTableModel(Object[][] data, Object[] columnNames) {
     for (int c = 0; c < columnNames.length; c++) __columns.add(__str(columnNames[c]));
     for (int r = 0; r < data.length; r++) addRow(data[r]);
   }
   static String __str(Object v) { return v == null ? "" : "" + v; }
-  public void addTableModelListener(TableModelListener l) { __tableListeners.add(l); }
-  public void removeTableModelListener(TableModelListener l) { __tableListeners.remove(l); }
-  // Notify listeners of a change over rows [first, last] (of the given type),
-  // as real Swing's AbstractTableModel does when the model is mutated.
-  void __fireTable(int firstRow, int lastRow, int column, int type) {
-    TableModelEvent e = new TableModelEvent(this, firstRow, lastRow, column, type);
-    for (TableModelListener l : __tableListeners) l.tableChanged(e);
-  }
   public int getColumnCount() { return __columns.size(); }
   public int getRowCount() { return __columns.isEmpty() ? 0 : __cells.size() / __columns.size(); }
   public String getColumnName(int col) { return __columns.get(col); }
   public Object getValueAt(int row, int col) { return __cells.get(row * __columns.size() + col); }
   public void setValueAt(Object value, int row, int col) {
     __cells.set(row * __columns.size() + col, __str(value));
-    __fireTable(row, row, col, TableModelEvent.UPDATE);
+    fireTableCellUpdated(row, col);
   }
   // Cells are editable by default; override this to make (some) read-only.
   public boolean isCellEditable(int row, int col) { return true; }
@@ -1594,28 +1643,26 @@ class DefaultTableModel {
     for (int c = 0; c < __columns.size(); c++) {
       __cells.add(__str(c < rowData.length ? rowData[c] : null));
     }
-    __fireTable(row, row, TableModelEvent.ALL_COLUMNS, TableModelEvent.INSERT);
+    fireTableRowsInserted(row, row);
   }
   public void insertRow(int row, Object[] rowData) {
     int base = row * __columns.size();
     for (int c = 0; c < __columns.size(); c++) {
       __cells.add(base + c, __str(c < rowData.length ? rowData[c] : null));
     }
-    __fireTable(row, row, TableModelEvent.ALL_COLUMNS, TableModelEvent.INSERT);
+    fireTableRowsInserted(row, row);
   }
   public void removeRow(int row) {
     int cols = __columns.size();
     for (int c = 0; c < cols; c++) __cells.remove(row * cols);
-    __fireTable(row, row, TableModelEvent.ALL_COLUMNS, TableModelEvent.DELETE);
+    fireTableRowsDeleted(row, row);
   }
   public void addColumn(Object columnName) {
     int oldCols = __columns.size();
     int rows = oldCols == 0 ? 0 : __cells.size() / oldCols;
     __columns.add(__str(columnName));
     for (int r = rows - 1; r >= 0; r--) __cells.add((r + 1) * oldCols, "");
-    // A new column is a structure change (HEADER_ROW), like fireTableStructureChanged.
-    __fireTable(TableModelEvent.HEADER_ROW, TableModelEvent.HEADER_ROW,
-        TableModelEvent.ALL_COLUMNS, TableModelEvent.UPDATE);
+    fireTableStructureChanged();
   }
   public void setRowCount(int rowCount) {
     int cols = __columns.size();
@@ -1624,11 +1671,8 @@ class DefaultTableModel {
     while (__cells.size() > target) __cells.remove(__cells.size() - 1);
     while (__cells.size() < target) __cells.add("");
     int newRows = getRowCount();
-    if (newRows > oldRows) {
-      __fireTable(oldRows, newRows - 1, TableModelEvent.ALL_COLUMNS, TableModelEvent.INSERT);
-    } else if (newRows < oldRows) {
-      __fireTable(newRows, oldRows - 1, TableModelEvent.ALL_COLUMNS, TableModelEvent.DELETE);
-    }
+    if (newRows > oldRows) fireTableRowsInserted(oldRows, newRows - 1);
+    else if (newRows < oldRows) fireTableRowsDeleted(newRows, oldRows - 1);
   }
 }
 
@@ -1638,14 +1682,14 @@ class DefaultTableModel {
 class JTable extends Component {
   Object[][] __data;
   Object[] __columns;
-  DefaultTableModel __model = null;
+  TableModel __model = null;
   int __selectedRow = -1;
   ListSelectionModel __selectionModel = new ListSelectionModel();
   public JTable() { __data = new Object[0][0]; __columns = new Object[0]; }
   public JTable(Object[][] data, Object[] columns) { __data = data; __columns = columns; }
-  public JTable(DefaultTableModel model) { __data = new Object[0][0]; __columns = new Object[0]; __model = model; }
-  public void setModel(DefaultTableModel model) { __model = model; }
-  public DefaultTableModel getModel() { return __model; }
+  public JTable(TableModel model) { __data = new Object[0][0]; __columns = new Object[0]; __model = model; }
+  public void setModel(TableModel model) { __model = model; }
+  public TableModel getModel() { return __model; }
   public int getRowCount() { return __model != null ? __model.getRowCount() : __data.length; }
   public int getColumnCount() { return __model != null ? __model.getColumnCount() : __columns.length; }
   public String getColumnName(int col) {

@@ -247,6 +247,8 @@ static JAVAX_SWING: &[&str] = &[
     "ListSelectionModel",
     "DefaultListModel",
     "JTable",
+    "TableModel",
+    "AbstractTableModel",
     "DefaultTableModel",
     "JProgressBar",
     "JSpinner",

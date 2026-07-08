@@ -1015,6 +1015,50 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_custom_abstract_table_model_subclass() {
+    // A student subclasses AbstractTableModel, implementing only the three
+    // abstract queries; the base supplies default column names, non-editable
+    // cells, listener management, and the fireTableXxx notifications.
+    let (result, console) = compile_and_run(
+        r#"
+        import javax.swing.*;
+        import javax.swing.event.*;
+        class TimesModel extends AbstractTableModel {
+            public int getRowCount() { return 3; }
+            public int getColumnCount() { return 3; }
+            public Object getValueAt(int r, int c) { return (r + 1) * (c + 1); }
+        }
+        public class Main {
+            public static void main(String[] args) {
+                TimesModel model = new TimesModel();
+                System.out.println("rows=" + model.getRowCount() + " cols=" + model.getColumnCount());
+                System.out.println("v(2,2)=" + model.getValueAt(2, 2));
+                System.out.println("colName1=" + model.getColumnName(1));
+                System.out.println("editable=" + model.isCellEditable(0, 0));
+                model.addTableModelListener(new TableModelListener() {
+                    public void tableChanged(TableModelEvent e) {
+                        System.out.println("fired type=" + e.getType()
+                            + " rows=" + e.getFirstRow() + ".." + e.getLastRow());
+                    }
+                });
+                model.fireTableDataChanged();
+                model.fireTableRowsInserted(1, 1);
+                // A JTable accepts any TableModel, not just DefaultTableModel.
+                JTable table = new JTable(model);
+                System.out.println("table cell=" + table.getValueAt(1, 2));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "rows=3 cols=3\nv(2,2)=9\ncolName1=B\neditable=false\nfired type=0 rows=0..2147483647\nfired type=1 rows=1..1\ntable cell=6\n"
+    );
+}
+
+#[test]
 fn swing_table_model_fires_table_model_listener_events() {
     // A DefaultTableModel notifies its TableModelListener on every mutation with
     // the right type (INSERT=1, UPDATE=0, DELETE=-1), row range, and column.
