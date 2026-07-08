@@ -1940,6 +1940,12 @@ test.describe('swing (interactive)', () => {
     // is a proper ARIA menu (menubar / menu / menuitem) with arrow navigation.
     await root.getByRole('button', { name: 'File' }).focus();
     await page.keyboard.press('Enter');
+    // The popup opens as a top-layer popover, so it escapes the window's
+    // `overflow: hidden` and is never clipped by a small frame.
+    const asPopover = await page.evaluate(
+      () => document.querySelector('[data-testid="swing-root"] .swing-menu-popup:popover-open') !== null,
+    );
+    expect(asPopover).toBe(true);
     await expect(root.getByRole('menuitem', { name: 'New' })).toBeFocused();
     await page.keyboard.press('ArrowDown');
     await expect(root.getByRole('menuitem', { name: 'Open' })).toBeFocused();

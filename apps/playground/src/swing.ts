@@ -1421,7 +1421,7 @@ export class SwingViz {
       const openThis = (): void => {
         if (openTop?.button !== button) {
           closeTop();
-          popup.hidden = false;
+          this.#showPopup(popup, button, false);
           button.setAttribute('aria-expanded', 'true');
           openTop = { button, popup };
         }
@@ -1505,7 +1505,9 @@ export class SwingViz {
     popup.className = 'swing-menu-popup';
     popup.setAttribute('role', 'menu');
     popup.setAttribute('aria-label', menu.text ?? 'Menu');
-    popup.hidden = true;
+    // A manual popover renders in the browser's top layer, so it is never
+    // clipped by the window's `overflow: hidden` (positioned via #showPopup).
+    popup.popover = 'manual';
 
     let openChild: { button: HTMLButtonElement; popup: HTMLElement } | null = null;
     const closeChild = (): void => {
@@ -1542,8 +1544,7 @@ export class SwingViz {
         const openSub = (): void => {
           if (openChild?.button !== subButton) {
             closeChild();
-            subPopup.hidden = false;
-            subPopup.style.top = `${String(subButton.offsetTop)}px`;
+            this.#showPopup(subPopup, subButton, true);
             subButton.setAttribute('aria-expanded', 'true');
             openChild = { button: subButton, popup: subPopup };
           }
@@ -1650,14 +1651,43 @@ export class SwingViz {
 
   /** Hide a popup and everything nested inside it, resetting aria-expanded. */
   #collapseMenu(popup: HTMLElement, button: HTMLElement): void {
+    // Hide nested popovers first, then this one (a manual popover doesn't
+    // auto-close its descendants).
     for (const nested of popup.querySelectorAll<HTMLElement>('[role="menu"]')) {
-      nested.hidden = true;
+      if (nested.matches(':popover-open')) {
+        nested.hidePopover();
+      }
     }
     for (const expanded of popup.querySelectorAll<HTMLElement>('[aria-expanded="true"]')) {
       expanded.setAttribute('aria-expanded', 'false');
     }
-    popup.hidden = true;
+    if (popup.matches(':popover-open')) {
+      popup.hidePopover();
+    }
     button.setAttribute('aria-expanded', 'false');
+  }
+
+  /** Show a menu popover in the top layer, positioned relative to its trigger:
+   * a top-level menu drops below its button, a submenu flies out to the right.
+   * Flips to stay within the viewport. */
+  #showPopup(popup: HTMLElement, trigger: HTMLElement, submenu: boolean): void {
+    if (!popup.matches(':popover-open')) {
+      popup.showPopover();
+    }
+    const rect = trigger.getBoundingClientRect();
+    let left = submenu ? rect.right : rect.left;
+    let top = submenu ? rect.top : rect.bottom;
+    // Now that it's laid out in the top layer, flip if it would overflow.
+    const pw = popup.offsetWidth;
+    const ph = popup.offsetHeight;
+    if (left + pw > window.innerWidth) {
+      left = submenu ? rect.left - pw : window.innerWidth - pw - 4;
+    }
+    if (top + ph > window.innerHeight) {
+      top = (submenu ? rect.bottom : rect.top) - ph;
+    }
+    popup.style.left = `${String(Math.max(4, left))}px`;
+    popup.style.top = `${String(Math.max(4, top))}px`;
   }
 
   /** Focus a popup's first menu item (its direct children only). */

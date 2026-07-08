@@ -668,32 +668,25 @@ label {
   background: light-dark(#dcdcd2, #4a4a4a);
 }
 
+/* Rendered as a top-layer popover (escapes the window's overflow clip). Its
+   left/top are set inline from the trigger's position; reset the popover UA's
+   centering (inset:0; margin:auto) so those take effect. */
 .swing-menu-popup {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 5;
+  position: fixed;
+  inset: auto;
+  margin: 0;
   min-width: 10rem;
   padding: 0.25rem 0;
-  margin-top: 2px;
-  display: flex;
   flex-direction: column;
   border: 1px solid light-dark(#c9c9bd, #5a5145);
   border-radius: 4px;
   background: light-dark(#ffffff, #2b2b2b);
+  color: light-dark(#1a1a1a, #f0f0f0);
   box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
 }
 
-.swing-menu-popup[hidden] {
-  display: none;
-}
-
-/* A nested submenu cascades to the right of its parent (its vertical offset is
-   set inline to line up with the parent item). */
-.swing-menu-popup .swing-menu-popup {
-  top: 0;
-  left: 100%;
-  margin: -0.25rem 0 0 2px;
+.swing-menu-popup:popover-open {
+  display: flex;
 }
 
 .swing-menu-item {
