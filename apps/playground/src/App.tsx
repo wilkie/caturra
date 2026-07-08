@@ -875,6 +875,37 @@ public class Main {
 `,
   },
   {
+    name: 'Editable combo',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JComboBox size;
+  static JLabel preview;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Editable combo");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // An editable combo: pick a preset from the list OR type a custom value.
+    String[] presets = {"Small", "Medium", "Large"};
+    size = new JComboBox(presets);
+    size.setEditable(true);
+    size.addActionListener(e ->
+        Main.preview.setText("Size: " + Main.size.getSelectedItem()));
+
+    preview = new JLabel("Size: Small");
+
+    frame.add(new JLabel("Choose or type a size:"), BorderLayout.NORTH);
+    frame.add(size, BorderLayout.CENTER);
+    frame.add(preview, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Search box',
     starter: `import javax.swing.*;
 import java.awt.*;

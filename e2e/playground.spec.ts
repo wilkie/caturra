@@ -1790,6 +1790,26 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('0 characters');
   });
 
+  test('an editable JComboBox accepts a custom value and offers presets', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Editable combo' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // Editable → a role=combobox text input backed by a datalist of presets.
+    const combo = root.getByRole('combobox');
+    await expect(combo).toBeVisible();
+    const presetCount = await page.evaluate(
+      () => document.querySelectorAll('[data-testid="swing-root"] datalist option').length,
+    );
+    expect(presetCount).toBe(3);
+
+    // Typing a value not in the list still works (getSelectedItem returns it).
+    await combo.fill('Huge');
+    await combo.blur();
+    await expect(root).toContainText('Size: Huge');
+  });
+
   test('a JTextField ActionListener fires on Enter', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Search box' });

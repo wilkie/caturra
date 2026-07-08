@@ -930,6 +930,13 @@ export class SwingViz {
         break;
       }
       case 'combobox':
+        // An editable combo is a wrapper (input + datalist), not a <select>.
+        if (el instanceof HTMLSelectElement) {
+          this.#patchSelect(el, node);
+        } else {
+          this.#patchEditableCombo(el, node);
+        }
+        break;
       case 'list':
         this.#patchSelect(el as HTMLSelectElement, node);
         break;
@@ -2293,6 +2300,9 @@ export class SwingViz {
   }
 
   private comboBox(node: SwingNode): HTMLElement {
+    if (node.editable === true) {
+      return this.editableComboBox(node);
+    }
     const select = document.createElement('select');
     select.className = 'swing-combobox';
     select.id = node.id;
@@ -2312,6 +2322,64 @@ export class SwingViz {
     this.#field(select, node, 'change');
     this.common(select, node);
     return select;
+  }
+
+  /** An editable JComboBox: an <input list> + <datalist> wrapped in one element
+   * (so reconcile tracks a single node). The user can type a custom value or
+   * pick a suggestion; the value is the text, not an index. */
+  private editableComboBox(node: SwingNode): HTMLElement {
+    const wrap = document.createElement('span');
+    wrap.className = 'swing-combobox-wrap';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'swing-combobox swing-combobox-editable';
+    input.setAttribute('role', 'combobox');
+    input.value = node.text ?? '';
+    input.disabled = node.enabled === false;
+    const listId = `${node.id}-datalist`;
+    input.setAttribute('list', listId);
+    const datalist = document.createElement('datalist');
+    datalist.id = listId;
+    this.#fillComboOptions(datalist, node.items ?? []);
+    if (node.tooltip !== undefined) {
+      input.setAttribute('aria-label', node.tooltip);
+    }
+    // The input carries the value; register it as the field for this combo id.
+    this.#fields.set(node.id, input);
+    if (node.listens === true) {
+      const id = node.id;
+      input.addEventListener('change', () => {
+        this.#dispatch(this.#payload(id));
+      });
+    }
+    wrap.append(input, datalist);
+    this.common(wrap, node); // dataset.cid/kind + colours/border/size on the wrapper
+    return wrap;
+  }
+
+  #patchEditableCombo(wrap: HTMLElement, node: SwingNode): void {
+    const input = wrap.querySelector('input');
+    const datalist = wrap.querySelector('datalist');
+    if (input) {
+      if (input.value !== (node.text ?? '')) {
+        input.value = node.text ?? '';
+      }
+      input.disabled = node.enabled === false;
+      this.#fields.set(node.id, input);
+    }
+    if (datalist) {
+      this.#fillComboOptions(datalist, node.items ?? []);
+    }
+  }
+
+  #fillComboOptions(datalist: HTMLDataListElement, items: string[]): void {
+    datalist.replaceChildren(
+      ...items.map((item) => {
+        const option = document.createElement('option');
+        option.value = item;
+        return option;
+      }),
+    );
   }
 
   /** A JList: a sized <select> renders as a native, accessible list box

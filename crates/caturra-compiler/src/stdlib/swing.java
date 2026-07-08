@@ -1150,26 +1150,58 @@ class ButtonGroup {
 class JComboBox extends Component {
   java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
   int __selectedIndex = -1;
+  boolean __editable = false;
+  String __editText = ""; // the current text in editable mode (may be custom)
   ActionListener __actionListener = null;
   public JComboBox() {}
   public JComboBox(String[] items) {
     for (int i = 0; i < items.length; i++) __items.add(items[i]);
-    if (__items.size() > 0) __selectedIndex = 0;
+    if (__items.size() > 0) { __selectedIndex = 0; __editText = __items.get(0); }
   }
   public void addItem(String item) {
     __items.add(item);
-    if (__selectedIndex < 0) __selectedIndex = 0;
+    if (__selectedIndex < 0) { __selectedIndex = 0; __editText = item; }
   }
+  public void insertItemAt(String item, int index) { __items.add(index, item); }
+  public void removeItem(String item) {
+    int i = __items.indexOf(item);
+    if (i >= 0) removeItemAt(i);
+  }
+  public void removeItemAt(int index) {
+    __items.remove(index);
+    if (__selectedIndex >= __items.size()) __selectedIndex = __items.size() - 1;
+  }
+  public void removeAllItems() { __items.clear(); __selectedIndex = -1; __editText = ""; }
   public int getItemCount() { return __items.size(); }
   public String getItemAt(int index) { return __items.get(index); }
-  public int getSelectedIndex() { return __selectedIndex; }
-  public void setSelectedIndex(int index) { __selectedIndex = index; }
+  public int getSelectedIndex() { return __editable ? __items.indexOf(__editText) : __selectedIndex; }
+  public void setSelectedIndex(int index) {
+    __selectedIndex = index;
+    if (index >= 0 && index < __items.size()) __editText = __items.get(index);
+  }
   public Object getSelectedItem() {
+    if (__editable) return __editText.equals("") ? null : __editText;
     if (__selectedIndex < 0 || __selectedIndex >= __items.size()) return null;
     return __items.get(__selectedIndex);
   }
+  // For an editable combo, accepts a value not in the list (a custom entry).
+  public void setSelectedItem(Object item) {
+    String s = item == null ? "" : "" + item;
+    __editText = s;
+    __selectedIndex = __items.indexOf(s);
+  }
+  public void setEditable(boolean editable) { __editable = editable; }
+  public boolean isEditable() { return __editable; }
   public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
-  void __setFromHost(String value) { __selectedIndex = Integer.parseInt(value); }
+  void __setFromHost(String value) {
+    if (__editable) {
+      __editText = value;
+      __selectedIndex = __items.indexOf(value);
+    } else {
+      __selectedIndex = Integer.parseInt(value);
+      if (__selectedIndex >= 0 && __selectedIndex < __items.size()) __editText = __items.get(__selectedIndex);
+    }
+  }
   void __onEvent() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
   }
@@ -1181,8 +1213,13 @@ class JComboBox extends Component {
       opts.append("\"").append(Component.__esc(__items.get(i))).append("\"");
     }
     opts.append("]");
+    // Editable: an <input list=…> with a datalist; the value is the text (which
+    // may be a custom entry). Non-editable: a <select> keyed by index.
+    String ed = __editable
+        ? ",\"editable\":true,\"text\":\"" + Component.__esc(__editText) + "\""
+        : "";
     return "{\"type\":\"combobox\",\"items\":" + opts.toString() + ",\"selectedIndex\":" + __selectedIndex
-        + "," + __commonJson() + "}";
+        + ed + "," + __commonJson() + "}";
   }
 }
 

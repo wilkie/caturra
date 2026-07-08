@@ -970,6 +970,42 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_editable_combo_box_custom_values_and_item_management() {
+    // An editable JComboBox: runtime addItem/removeItem, and getSelectedItem
+    // returns the current text — a listed value (with its index) or a custom
+    // typed one (index -1). Ids: frame c0, combo c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static JComboBox combo;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Combo");
+                String[] fruits = {"Apple", "Banana"};
+                combo = new JComboBox(fruits);
+                combo.setEditable(true);
+                combo.addItem("Cherry");
+                combo.removeItem("Apple");
+                combo.addActionListener(e ->
+                    System.out.println("chose " + Main.combo.getSelectedItem()
+                        + " idx=" + Main.combo.getSelectedIndex()));
+                System.out.println("count=" + combo.getItemCount());
+                frame.add(combo);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\nc1=Banana")),      // picked a listed value
+            Some(String::from("c1\nc1=Dragonfruit")), // typed a custom value
+        ],
+    );
+    assert_eq!(out, "count=2\nchose Banana idx=0\nchose Dragonfruit idx=-1\n");
+}
+
+#[test]
 fn swing_document_listener_fires_insert_and_remove() {
     // getDocument().addDocumentListener fires per edit: insertUpdate when the
     // text grows, removeUpdate when it shrinks. The host marks each with a
