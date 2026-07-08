@@ -36,6 +36,7 @@ interface SwingNode {
     | 'panel'
     | 'label'
     | 'button'
+    | 'toggle'
     | 'textfield'
     | 'textarea'
     | 'checkbox'
@@ -87,6 +88,8 @@ interface SwingNode {
   password?: boolean;
   wrap?: boolean;
   selected?: boolean;
+  /** JButton mnemonic letter (Alt-shortcut), applied as the accessKey. */
+  mnemonic?: string;
   /** JList: the selected indices and whether multiple selection is allowed. */
   selectedIndices?: number[];
   multiple?: boolean;
@@ -650,6 +653,12 @@ export class SwingViz {
       case 'button':
         el.textContent = node.text ?? '';
         (el as HTMLButtonElement).disabled = node.enabled === false;
+        (el as HTMLButtonElement).accessKey = node.mnemonic ?? '';
+        break;
+      case 'toggle':
+        el.textContent = node.text ?? '';
+        (el as HTMLButtonElement).disabled = node.enabled === false;
+        el.setAttribute('aria-pressed', String(node.selected === true));
         break;
       case 'textfield':
       case 'textarea': {
@@ -945,6 +954,8 @@ export class SwingViz {
         return this.label(node);
       case 'button':
         return this.button(node);
+      case 'toggle':
+        return this.toggleButton(node);
       case 'textfield':
         return this.textField(node);
       case 'textarea':
@@ -1770,6 +1781,8 @@ export class SwingViz {
     button.id = node.id;
     button.textContent = node.text ?? '';
     button.disabled = node.enabled === false;
+    // setMnemonic → an accessKey (the platform's Alt-shortcut for the button).
+    button.accessKey = node.mnemonic ?? '';
     // A click reports the button's id plus every field's current value to
     // the program's ActionListener. (Native <button> also fires on
     // Enter/Space, so keyboard works.) Only wired when it has a listener.
@@ -1777,6 +1790,28 @@ export class SwingViz {
       const id = node.id;
       button.addEventListener('click', () => {
         this.#dispatch(this.#payload(id));
+      });
+    }
+    this.common(button, node);
+    return button;
+  }
+
+  /** A JToggleButton: a two-state button (aria-pressed). Clicking flips its
+   * pressed state and reports it, firing the Action/Item listeners. */
+  private toggleButton(node: SwingNode): HTMLElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'swing-button swing-toggle';
+    button.id = node.id;
+    button.textContent = node.text ?? '';
+    button.disabled = node.enabled === false;
+    button.setAttribute('aria-pressed', String(node.selected === true));
+    if (node.listens === true) {
+      const id = node.id;
+      button.addEventListener('click', () => {
+        const pressed = button.getAttribute('aria-pressed') !== 'true';
+        button.setAttribute('aria-pressed', String(pressed));
+        this.#dispatch(`${this.#payload(id)}\n${id}=${String(pressed)}`);
       });
     }
     this.common(button, node);

@@ -765,21 +765,66 @@ class JLabel extends Component {
 
 class JButton extends Component {
   String __text;
+  String __command = null;   // action command (defaults to the button text)
+  char __mnemonic = 0;       // Alt-shortcut letter (0 = none)
   ActionListener __listener = null;
   public JButton() { __text = ""; }
   public JButton(String text) { __text = text; }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
+  public void setActionCommand(String command) { __command = command; }
+  public String getActionCommand() { return __command == null ? __text : __command; }
+  public void setMnemonic(int key) { __mnemonic = (char) key; }
+  public void setMnemonic(char key) { __mnemonic = key; }
+  public int getMnemonic() { return __mnemonic; }
   public void addActionListener(ActionListener l) {
     __listener = l;
     __SwingRuntime.__interactive = true;
   }
+  // Programmatically activate the button (fires its ActionListener).
+  public void doClick() { __onEvent(); }
   void __onEvent() {
-    if (__listener != null) __listener.actionPerformed(new ActionEvent(this));
+    if (__listener != null) __listener.actionPerformed(new ActionEvent(this, getActionCommand()));
   }
   boolean __listens() { return __listener != null; }
   String __json() {
-    return "{\"type\":\"button\",\"text\":\"" + Component.__esc(__text) + "\"," + __commonJson() + "}";
+    String m = __mnemonic == 0 ? "" : ",\"mnemonic\":\"" + __mnemonic + "\"";
+    return "{\"type\":\"button\",\"text\":\"" + Component.__esc(__text) + "\"" + m + "," + __commonJson() + "}";
+  }
+}
+
+// A two-state button: pressed or not. Like a checkbox but styled as a button
+// (aria-pressed). Fires its ActionListener and/or ItemListener on toggle.
+class JToggleButton extends Component {
+  String __text;
+  boolean __sel;
+  String __command = null;
+  ActionListener __actionListener = null;
+  ItemListener __itemListener = null;
+  public JToggleButton() { __text = ""; __sel = false; }
+  public JToggleButton(String text) { __text = text; __sel = false; }
+  public JToggleButton(String text, boolean selected) { __text = text; __sel = selected; }
+  public void setText(String text) { __text = text; }
+  public String getText() { return __text; }
+  public boolean isSelected() { return __sel; }
+  public void setSelected(boolean selected) { __sel = selected; }
+  public void setActionCommand(String command) { __command = command; }
+  public String getActionCommand() { return __command == null ? __text : __command; }
+  public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
+  public void addItemListener(ItemListener l) { __itemListener = l; __SwingRuntime.__interactive = true; }
+  public void doClick() { __sel = !__sel; __onEvent(); }
+  void __setFromHost(String value) { __sel = value.equals("true"); }
+  void __onEvent() {
+    if (__itemListener != null) {
+      int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
+      __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
+    }
+    if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this, getActionCommand()));
+  }
+  boolean __listens() { return __actionListener != null || __itemListener != null; }
+  String __json() {
+    return "{\"type\":\"toggle\",\"text\":\"" + Component.__esc(__text) + "\",\"selected\":" + __sel
+        + "," + __commonJson() + "}";
   }
 }
 
@@ -1546,8 +1591,11 @@ class JFrame extends Container {
 
 class ActionEvent {
   Object __src;
+  String __command = null;
   public ActionEvent(Object source) { __src = source; }
+  public ActionEvent(Object source, String command) { __src = source; __command = command; }
   public Object getSource() { return __src; }
+  public String getActionCommand() { return __command; }
 }
 
 interface ActionListener {

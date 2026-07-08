@@ -652,6 +652,47 @@ public class Main {
 `,
   },
   {
+    name: 'Toggle buttons',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JToggleButton bold;
+  static JToggleButton italic;
+  static JLabel preview;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Toggle buttons");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // A JToggleButton stays pressed until clicked again (aria-pressed).
+    JPanel bar = new JPanel();
+    bold = new JToggleButton("Bold");
+    italic = new JToggleButton("Italic");
+    bold.addActionListener(e -> Main.update());
+    italic.addActionListener(e -> Main.update());
+    bar.add(bold);
+    bar.add(italic);
+
+    preview = new JLabel("Style: plain");
+
+    frame.add(bar, BorderLayout.NORTH);
+    frame.add(preview, BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+
+  static void update() {
+    String s = "";
+    if (Main.bold.isSelected()) s = s + "bold ";
+    if (Main.italic.isSelected()) s = s + "italic ";
+    if (s.equals("")) s = "plain";
+    Main.preview.setText("Style: " + s.trim());
+  }
+}
+`,
+  },
+  {
     name: 'Login form',
     starter: `import javax.swing.*;
 import java.awt.*;

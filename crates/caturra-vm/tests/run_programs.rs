@@ -873,6 +873,83 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_button_action_command_and_do_click() {
+    // setActionCommand flows to ActionEvent.getActionCommand(); doClick() fires
+    // the listener programmatically (before the event loop even starts).
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Cmd");
+                JButton b = new JButton("Save");
+                b.setActionCommand("SAVE_DOC");
+                b.addActionListener(e -> System.out.println("cmd " + e.getActionCommand()));
+                b.doClick();
+                frame.add(b);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("c1"))],
+    );
+    assert_eq!(out, "cmd SAVE_DOC\ncmd SAVE_DOC\n");
+}
+
+#[test]
+fn swing_toggle_button_flips_and_fires() {
+    // A JToggleButton toggles its selected state on click and reports it; the
+    // ItemListener sees the new state. Ids: frame c0, toggle c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import java.awt.event.*;
+        public class Main {
+            static JToggleButton bold;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Toggle");
+                bold = new JToggleButton("Bold");
+                bold.addItemListener(e -> System.out.println("bold " + Main.bold.isSelected()));
+                frame.add(bold);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\nc1=true")),
+            Some(String::from("c1\nc1=false")),
+        ],
+    );
+    assert_eq!(out, "bold true\nbold false\n");
+}
+
+#[test]
+fn swing_button_mnemonic_serializes() {
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Mnem");
+                JButton b = new JButton("Save");
+                b.setMnemonic(KeyEvent.VK_S);
+                frame.add(b);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""mnemonic":"S""#), "no mnemonic: {json}");
+}
+
+#[test]
 fn swing_password_field_and_editable() {
     // JPasswordField serializes as a masked field and getPassword() returns the
     // text as a char[]; JTextField.setEditable(false) marks it read-only.

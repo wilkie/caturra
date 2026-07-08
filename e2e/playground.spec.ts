@@ -1603,6 +1603,27 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('a JToggleButton stays pressed and reports its state', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Toggle buttons' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // A toggle button exposes aria-pressed; it starts unpressed.
+    const bold = root.getByRole('button', { name: 'Bold', pressed: false });
+    await expect(bold).toBeVisible();
+
+    // Clicking presses it and fires the listener (the preview updates).
+    await bold.click();
+    await expect(root.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(root).toContainText('Style: bold');
+
+    // Clicking again releases it.
+    await root.getByRole('button', { name: 'Bold' }).click();
+    await expect(root.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(root).toContainText('Style: plain');
+  });
+
   test('a JPasswordField masks input and getPassword() reads it back', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Login form' });
