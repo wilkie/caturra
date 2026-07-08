@@ -2434,6 +2434,12 @@ test.describe('swing (interactive)', () => {
     await close.click();
     await expect(page.getByTestId('run')).toBeEnabled();
     await expect(page.getByTestId('stop-run')).toBeHidden();
+
+    // The exited app is clearly marked: a badge and a dimmed, inert frame.
+    await expect(page.getByTestId('swing-stopped-badge')).toBeVisible();
+    await expect(root).toHaveClass(/swing-stopped/);
+    const opacity = await root.evaluate((el) => Number(getComputedStyle(el).opacity));
+    expect(opacity).toBeLessThan(1);
   });
 
   test('a listener reads the current value typed into a text field', async ({ page }) => {

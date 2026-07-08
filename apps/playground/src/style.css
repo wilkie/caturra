@@ -706,11 +706,21 @@ label {
   padding: 0.15rem 0.3rem;
 }
 
+/* A finished (exited) Swing app: dim the last frame so it reads as inert. */
+#swing-root.swing-stopped {
+  opacity: 0.5;
+  filter: grayscale(0.4);
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
 /* Editable JComboBox: a text input + drop arrow inside one bordered box, with a
-   top-layer listbox popup (a real dropdown, not native autocomplete). */
+   top-layer listbox popup (a real dropdown, not native autocomplete). The arrow
+   is a full-height button on the right (a divider sets it off), so it doesn't
+   look like a glyph floating in a tall, stretched combo. */
 .swing-combobox-wrap {
   display: inline-flex;
-  align-items: center;
+  align-items: stretch;
   border: 1px solid var(--swing-control-border);
   border-radius: var(--swing-radius);
   background: var(--swing-field);
@@ -734,13 +744,18 @@ label {
 
 .swing-combobox-arrow {
   border: none;
+  border-left: 1px solid var(--swing-control-border);
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: 0 0.35rem;
+  padding: 0 0.5rem;
   font-size: 0.7rem;
   line-height: 1;
   align-self: stretch;
+}
+
+.swing-combobox-arrow:hover {
+  background: var(--swing-control-hover);
 }
 
 .swing-combobox-list {

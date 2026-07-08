@@ -1934,6 +1934,11 @@ export function App(): React.JSX.Element {
   const [view, setView] = useState<'none' | 'neighborhood' | 'theater' | 'swing'>('none');
   const [swingDialog, setSwingDialog] = useState<{ kind: string; message: string } | null>(null);
   const [swingDialogInput, setSwingDialogInput] = useState('');
+  // The last dialog shown, kept during MUI's fade-out so the closing dialog
+  // doesn't flash its default text as swingDialog goes null.
+  const lastDialogRef = useRef<{ kind: string; message: string } | null>(null);
+  // True once an interactive Swing app has finished — the shown frame is inert.
+  const [swingStopped, setSwingStopped] = useState(false);
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [hasSolution, setHasSolution] = useState(false);
   const [debugBar, setDebugBar] = useState(false);
@@ -2414,6 +2419,7 @@ export function App(): React.JSX.Element {
     swingRenderedLiveRef.current = false;
     swingPendingMotionRef.current = null;
     setSwingDialog(null);
+    setSwingStopped(false);
     setPhase('running');
     clearConsole();
     neighborhoodVizRef.current?.stop();
@@ -2476,6 +2482,12 @@ export function App(): React.JSX.Element {
     } finally {
       if (!wasStopped()) {
         setPhase('idle');
+      }
+      // An interactive Swing app whose loop returned (window closed) has exited;
+      // dim the last frame so it's clear nothing is listening anymore. (Read via
+      // the function so flow analysis doesn't assume the ref's value.)
+      if (swingRenderedLive()) {
+        setSwingStopped(true);
       }
     }
   };
@@ -2727,6 +2739,14 @@ export function App(): React.JSX.Element {
   const runDisabled = !ready || phase === 'running' || phase === 'debugging';
   const debugDisabled = !ready || phase === 'running' || phase === 'debugging';
   const testDisabled = !ready || phase === 'running' || phase === 'testing';
+
+  // The dialog's `open` follows swingDialog, but its CONTENT reads the last
+  // shown dialog so it doesn't flash default text during MUI's fade-out (when
+  // swingDialog has already gone null).
+  if (swingDialog !== null) {
+    lastDialogRef.current = swingDialog;
+  }
+  const shownDialog = swingDialog ?? lastDialogRef.current;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -3058,9 +3078,26 @@ export function App(): React.JSX.Element {
                 gap: 1,
               }}
             >
-              <Typography variant="subtitle2" id="swing-heading">
-                Swing UI
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="subtitle2" id="swing-heading">
+                  Swing UI
+                </Typography>
+                {swingStopped && (
+                  <Typography
+                    data-testid="swing-stopped-badge"
+                    variant="caption"
+                    sx={{
+                      px: 0.8,
+                      py: 0.2,
+                      borderRadius: 1,
+                      bgcolor: 'action.disabledBackground',
+                      color: 'text.secondary',
+                    }}
+                  >
+                    Exited — not running
+                  </Typography>
+                )}
+              </Box>
               <TextField
                 select
                 size="small"
@@ -3084,7 +3121,13 @@ export function App(): React.JSX.Element {
                 <option value="contrast">High Contrast</option>
               </TextField>
             </Box>
-            <div id="swing-root" data-testid="swing-root" data-laf={laf} ref={swingMountRef} />
+            <div
+              id="swing-root"
+              data-testid="swing-root"
+              data-laf={laf}
+              className={swingStopped ? 'swing-stopped' : undefined}
+              ref={swingMountRef}
+            />
           </Box>
 
           <Box
@@ -3132,17 +3175,17 @@ export function App(): React.JSX.Element {
         data-testid="swing-dialog"
       >
         <DialogTitle id="swing-dialog-title">
-          {swingDialog?.kind === 'input'
+          {shownDialog?.kind === 'input'
             ? 'Input'
-            : swingDialog?.kind === 'message'
+            : shownDialog?.kind === 'message'
               ? 'Message'
               : 'Select an Option'}
         </DialogTitle>
         <DialogContent>
           <DialogContentText sx={{ whiteSpace: 'pre-wrap' }}>
-            {swingDialog?.message}
+            {shownDialog?.message}
           </DialogContentText>
-          {swingDialog?.kind === 'input' && (
+          {shownDialog?.kind === 'input' && (
             <TextField
               autoFocus
               fullWidth
@@ -3160,7 +3203,7 @@ export function App(): React.JSX.Element {
             />
           )}
         </DialogContent>
-        <DialogActions>{swingDialog ? dialogActions(swingDialog.kind) : null}</DialogActions>
+        <DialogActions>{shownDialog ? dialogActions(shownDialog.kind) : null}</DialogActions>
       </Dialog>
     </Box>
   );
