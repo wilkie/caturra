@@ -434,7 +434,7 @@ fn swing_serializes_an_accessible_component_tree() {
     // The label associates with the text field's id (c2: frame=c0, label=c1,
     // field=c2), which is what the DOM renders as `<label for>`.
     assert!(
-        json.contains(r#""type":"textfield","text":"","columns":12,"id":"c2""#),
+        json.contains(r#""type":"textfield","text":"","columns":12,"editable":true,"id":"c2""#),
         "no field: {json}"
     );
     assert!(
@@ -870,6 +870,53 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
         ],
     );
     assert_eq!(out, "tab 2 = Three\ntab 0 = One\n");
+}
+
+#[test]
+fn swing_password_field_and_editable() {
+    // JPasswordField serializes as a masked field and getPassword() returns the
+    // text as a char[]; JTextField.setEditable(false) marks it read-only.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Login");
+                JPasswordField pw = new JPasswordField(12);
+                pw.setText("secret");
+                JTextField readonly = new JTextField("frozen");
+                readonly.setEditable(false);
+                frame.add(pw);
+                frame.add(readonly);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(json.contains(r#""password":true"#), "no password flag: {json}");
+    assert!(json.contains(r#""text":"frozen","columns":0,"editable":false"#), "not read-only: {json}");
+}
+
+#[test]
+fn swing_password_field_get_password_returns_chars() {
+    // getPassword() -> char[]; String(char[]) reconstructs it.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        public class Main {
+            public static void main(String[] args) {
+                JPasswordField pw = new JPasswordField();
+                pw.setText("hunter2");
+                char[] chars = pw.getPassword();
+                System.out.println("len " + chars.length + " = " + new String(chars));
+            }
+        }
+        "#,
+        "Main",
+        vec![],
+    );
+    assert_eq!(out, "len 7 = hunter2\n");
 }
 
 #[test]

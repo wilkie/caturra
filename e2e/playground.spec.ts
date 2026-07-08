@@ -1603,6 +1603,26 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('a JPasswordField masks input and getPassword() reads it back', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Login form' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // The password field is a masked input (no textbox role); the user field
+    // is the one text box.
+    const pw = root.locator('input[type="password"]');
+    await expect(pw).toBeVisible();
+    const user = root.locator('input[type="text"]');
+    await expect(user).toBeVisible();
+
+    // Fill both; logging in reads user.getText() and pass.getPassword().
+    await user.fill('ada');
+    await pw.fill('secret');
+    await root.getByRole('button', { name: 'Log in' }).click();
+    await expect(root).toContainText('Welcome, ada (6 chars)');
+  });
+
   test('preferred size, Color.darker, and horizontal alignment style widgets', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Styled widgets' });

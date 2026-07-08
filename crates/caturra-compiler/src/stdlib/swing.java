@@ -792,6 +792,8 @@ class JTextField extends Component {
 
   String __text;
   int __cols;
+  boolean __editable = true;
+  boolean __password = false;
   public JTextField() { __text = ""; __cols = 0; }
   public JTextField(int cols) { __text = ""; __cols = cols; }
   public JTextField(String text) { __text = text; __cols = 0; }
@@ -799,13 +801,29 @@ class JTextField extends Component {
   public String getText() { return __text; }
   public void setText(String text) { __text = text; }
   public int getColumns() { return __cols; }
+  public void setColumns(int cols) { __cols = cols; }
+  public void setEditable(boolean editable) { __editable = editable; }
+  public boolean isEditable() { return __editable; }
   public void setHorizontalAlignment(int alignment) { __halign = alignment; }
   public int getHorizontalAlignment() { return __halign < 0 ? LEADING : __halign; }
   void __setFromHost(String value) { __text = value; }
   String __json() {
+    String pw = __password ? ",\"password\":true" : "";
     return "{\"type\":\"textfield\",\"text\":\"" + Component.__esc(__text) + "\",\"columns\":" + __cols
-        + "," + __commonJson() + "}";
+        + ",\"editable\":" + __editable + pw + "," + __commonJson() + "}";
   }
+}
+
+// A masked text field. getPassword() returns the text as a char[] (real Swing
+// avoids String for passwords); the renderer shows an <input type=password>.
+class JPasswordField extends JTextField {
+  public JPasswordField() { __password = true; }
+  public JPasswordField(int cols) { __cols = cols; __password = true; }
+  public JPasswordField(String text) { __text = text; __password = true; }
+  public JPasswordField(String text, int cols) { __text = text; __cols = cols; __password = true; }
+  public char[] getPassword() { return __text.toCharArray(); }
+  public void setEchoChar(char c) {}
+  public char getEchoChar() { return '*'; }
 }
 
 class JTextArea extends Component {

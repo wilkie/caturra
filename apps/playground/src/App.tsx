@@ -652,6 +652,44 @@ public class Main {
 `,
   },
   {
+    name: 'Login form',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JTextField user;
+  static JPasswordField pass;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Login");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new GridLayout(0, 2));
+
+    frame.add(new JLabel("User:"));
+    user = new JTextField(12);
+    frame.add(user);
+
+    frame.add(new JLabel("Password:"));
+    pass = new JPasswordField(12); // masked input; getPassword() -> char[]
+    frame.add(pass);
+
+    JButton login = new JButton("Log in");
+    login.addActionListener(e -> {
+      String p = new String(Main.pass.getPassword());
+      Main.status.setText("Welcome, " + Main.user.getText() + " (" + p.length() + " chars)");
+    });
+    frame.add(login);
+
+    status = new JLabel("Enter credentials");
+    frame.add(status);
+
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Styled widgets',
     starter: `import javax.swing.*;
 import java.awt.*;

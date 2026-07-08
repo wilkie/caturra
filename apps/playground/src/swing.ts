@@ -83,6 +83,8 @@ interface SwingNode {
   columns?: number;
   rows?: number;
   editable?: boolean;
+  /** JPasswordField: render as a masked <input type=password>. */
+  password?: boolean;
   wrap?: boolean;
   selected?: boolean;
   /** JList: the selected indices and whether multiple selection is allowed. */
@@ -657,9 +659,7 @@ export class SwingViz {
           input.value = node.text ?? '';
         }
         input.disabled = node.enabled === false;
-        if (input instanceof HTMLTextAreaElement) {
-          input.readOnly = node.editable === false;
-        }
+        input.readOnly = node.editable === false; // JTextField / JTextArea setEditable
         this.#fields.set(node.id, input);
         break;
       }
@@ -1785,11 +1785,12 @@ export class SwingViz {
 
   private textField(node: SwingNode): HTMLElement {
     const input = document.createElement('input');
-    input.type = 'text';
+    input.type = node.password === true ? 'password' : 'text';
     input.className = 'swing-textfield';
     input.id = node.id;
     input.value = node.text ?? '';
     input.disabled = node.enabled === false;
+    input.readOnly = node.editable === false;
     if (node.columns !== undefined && node.columns > 0) {
       input.size = node.columns;
     }
