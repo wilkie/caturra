@@ -14,11 +14,14 @@
 
 /** A component border (BorderFactory), applied as CSS in common(). */
 interface BorderSpec {
-  type: 'line' | 'empty' | 'titled' | 'etched';
+  type: 'line' | 'empty' | 'titled' | 'etched' | 'matte' | 'bevel' | 'compound';
   thickness: number;
   color?: string; // "r,g,b"
   title?: string;
   insets: string; // "top,left,bottom,right"
+  raised?: boolean; // bevel: raised vs lowered
+  outer?: BorderSpec; // compound outside
+  inner?: BorderSpec; // compound inside, or a titled border's frame
 }
 
 interface SwingNode {
@@ -896,9 +899,9 @@ export class SwingViz {
     this.applyBorder(el, node.border);
   }
 
-  /** Apply a BorderFactory border as CSS (line/empty/etched) or a titled group
-   * box. Resets prior border styling first so a reconciled element doesn't keep
-   * a stale border. */
+  /** Apply a BorderFactory border as CSS. A compound border layers its inner
+   * border inside the outer frame. Resets prior border styling first so a
+   * reconciled element doesn't keep a stale border. */
   private applyBorder(el: HTMLElement, border: BorderSpec | undefined): void {
     // Undo any titled-group state from a previous render before reapplying.
     if (el.dataset.borderTitle !== undefined && border?.type !== 'titled') {
@@ -909,29 +912,70 @@ export class SwingViz {
     }
     el.style.border = '';
     el.style.padding = '';
+    el.style.boxShadow = '';
     if (border === undefined) {
       return;
     }
-    switch (border.type) {
-      case 'line':
-        el.style.border = `${String(border.thickness)}px solid ${cssColor(border.color) ?? 'currentColor'}`;
-        break;
-      case 'empty': {
-        const [t, l, b, r] = border.insets.split(',').map(Number);
-        el.style.padding = `${String(t)}px ${String(r)}px ${String(b)}px ${String(l)}px`;
-        break;
+    if (border.type === 'compound') {
+      if (border.outer) {
+        this.frameBorder(el, border.outer);
       }
+      if (border.inner) {
+        this.innerBorder(el, border.inner);
+      }
+      return;
+    }
+    this.frameBorder(el, border);
+  }
+
+  /** The visible frame of a single (non-compound) border on the element. */
+  private frameBorder(el: HTMLElement, b: BorderSpec): void {
+    const [t, l, bottom, r] = b.insets.split(',').map(Number);
+    switch (b.type) {
+      case 'line':
+        el.style.border = `${String(b.thickness)}px solid ${cssColor(b.color) ?? 'currentColor'}`;
+        break;
+      case 'matte':
+        // Per-side thickness in one colour.
+        el.style.borderStyle = 'solid';
+        el.style.borderColor = cssColor(b.color) ?? 'currentColor';
+        el.style.borderWidth = `${String(t)}px ${String(r)}px ${String(bottom)}px ${String(l)}px`;
+        break;
       case 'etched':
-        el.style.border = `${String(border.thickness)}px groove light-dark(#c8c8c0, #5a5a5a)`;
+        el.style.border = `${String(b.thickness)}px groove light-dark(#c8c8c0, #5a5a5a)`;
+        break;
+      case 'bevel':
+        el.style.border = `2px ${b.raised === true ? 'outset' : 'inset'} light-dark(#d8d8d0, #565656)`;
+        break;
+      case 'empty':
+        el.style.padding = `${String(t)}px ${String(r)}px ${String(bottom)}px ${String(l)}px`;
         break;
       case 'titled':
         // A group box: an accessible region named by its caption, with the
         // caption drawn over the top border via the ::before rule.
         el.classList.add('swing-titled');
-        el.dataset.borderTitle = border.title ?? '';
+        el.dataset.borderTitle = b.title ?? '';
         el.setAttribute('role', 'group');
-        el.setAttribute('aria-label', border.title ?? '');
+        el.setAttribute('aria-label', b.title ?? '');
+        // TitledBorder(border, title) frames with that border (inline, so it
+        // overrides the default etched groove from the CSS class).
+        if (b.inner) {
+          this.frameBorder(el, b.inner);
+        }
         break;
+      default:
+        break;
+    }
+  }
+
+  /** A compound border's inner contribution, layered inside the outer frame:
+   * padding for an empty border, an inset ring for a line/matte border. */
+  private innerBorder(el: HTMLElement, b: BorderSpec): void {
+    if (b.type === 'empty') {
+      const [t, l, bottom, r] = b.insets.split(',').map(Number);
+      el.style.padding = `${String(t)}px ${String(r)}px ${String(bottom)}px ${String(l)}px`;
+    } else if (b.type === 'line' || b.type === 'matte') {
+      el.style.boxShadow = `inset 0 0 0 ${String(b.thickness)}px ${cssColor(b.color) ?? 'currentColor'}`;
     }
   }
 

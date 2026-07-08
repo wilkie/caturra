@@ -254,9 +254,18 @@ static JAVAX_SWING: &[&str] = &[
     "BorderFactory",
     "Border",
 ];
-/// `javax.swing.border`: the `Border` handle returned by `BorderFactory`
-/// (kept here too so `import javax.swing.border.Border;` resolves).
-static JAVAX_SWING_BORDER: &[&str] = &["Border"];
+/// `javax.swing.border`: the `Border` handle returned by `BorderFactory` plus
+/// the concrete subtypes (constructible directly, e.g. `new LineBorder(...)`).
+static JAVAX_SWING_BORDER: &[&str] = &[
+    "Border",
+    "LineBorder",
+    "EmptyBorder",
+    "MatteBorder",
+    "EtchedBorder",
+    "BevelBorder",
+    "TitledBorder",
+    "CompoundBorder",
+];
 static JAVA_AWT: &[&str] = &[
     "Color",
     "Dimension",

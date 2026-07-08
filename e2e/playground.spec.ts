@@ -1603,7 +1603,7 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
-  test('BorderFactory titled and line borders render as a group and a frame', async ({ page }) => {
+  test('BorderFactory renders titled, matte, and compound borders', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Bordered form' });
     await page.getByTestId('run').click();
@@ -1617,15 +1617,34 @@ test.describe('swing (interactive)', () => {
     // The caption is drawn via the ::before rule from the data attribute.
     await expect(group).toHaveAttribute('data-border-title', 'Preferences');
 
-    // The line border on the note is a 2px solid frame in the given colour.
-    const note = root.locator('span.swing-label', { hasText: 'Pick your settings above.' });
-    const border = await note.evaluate((el) => {
+    // A matte border draws only the top and bottom sides, in the given colour.
+    const banner = root.locator('span.swing-label', { hasText: /^Settings$/ });
+    const matte = await banner.evaluate((el) => {
       const s = getComputedStyle(el);
-      return { width: s.borderTopWidth, style: s.borderTopStyle, color: s.borderTopColor };
+      return { top: s.borderTopWidth, left: s.borderLeftWidth, color: s.borderTopColor };
     });
-    expect(border.width).toBe('2px');
-    expect(border.style).toBe('solid');
-    expect(border.color).toBe('rgb(60, 120, 220)');
+    expect(matte.top).toBe('4px');
+    expect(matte.left).toBe('0px');
+    expect(matte.color).toBe('rgb(220, 140, 40)');
+
+    // A compound border: the outer line frame (2px, coloured) plus the inner
+    // empty border's padding (6px vertical, 10px horizontal).
+    const note = root.locator('span.swing-label', { hasText: 'Pick your settings above.' });
+    const compound = await note.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        width: s.borderTopWidth,
+        style: s.borderTopStyle,
+        color: s.borderTopColor,
+        padTop: s.paddingTop,
+        padLeft: s.paddingLeft,
+      };
+    });
+    expect(compound.width).toBe('2px');
+    expect(compound.style).toBe('solid');
+    expect(compound.color).toBe('rgb(60, 120, 220)');
+    expect(compound.padTop).toBe('6px');
+    expect(compound.padLeft).toBe('10px');
   });
 
   test('JOptionPane shows accessible modal dialogs (input, confirm, message)', async ({ page }) => {

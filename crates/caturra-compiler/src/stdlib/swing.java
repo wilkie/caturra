@@ -65,11 +65,15 @@ class Font {
 // single class tagged by __type carries every variant's fields; the renderer
 // styles the element from the serialized descriptor.
 class Border {
-  String __type;   // "line" | "empty" | "titled" | "etched"
+  // "line" | "empty" | "titled" | "etched" | "matte" | "bevel" | "compound"
+  String __type = "line";
   Color __color = null;
   int __thickness = 1;
   String __title = null;
   int __top = 0, __left = 0, __bottom = 0, __right = 0;
+  boolean __raised = false;   // bevel: raised vs lowered
+  Border __inner = null;      // compound inside, or a titled border's frame
+  Border __outer = null;      // compound outside
 
   String __json() {
     StringBuilder s = new StringBuilder("{\"type\":\"");
@@ -81,42 +85,77 @@ class Border {
     if (__title != null) s.append(",\"title\":\"").append(Component.__esc(__title)).append("\"");
     s.append(",\"insets\":\"").append(__top).append(",").append(__left)
         .append(",").append(__bottom).append(",").append(__right).append("\"");
+    if (__type.equals("bevel")) s.append(",\"raised\":").append(__raised);
+    if (__outer != null) s.append(",\"outer\":").append(__outer.__json());
+    if (__inner != null) s.append(",\"inner\":").append(__inner.__json());
     return s.append("}").toString();
   }
 }
 
-// javax.swing.BorderFactory: the shared factory for the common border kinds.
+// The concrete border subtypes are also constructible directly (some textbooks
+// use `new LineBorder(...)` rather than the factory); each sets its tag + fields
+// on the inherited Border state.
+class LineBorder extends Border {
+  public LineBorder(Color color) { __type = "line"; __color = color; __thickness = 1; }
+  public LineBorder(Color color, int thickness) { __type = "line"; __color = color; __thickness = thickness; }
+}
+
+class EmptyBorder extends Border {
+  public EmptyBorder(int top, int left, int bottom, int right) {
+    __type = "empty"; __top = top; __left = left; __bottom = bottom; __right = right;
+  }
+}
+
+// A per-side coloured border (asymmetric thickness).
+class MatteBorder extends Border {
+  public MatteBorder(int top, int left, int bottom, int right, Color color) {
+    __type = "matte"; __top = top; __left = left; __bottom = bottom; __right = right; __color = color;
+  }
+}
+
+class EtchedBorder extends Border {
+  public EtchedBorder() { __type = "etched"; __thickness = 2; }
+}
+
+// A raised or lowered 3D bevel.
+class BevelBorder extends Border {
+  public static final int RAISED = 0;
+  public static final int LOWERED = 1;
+  public BevelBorder(int type) { __type = "bevel"; __thickness = 2; __raised = (type == RAISED); }
+}
+
+class TitledBorder extends Border {
+  public TitledBorder(String title) { __type = "titled"; __title = title; }
+  // Frames with `border` (instead of the default etched line) under the caption.
+  public TitledBorder(Border border, String title) { __type = "titled"; __title = title; __inner = border; }
+}
+
+// Nests one border inside another (classically a line outside + empty padding
+// inside).
+class CompoundBorder extends Border {
+  public CompoundBorder(Border outside, Border inside) {
+    __type = "compound"; __outer = outside; __inner = inside;
+  }
+}
+
+// javax.swing.BorderFactory: the shared factory delegating to the subtypes.
 class BorderFactory {
-  public static Border createLineBorder(Color color) { return createLineBorder(color, 1); }
-  public static Border createLineBorder(Color color, int thickness) {
-    Border b = new Border();
-    b.__type = "line";
-    b.__color = color;
-    b.__thickness = thickness;
-    return b;
-  }
-  // A transparent margin (padding) of the given insets — no visible line.
+  public static Border createLineBorder(Color color) { return new LineBorder(color); }
+  public static Border createLineBorder(Color color, int thickness) { return new LineBorder(color, thickness); }
   public static Border createEmptyBorder(int top, int left, int bottom, int right) {
-    Border b = new Border();
-    b.__type = "empty";
-    b.__top = top;
-    b.__left = left;
-    b.__bottom = bottom;
-    b.__right = right;
-    return b;
+    return new EmptyBorder(top, left, bottom, right);
   }
-  // A titled group box: an etched line with a caption in the top-left.
-  public static Border createTitledBorder(String title) {
-    Border b = new Border();
-    b.__type = "titled";
-    b.__title = title;
-    return b;
+  public static Border createMatteBorder(int top, int left, int bottom, int right, Color color) {
+    return new MatteBorder(top, left, bottom, right, color);
   }
-  public static Border createEtchedBorder() {
-    Border b = new Border();
-    b.__type = "etched";
-    b.__thickness = 2;
-    return b;
+  public static Border createTitledBorder(String title) { return new TitledBorder(title); }
+  public static Border createTitledBorder(Border border, String title) { return new TitledBorder(border, title); }
+  public static Border createEtchedBorder() { return new EtchedBorder(); }
+  public static Border createBevelBorder(int type) { return new BevelBorder(type); }
+  public static Border createRaisedBevelBorder() { return new BevelBorder(BevelBorder.RAISED); }
+  public static Border createLoweredBevelBorder() { return new BevelBorder(BevelBorder.LOWERED); }
+  public static Border createCompoundBorder(Border outside, Border inside) {
+    return new CompoundBorder(outside, inside);
   }
 }
 

@@ -879,6 +879,53 @@ fn swing_border_factory_serializes_border_descriptors() {
 }
 
 #[test]
+fn swing_border_factory_compound_matte_and_bevel() {
+    // The richer border kinds serialize too: a compound border nests outer +
+    // inner descriptors, a matte border carries per-side insets + colour, and a
+    // bevel is raised or lowered. Also exercises constructing a subtype directly
+    // (new EmptyBorder) rather than via the factory.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.border.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Borders");
+                JPanel a = new JPanel();
+                a.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(new Color(30, 90, 200), 2),
+                    new EmptyBorder(6, 8, 6, 8)));
+                JPanel b = new JPanel();
+                b.setBorder(BorderFactory.createMatteBorder(4, 0, 4, 0, new Color(220, 140, 40)));
+                JPanel c = new JPanel();
+                c.setBorder(BorderFactory.createLoweredBevelBorder());
+                frame.add(a);
+                frame.add(b);
+                frame.add(c);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(
+            r#""border":{"type":"compound","thickness":1,"insets":"0,0,0,0","outer":{"type":"line","thickness":2,"color":"30,90,200","insets":"0,0,0,0"},"inner":{"type":"empty","thickness":1,"insets":"6,8,6,8"}}"#
+        ),
+        "no compound border: {json}"
+    );
+    assert!(
+        json.contains(r#""border":{"type":"matte","thickness":1,"color":"220,140,40","insets":"4,0,4,0"}"#),
+        "no matte border: {json}"
+    );
+    assert!(
+        json.contains(r#""border":{"type":"bevel","thickness":2,"insets":"0,0,0,0","raised":false}"#),
+        "no lowered bevel: {json}"
+    );
+}
+
+#[test]
 fn swing_component_font_serializes() {
     // Component.setFont serializes "<style> <size> <family>" on the widget so
     // the renderer can style its text (JLabel here; applies to any component).

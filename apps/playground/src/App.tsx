@@ -542,6 +542,10 @@ public class Main {
     frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
     frame.setLayout(new BorderLayout());
 
+    // A matte border draws per-side accents (here a top and bottom rule).
+    JLabel banner = new JLabel("Settings");
+    banner.setBorder(BorderFactory.createMatteBorder(4, 0, 4, 0, new Color(220, 140, 40)));
+
     // A titled border groups related controls into a labelled group box
     // (rendered as an accessible role=group named by its title).
     JPanel group = new JPanel();
@@ -551,10 +555,13 @@ public class Main {
     group.add(new JCheckBox("Dark mode"));
     group.add(new JCheckBox("Autosave"));
 
-    // A line border draws a coloured frame; an empty border adds padding.
+    // A compound border: a coloured line outside, padding inside.
     JLabel note = new JLabel("Pick your settings above.");
-    note.setBorder(BorderFactory.createLineBorder(new Color(60, 120, 220), 2));
+    note.setBorder(BorderFactory.createCompoundBorder(
+        BorderFactory.createLineBorder(new Color(60, 120, 220), 2),
+        BorderFactory.createEmptyBorder(6, 10, 6, 10)));
 
+    frame.add(banner, BorderLayout.NORTH);
     frame.add(group, BorderLayout.CENTER);
     frame.add(note, BorderLayout.SOUTH);
     frame.setVisible(true);
