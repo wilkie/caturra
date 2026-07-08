@@ -616,6 +616,41 @@ public class Main {
 `,
   },
   {
+    name: 'Toolbar',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Toolbar");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // A toolbar strip: arrow keys move between buttons (one Tab stop).
+    JToolBar bar = new JToolBar("Formatting");
+    addButton(bar, "Bold");
+    addButton(bar, "Italic");
+    bar.addSeparator();
+    addButton(bar, "Clear");
+
+    status = new JLabel("Ready");
+
+    frame.add(bar, BorderLayout.NORTH);
+    frame.add(status, BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+
+  static void addButton(JToolBar bar, String label) {
+    JButton b = new JButton(label);
+    b.addActionListener(e -> Main.status.setText(label + " clicked"));
+    bar.add(b);
+  }
+}
+`,
+  },
+  {
     name: 'Split pane',
     starter: `import javax.swing.*;
 import java.awt.*;

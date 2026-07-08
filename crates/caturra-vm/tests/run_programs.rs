@@ -873,6 +873,64 @@ fn swing_tabbed_pane_switches_tabs_and_fires_change_listener() {
 }
 
 #[test]
+fn swing_tool_bar_serializes_buttons_separator_and_dispatches() {
+    // A JToolBar serializes its name, orientation, and child controls (with a
+    // separator between groups); a toolbar button's ActionListener fires on
+    // click. Ids: frame c0, toolbar c1, cut c2, copy c3, separator c4, about c5.
+    let json = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                JToolBar bar = new JToolBar("Actions");
+                bar.add(new JButton("Cut"));
+                bar.add(new JButton("Copy"));
+                bar.addSeparator();
+                bar.add(new JButton("About"));
+                frame.add(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(
+        json.contains(r#""type":"toolbar","orientation":0,"name":"Actions""#),
+        "no toolbar: {json}"
+    );
+    assert!(json.contains(r#""type":"toolbarsep""#), "no separator: {json}");
+    assert!(json.contains(r#""type":"button""#), "no toolbar buttons: {json}");
+}
+
+#[test]
+fn swing_tool_bar_button_fires_listener() {
+    // A button inside a toolbar dispatches its ActionListener like any other.
+    // Ids: frame c0, toolbar c1, save c2.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Editor");
+                JToolBar bar = new JToolBar();
+                JButton save = new JButton("Save");
+                save.addActionListener(e -> System.out.println("saved"));
+                bar.add(save);
+                frame.add(bar);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![Some(String::from("c2"))],
+    );
+    assert_eq!(out, "saved\n");
+}
+
+#[test]
 fn swing_split_pane_serializes_both_sides_and_divider() {
     // A JSplitPane serializes its orientation, divider location, and the two
     // nested components. Constructing with the (orientation, left, right) ctor

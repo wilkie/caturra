@@ -46,6 +46,8 @@ interface SwingNode {
     | 'scrollpane'
     | 'tabbedpane'
     | 'splitpane'
+    | 'toolbar'
+    | 'toolbarsep'
     | 'table'
     | 'progressbar'
     | 'spinner'
@@ -123,6 +125,8 @@ interface SwingNode {
   right?: SwingNode | null;
   orientation?: number;
   divider?: number;
+  /** A JToolBar's accessible name (setName), used as its aria-label. */
+  name?: string | null;
   /** JTable column names, row-major cell text, and the selected row (-1 none). */
   headers?: string[];
   cells?: string[][];
@@ -561,6 +565,10 @@ export class SwingViz {
       case 'splitpane':
         this.#buildSplit(el, node, prev);
         break;
+      case 'toolbar':
+        this.#reconcileChildren(el, node, prev);
+        this.#toolbarRoving(el);
+        break;
       case 'label':
         el.textContent = node.text ?? '';
         break;
@@ -884,6 +892,10 @@ export class SwingViz {
         return this.tabbedPane(node);
       case 'splitpane':
         return this.splitPaneSplit(node);
+      case 'toolbar':
+        return this.toolBar(node);
+      case 'toolbarsep':
+        return this.toolBarSeparator(node);
       case 'table':
         return this.table(node);
       case 'progressbar':
@@ -1534,6 +1546,78 @@ export class SwingViz {
       const size = (vertical ? cur.height : cur.width) + (event.key === inc ? 10 : -10);
       setSize(size);
     });
+  }
+
+  /** A JToolBar: an ARIA toolbar strip of controls with roving-focus arrow
+   * navigation (one Tab stop; arrows move between items). */
+  private toolBar(node: SwingNode): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'swing-toolbar';
+    el.setAttribute('role', 'toolbar');
+    const vertical = node.orientation === 1; // VERTICAL
+    el.classList.toggle('swing-toolbar-vertical', vertical);
+    el.setAttribute('aria-orientation', vertical ? 'vertical' : 'horizontal');
+    if (node.name !== undefined && node.name !== null) {
+      el.setAttribute('aria-label', node.name);
+    }
+    this.common(el, node);
+    this.children(el, node);
+    // Arrow keys move focus among the toolbar's controls (roving tabindex).
+    el.addEventListener('keydown', (event) => {
+      const items = this.#toolbarItems(el);
+      const current = items.indexOf(document.activeElement as HTMLElement);
+      if (current < 0) {
+        return;
+      }
+      const next = vertical ? 'ArrowDown' : 'ArrowRight';
+      const prevKey = vertical ? 'ArrowUp' : 'ArrowLeft';
+      let target: number;
+      if (event.key === next) {
+        target = (current + 1) % items.length;
+      } else if (event.key === prevKey) {
+        target = (current - 1 + items.length) % items.length;
+      } else if (event.key === 'Home') {
+        target = 0;
+      } else if (event.key === 'End') {
+        target = items.length - 1;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      items[current]?.setAttribute('tabindex', '-1');
+      const el2 = items[target];
+      if (el2) {
+        el2.tabIndex = 0;
+        el2.focus();
+      }
+    });
+    this.#toolbarRoving(el);
+    return el;
+  }
+
+  /** The focusable controls of a toolbar, in order. */
+  #toolbarItems(el: HTMLElement): HTMLElement[] {
+    return [...el.querySelectorAll<HTMLElement>('button, input, select, a[href]')].filter(
+      (item) => !(item as HTMLButtonElement).disabled,
+    );
+  }
+
+  /** Roving tabindex: exactly one toolbar item is in the Tab order (the focused
+   * one, else the first). Re-applied on build and after each reconcile. */
+  #toolbarRoving(el: HTMLElement): void {
+    const items = this.#toolbarItems(el);
+    const active = items.find((item) => item === document.activeElement) ?? items[0];
+    for (const item of items) {
+      item.tabIndex = item === active ? 0 : -1;
+    }
+  }
+
+  private toolBarSeparator(node: SwingNode): HTMLElement {
+    const sep = document.createElement('div');
+    sep.className = 'swing-toolbar-sep';
+    sep.setAttribute('aria-hidden', 'true');
+    this.common(sep, node);
+    return sep;
   }
 
   /** A custom-painted JPanel: a canvas replaying its Graphics commands. */

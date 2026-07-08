@@ -1603,6 +1603,31 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
+  test('a JToolBar is an accessible strip with roving arrow-key focus', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Toolbar' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+
+    // An accessible toolbar named by setName, holding three buttons.
+    const toolbar = root.getByRole('toolbar');
+    await expect(toolbar).toBeVisible();
+    await expect(toolbar).toHaveAttribute('aria-label', 'Formatting');
+    await expect(toolbar).toHaveAttribute('aria-orientation', 'horizontal');
+    await expect(toolbar.getByRole('button')).toHaveCount(3);
+
+    // Roving focus: the toolbar is one Tab stop; arrows move between buttons.
+    const bold = root.getByRole('button', { name: 'Bold' });
+    await bold.focus();
+    await page.keyboard.press('ArrowRight');
+    const italic = root.getByRole('button', { name: 'Italic' });
+    await expect(italic).toBeFocused();
+
+    // A toolbar button dispatches its ActionListener.
+    await italic.click();
+    await expect(root).toContainText('Italic clicked');
+  });
+
   test('a JSplitPane separates two panes with a resizable divider', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Split pane' });

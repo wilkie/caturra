@@ -619,6 +619,41 @@ class JSplitPane extends Component {
   }
 }
 
+// A decorative gap between groups of toolbar buttons (JToolBar.addSeparator()).
+class __ToolBarSeparator extends Component {
+  String __json() { return "{\"type\":\"toolbarsep\"," + __commonJson() + "}"; }
+}
+
+// A strip of buttons (and other controls). Renders as an ARIA toolbar with
+// roving-focus arrow-key navigation. Floatable/rollover are accepted no-ops.
+class JToolBar extends Container {
+  public static final int HORIZONTAL = 0;
+  public static final int VERTICAL = 1;
+
+  int __orientation = HORIZONTAL;
+  String __name = null;
+
+  public JToolBar() {}
+  public JToolBar(String name) { __name = name; }
+  public JToolBar(int orientation) { __orientation = orientation; }
+  public JToolBar(String name, int orientation) { __name = name; __orientation = orientation; }
+
+  public void setOrientation(int o) { __orientation = o; }
+  public int getOrientation() { return __orientation; }
+  public void setName(String n) { __name = n; }
+  public String getName() { return __name; }
+  public void setFloatable(boolean b) {}
+  public void setRollover(boolean b) {}
+  public void addSeparator() { add(new __ToolBarSeparator()); }
+
+  String __json() {
+    String name = __name == null ? "null" : "\"" + Component.__esc(__name) + "\"";
+    return "{\"type\":\"toolbar\",\"orientation\":" + __orientation
+        + ",\"name\":" + name
+        + ",\"children\":" + __kidsJson() + "," + __commonJson() + "}";
+  }
+}
+
 class JLabel extends Component {
   String __text;
   Component __labelFor = null;
