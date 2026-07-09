@@ -1036,6 +1036,54 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_table_cell_renderer_styles_a_column() {
+    // Per-column renderers: one right-aligns the Score column (alignment set
+    // once, and it sticks) and colours negative scores red.
+    let tree = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                String[] cols = {"Player", "Score"};
+                Object[][] data = {{"Ada", "10"}, {"Bo", "-3"}};
+                DefaultTableModel model = new DefaultTableModel(data, cols);
+                JTable table = new JTable(model);
+
+                DefaultTableCellRenderer scores = new DefaultTableCellRenderer() {
+                    public Component getTableCellRendererComponent(JTable table, Object value,
+                            boolean isSelected, boolean hasFocus, int row, int column) {
+                        Component base = super.getTableCellRendererComponent(
+                            table, value, isSelected, hasFocus, row, column);
+                        JLabel label = (JLabel) base;
+                        if (("" + value).startsWith("-")) label.setForeground(new Color(200, 0, 0));
+                        return label;
+                    }
+                };
+                scores.setHorizontalAlignment(SwingConstants.RIGHT);
+                table.getColumnModel().getColumn(1).setCellRenderer(scores);
+                table.getColumnModel().getColumn(1).setHeaderValue("Points");
+
+                JFrame frame = new JFrame("Scores");
+                frame.add(table);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    // setHeaderValue overrides the model's column name.
+    assert!(tree.contains(r#""headers":["Player","Points"]"#), "{tree}");
+    // Column 0 has no renderer ({}); column 1 is right-aligned (RIGHT == 4),
+    // and only the negative score is red — the shared instance resets colour
+    // between cells but keeps the alignment.
+    assert!(
+        tree.contains(r#""cellStyles":[[{},{"halign":4}],[{},{"fg":"200,0,0","halign":4}]]"#),
+        "{tree}"
+    );
+}
+
+#[test]
 fn swing_custom_abstract_table_model_subclass() {
     // A student subclasses AbstractTableModel, implementing only the three
     // abstract queries; the base supplies default column names, non-editable
@@ -7441,3 +7489,4 @@ fn anonymous_class_forwards_super_args_and_captures_a_local() {
     );
     assert_eq!(out, "105\n");
 }
+

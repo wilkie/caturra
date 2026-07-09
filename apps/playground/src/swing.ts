@@ -169,6 +169,8 @@ interface SwingNode {
   /** JTable column names, row-major cell text, and the selected row (-1 none). */
   headers?: string[];
   cells?: string[][];
+  /** Per-cell styling from a column's TableCellRenderer (parallel to `cells`). */
+  cellStyles?: SwingCellStyle[][];
   selectedRow?: number;
   children?: SwingNode[];
 }
@@ -187,6 +189,13 @@ interface SwingMenu {
 interface SwingItemStyle {
   fg?: string;
   bg?: string;
+}
+
+/** Per-cell styling produced by a JTable column's TableCellRenderer. */
+interface SwingCellStyle {
+  fg?: string;
+  bg?: string;
+  halign?: number;
 }
 
 interface SwingMenuEntry {
@@ -2592,6 +2601,13 @@ export class SwingViz {
       for (const [c, value] of row.entries()) {
         const td = document.createElement('td');
         td.textContent = value;
+        // Colours and alignment chosen by this column's TableCellRenderer.
+        const style = node.cellStyles?.[r]?.[c];
+        if (style !== undefined) {
+          td.style.color = cssColor(style.fg) ?? '';
+          td.style.backgroundColor = cssColor(style.bg) ?? '';
+          td.style.textAlign = style.halign === undefined ? '' : horizAlign(style.halign);
+        }
         if (selectable || editable) {
           td.setAttribute('role', 'gridcell');
         }

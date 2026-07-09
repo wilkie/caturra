@@ -2415,6 +2415,34 @@ test.describe('swing (interactive)', () => {
     await expect(table.getByRole('row', { name: /Bo/ })).toContainText('8');
   });
 
+  test('a TableCellRenderer styles one column of a JTable', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Table cell renderer' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    // This demo has no listeners, so it renders statically → role=table.
+    const grid = root.getByRole('table');
+
+    // setHeaderValue overrides the model's column name.
+    await expect(grid.getByRole('columnheader', { name: 'Points' })).toBeVisible();
+
+    const cell = (row: number, col: number) =>
+      grid.locator('tbody tr').nth(row).locator('td').nth(col);
+
+    // The Score column is right-aligned for every cell (alignment sticks)...
+    await expect(cell(0, 1)).toHaveText('10');
+    await expect(cell(0, 1)).toHaveCSS('text-align', 'right');
+    await expect(cell(1, 1)).toHaveCSS('text-align', 'right');
+
+    // ...but only the negative score is red — the colour resets between cells.
+    await expect(cell(1, 1)).toHaveText('-3');
+    await expect(cell(1, 1)).toHaveCSS('color', 'rgb(190, 30, 30)');
+    await expect(cell(0, 1)).not.toHaveCSS('color', 'rgb(190, 30, 30)');
+
+    // The Player column has no renderer, so it is untouched.
+    await expect(cell(0, 0)).not.toHaveCSS('text-align', 'right');
+  });
+
   test('a custom AbstractTableModel subclass backs a JTable and fires on insert', async ({
     page,
   }) => {

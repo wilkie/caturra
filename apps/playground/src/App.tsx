@@ -1968,6 +1968,50 @@ public class Main {
 `,
   },
   {
+    name: 'Table cell renderer',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Scores");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    String[] cols = {"Player", "Score"};
+    Object[][] data = {{"Ada", "10"}, {"Bo", "-3"}, {"Cy", "7"}};
+    DefaultTableModel model = new DefaultTableModel(data, cols);
+    JTable table = new JTable(model);
+
+    // A cell renderer decides how each cell in its column is drawn. It is asked
+    // once per cell, with the value, the row, and the column.
+    DefaultTableCellRenderer scores = new DefaultTableCellRenderer() {
+      public Component getTableCellRendererComponent(JTable table, Object value,
+          boolean isSelected, boolean hasFocus, int row, int column) {
+        Component base = super.getTableCellRendererComponent(
+            table, value, isSelected, hasFocus, row, column);
+        JLabel label = (JLabel) base;
+        // Negative scores go red. The colour resets between cells, so this
+        // does not bleed onto the next row.
+        if (("" + value).startsWith("-")) {
+          label.setForeground(new Color(190, 30, 30));
+        }
+        return label;
+      }
+    };
+    // Alignment is set once and sticks for every cell in the column.
+    scores.setHorizontalAlignment(SwingConstants.RIGHT);
+
+    table.getColumnModel().getColumn(1).setCellRenderer(scores);
+    table.getColumnModel().getColumn(1).setHeaderValue("Points");
+
+    frame.add(new JScrollPane(table), BorderLayout.CENTER);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Custom table model',
     starter: `import javax.swing.*;
 import java.awt.*;

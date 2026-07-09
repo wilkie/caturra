@@ -1697,6 +1697,50 @@ class JSpinner extends Component {
 // addRow/removeRow/setValueAt appear as soon as the event loop repaints. Cells
 // are stored in row-major order as their string form (this subset shows cells
 // as text) — real Swing keeps Objects, and its element params are Object.
+// Decides how one table cell is drawn: return a component configured for
+// `value`. A cell is a <td>, so its text, colours, and alignment reach the
+// screen. Install one per column via getColumnModel().getColumn(c).
+interface TableCellRenderer {
+  Component getTableCellRendererComponent(JTable table, Object value,
+      boolean isSelected, boolean hasFocus, int row, int column);
+}
+
+// The default renderer: a JLabel showing the value's toString(). Set its
+// alignment once (it sticks), or subclass it and restyle per cell.
+class DefaultTableCellRenderer extends JLabel implements TableCellRenderer {
+  public DefaultTableCellRenderer() { super(""); }
+  public Component getTableCellRendererComponent(JTable table, Object value,
+      boolean isSelected, boolean hasFocus, int row, int column) {
+    setText(value == null ? "" : "" + value);
+    // The SAME instance draws every cell, so clear the colours a subclass may
+    // have set on a previous cell. Alignment is NOT reset — real Swing keeps
+    // it, so `renderer.setHorizontalAlignment(RIGHT)` sticks for the column.
+    __fg = null;
+    __bg = null;
+    return this;
+  }
+}
+
+// One column of a JTable: which model column it shows, its header, and how its
+// cells are drawn.
+class TableColumn {
+  int __modelIndex;
+  Object __headerValue = null; // null => use the model's column name
+  TableCellRenderer __renderer = null;
+  public TableColumn(int modelIndex) { __modelIndex = modelIndex; }
+  public int getModelIndex() { return __modelIndex; }
+  public void setHeaderValue(Object value) { __headerValue = value; }
+  public Object getHeaderValue() { return __headerValue; }
+  public void setCellRenderer(TableCellRenderer renderer) { __renderer = renderer; }
+  public TableCellRenderer getCellRenderer() { return __renderer; }
+}
+
+class TableColumnModel {
+  java.util.ArrayList<TableColumn> __columns = new java.util.ArrayList<TableColumn>();
+  public int getColumnCount() { return __columns.size(); }
+  public TableColumn getColumn(int index) { return __columns.get(index); }
+}
+
 // The data model behind a JTable. Students usually subclass AbstractTableModel
 // (implementing the three abstract queries) or use DefaultTableModel.
 interface TableModel {
@@ -1821,6 +1865,7 @@ class JTable extends Component {
   TableModel __model = null;
   int __selectedRow = -1;
   ListSelectionModel __selectionModel = new ListSelectionModel();
+  TableColumnModel __columnModel = new TableColumnModel();
   public JTable() { __data = new Object[0][0]; __columns = new Object[0]; }
   public JTable(Object[][] data, Object[] columns) { __data = data; __columns = columns; }
   public JTable(TableModel model) { __data = new Object[0][0]; __columns = new Object[0]; __model = model; }
@@ -1842,6 +1887,46 @@ class JTable extends Component {
   public void setRowSelectionInterval(int index0, int index1) { __selectedRow = index0; }
   public void clearSelection() { __selectedRow = -1; }
   public ListSelectionModel getSelectionModel() { return __selectionModel; }
+  // Keep one TableColumn per model column (columns can be added at runtime).
+  void __syncColumns() {
+    int columns = getColumnCount();
+    while (__columnModel.__columns.size() < columns) {
+      __columnModel.__columns.add(new TableColumn(__columnModel.__columns.size()));
+    }
+    while (__columnModel.__columns.size() > columns) {
+      __columnModel.__columns.remove(__columnModel.__columns.size() - 1);
+    }
+  }
+  public TableColumnModel getColumnModel() { __syncColumns(); return __columnModel; }
+  public TableCellRenderer getCellRenderer(int row, int column) {
+    __syncColumns();
+    return __columnModel.getColumn(column).getCellRenderer();
+  }
+  boolean __hasRenderer() {
+    for (int c = 0; c < __columnModel.__columns.size(); c++) {
+      if (__columnModel.__columns.get(c).__renderer != null) return true;
+    }
+    return false;
+  }
+  // A renderer's component contributes its colours and alignment to the cell.
+  static String __cellStyleJson(Component cell) {
+    StringBuilder s = new StringBuilder("{");
+    boolean first = true;
+    if (cell.__fg != null) {
+      s.append("\"fg\":\"").append(Component.__rgb(cell.__fg)).append("\"");
+      first = false;
+    }
+    if (cell.__bg != null) {
+      if (!first) s.append(",");
+      s.append("\"bg\":\"").append(Component.__rgb(cell.__bg)).append("\"");
+      first = false;
+    }
+    if (cell.__halign >= 0) {
+      if (!first) s.append(",");
+      s.append("\"halign\":").append(cell.__halign);
+    }
+    return s.append("}").toString();
+  }
   public boolean isCellEditable(int row, int col) {
     return __model != null ? __model.isCellEditable(row, col) : true;
   }
@@ -1871,26 +1956,47 @@ class JTable extends Component {
     StringBuilder s = new StringBuilder("[");
     for (int c = 0; c < getColumnCount(); c++) {
       if (c > 0) s.append(",");
-      s.append("\"").append(Component.__esc(getColumnName(c))).append("\"");
-    }
-    return s.append("]").toString();
-  }
-  String __rowsJson() {
-    StringBuilder s = new StringBuilder("[");
-    for (int r = 0; r < getRowCount(); r++) {
-      if (r > 0) s.append(",");
-      s.append("[");
-      for (int c = 0; c < getColumnCount(); c++) {
-        if (c > 0) s.append(",");
-        Object cell = getValueAt(r, c);
-        s.append("\"").append(Component.__esc(cell == null ? "" : "" + cell)).append("\"");
-      }
-      s.append("]");
+      Object header = __columnModel.getColumn(c).getHeaderValue();
+      String name = header != null ? "" + header : getColumnName(c);
+      s.append("\"").append(Component.__esc(name)).append("\"");
     }
     return s.append("]").toString();
   }
   String __json() {
-    return "{\"type\":\"table\",\"headers\":" + __colsJson() + ",\"cells\":" + __rowsJson()
+    __syncColumns();
+    boolean hasRenderer = __hasRenderer();
+    StringBuilder rows = new StringBuilder("[");
+    StringBuilder styles = new StringBuilder("[");
+    for (int r = 0; r < getRowCount(); r++) {
+      if (r > 0) { rows.append(","); styles.append(","); }
+      rows.append("[");
+      styles.append("[");
+      for (int c = 0; c < getColumnCount(); c++) {
+        if (c > 0) { rows.append(","); styles.append(","); }
+        Object value = getValueAt(r, c);
+        String text = value == null ? "" : "" + value;
+        if (hasRenderer) {
+          TableCellRenderer renderer = __columnModel.getColumn(c).getCellRenderer();
+          if (renderer == null) {
+            styles.append("{}");
+          } else {
+            // Ask the renderer to configure a component for this cell, then take
+            // its text, colours, and alignment.
+            Component cell = renderer.getTableCellRendererComponent(
+                this, value, r == __selectedRow, false, r, c);
+            text = cell.__displayText();
+            styles.append(JTable.__cellStyleJson(cell));
+          }
+        }
+        rows.append("\"").append(Component.__esc(text)).append("\"");
+      }
+      rows.append("]");
+      styles.append("]");
+    }
+    rows.append("]");
+    styles.append("]");
+    String cellStyles = hasRenderer ? ",\"cellStyles\":" + styles.toString() : "";
+    return "{\"type\":\"table\",\"headers\":" + __colsJson() + ",\"cells\":" + rows.toString() + cellStyles
         + ",\"selectedRow\":" + __selectedRow + ",\"editable\":" + __editable()
         + "," + __commonJson() + "}";
   }
