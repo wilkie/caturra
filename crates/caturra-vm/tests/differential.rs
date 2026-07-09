@@ -4672,3 +4672,81 @@ public class DiffCastNull {
 }
 "#
 );
+
+differential_test!(
+    diff_system_arraycopy_and_line_separator,
+    "DiffArrayCopy",
+    r#"
+import java.util.Arrays;
+
+public class DiffArrayCopy {
+    public static void main(String[] args) {
+        int[] source = {1, 2, 3, 4, 5};
+        int[] destination = new int[5];
+        System.arraycopy(source, 1, destination, 0, 3);
+        System.out.println(Arrays.toString(destination));
+
+        // A copy within one array behaves as if it went through a temporary,
+        // in both directions.
+        int[] forward = {1, 2, 3, 4, 5};
+        System.arraycopy(forward, 0, forward, 1, 4);
+        System.out.println(Arrays.toString(forward));
+        int[] backward = {1, 2, 3, 4, 5};
+        System.arraycopy(backward, 1, backward, 0, 4);
+        System.out.println(Arrays.toString(backward));
+
+        // Every element kind.
+        String[] words = {"a", "b", "c"};
+        String[] copied = new String[3];
+        System.arraycopy(words, 0, copied, 1, 2);
+        System.out.println(Arrays.toString(copied));
+        double[] doubles = new double[2];
+        System.arraycopy(new double[] {1.5, 2.5}, 0, doubles, 0, 2);
+        long[] longs = new long[2];
+        System.arraycopy(new long[] {7L, 8L}, 0, longs, 0, 2);
+        char[] letters = new char[2];
+        System.arraycopy(new char[] {'x', 'y'}, 0, letters, 0, 2);
+        boolean[] flags = new boolean[2];
+        System.arraycopy(new boolean[] {true, false}, 0, flags, 0, 2);
+        byte[] bytes = new byte[2];
+        System.arraycopy(new byte[] {1, 2}, 0, bytes, 0, 2);
+        short[] shorts = new short[2];
+        System.arraycopy(new short[] {3, 4}, 0, shorts, 0, 2);
+        float[] floats = new float[2];
+        System.arraycopy(new float[] {1.5f, 2.5f}, 0, floats, 0, 2);
+        System.out.println(Arrays.toString(doubles) + Arrays.toString(longs) + Arrays.toString(letters));
+        System.out.println(Arrays.toString(flags) + Arrays.toString(bytes)
+                + Arrays.toString(shorts) + Arrays.toString(floats));
+
+        // The rows of a 2D array are references, so they alias.
+        int[][] grid = {{1}, {2}};
+        int[][] rows = new int[2][];
+        System.arraycopy(grid, 0, rows, 0, 2);
+        System.out.println(Arrays.deepToString(rows) + " " + (grid[0] == rows[0]));
+
+        // A zero-length copy at the very end is legal.
+        System.arraycopy(source, 5, destination, 5, 0);
+        System.out.println("empty copy");
+
+        try { System.arraycopy(source, 0, destination, 0, 9); }
+        catch (ArrayIndexOutOfBoundsException e) { System.out.println("too long"); }
+        try { System.arraycopy(source, -1, destination, 0, 1); }
+        catch (ArrayIndexOutOfBoundsException e) { System.out.println("negative position"); }
+        try { System.arraycopy(source, 0, destination, 0, -1); }
+        catch (ArrayIndexOutOfBoundsException e) { System.out.println("negative length"); }
+        int[] none = null;
+        try { System.arraycopy(none, 0, destination, 0, 1); }
+        catch (NullPointerException e) { System.out.println("null"); }
+        // The component types must match exactly.
+        try { System.arraycopy(source, 0, new long[5], 0, 1); }
+        catch (ArrayStoreException e) { System.out.println("int into long"); }
+        try { System.arraycopy(new boolean[5], 0, destination, 0, 1); }
+        catch (ArrayStoreException e) { System.out.println("boolean into int"); }
+
+        // Runs on a system where a line ends with a newline.
+        System.out.println(System.lineSeparator().equals("\n")
+                + " " + System.lineSeparator().length());
+    }
+}
+"#
+);

@@ -1603,6 +1603,130 @@ fn scanner_peek_token(
 /// Element equality for list membership: value equality for numbers
 /// and strings (Java's `equals`), reference equality for user objects
 /// (correct here, since `equals` overriding is not supported).
+/// The elements `System.arraycopy` lifts out of the source before writing
+/// them, so that a copy within one array behaves as Java's does: as if it
+/// went through a temporary.
+enum ArrayChunk {
+    Int(Vec<i32>),
+    Double(Vec<f64>),
+    Long(Vec<i64>),
+    Float(Vec<f32>),
+    Short(Vec<i16>),
+    Byte(Vec<i8>),
+    Ref(Vec<JValue>),
+}
+
+/// `System.arraycopy(src, srcPos, dest, destPos, length)`.
+fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, VmError> {
+    let [
+        JValue::Ref(source),
+        JValue::Int(source_pos),
+        JValue::Ref(destination),
+        JValue::Int(destination_pos),
+        JValue::Int(length),
+    ] = args
+    else {
+        return Err(VmError::UnknownIntrinsic(String::from("System.arraycopy")));
+    };
+    let (Some(source), Some(destination)) = (*source, *destination) else {
+        return Err(throw("java.lang.NullPointerException"));
+    };
+
+    // The component types must match exactly: a `boolean[]` never copies into
+    // an `int[]`, even though both hold their elements as 32-bit words.
+    let store_error = || throw("java.lang.ArrayStoreException: incompatible array types");
+    let (Some(source_object), Some(destination_object)) = (heap.get(source), heap.get(destination))
+    else {
+        return Err(store_error());
+    };
+    let (source_len, destination_len) = match (source_object, destination_object) {
+        (HeapObject::IntArray(from, a), HeapObject::IntArray(to, b)) if from == to => {
+            (a.len(), b.len())
+        }
+        (HeapObject::DoubleArray(a), HeapObject::DoubleArray(b)) => (a.len(), b.len()),
+        (HeapObject::LongArray(a), HeapObject::LongArray(b)) => (a.len(), b.len()),
+        (HeapObject::FloatArray(a), HeapObject::FloatArray(b)) => (a.len(), b.len()),
+        (HeapObject::ShortArray(a), HeapObject::ShortArray(b)) => (a.len(), b.len()),
+        (HeapObject::ByteArray(a), HeapObject::ByteArray(b)) => (a.len(), b.len()),
+        (HeapObject::RefArray(a), HeapObject::RefArray(b)) => (a.len(), b.len()),
+        _ => return Err(store_error()),
+    };
+
+    let out_of_range = |index: i32| {
+        throw(format!(
+            "java.lang.ArrayIndexOutOfBoundsException: arraycopy: {index}"
+        ))
+    };
+    // A negative position or length is out of range before any bound is even
+    // consulted.
+    for index in [*source_pos, *destination_pos, *length] {
+        if index < 0 {
+            return Err(out_of_range(index));
+        }
+    }
+    let (Ok(from), Ok(to), Ok(count)) = (
+        usize::try_from(*source_pos),
+        usize::try_from(*destination_pos),
+        usize::try_from(*length),
+    ) else {
+        return Err(out_of_range(*length));
+    };
+    if from + count > source_len {
+        return Err(out_of_range(*source_pos));
+    }
+    if to + count > destination_len {
+        return Err(out_of_range(*destination_pos));
+    }
+
+    let taken = match heap.get(source) {
+        Some(HeapObject::IntArray(_, values)) => {
+            ArrayChunk::Int(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::DoubleArray(values)) => {
+            ArrayChunk::Double(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::LongArray(values)) => {
+            ArrayChunk::Long(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::FloatArray(values)) => {
+            ArrayChunk::Float(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::ShortArray(values)) => {
+            ArrayChunk::Short(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::ByteArray(values)) => {
+            ArrayChunk::Byte(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::RefArray(values)) => ArrayChunk::Ref(values[from..from + count].to_vec()),
+        _ => return Err(store_error()),
+    };
+    match (heap.get_mut(destination), taken) {
+        (Some(HeapObject::IntArray(_, values)), ArrayChunk::Int(taken)) => {
+            values[to..to + count].copy_from_slice(&taken);
+        }
+        (Some(HeapObject::DoubleArray(values)), ArrayChunk::Double(taken)) => {
+            values[to..to + count].copy_from_slice(&taken);
+        }
+        (Some(HeapObject::LongArray(values)), ArrayChunk::Long(taken)) => {
+            values[to..to + count].copy_from_slice(&taken);
+        }
+        (Some(HeapObject::FloatArray(values)), ArrayChunk::Float(taken)) => {
+            values[to..to + count].copy_from_slice(&taken);
+        }
+        (Some(HeapObject::ShortArray(values)), ArrayChunk::Short(taken)) => {
+            values[to..to + count].copy_from_slice(&taken);
+        }
+        (Some(HeapObject::ByteArray(values)), ArrayChunk::Byte(taken)) => {
+            values[to..to + count].copy_from_slice(&taken);
+        }
+        (Some(HeapObject::RefArray(values)), ArrayChunk::Ref(taken)) => {
+            values[to..to + count].copy_from_slice(&taken);
+        }
+        _ => return Err(store_error()),
+    }
+    Ok(None)
+}
+
 /// The wrapper class and the primitive behind a value, when it is boxed.
 fn unboxed(heap: &Heap, value: JValue) -> (Option<&str>, JValue) {
     if let JValue::Ref(Some(reference)) = value
@@ -2131,6 +2255,10 @@ pub fn invoke_static(
         "java/lang/Short" => small_int_static(heap, "Short", method, args),
         "java/lang/Byte" => small_int_static(heap, "Byte", method, args),
         "java/lang/System" => match method {
+            "arraycopy" => system_arraycopy(heap, args),
+            // The JVM's is system-dependent; caturra always runs where a line
+            // ends with a newline.
+            "lineSeparator" => Ok(Some(JValue::Ref(Some(heap.alloc_string("\n"))))),
             "currentTimeMillis" => Ok(Some(JValue::Long(console.now_millis()))),
             "nanoTime" => Ok(Some(JValue::Long(
                 console.now_millis().wrapping_mul(1_000_000),

@@ -9340,3 +9340,99 @@ fn a_null_literal_can_be_cast() {
     );
     assert_eq!(out, "null true 4 6\n");
 }
+
+/// `System.arraycopy` over every element kind, including a copy within one
+/// array (which behaves as if it went through a temporary) and the component
+/// type check that keeps a `boolean[]` out of an `int[]`, even though both
+/// hold their elements as 32-bit words. `System.lineSeparator()` is always a
+/// newline. Cross-checked against a real JDK by
+/// `diff_system_arraycopy_and_line_separator`.
+#[test]
+fn system_arraycopy_and_line_separator() {
+    let out = run_stdout(
+        r#"
+        import java.util.Arrays;
+        public class S {
+            public static void main(String[] args) {
+                int[] source = {1, 2, 3, 4, 5};
+                int[] destination = new int[5];
+                System.arraycopy(source, 1, destination, 0, 3);
+                System.out.println(Arrays.toString(destination));
+
+                // Overlapping, both directions.
+                int[] forward = {1, 2, 3, 4, 5};
+                System.arraycopy(forward, 0, forward, 1, 4);
+                int[] backward = {1, 2, 3, 4, 5};
+                System.arraycopy(backward, 1, backward, 0, 4);
+                System.out.println(Arrays.toString(forward) + Arrays.toString(backward));
+
+                String[] words = {"a", "b"};
+                String[] copied = new String[3];
+                System.arraycopy(words, 0, copied, 1, 2);
+                System.out.println(Arrays.toString(copied));
+
+                // The rows of a 2D array are references, so they alias.
+                int[][] grid = {{1}, {2}};
+                int[][] rows = new int[2][];
+                System.arraycopy(grid, 0, rows, 0, 2);
+                System.out.println(Arrays.deepToString(rows) + " " + (grid[0] == rows[0]));
+
+                // A zero-length copy at the very end is legal.
+                System.arraycopy(source, 5, destination, 5, 0);
+
+                try { System.arraycopy(source, 0, destination, 0, 9); }
+                catch (ArrayIndexOutOfBoundsException e) { System.out.println("too long"); }
+                try { System.arraycopy(source, 0, destination, 0, -1); }
+                catch (ArrayIndexOutOfBoundsException e) { System.out.println("negative"); }
+                int[] none = null;
+                try { System.arraycopy(none, 0, destination, 0, 1); }
+                catch (NullPointerException e) { System.out.println("null"); }
+                try { System.arraycopy(new boolean[5], 0, destination, 0, 1); }
+                catch (ArrayStoreException e) { System.out.println("boolean into int"); }
+
+                System.out.println(System.lineSeparator().equals("\n")
+                        + " " + System.lineSeparator().length());
+            }
+        }
+        "#,
+        "S",
+    );
+    assert_eq!(
+        out,
+        "[2, 3, 4, 0, 0]\n\
+         [1, 1, 2, 3, 4][2, 3, 4, 5, 5]\n\
+         [null, a, b]\n\
+         [[1], [2]] true\n\
+         too long\n\
+         negative\n\
+         null\n\
+         boolean into int\n\
+         true 1\n"
+    );
+}
+
+/// `System.arraycopy` is typed to arrays, where javac takes `Object` and
+/// throws `ArrayStoreException` — stricter, so anything compiling here still
+/// compiles on a JDK.
+#[test]
+fn system_arraycopy_rejects_a_non_array() {
+    for (source, want) in [
+        (
+            "int[] d = new int[2]; System.arraycopy(\"a\", 0, d, 0, 1);",
+            "cannot find symbol: method arraycopy(String,int,int[],int,int) in class System",
+        ),
+        (
+            "int[] d = new int[2]; System.arraycopy(d, 0, d, 0);",
+            "cannot find symbol: method arraycopy(int[],int,int[],int) in class System",
+        ),
+    ] {
+        let text = format!("class M {{ static void r() {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}

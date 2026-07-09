@@ -3885,6 +3885,16 @@ const LONG_METHODS: &[BuiltinMethod] = &[
 const SYSTEM_METHODS: &[BuiltinMethod] = &[
     bm("currentTimeMillis", &[], BRet::Long, "()J"),
     bm("nanoTime", &[], BRet::Long, "()J"),
+    // `arraycopy(Object src, int srcPos, Object dest, int destPos, int len)`.
+    // Typed to arrays, where javac takes `Object` and throws
+    // `ArrayStoreException` for anything else — stricter, the safe direction.
+    bm(
+        "arraycopy",
+        &[BParam::RefArray, I, BParam::RefArray, I, I],
+        BRet::Void,
+        "(Ljava/lang/Object;ILjava/lang/Object;II)V",
+    ),
+    bm("lineSeparator", &[], BRet::Str, "()Ljava/lang/String;"),
     // Terminate the program with the given status code (Java's System.exit).
     bm("exit", &[I], BRet::Void, "(I)V"),
     // Internal standard-out capture, used only by the bundled

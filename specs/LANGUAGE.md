@@ -413,6 +413,18 @@ null` is the way to test for absence, and unboxing an absent value
     references), so `Object[] rows = grid;` and
     `Arrays.equals(int[][], int[][])` compile; `int[]` does not.
     Pinned by `diff_arrays_deep_operations`.
+  - `System.arraycopy` and `System.lineSeparator` (2026-07-09).
+    `arraycopy` copies between arrays of every element kind, checks the
+    component types exactly (a `boolean[]` never copies into an
+    `int[]`, though both hold their elements as 32-bit words), and a
+    copy within one array behaves as if it went through a temporary, as
+    Java's does. Its parameters are typed to arrays, where javac takes
+    `Object` and throws `ArrayStoreException` for anything else —
+    stricter, so anything compiling here still compiles on a JDK.
+    Bounds errors are `ArrayIndexOutOfBoundsException`, a null array is
+    a `NullPointerException`. `lineSeparator()` is always `"\n"`: the
+    JVM's is system-dependent, and caturra runs where a line ends with a
+    newline. Pinned by `diff_system_arraycopy_and_line_separator`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
