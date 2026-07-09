@@ -8358,3 +8358,82 @@ fn unsupported_map_members_explain_themselves() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// A value coerced to text uses its own `toString()`, even when the coercion
+/// happens inside an intrinsic that only the VM can see into. Cross-checked
+/// against a real JDK by `diff_to_string_inside_collections` and
+/// `diff_to_string_edge_cases`; this keeps the coverage on a JDK-less CI box.
+#[test]
+fn collections_render_elements_with_their_own_to_string() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.HashMap;
+        import java.util.Map;
+
+        class Student {
+            String name;
+            Student(String name) { this.name = name; }
+            public String toString() { return "S(" + name + ")"; }
+        }
+
+        class Boom {
+            public String toString() { throw new IllegalStateException("boom"); }
+        }
+
+        public class R {
+            public static void main(String[] args) {
+                Student ann = new Student("Ann");
+                ArrayList<Student> list = new ArrayList<Student>();
+                list.add(ann);
+                System.out.println(list);
+                System.out.println("concat: " + list);
+
+                Map<String, Student> byName = new HashMap<String, Student>();
+                byName.put("a", ann);
+                System.out.println(byName + " " + byName.values() + " " + byName.entrySet());
+
+                StringBuilder sb = new StringBuilder();
+                sb.append(ann);
+                System.out.println(sb);
+
+                // A collection holding itself renders as Java's marker.
+                ArrayList<Object> self = new ArrayList<Object>();
+                self.add(self);
+                System.out.println(self);
+
+                // An exception from toString reaches the caller's catch.
+                ArrayList<Boom> boom = new ArrayList<Boom>();
+                boom.add(new Boom());
+                try {
+                    System.out.println(boom);
+                } catch (IllegalStateException e) {
+                    System.out.println("caught " + e.getMessage());
+                }
+
+                // Two collections holding each other overflow, they do not hang.
+                ArrayList<Object> a = new ArrayList<Object>();
+                ArrayList<Object> b = new ArrayList<Object>();
+                a.add(b);
+                b.add(a);
+                try {
+                    System.out.println(a);
+                } catch (StackOverflowError e) {
+                    System.out.println("cycle overflows");
+                }
+            }
+        }
+        "#,
+        "R",
+    );
+    assert_eq!(
+        out,
+        "[S(Ann)]\n\
+         concat: [S(Ann)]\n\
+         {a=S(Ann)} [S(Ann)] [a=S(Ann)]\n\
+         S(Ann)\n\
+         [(this Collection)]\n\
+         caught boom\n\
+         cycle overflows\n"
+    );
+}

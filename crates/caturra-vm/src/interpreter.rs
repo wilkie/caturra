@@ -19,7 +19,7 @@ use crate::debug::{
 };
 use crate::intrinsics::{self, IntrinsicStatics};
 use crate::io::ConsoleIo;
-use crate::value::{Heap, HeapRef, JValue};
+use crate::value::{Heap, HeapRef, JValue, MapViewKind};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
@@ -40,6 +40,15 @@ pub(crate) struct Interpreter<'run> {
     init_started: std::collections::HashSet<String>,
     remaining_instructions: u64,
     max_call_depth: u32,
+    /// Frames suspended beneath a nested run (see
+    /// [`Interpreter::run_nested`]), innermost run last: the caller's
+    /// location, then the frames below it. Kept here rather than on the host
+    /// stack so that call depth and stack traces still see them.
+    suspended_runs: Vec<(Option<CurrentLocation>, Vec<Frame<'run>>)>,
+    /// The number of frames in `suspended_runs`, plus one native caller per
+    /// nested run. Call depth counts them: a `toString()` reached from a
+    /// container's must still see the recursion it is already inside.
+    nested_frame_base: usize,
     /// Suspended caller frames; the active frame lives as a local in
     /// [`Self::run_loop`] and is swapped in and out on call/return.
     /// Keeping frames as plain data (rather than host-stack recursion)
@@ -118,6 +127,8 @@ impl<'run> Interpreter<'run> {
             init_started: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
             max_call_depth,
+            suspended_runs: Vec::new(),
+            nested_frame_base: 0,
             frames: Vec::new(),
             current_location: None,
             code_cache: HashMap::new(),
@@ -201,14 +212,31 @@ impl<'run> Interpreter<'run> {
                 location(&current.source_file, current.line)
             );
         }
-        for suspended in self.frames.iter().rev() {
-            let class_name = suspended.class.class_name().unwrap_or("<unknown>");
-            let _ = write!(
-                full,
-                "\n\tat {class_name}.{}({})",
-                suspended.method_name,
-                location(&suspended.code.source_file, suspended.current_line)
-            );
+        let trace_frames = |frames: &[Frame<'run>], full: &mut String| {
+            for suspended in frames.iter().rev() {
+                let class_name = suspended.class.class_name().unwrap_or("<unknown>");
+                let _ = write!(
+                    full,
+                    "\n\tat {class_name}.{}({})",
+                    suspended.method_name,
+                    location(&suspended.code.source_file, suspended.current_line)
+                );
+            }
+        };
+        trace_frames(&self.frames, &mut full);
+        // Then the callers below each nested run (a `toString()` invoked while
+        // rendering a container), innermost run first.
+        for (caller, frames) in self.suspended_runs.iter().rev() {
+            if let Some(caller) = caller {
+                let _ = write!(
+                    full,
+                    "\n\tat {}.{}({})",
+                    caller.class_name,
+                    caller.method_name,
+                    location(&caller.source_file, caller.line)
+                );
+            }
+            trace_frames(frames, &mut full);
         }
         full
     }
@@ -221,7 +249,7 @@ impl<'run> Interpreter<'run> {
         frame: &mut Frame<'run>,
         boundary_line: u16,
     ) -> Option<DebugCommand> {
-        let depth = self.frames.len();
+        let depth = self.call_depth();
         let debug = self.debug.as_mut().expect("caller checked debug mode");
         let at_line_boundary = boundary_line != 0;
 
@@ -430,7 +458,7 @@ impl<'run> Interpreter<'run> {
         method: &'run MethodInfo,
         mut locals: Vec<JValue>,
     ) -> Result<Frame<'run>, VmError> {
-        if self.frames.len() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
+        if self.call_depth() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
             return Err(VmError::UncaughtException(String::from(
                 "java.lang.StackOverflowError",
             )));
@@ -1941,6 +1969,239 @@ impl<'run> Interpreter<'run> {
         false
     }
 
+    /// Run `frame` to completion, isolated from the frames already suspended.
+    ///
+    /// Native code sometimes has to make a real Java call: rendering a value
+    /// as text calls its `toString()`. The interpreter keeps frames as data
+    /// rather than host-stack recursion, so a nested call means running a
+    /// second, private frame stack to completion and putting the old one
+    /// back. An exception that escapes the nested call surfaces as an `Err`,
+    /// which the outer frames' handlers then see as usual.
+    fn run_nested(&mut self, frame: Frame<'run>) -> Result<Option<JValue>, VmError> {
+        let location = self.current_location.take();
+        let suspended = std::mem::take(&mut self.frames);
+        // The suspended frames plus the caller that is running natively right
+        // now: a nested call is that much deeper, even though `frames` starts
+        // empty so that an exception cannot unwind past the native call.
+        let base = self.nested_frame_base + suspended.len() + 1;
+        let outer_base = std::mem::replace(&mut self.nested_frame_base, base);
+        self.suspended_runs.push((location, suspended));
+
+        let result = self.run_loop(frame);
+
+        let (location, suspended) = self.suspended_runs.pop().expect("pushed above");
+        self.nested_frame_base = outer_base;
+        self.frames = suspended;
+        self.current_location = location;
+        result
+    }
+
+    /// How deep the Java call stack is, counting frames suspended beneath any
+    /// nested run.
+    fn call_depth(&self) -> usize {
+        self.nested_frame_base + self.frames.len()
+    }
+
+    /// `obj.toString()`, dispatched virtually. Falls back to Java's default
+    /// `Class@hash` when neither the class nor its ancestors declare one.
+    fn instance_to_string(
+        &mut self,
+        receiver: HeapRef,
+        class_name: &str,
+    ) -> Result<String, VmError> {
+        let returned = match self.user_virtual_dispatch(
+            receiver,
+            class_name,
+            "toString",
+            "()Ljava/lang/String;",
+            &[],
+        )? {
+            UserDispatch::Call(frame) => self.run_nested(frame)?,
+            UserDispatch::Value(value) => value,
+        };
+        Ok(match returned {
+            Some(JValue::Ref(Some(text))) => self.heap.string_text(text).unwrap_or_default(),
+            // A `toString()` returning null renders as "null" rather than
+            // throwing, the way `String.valueOf(Object)` does.
+            _ => String::from("null"),
+        })
+    }
+
+    /// `String.valueOf(value)`: the text Java would produce. Unlike the
+    /// intrinsic renderers, which see only the heap, this calls a user
+    /// `toString()` — and so renders a list or a map by rendering its
+    /// elements, exactly as `AbstractCollection` and `AbstractMap` do.
+    fn string_value_of(&mut self, value: JValue, depth: u32) -> Result<String, VmError> {
+        use crate::value::HeapObject;
+        // An indirect cycle (a list inside a list that holds it) overflows a
+        // real JVM's stack. It must not overflow the host's.
+        if depth > MAX_RENDER_DEPTH {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.StackOverflowError",
+            )));
+        }
+        let reference = match value {
+            JValue::Int(v) => return Ok(v.to_string()),
+            JValue::Long(v) => return Ok(v.to_string()),
+            JValue::Float(v) => return Ok(intrinsics::java_float_to_string(v)),
+            JValue::Double(v) => return Ok(intrinsics::java_double_to_string(v)),
+            JValue::Ref(None) => return Ok(String::from("null")),
+            JValue::Ref(Some(reference)) => reference,
+        };
+        // Copy out what we need before calling back into Java, which may
+        // allocate and so cannot hold a borrow of the heap.
+        let renderable = match self.heap.get(reference) {
+            Some(HeapObject::Instance { class_name, .. }) => {
+                Renderable::Instance(class_name.clone())
+            }
+            Some(HeapObject::ArrayList(items)) => Renderable::List(items.clone()),
+            Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
+            Some(HeapObject::MapView { map, kind }) => {
+                let (map, kind) = (*map, *kind);
+                match self.heap.get(map) {
+                    Some(HeapObject::HashMap(map)) => {
+                        Renderable::View(map.entries_in_order(), kind)
+                    }
+                    _ => Renderable::Opaque,
+                }
+            }
+            Some(HeapObject::MapEntry { map, key }) => {
+                let (map, key) = (*map, *key);
+                let comparable = crate::map::map_key(&self.heap, key);
+                let value = match self.heap.get(map) {
+                    Some(HeapObject::HashMap(map)) => {
+                        map.lookup(&comparable).unwrap_or(JValue::NULL)
+                    }
+                    _ => JValue::NULL,
+                };
+                Renderable::Entry(key, value)
+            }
+            _ => Renderable::Opaque,
+        };
+
+        match renderable {
+            Renderable::Instance(class_name) => self.instance_to_string(reference, &class_name),
+            Renderable::List(items) => {
+                let mut parts = Vec::with_capacity(items.len());
+                for item in items {
+                    parts.push(self.render_element(item, reference, depth, THIS_COLLECTION)?);
+                }
+                Ok(format!("[{}]", parts.join(", ")))
+            }
+            Renderable::Map(entries) => {
+                let mut parts = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    parts.push(format!(
+                        "{}={}",
+                        self.render_element(key, reference, depth, THIS_MAP)?,
+                        self.render_element(value, reference, depth, THIS_MAP)?
+                    ));
+                }
+                Ok(format!("{{{}}}", parts.join(", ")))
+            }
+            Renderable::View(entries, kind) => {
+                let mut parts = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    parts.push(match kind {
+                        MapViewKind::Keys => {
+                            self.render_element(key, reference, depth, THIS_COLLECTION)?
+                        }
+                        MapViewKind::Values => {
+                            self.render_element(value, reference, depth, THIS_COLLECTION)?
+                        }
+                        MapViewKind::Entries => format!(
+                            "{}={}",
+                            self.render_element(key, reference, depth, THIS_COLLECTION)?,
+                            self.render_element(value, reference, depth, THIS_COLLECTION)?
+                        ),
+                    });
+                }
+                Ok(format!("[{}]", parts.join(", ")))
+            }
+            Renderable::Entry(key, value) => Ok(format!(
+                "{}={}",
+                self.render_element(key, reference, depth, THIS_MAP)?,
+                self.render_element(value, reference, depth, THIS_MAP)?
+            )),
+            Renderable::Opaque => Ok(intrinsics::object_display(&self.heap, value)),
+        }
+    }
+
+    /// One element of a container. A container holding itself renders as
+    /// `(this Collection)` instead of recursing, exactly as Java's does.
+    fn render_element(
+        &mut self,
+        item: JValue,
+        owner: HeapRef,
+        depth: u32,
+        self_text: &str,
+    ) -> Result<String, VmError> {
+        if item == JValue::Ref(Some(owner)) {
+            return Ok(self_text.to_owned());
+        }
+        self.string_value_of(item, depth + 1)
+    }
+
+    /// `list.toString()` / `map.toString()` and the two map views'. Answered
+    /// here rather than in the intrinsic layer because rendering an element
+    /// may call a user `toString()`, which needs the interpreter.
+    fn container_to_string(
+        &mut self,
+        frame: &mut Frame<'run>,
+        receiver: HeapRef,
+        method_name: &str,
+        descriptor: &str,
+    ) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        let renders_its_elements = matches!(
+            self.heap.get(receiver),
+            Some(
+                HeapObject::ArrayList(_)
+                    | HeapObject::HashMap(_)
+                    | HeapObject::MapView { .. }
+                    | HeapObject::MapEntry { .. }
+            )
+        );
+        if !renders_its_elements
+            || method_name != "toString"
+            || descriptor != "()Ljava/lang/String;"
+        {
+            return Ok(false);
+        }
+        let text = self.string_value_of(JValue::Ref(Some(receiver)), 0)?;
+        let reference = self.heap.alloc_string(&text);
+        frame.stack.push(JValue::Ref(Some(reference)));
+        Ok(true)
+    }
+
+    /// `println(Object)` and `StringBuilder.append(Object)` render their
+    /// argument, which may call a user `toString()`. Rather than duplicate
+    /// the console-capturing and appending logic, render the argument here
+    /// and hand the intrinsic layer the equivalent `String` call.
+    fn render_object_argument(
+        &mut self,
+        receiver: HeapRef,
+        method_name: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Option<(&'static str, JValue)>, VmError> {
+        use crate::value::HeapObject;
+        let string_form = match (self.heap.get(receiver), method_name, descriptor) {
+            (Some(HeapObject::PrintStream(_)), "print" | "println", "(Ljava/lang/Object;)V") => {
+                "(Ljava/lang/String;)V"
+            }
+            (
+                Some(HeapObject::StringBuilder(_)),
+                "append",
+                "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+            ) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+            _ => return Ok(None),
+        };
+        let text = self.string_value_of(args[0], 0)?;
+        let reference = self.heap.alloc_string(&text);
+        Ok(Some((string_form, JValue::Ref(Some(reference)))))
+    }
+
     /// Dispatch an instance method on a user-defined object, with the
     /// default `toString` when the class doesn't define one. Returns
     /// either a frame to push or an inline result value.
@@ -2373,6 +2634,17 @@ impl<'run> Interpreter<'run> {
                 _ => {}
             }
         }
+        // Turning a value into text can call a user `toString()`, which needs
+        // the interpreter; the intrinsic layer holds only the heap.
+        if self.container_to_string(frame, receiver, &method_name, &descriptor)? {
+            return Ok(None);
+        }
+        let rendered = self.render_object_argument(receiver, &method_name, &descriptor, &args)?;
+        let (descriptor, args) = match rendered {
+            Some((string_form, text)) => (String::from(string_form), vec![text]),
+            None => (descriptor, args),
+        };
+
         let result = if let Some(instance_class) = instance_class {
             match self.user_virtual_dispatch(
                 receiver,
@@ -3379,6 +3651,11 @@ impl WatchEvaluator for FrameWatchEvaluator<'_, '_> {
         // (that is the point — watches see live state).
         let saved_frames = std::mem::take(&mut interp.frames);
         let saved_location = interp.current_location.take();
+        // A watch is its own stack, even when the pause happened inside a
+        // nested run (a breakpoint in a `toString()` reached from a
+        // container's).
+        let saved_runs = std::mem::take(&mut interp.suspended_runs);
+        let saved_base = std::mem::replace(&mut interp.nested_frame_base, 0);
         let saved_budget = interp.remaining_instructions;
         interp.remaining_instructions = saved_budget.min(WATCH_INSTRUCTION_BUDGET);
 
@@ -3386,6 +3663,8 @@ impl WatchEvaluator for FrameWatchEvaluator<'_, '_> {
 
         let spent = saved_budget.min(WATCH_INSTRUCTION_BUDGET) - interp.remaining_instructions;
         interp.remaining_instructions = saved_budget.saturating_sub(spent);
+        interp.nested_frame_base = saved_base;
+        interp.suspended_runs = saved_runs;
         interp.frames = saved_frames;
         interp.current_location = saved_location;
 
@@ -3423,6 +3702,28 @@ enum Flow<'run> {
 }
 
 /// The outcome of dispatching a virtual call on a user object.
+/// Java's marker for a container that holds itself, instead of recursing.
+const THIS_COLLECTION: &str = "(this Collection)";
+const THIS_MAP: &str = "(this Map)";
+
+/// How deeply [`Interpreter::string_value_of`] nests containers before it calls
+/// the shape a cycle. A real JVM throws `StackOverflowError`; so do we,
+/// rather than exhausting the host stack.
+const MAX_RENDER_DEPTH: u32 = 64;
+
+/// What [`Interpreter::string_value_of`] found on the heap, lifted out of it so
+/// that rendering can call back into Java.
+enum Renderable {
+    /// An instance of a loaded class: ask its `toString()`.
+    Instance(String),
+    List(Vec<JValue>),
+    Map(Vec<(JValue, JValue)>),
+    View(Vec<(JValue, JValue)>, MapViewKind),
+    Entry(JValue, JValue),
+    /// Anything the intrinsic layer can render without calling Java.
+    Opaque,
+}
+
 enum UserDispatch<'run> {
     /// Push this frame and continue executing inside it.
     Call(Frame<'run>),

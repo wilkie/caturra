@@ -1836,19 +1836,6 @@ fn list_method(
         }
         // Capacity hints: real methods, observable-free here.
         ("ensureCapacity", _, [JValue::Int(_)]) | ("trimToSize", _, []) => Ok(None),
-        ("toString", _, []) => {
-            let values = match heap.get(receiver) {
-                Some(HeapObject::ArrayList(values)) => values.clone(),
-                _ => unreachable!(),
-            };
-            let mut parts = Vec::with_capacity(values.len());
-            for value in values {
-                parts.push(display_jvalue(heap, value));
-            }
-            let text = format!("[{}]", parts.join(", "));
-            let reference = heap.alloc_string(&text);
-            Ok(Some(JValue::Ref(Some(reference))))
-        }
         _ => Err(VmError::UnknownIntrinsic(format!(
             "ArrayList.{method}{descriptor}"
         ))),
@@ -1995,11 +1982,6 @@ fn map_method(
             });
             Ok(Some(JValue::Int(hash)))
         }
-        ("toString", []) => {
-            let text = render_entries(heap, receiver, MapViewKind::Entries, "{", "}");
-            let reference = heap.alloc_string(&text);
-            Ok(Some(JValue::Ref(Some(reference))))
-        }
         // Java's three views are live: a later `put` shows through them.
         ("keySet", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Keys))),
         ("values", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Values))),
@@ -2013,24 +1995,6 @@ fn map_method(
 /// Allocate one of a map's three views onto it.
 fn alloc_view(heap: &mut Heap, map: HeapRef, kind: MapViewKind) -> JValue {
     JValue::Ref(Some(heap.alloc(HeapObject::MapView { map, kind })))
-}
-
-/// Render a map's entries in iteration order, as `keySet`, `values` and
-/// `entrySet` each show them.
-fn render_entries(heap: &Heap, map: HeapRef, kind: MapViewKind, open: &str, close: &str) -> String {
-    let rendered: Vec<String> = entries_of(heap, map)
-        .iter()
-        .map(|(key, value)| match kind {
-            MapViewKind::Keys => display_jvalue(heap, *key),
-            MapViewKind::Values => display_jvalue(heap, *value),
-            MapViewKind::Entries => format!(
-                "{}={}",
-                display_jvalue(heap, *key),
-                display_jvalue(heap, *value)
-            ),
-        })
-        .collect();
-    format!("{open}{}{close}", rendered.join(", "))
 }
 
 /// `keySet()` / `values()` / `entrySet()`. These are views, not copies, so
@@ -2067,11 +2031,6 @@ fn map_view_method(
                 MapViewKind::Entries => false,
             };
             Ok(Some(JValue::Int(i32::from(found))))
-        }
-        ("toString", []) => {
-            let text = render_entries(heap, map, kind, "[", "]");
-            let reference = heap.alloc_string(&text);
-            Ok(Some(JValue::Ref(Some(reference))))
         }
         // The element at a position in the map's iteration order.
         ("__get", [JValue::Int(position)]) => {
@@ -2117,18 +2076,6 @@ fn map_entry_method(
             let previous = map_of_mut(heap, map)?.insert(comparable, key, *value);
             Ok(Some(previous.unwrap_or(JValue::NULL)))
         }
-        ("toString", []) => {
-            let value = map_of(heap, map)
-                .lookup(&comparable)
-                .unwrap_or(JValue::NULL);
-            let text = format!(
-                "{}={}",
-                display_jvalue(heap, key),
-                display_jvalue(heap, value)
-            );
-            let reference = heap.alloc_string(&text);
-            Ok(Some(JValue::Ref(Some(reference))))
-        }
         // `Map.Entry.hashCode` is the key's hash XOR the value's.
         ("hashCode", []) => {
             let value = map_of(heap, map)
@@ -2164,42 +2111,6 @@ fn entries_of(heap: &Heap, reference: HeapRef) -> Vec<(JValue, JValue)> {
     match heap.get(reference) {
         Some(HeapObject::HashMap(map)) => map.entries_in_order(),
         _ => Vec::new(),
-    }
-}
-
-/// Best-effort display of a stored value for `ArrayList.toString`
-/// (ints print as ints; the VM cannot distinguish boxed Character /
-/// Boolean, a documented deviation).
-fn display_jvalue(heap: &Heap, value: JValue) -> String {
-    match value {
-        JValue::Int(v) => v.to_string(),
-        JValue::Long(v) => v.to_string(),
-        JValue::Float(v) => v.to_string(),
-        JValue::Double(v) => java_double_to_string(v),
-        JValue::Ref(None) => String::from("null"),
-        JValue::Ref(Some(reference)) => match heap.get(reference) {
-            Some(HeapObject::JavaString(units)) => String::from_utf16_lossy(units),
-            Some(HeapObject::Boxed { class_name, value }) => boxed_to_string(class_name, *value),
-            Some(HeapObject::Instance { class_name, .. }) => {
-                // User toString would need re-entering the interpreter;
-                // fall back to the default form here.
-                format!("{class_name}@{reference:x}")
-            }
-            Some(HeapObject::Field {
-                declaring,
-                name,
-                descriptor,
-                access,
-                ..
-            }) => field_to_string(declaring, name, descriptor, *access),
-            Some(HeapObject::Constructor {
-                declaring,
-                descriptor,
-                access,
-            }) => constructor_to_string(declaring, descriptor, *access),
-            Some(HeapObject::Class { name }) => format!("class {name}"),
-            _ => String::from("<object>"),
-        },
     }
 }
 
@@ -3510,7 +3421,7 @@ fn string_static(
 /// Render a `StringBuilder.append` argument the way Java would.
 /// Render an `Object`-typed value inline (`String.valueOf` semantics) for the
 /// reflection handles that flow through `append(Object)`/`print(Object)`.
-fn object_display(heap: &Heap, value: JValue) -> String {
+pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
     match value {
         JValue::Ref(None) => String::from("null"),
         JValue::Ref(Some(reference)) => match heap.get(reference) {
@@ -3548,21 +3459,6 @@ fn object_display(heap: &Heap, value: JValue) -> String {
                 }
             }
             Some(HeapObject::Instance { class_name, .. }) => format!("{class_name}@{reference:x}"),
-            // A map renders as its entries, in iteration order.
-            Some(HeapObject::HashMap(map)) => {
-                let rendered: Vec<String> = map
-                    .entries_in_order()
-                    .iter()
-                    .map(|(key, value)| {
-                        format!(
-                            "{}={}",
-                            display_jvalue(heap, *key),
-                            display_jvalue(heap, *value)
-                        )
-                    })
-                    .collect();
-                format!("{{{}}}", rendered.join(", "))
-            }
             _ => format!("object@{reference:x}"),
         },
         other => format!("{other:?}"),
@@ -3586,9 +3482,9 @@ fn builder_value_text(heap: &Heap, param: &str, value: &JValue) -> Result<Vec<u1
                 VmError::UnknownIntrinsic(String::from("argument is not a string object"))
             })?,
         },
-        // `append(Object)`/`insert(int, Object)` — `String.valueOf(Object)`
-        // semantics (used when a reflection handle like a Class type argument
-        // is concatenated).
+        // `insert(int, Object)` — `String.valueOf(Object)` semantics.
+        // `append(Object)` never reaches here: the interpreter renders its
+        // argument first, since doing so may call a user `toString()`.
         ("Ljava/lang/Object;", value) => object_display(heap, *value),
         _ => {
             return Err(VmError::UnknownIntrinsic(format!(
@@ -3643,9 +3539,6 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
                 VmError::UnknownIntrinsic(String::from("println argument is not a string object"))
             })?,
         },
-        // `println(Object)` — `String.valueOf(Object)` semantics, so a null
-        // (a wrapper from `map.get(absent)`) prints "null" rather than throwing.
-        ("(Ljava/lang/Object;)V", [value]) => object_display(heap, *value),
         _ => {
             return Err(VmError::UnknownIntrinsic(format!(
                 "PrintStream overload {descriptor} with {} args",

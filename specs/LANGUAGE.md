@@ -267,10 +267,25 @@ null` is the way to test for absence, and unboxing an absent value
     reasons. `keySet`/`values`/`entrySet` and the core methods are
     pinned against a real JDK by `diff_hash_map_iteration_order`,
     `_core_methods`, `_null_and_unboxing` and `_views`.
-    `println(map)` of user-class values prints the default
-    `Class@hash` form, not their `toString` — the same long-standing
-    deviation `println(list)` has, since an intrinsic cannot re-enter
-    the interpreter.
+  - **`toString` is honoured wherever a value becomes text** (2026-07-09).
+    A container renders its elements by calling their `toString()`, as
+    `AbstractCollection` and `AbstractMap` do — `println(list)`,
+    `"" + map`, `map.values()`, `sb.append(obj)` and `%s` all agree with
+    the JDK. This needs an intrinsic to call back into Java, so the
+    coercion points live in the interpreter (which can run a nested
+    frame stack) rather than the intrinsic layer (which sees only the
+    heap). Faithful to the corners: a collection holding itself renders
+    as `(this Collection)` rather than recursing; a `toString()` that
+    returns `null` renders as `"null"`; one that throws propagates to
+    the caller's `catch`, with the calling frames in the stack trace;
+    and a cycle between two collections, or a `toString()` that renders
+    itself, throws `StackOverflowError` instead of exhausting the host
+    stack. A class that declares no `toString` keeps Java's default
+    `Class@hash`. Pinned against a real JDK by
+    `diff_to_string_inside_collections` and `diff_to_string_edge_cases`.
+    One consequence for the debugger: pausing on a breakpoint inside a
+    `toString()` that a container is rendering shows only that call's
+    frames, because the frames beneath it are suspended.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get

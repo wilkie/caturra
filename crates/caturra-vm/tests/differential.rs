@@ -3421,3 +3421,152 @@ public class DiffMapViews {
 }
 "#
 );
+
+differential_test!(
+    diff_to_string_inside_collections,
+    "DiffToString",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+
+class Student {
+    String name;
+    Student(String name) { this.name = name; }
+    public String toString() { return "S(" + name + ")"; }
+}
+
+class Plain {
+    int x = 7;
+}
+
+public class DiffToString {
+    public static void main(String[] args) {
+        Student ann = new Student("Ann");
+        ArrayList<Student> list = new ArrayList<Student>();
+        list.add(ann);
+        list.add(new Student("Bo"));
+
+        // A container renders its elements with their own toString.
+        System.out.println(list);
+        System.out.println("concat: " + list);
+        System.out.println(String.format("%s", list));
+
+        Map<String, Student> byName = new HashMap<String, Student>();
+        byName.put("a", ann);
+        System.out.println(byName);
+        System.out.println(byName.values());
+        System.out.println(byName.entrySet());
+
+        Map<Student, String> byStudent = new HashMap<Student, String>();
+        byStudent.put(ann, "x");
+        System.out.println(byStudent.keySet());
+
+        // StringBuilder.append(Object) too.
+        StringBuilder sb = new StringBuilder();
+        sb.append(ann).append('|').append(list);
+        System.out.println(sb);
+
+        // A class without toString keeps Java's default form (the identity
+        // hash is arbitrary, so only its shape is comparable).
+        ArrayList<Plain> plains = new ArrayList<Plain>();
+        plains.add(new Plain());
+        String rendered = plains.toString();
+        System.out.println(rendered.startsWith("[Plain@") && rendered.endsWith("]"));
+
+        // Nulls and empties.
+        ArrayList<Student> holes = new ArrayList<Student>();
+        holes.add(null);
+        System.out.println(holes + " " + new ArrayList<Student>());
+
+        // Inherited toString.
+        ArrayList<Object> mixed = new ArrayList<Object>();
+        mixed.add(ann);
+        mixed.add("plain string");
+        System.out.println(mixed);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_to_string_edge_cases,
+    "DiffToStringEdges",
+    r#"
+import java.util.ArrayList;
+
+class Boom {
+    public String toString() { throw new IllegalStateException("boom"); }
+}
+
+class Nully {
+    public String toString() { return null; }
+}
+
+class Node {
+    int n;
+    Node next;
+    Node(int n) { this.n = n; }
+    public String toString() { return next == null ? "" + n : n + "->" + next; }
+}
+
+class Loop {
+    public String toString() { return "" + this; }
+}
+
+public class DiffToStringEdges {
+    public static void main(String[] args) {
+        // A collection holding itself does not recurse.
+        ArrayList<Object> self = new ArrayList<Object>();
+        self.add(self);
+        System.out.println(self);
+        ArrayList<Object> outer = new ArrayList<Object>();
+        outer.add("x");
+        outer.add(self);
+        System.out.println(outer);
+
+        // An exception thrown by toString propagates to the caller.
+        ArrayList<Boom> boom = new ArrayList<Boom>();
+        boom.add(new Boom());
+        try {
+            System.out.println(boom);
+        } catch (IllegalStateException e) {
+            System.out.println("caught " + e.getMessage());
+        }
+
+        // A toString returning null renders as "null", it does not throw.
+        ArrayList<Nully> nully = new ArrayList<Nully>();
+        nully.add(new Nully());
+        System.out.println(nully);
+
+        // A toString that calls another object's toString.
+        Node head = new Node(1);
+        head.next = new Node(2);
+        ArrayList<Node> nodes = new ArrayList<Node>();
+        nodes.add(head);
+        System.out.println(nodes);
+
+        // Two collections holding each other overflow the stack, as in Java.
+        ArrayList<Object> a = new ArrayList<Object>();
+        ArrayList<Object> b = new ArrayList<Object>();
+        a.add(b);
+        b.add(a);
+        try {
+            System.out.println(a);
+        } catch (StackOverflowError e) {
+            System.out.println("indirect cycle overflows");
+        }
+
+        // So does a toString that renders itself.
+        ArrayList<Loop> loop = new ArrayList<Loop>();
+        loop.add(new Loop());
+        try {
+            System.out.println(loop);
+        } catch (StackOverflowError e) {
+            System.out.println("self-rendering toString overflows");
+        }
+        System.out.println("still running");
+    }
+}
+"#
+);
