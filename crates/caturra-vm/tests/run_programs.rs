@@ -3893,7 +3893,8 @@ fn array_object_methods_reference_semantics() {
 #[test]
 fn sort_arrays_and_collections_and_list_equals() {
     // Arrays.sort(int[]/String[]), Collections.sort(list), a generic downcast,
-    // and list equality dispatching a user equals override.
+    // and list equality dispatching a user equals override — `a.equals(b)`
+    // agrees with the hand-written element loop beside it.
     let out = run_stdout(
         r#"
         import java.util.*;
@@ -3938,7 +3939,7 @@ fn sort_arrays_and_collections_and_list_equals() {
         "#,
         "Main",
     );
-    assert_eq!(out, "[1, 2, 3]\n[fig, kiwi, pear]\nfig\nfalse true\n");
+    assert_eq!(out, "[1, 2, 3]\n[fig, kiwi, pear]\nfig\ntrue true\n");
 }
 
 #[test]
@@ -8505,4 +8506,91 @@ fn collections_sort_of_a_non_comparable_throws() {
     );
     assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
     assert_eq!(console.stdout_text(), "not comparable\n");
+}
+
+/// A collection compares its elements with their own `equals`, and hashes its
+/// keys with their own `hashCode`. Cross-checked against a real JDK by
+/// `diff_user_equals_in_collections` and `diff_equals_edge_cases`.
+#[test]
+fn collections_use_the_user_equals_and_hash_code() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.HashMap;
+        import java.util.Map;
+
+        class Point {
+            int x;
+            int y;
+            Point(int x, int y) { this.x = x; this.y = y; }
+            public boolean equals(Object other) {
+                if (!(other instanceof Point)) return false;
+                Point that = (Point) other;
+                return x == that.x && y == that.y;
+            }
+            public int hashCode() { return 31 * x + y; }
+            public String toString() { return "(" + x + "," + y + ")"; }
+        }
+
+        // equals without hashCode: the map cannot find the key again, exactly
+        // as on a real JVM.
+        class Broken {
+            int id;
+            Broken(int id) { this.id = id; }
+            public boolean equals(Object other) {
+                return other instanceof Broken && ((Broken) other).id == id;
+            }
+        }
+
+        public class E {
+            public static void main(String[] args) {
+                ArrayList<Point> list = new ArrayList<Point>();
+                list.add(new Point(1, 2));
+                list.add(new Point(3, 4));
+                System.out.println(list.contains(new Point(1, 2)) + " " + list.indexOf(new Point(3, 4)));
+                System.out.println(list.remove(new Point(1, 2)) + " " + list);
+
+                ArrayList<Point> one = new ArrayList<Point>();
+                one.add(new Point(1, 2));
+                ArrayList<Point> two = new ArrayList<Point>();
+                two.add(new Point(1, 2));
+                System.out.println(one.equals(two) + " " + (one.hashCode() == two.hashCode()));
+
+                Map<Point, String> map = new HashMap<Point, String>();
+                map.put(new Point(1, 2), "first");
+                map.put(new Point(1, 2), "second");
+                System.out.println(map.size() + " " + map.get(new Point(1, 2)) + " " + map);
+
+                Map<Broken, String> broken = new HashMap<Broken, String>();
+                broken.put(new Broken(1), "x");
+                System.out.println(broken.get(new Broken(1)) + " " + broken.containsKey(new Broken(1)));
+
+                // Double.equals compares bits: -0.0 is a distinct key, NaN is
+                // its own. `==` disagrees with both.
+                Map<Double, String> byDouble = new HashMap<Double, String>();
+                byDouble.put(0.0, "pos");
+                byDouble.put(-0.0, "neg");
+                byDouble.put(Double.NaN, "nan");
+                System.out.println(byDouble.size() + " " + byDouble.get(Double.NaN));
+
+                // Boolean hashes to 1231/1237, not 0/1.
+                Map<Boolean, String> flags = new HashMap<Boolean, String>();
+                flags.put(true, "t");
+                flags.put(false, "f");
+                System.out.println(flags);
+            }
+        }
+        "#,
+        "E",
+    );
+    assert_eq!(
+        out,
+        "true 1\n\
+         true [(3,4)]\n\
+         true true\n\
+         1 second {(1,2)=second}\n\
+         null false\n\
+         3 nan\n\
+         {false=f, true=t}\n"
+    );
 }

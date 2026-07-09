@@ -13,84 +13,29 @@
 //! to the chain's tail and a resize splits each chain while preserving
 //! relative order.
 //!
-//! The one divergence: with at least 8 keys colliding in a single bucket of
-//! a table of 64 or more, a real `HashMap` converts that bucket to a
-//! red-black tree and iterates it in tree order. caturra keeps the chain
-//! order. Reaching it takes deliberately-crafted colliding keys.
+//! A key's hash code and its equality may both come from user code, which
+//! only the interpreter can run. So this module stores each key's hash and
+//! hands out the *candidates* sharing one; the caller decides which of them
+//! the key actually equals. `HashMap.getNode` works the same way — compare
+//! hashes first, then `equals`.
+//!
+//! Below a table length of 64, a bin of 8 makes Java resize rather than
+//! treeify, which reshuffles every bucket; that is modelled. The one
+//! divergence left: at 64 or more, such a bin really does become a red-black
+//! tree, and iterates in tree order rather than chain order. Reaching it
+//! takes deliberately-crafted colliding keys.
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
 
-use crate::value::{HeapObject, HeapRef, JValue};
+use crate::value::JValue;
 
-/// A key by value, as `Map` compares them: `equals` semantics, not
-/// reference identity. Doubles and floats key on their raw bits, so
-/// `-0.0` and `0.0` are distinct keys and `NaN` equals itself — exactly
-/// what `Double.equals` does, and unlike `==` on the primitives.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MapKey {
-    Int(i32),
-    Long(i64),
-    /// `Double.doubleToLongBits`.
-    Double(i64),
-    /// `Float.floatToIntBits`.
-    Float(i32),
-    Str(Vec<u16>),
-    /// A boxed `Boolean`. It is the one wrapper whose `hashCode` is not
-    /// its value (1231/1237), so it needs its own key to land in the
-    /// bucket the JDK would pick.
-    Bool(bool),
-    /// An object without value equality: identity, as Java's default
-    /// `equals` does (caturra does not support overriding `equals`).
-    Ref(HeapRef),
-    Null,
-}
-
-impl MapKey {
-    /// The key's `hashCode()`, matching the JDK's for every type whose
-    /// keys caturra can compare by value.
-    #[must_use]
-    pub fn hash_code(&self) -> i32 {
-        match self {
-            MapKey::Int(v) => *v,
-            // `Long.hashCode` / `Double.hashCode`: fold the high word down.
-            MapKey::Long(v) => fold_to_int(*v),
-            MapKey::Double(bits) => fold_to_int(*bits),
-            MapKey::Float(bits) => *bits,
-            MapKey::Bool(v) => {
-                if *v {
-                    1231
-                } else {
-                    1237
-                }
-            }
-            MapKey::Str(units) => units
-                .iter()
-                .fold(0i32, |h, u| h.wrapping_mul(31).wrapping_add(i32::from(*u))),
-            // Arbitrary in Java too, so no order is promised for object keys.
-            MapKey::Ref(reference) => reference.cast_signed(),
-            MapKey::Null => 0,
-        }
-    }
-
-    /// `HashMap.hash(key)`: the hash code with its high bits spread down,
-    /// so that tables smaller than 2^16 still see them. A null key hashes
-    /// to 0 without spreading, and so always lands in bucket 0.
-    fn spread(&self) -> u32 {
-        if matches!(self, MapKey::Null) {
-            return 0;
-        }
-        let h = self.hash_code().cast_unsigned();
-        h ^ (h >> 16)
-    }
-}
-
-/// One entry, remembering the key both as the value the program handed us
-/// (what `keySet` and `toString` must show) and as its comparison key.
+/// One mapping, remembering its key's `hashCode()` so that neither a lookup
+/// nor the iteration order has to recompute it.
 #[derive(Debug, Clone)]
 struct Entry {
     key: JValue,
-    comparable: MapKey,
+    hash: i32,
     value: JValue,
 }
 
@@ -100,9 +45,9 @@ pub struct JavaHashMap {
     /// Entries in insertion order. Re-putting an existing key updates the
     /// value in place and keeps the original position, as Java does.
     entries: Vec<Entry>,
-    /// Comparison key to index into `entries`, so `get`/`containsKey` are
-    /// constant time rather than a scan.
-    index: HashMap<MapKey, usize>,
+    /// Key hash code to the entries carrying it. Two keys with the same hash
+    /// need not be equal, so this narrows a lookup rather than answering it.
+    index: HashMap<i32, Vec<usize>>,
     /// Java's `table.length`: zero until the first insertion allocates it.
     table_len: usize,
     /// Java's `threshold`: the size at which the table doubles. Before the
@@ -153,24 +98,31 @@ impl JavaHashMap {
         self.entries.is_empty()
     }
 
+    /// The entries whose key hash is `hash`. The caller compares them with
+    /// `equals` — which may be the user's — to find the real match.
     #[must_use]
-    pub fn lookup(&self, key: &MapKey) -> Option<JValue> {
-        self.index.get(key).map(|at| self.entries[*at].value)
+    pub fn candidates(&self, hash: i32) -> Vec<usize> {
+        self.index.get(&hash).cloned().unwrap_or_default()
     }
 
     #[must_use]
-    pub fn contains_key(&self, key: &MapKey) -> bool {
-        self.index.contains_key(key)
+    pub fn key_at(&self, at: usize) -> JValue {
+        self.entries[at].key
     }
 
-    /// Insert or overwrite, returning the previous value. A re-put keeps the
-    /// entry's position and its original key object, as Java's does.
-    pub fn insert(&mut self, comparable: MapKey, key: JValue, value: JValue) -> Option<JValue> {
-        if let Some(at) = self.index.get(&comparable) {
-            let previous = self.entries[*at].value;
-            self.entries[*at].value = value;
-            return Some(previous);
-        }
+    #[must_use]
+    pub fn value_at(&self, at: usize) -> JValue {
+        self.entries[at].value
+    }
+
+    /// Overwrite a mapping's value, returning the previous one. The entry
+    /// keeps its position and its original key object, as Java's does.
+    pub fn set_value_at(&mut self, at: usize, value: JValue) -> JValue {
+        std::mem::replace(&mut self.entries[at].value, value)
+    }
+
+    /// Append a mapping whose key is known to be absent.
+    pub fn insert_new(&mut self, hash: i32, key: JValue, value: JValue) {
         if self.table_len == 0 {
             self.table_len = if self.threshold == 0 {
                 DEFAULT_CAPACITY
@@ -179,32 +131,59 @@ impl JavaHashMap {
             };
             self.threshold = self.table_len * 3 / 4;
         }
-        self.index.insert(comparable.clone(), self.entries.len());
-        self.entries.push(Entry {
-            key,
-            comparable,
-            value,
-        });
+        self.index.entry(hash).or_default().push(self.entries.len());
+        self.entries.push(Entry { key, hash, value });
+
+        // `treeifyBin`: a bin this long in a table this small makes Java grow
+        // the table rather than grow a tree. That reshuffles every bucket, so
+        // a map whose keys collide iterates differently than the load factor
+        // alone would suggest — model it, or the order is wrong. `putVal`
+        // acts when the chain it appended to *already held* `TREEIFY_THRESHOLD`
+        // nodes, so the trigger is one past it.
+        if self.table_len < MIN_TREEIFY_CAPACITY && self.bin_len(hash) > TREEIFY_THRESHOLD {
+            self.grow();
+        }
         if self.entries.len() > self.threshold {
-            self.table_len *= 2;
-            self.threshold = self.table_len * 3 / 4;
+            self.grow();
         }
         self.order.take();
-        None
     }
 
-    /// Remove a key, returning its value. The table never shrinks — Java's
-    /// doesn't either, so the iteration order of what remains is unchanged.
-    pub fn remove(&mut self, key: &MapKey) -> Option<JValue> {
-        let at = self.index.remove(key)?;
+    /// Double the table, as `resize` does.
+    fn grow(&mut self) {
+        self.table_len *= 2;
+        self.threshold = self.table_len * 3 / 4;
+    }
+
+    /// How many entries share the bucket that `hash` lands in. Only consulted
+    /// while the table is smaller than `MIN_TREEIFY_CAPACITY`, where it is
+    /// therefore short.
+    fn bin_len(&self, hash: i32) -> usize {
+        let mask = self.table_len - 1;
+        let bucket = spread(hash) as usize & mask;
+        self.entries
+            .iter()
+            .filter(|entry| spread(entry.hash) as usize & mask == bucket)
+            .count()
+    }
+
+    /// Remove the mapping at `at`, returning its value. The table never
+    /// shrinks — Java's doesn't either, so the iteration order of what
+    /// remains is unchanged.
+    pub fn remove_at(&mut self, at: usize) -> JValue {
         let removed = self.entries.remove(at);
-        for slot in self.index.values_mut() {
-            if *slot > at {
-                *slot -= 1;
+        // Every later entry shifted down one, and this position is gone.
+        for positions in self.index.values_mut() {
+            positions.retain(|position| *position != at);
+            for position in positions.iter_mut() {
+                if *position > at {
+                    *position -= 1;
+                }
             }
         }
+        self.index.retain(|_, positions| !positions.is_empty());
         self.order.take();
-        Some(removed.value)
+        removed.value
     }
 
     pub fn clear(&mut self) {
@@ -221,7 +200,7 @@ impl JavaHashMap {
             let mut order: Vec<usize> = (0..self.entries.len()).collect();
             // A stable sort by bucket keeps each bucket's chain in
             // insertion order, which is where Java leaves it.
-            order.sort_by_key(|at| self.entries[*at].comparable.spread() as usize & mask);
+            order.sort_by_key(|at| spread(self.entries[*at].hash) as usize & mask);
             order
         })
     }
@@ -234,6 +213,20 @@ impl JavaHashMap {
         Some((entry.key, entry.value))
     }
 
+    /// Every entry in iteration order, with its key's hash. `new HashMap<>(map)`
+    /// copies these straight across: the keys are already distinct, and their
+    /// hash codes cannot have changed.
+    #[must_use]
+    pub fn hashed_entries_in_order(&self) -> Vec<(i32, JValue, JValue)> {
+        self.iteration_order()
+            .iter()
+            .map(|at| {
+                let entry = &self.entries[*at];
+                (entry.hash, entry.key, entry.value)
+            })
+            .collect()
+    }
+
     /// Every entry in iteration order.
     #[must_use]
     pub fn entries_in_order(&self) -> Vec<(JValue, JValue)> {
@@ -244,13 +237,24 @@ impl JavaHashMap {
     }
 }
 
-/// `(int) (v ^ (v >>> 32))`, how `Long` and `Double` hash a 64-bit value.
-fn fold_to_int(value: i64) -> i32 {
-    (value ^ (value.cast_unsigned() >> 32).cast_signed()) as i32
+/// `HashMap.hash(key)`: the hash code with its high bits spread down, so
+/// that tables smaller than 2^16 still see them. Java spreads a null key's
+/// hash of 0 as well, which leaves it 0 — so null always lands in bucket 0.
+fn spread(hash: i32) -> u32 {
+    let hash = hash.cast_unsigned();
+    hash ^ (hash >> 16)
 }
 
 /// Java's `HashMap.DEFAULT_INITIAL_CAPACITY`.
 const DEFAULT_CAPACITY: usize = 16;
+
+/// Java's `TREEIFY_THRESHOLD`: appending to a chain already this long makes
+/// `HashMap` act.
+const TREEIFY_THRESHOLD: usize = 8;
+
+/// Java's `MIN_TREEIFY_CAPACITY`: below this the table doubles instead of
+/// growing a red-black tree.
+const MIN_TREEIFY_CAPACITY: usize = 64;
 
 /// Java's `tableSizeFor`: the next power of two at or above `capacity`,
 /// clamped to `MAXIMUM_CAPACITY`.
@@ -266,39 +270,4 @@ fn table_size_for(capacity: i32) -> usize {
         return MAXIMUM_CAPACITY;
     }
     capacity.next_power_of_two()
-}
-
-/// The comparison key for a value used as a map key. Strings compare by
-/// content; everything else by its own `equals`.
-#[must_use]
-pub fn map_key(heap: &crate::value::Heap, value: JValue) -> MapKey {
-    match value {
-        JValue::Int(v) => MapKey::Int(v),
-        JValue::Long(v) => MapKey::Long(v),
-        // `floatToIntBits`/`doubleToLongBits` collapse every NaN payload to
-        // one, which is why `Double.equals` finds NaN equal to itself where
-        // `==` does not.
-        JValue::Float(v) => MapKey::Float(if v.is_nan() {
-            f32::NAN.to_bits().cast_signed()
-        } else {
-            v.to_bits().cast_signed()
-        }),
-        JValue::Double(v) => MapKey::Double(if v.is_nan() {
-            f64::NAN.to_bits().cast_signed()
-        } else {
-            v.to_bits().cast_signed()
-        }),
-        JValue::Ref(None) => MapKey::Null,
-        JValue::Ref(Some(reference)) => match heap.get(reference) {
-            Some(HeapObject::JavaString(units)) => MapKey::Str(units.clone()),
-            Some(HeapObject::Boxed { class_name, value }) => {
-                if class_name == "java/lang/Boolean" {
-                    MapKey::Bool(*value != JValue::Int(0))
-                } else {
-                    map_key(heap, *value)
-                }
-            }
-            _ => MapKey::Ref(reference),
-        },
-    }
 }

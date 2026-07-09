@@ -224,9 +224,10 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     (2026-07-03): `size/add/get/set/remove` (by index and by value),
     `clear/contains/indexOf/lastIndexOf/addAll` (both)/`equals`/
     `hashCode` (Java's 31-fold)/`toString/isEmpty`, plus the capacity
-    hints as no-ops; element equality is by value for numbers and
-    strings and by identity for objects (correct here, since `equals`
-    overriding is not supported). Iterators, lambdas, comparators,
+    hints as no-ops; `contains`/`indexOf`/`lastIndexOf`/`remove(Object)`/
+    `equals`/`hashCode` compare elements with **their own `equals` and
+    `hashCode`** (2026-07-09), overrides included, asking the probe as
+    Java does. Iterators, lambdas, comparators,
     streams, `toArray`, and `subList` report honest reasons. Autoboxing (a no-op in this VM — boxed-equality caching
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
@@ -238,10 +239,10 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     reproduces it (bucket index `(n - 1) & (h ^ h >>> 16)`, insertion
     order within a bucket, the table doubling past a 0.75 load factor,
     and `new HashMap<>(capacity)` / `new HashMap<>(map)` sizing their
-    tables as Java does). The one deviation: a real `HashMap` turns a
-    bucket of 8+ colliding keys in a table of 64+ into a red-black tree
-    and iterates it in tree order; caturra keeps the chain order.
-    Reaching it takes deliberately-crafted keys.
+    tables as Java does). The one deviation left: at a table of 64 or
+    more, a bin of 8+ colliding keys really does become a red-black
+    tree, which iterates in tree order rather than chain order; caturra
+    keeps the chain order. Reaching it takes deliberately-crafted keys.
     Methods: `size/isEmpty/containsKey/containsValue/get/getOrDefault/
 put/putIfAbsent/remove` (by key, and by key+value)/`replace` (both)/
     `clear/putAll/equals/hashCode/toString`, and the three views
@@ -251,9 +252,16 @@ put/putIfAbsent/remove` (by key, and by key+value)/`replace` (both)/
     for-each walks all three (an index loop over a synthetic accessor,
     since caturra has no iterators — so mutating a map inside such a
     loop silently sees the change where a real JDK throws
-    `ConcurrentModificationException`). Keys compare with `equals`
-    semantics, so `-0.0` and `0.0` are distinct keys, `NaN` equals
-    itself, and a `null` key is legal and lands in bucket 0.
+    `ConcurrentModificationException`). Keys hash and compare with
+    **their own `hashCode` and `equals`** (2026-07-09), overrides
+    included — so a map's iteration order follows a user's `hashCode`,
+    and a class that overrides `equals` without `hashCode` loses its
+    keys, exactly as on a real JVM. A bin of 8 in a table shorter than
+    64 makes Java resize rather than treeify, reshuffling every bucket;
+    that is modelled too. `Double.equals` compares raw bits, so `-0.0`
+    and `0.0` are distinct keys and `NaN` equals itself (`==` says the
+    opposite of both); `Boolean` hashes to 1231/1237; a `null` key is
+    legal and lands in bucket 0.
     Unlike `ArrayList`'s elements, a map's keys and values are **boxed**
     at the boundary: `map.put(k, v);` as a statement must not throw on a
     new key while `int old = map.put(k, v);` must, and only a boxed

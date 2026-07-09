@@ -3636,3 +3636,219 @@ public class DiffSort {
 }
 "#
 );
+
+differential_test!(
+    diff_user_equals_in_collections,
+    "DiffEquals",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+
+class Point {
+    int x;
+    int y;
+    Point(int x, int y) { this.x = x; this.y = y; }
+    public boolean equals(Object other) {
+        if (!(other instanceof Point)) return false;
+        Point that = (Point) other;
+        return x == that.x && y == that.y;
+    }
+    public int hashCode() { return 31 * x + y; }
+    public String toString() { return "(" + x + "," + y + ")"; }
+}
+
+// equals without hashCode: two equal keys land in different buckets, so the
+// map keeps both — a real JVM does the same.
+class Broken {
+    int id;
+    Broken(int id) { this.id = id; }
+    public boolean equals(Object other) {
+        return other instanceof Broken && ((Broken) other).id == id;
+    }
+    public String toString() { return "B" + id; }
+}
+
+public class DiffEquals {
+    public static void main(String[] args) {
+        Point a = new Point(1, 2);
+        Point b = new Point(1, 2);
+        Point c = new Point(3, 4);
+
+        ArrayList<Point> list = new ArrayList<Point>();
+        list.add(a);
+        list.add(c);
+        list.add(new Point(1, 2));
+        System.out.println(list.contains(b) + " " + list.contains(new Point(9, 9)));
+        System.out.println(list.indexOf(b) + " " + list.lastIndexOf(b));
+        System.out.println(list.remove(b) + " " + list);
+
+        ArrayList<Point> one = new ArrayList<Point>();
+        one.add(new Point(1, 2));
+        ArrayList<Point> two = new ArrayList<Point>();
+        two.add(new Point(1, 2));
+        System.out.println(one.equals(two) + " " + (one.hashCode() == two.hashCode()));
+        two.add(c);
+        System.out.println(one.equals(two));
+
+        // A map's iteration order follows the user's hashCode, across a resize.
+        Map<Point, Integer> byPoint = new HashMap<Point, Integer>();
+        for (int i = 0; i < 12; i++) {
+            byPoint.put(new Point(i, i), i);
+        }
+        System.out.println(byPoint);
+        System.out.println(byPoint.keySet());
+        System.out.println(byPoint.get(new Point(5, 5)) + " " + byPoint.containsKey(new Point(99, 99)));
+        System.out.println(byPoint.remove(new Point(3, 3)) + " " + byPoint.size());
+
+        // Re-putting an equal key replaces the value and keeps one entry.
+        Map<Point, String> single = new HashMap<Point, String>();
+        single.put(a, "first");
+        single.put(b, "second");
+        System.out.println(single.size() + " " + single + " " + single.get(new Point(1, 2)));
+        System.out.println(single.containsValue("second") + " " + single.containsValue("first"));
+
+        // Map equality and hashCode go through the elements' own.
+        Map<Point, Integer> left = new HashMap<Point, Integer>();
+        left.put(new Point(1, 1), 10);
+        Map<Point, Integer> right = new HashMap<Point, Integer>();
+        right.put(new Point(1, 1), 10);
+        System.out.println(left.equals(right) + " " + (left.hashCode() == right.hashCode()));
+
+        // equals without hashCode: the key cannot be found again.
+        Map<Broken, String> broken = new HashMap<Broken, String>();
+        broken.put(new Broken(1), "x");
+        System.out.println(broken.get(new Broken(1)) + " " + broken.containsKey(new Broken(1)));
+        broken.put(new Broken(1), "y");
+        System.out.println(broken.size());
+
+        // But a list, which only uses equals, finds it.
+        ArrayList<Broken> brokenList = new ArrayList<Broken>();
+        brokenList.add(new Broken(1));
+        System.out.println(brokenList.contains(new Broken(1)));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_equals_edge_cases,
+    "DiffEqualsEdges",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+
+class Boom {
+    public boolean equals(Object other) { throw new IllegalStateException("eq"); }
+    public int hashCode() { return 1; }
+}
+
+public class DiffEqualsEdges {
+    public static void main(String[] args) {
+        // Double.equals compares raw bits: -0.0 differs from 0.0, NaN equals
+        // itself. `==` says the opposite of both.
+        Map<Double, String> byDouble = new HashMap<Double, String>();
+        byDouble.put(0.0, "pos");
+        byDouble.put(-0.0, "neg");
+        byDouble.put(Double.NaN, "nan");
+        System.out.println(byDouble.size() + " " + byDouble.get(Double.NaN) + " " + byDouble.get(-0.0));
+
+        ArrayList<Double> doubles = new ArrayList<Double>();
+        doubles.add(Double.NaN);
+        doubles.add(0.0);
+        System.out.println(doubles.contains(Double.NaN) + " " + doubles.contains(-0.0));
+
+        // Boolean hashes to 1231/1237, not to 0/1.
+        Map<Boolean, String> flags = new HashMap<Boolean, String>();
+        flags.put(true, "t");
+        flags.put(false, "f");
+        System.out.println(flags);
+
+        // Character and Integer keys.
+        Map<Character, Integer> letters = new HashMap<Character, Integer>();
+        letters.put('a', 1);
+        letters.put('z', 2);
+        System.out.println(letters + " " + letters.get('z'));
+
+        // A null key still maps, and a null element still compares.
+        Map<String, Integer> withNull = new HashMap<String, Integer>();
+        withNull.put(null, 0);
+        withNull.put("a", 1);
+        System.out.println(withNull.get(null) + " " + withNull.containsKey(null));
+        ArrayList<String> holes = new ArrayList<String>();
+        holes.add(null);
+        holes.add("x");
+        System.out.println(holes.contains(null) + " " + holes.indexOf(null) + " " + holes.remove(null));
+
+        // An exception from equals reaches the caller's catch.
+        ArrayList<Boom> boom = new ArrayList<Boom>();
+        boom.add(new Boom());
+        try {
+            boom.contains(new Boom());
+            System.out.println("no throw");
+        } catch (IllegalStateException e) {
+            System.out.println("caught " + e.getMessage());
+        }
+
+        // Strings and boxed wrappers still compare by value.
+        ArrayList<String> words = new ArrayList<String>();
+        words.add("pear");
+        System.out.println(words.contains("pe" + "ar") + " " + words.indexOf("fig"));
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        numbers.add(7);
+        System.out.println(numbers.contains(7) + " " + numbers.contains(8));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_hash_map_colliding_bins_resize,
+    "DiffMapCollide",
+    r#"
+import java.util.HashMap;
+import java.util.Map;
+
+// Every key lands in the same bucket of a 16- or 32-long table, and the keys
+// only spread out once the table reaches 64. Staying under 8 per bin there
+// keeps us clear of the treeified bins caturra does not model.
+class Collides {
+    int id;
+    Collides(int id) { this.id = id; }
+    public boolean equals(Object other) {
+        return other instanceof Collides && ((Collides) other).id == id;
+    }
+    public int hashCode() { return id * 32; }
+    public String toString() { return "c" + id; }
+}
+
+public class DiffMapCollide {
+    public static void main(String[] args) {
+        // A bin of 8 makes Java resize rather than treeify while the table is
+        // under 64 long, which reshuffles every bucket.
+        for (int count = 6; count <= 14; count++) {
+            Map<Collides, Integer> map = new HashMap<Collides, Integer>();
+            for (int i = 0; i < count; i++) {
+                map.put(new Collides(i), i);
+            }
+            System.out.println(count + ": " + map.keySet());
+        }
+
+        // The same, reached through a copy constructor's pre-sized table.
+        Map<Collides, Integer> source = new HashMap<Collides, Integer>();
+        for (int i = 0; i < 10; i++) {
+            source.put(new Collides(i), i);
+        }
+        System.out.println(new HashMap<Collides, Integer>(source).keySet());
+
+        // And through an explicit initial capacity.
+        Map<Collides, Integer> sized = new HashMap<Collides, Integer>(4);
+        for (int i = 0; i < 10; i++) {
+            sized.put(new Collides(i), i);
+        }
+        System.out.println(sized.keySet());
+    }
+}
+"#
+);

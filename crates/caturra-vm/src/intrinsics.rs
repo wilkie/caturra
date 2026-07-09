@@ -7,8 +7,7 @@
 //! `specs/LANGUAGE.md` staging.
 
 use crate::io::ConsoleIo;
-use crate::map::{JavaHashMap, map_key};
-use crate::value::MapViewKind;
+use crate::map::JavaHashMap;
 use crate::value::{Heap, HeapObject, HeapRef, JValue, StdStream};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
@@ -160,12 +159,12 @@ pub fn invoke_special(
                 return Err(throw("java.lang.NullPointerException"));
             };
             let entries = match heap.get(source) {
-                Some(HeapObject::HashMap(map)) => map.entries_in_order(),
+                Some(HeapObject::HashMap(map)) => map.hashed_entries_in_order(),
                 _ => return Err(throw("java.lang.ClassCastException: not a Map")),
             };
             let mut copy = JavaHashMap::sized_for(entries.len());
-            for (key, value) in entries {
-                copy.insert(map_key(heap, key), key, value);
+            for (hash, key, value) in entries {
+                copy.insert_new(hash, key, value);
             }
             match heap.get_mut(receiver) {
                 Some(HeapObject::HashMap(map)) => *map = copy,
@@ -370,15 +369,6 @@ pub fn invoke_virtual(
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
-        (HeapObject::HashMap(_), _) => map_method(heap, receiver, method, descriptor, args),
-        (HeapObject::MapView { map, kind }, _) => {
-            let (map, kind) = (*map, *kind);
-            map_view_method(heap, map, kind, method, descriptor, args)
-        }
-        (HeapObject::MapEntry { map, key }, _) => {
-            let (map, key) = (*map, *key);
-            map_entry_method(heap, map, key, method, descriptor, args)
-        }
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
         (
             HeapObject::Exception {
@@ -1613,42 +1603,95 @@ fn scanner_peek_token(
 /// Element equality for list membership: value equality for numbers
 /// and strings (Java's `equals`), reference equality for user objects
 /// (correct here, since `equals` overriding is not supported).
-fn values_equal(heap: &Heap, a: JValue, b: JValue) -> bool {
+/// The wrapper class and the primitive behind a value, when it is boxed.
+fn unboxed(heap: &Heap, value: JValue) -> (Option<&str>, JValue) {
+    if let JValue::Ref(Some(reference)) = value
+        && let Some(HeapObject::Boxed { class_name, value }) = heap.get(reference)
+    {
+        return (Some(class_name), *value);
+    }
+    (None, value)
+}
+
+/// `a.equals(b)` for every value the VM can compare without running Java:
+/// primitives, wrappers, strings, and `null`. A user object compares by
+/// identity — [`Interpreter::java_equals`] overrides that with its `equals`.
+///
+/// `Double.equals` and `Float.equals` compare raw bits, not numbers, so
+/// `-0.0` differs from `0.0` and `NaN` equals itself. `==` says the opposite
+/// of both.
+pub(crate) fn native_equals(heap: &Heap, a: JValue, b: JValue) -> bool {
+    let (class_a, a) = unboxed(heap, a);
+    let (class_b, b) = unboxed(heap, b);
+    // `Integer.valueOf(1).equals(Long.valueOf(1))` is false.
+    if let (Some(class_a), Some(class_b)) = (class_a, class_b)
+        && class_a != class_b
+    {
+        return false;
+    }
     match (a, b) {
-        (JValue::Ref(Some(x)), JValue::Ref(Some(y))) => {
-            if x == y {
-                return true;
-            }
-            matches!(
-                (heap.get(x), heap.get(y)),
-                (
-                    Some(HeapObject::JavaString(sx)),
-                    Some(HeapObject::JavaString(sy)),
-                ) if sx == sy
-            )
+        (JValue::Int(x), JValue::Int(y)) => x == y,
+        (JValue::Long(x), JValue::Long(y)) => x == y,
+        (JValue::Double(x), JValue::Double(y)) => {
+            x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan())
         }
-        _ => a == b,
+        (JValue::Float(x), JValue::Float(y)) => {
+            x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan())
+        }
+        (JValue::Ref(None), JValue::Ref(None)) => true,
+        (JValue::Ref(Some(x)), JValue::Ref(Some(y))) => {
+            x == y
+                || matches!(
+                    (heap.get(x), heap.get(y)),
+                    (
+                        Some(HeapObject::JavaString(sx)),
+                        Some(HeapObject::JavaString(sy)),
+                    ) if sx == sy
+                )
+        }
+        _ => false,
     }
 }
 
 /// A stored value's Java hash code, for `ArrayList.hashCode`.
 #[allow(clippy::cast_possible_wrap)]
-fn value_hash(heap: &Heap, value: JValue) -> i32 {
+/// `value.hashCode()` for every value the VM can hash without running Java.
+/// A user object hashes by identity — [`Interpreter::java_hash_code`]
+/// overrides that with its `hashCode`.
+pub(crate) fn native_hash(heap: &Heap, value: JValue) -> i32 {
+    let (class, value) = unboxed(heap, value);
+    // `Boolean` is the one wrapper whose hash is not its value.
+    if class == Some("java/lang/Boolean") {
+        return if value == JValue::Int(0) { 1237 } else { 1231 };
+    }
     match value {
+        // Integer, Short, Byte and Character all hash to their value.
         JValue::Int(v) => v,
+        JValue::Long(v) => fold_to_int(v),
         JValue::Double(v) => java_double_hash(v),
+        JValue::Float(v) => float_to_int_bits(v),
+        JValue::Ref(None) => 0,
         JValue::Ref(Some(reference)) => match heap.get(reference) {
-            Some(HeapObject::JavaString(units)) => {
-                let mut hash: i32 = 0;
-                for unit in units {
-                    hash = hash.wrapping_mul(31).wrapping_add(i32::from(*unit));
-                }
-                hash
-            }
+            Some(HeapObject::JavaString(units)) => units.iter().fold(0i32, |hash, unit| {
+                hash.wrapping_mul(31).wrapping_add(i32::from(*unit))
+            }),
             // Identity hash (arbitrary in Java too).
             _ => reference.cast_signed(),
         },
-        _ => 0,
+    }
+}
+
+/// `(int) (v ^ (v >>> 32))`, how `Long` and `Double` hash a 64-bit value.
+pub(crate) fn fold_to_int(value: i64) -> i32 {
+    (value ^ (value.cast_unsigned() >> 32).cast_signed()) as i32
+}
+
+/// `Float.floatToIntBits`, which collapses every NaN payload to one.
+fn float_to_int_bits(value: f32) -> i32 {
+    if value.is_nan() {
+        f32::NAN.to_bits().cast_signed()
+    } else {
+        value.to_bits().cast_signed()
     }
 }
 
@@ -1735,52 +1778,6 @@ fn list_method(
             }
             Ok(None)
         }
-        ("contains", _, [value]) => {
-            let found = match heap.get(receiver) {
-                Some(HeapObject::ArrayList(values)) => {
-                    values.iter().any(|v| values_equal(heap, *v, *value))
-                }
-                _ => false,
-            };
-            Ok(Some(JValue::Int(i32::from(found))))
-        }
-        ("indexOf", _, [value]) => {
-            let index = match heap.get(receiver) {
-                Some(HeapObject::ArrayList(values)) => values
-                    .iter()
-                    .position(|v| values_equal(heap, *v, *value))
-                    .and_then(|i| i32::try_from(i).ok())
-                    .unwrap_or(-1),
-                _ => -1,
-            };
-            Ok(Some(JValue::Int(index)))
-        }
-        ("lastIndexOf", _, [value]) => {
-            let index = match heap.get(receiver) {
-                Some(HeapObject::ArrayList(values)) => values
-                    .iter()
-                    .rposition(|v| values_equal(heap, *v, *value))
-                    .and_then(|i| i32::try_from(i).ok())
-                    .unwrap_or(-1),
-                _ => -1,
-            };
-            Ok(Some(JValue::Int(index)))
-        }
-        ("remove", "(Ljava/lang/Object;)Z", [value]) => {
-            let position = match heap.get(receiver) {
-                Some(HeapObject::ArrayList(values)) => {
-                    values.iter().position(|v| values_equal(heap, *v, *value))
-                }
-                _ => None,
-            };
-            if let Some(position) = position
-                && let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver)
-            {
-                values.remove(position);
-                return Ok(Some(JValue::Int(1)));
-            }
-            Ok(Some(JValue::Int(0)))
-        }
         ("addAll", "(Ljava/util/Collection;)Z", [JValue::Ref(other)]) => {
             let other = other.ok_or_else(|| throw("java.lang.NullPointerException"))?;
             let incoming = match heap.get(other) {
@@ -1816,301 +1813,11 @@ fn list_method(
             }
             Ok(Some(JValue::Int(i32::from(changed))))
         }
-        ("equals", _, [JValue::Ref(other)]) => {
-            let equal = other.is_some_and(|other| match (heap.get(receiver), heap.get(other)) {
-                (Some(HeapObject::ArrayList(a)), Some(HeapObject::ArrayList(b))) => {
-                    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(heap, *x, *y))
-                }
-                _ => false,
-            });
-            Ok(Some(JValue::Int(i32::from(equal))))
-        }
-        ("hashCode", _, []) => {
-            let hash = match heap.get(receiver) {
-                Some(HeapObject::ArrayList(values)) => values.iter().fold(1i32, |acc, v| {
-                    acc.wrapping_mul(31).wrapping_add(value_hash(heap, *v))
-                }),
-                _ => 0,
-            };
-            Ok(Some(JValue::Int(hash)))
-        }
         // Capacity hints: real methods, observable-free here.
         ("ensureCapacity", _, [JValue::Int(_)]) | ("trimToSize", _, []) => Ok(None),
         _ => Err(VmError::UnknownIntrinsic(format!(
             "ArrayList.{method}{descriptor}"
         ))),
-    }
-}
-
-/// `java.util.HashMap` methods. Keys and values arrive boxed (the compiler
-/// autoboxes at the boundary, as javac does), so a missing key can return a
-/// real `null` and unboxing it throws where Java throws.
-#[allow(clippy::too_many_lines)] // one arm per documented method
-fn map_method(
-    heap: &mut Heap,
-    receiver: HeapRef,
-    method: &str,
-    descriptor: &str,
-    args: &[JValue],
-) -> Result<Option<JValue>, VmError> {
-    // `equals`/`containsValue` compare values the way `Object.equals` does,
-    // which for the types caturra can compare by value is exactly what
-    // `MapKey` equality means.
-    let same_value = |heap: &Heap, a: JValue, b: JValue| map_key(heap, a) == map_key(heap, b);
-
-    match (method, args) {
-        ("size", []) => Ok(Some(JValue::Int(
-            i32::try_from(map_of(heap, receiver).len()).unwrap_or(i32::MAX),
-        ))),
-        ("isEmpty", []) => Ok(Some(JValue::Int(i32::from(
-            map_of(heap, receiver).is_empty(),
-        )))),
-        ("containsKey", [key]) => {
-            let key = map_key(heap, *key);
-            Ok(Some(JValue::Int(i32::from(
-                map_of(heap, receiver).contains_key(&key),
-            ))))
-        }
-        ("containsValue", [value]) => {
-            let entries = entries_of(heap, receiver);
-            let found = entries.iter().any(|(_, v)| same_value(heap, *v, *value));
-            Ok(Some(JValue::Int(i32::from(found))))
-        }
-        ("get", [key]) => {
-            let key = map_key(heap, *key);
-            Ok(Some(
-                map_of(heap, receiver).lookup(&key).unwrap_or(JValue::NULL),
-            ))
-        }
-        ("getOrDefault", [key, fallback]) => {
-            let key = map_key(heap, *key);
-            Ok(Some(
-                map_of(heap, receiver).lookup(&key).unwrap_or(*fallback),
-            ))
-        }
-        ("put", [key, value]) => {
-            let comparable = map_key(heap, *key);
-            let previous = map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
-            Ok(Some(previous.unwrap_or(JValue::NULL)))
-        }
-        ("putIfAbsent", [key, value]) => {
-            let comparable = map_key(heap, *key);
-            // Java treats a key mapped to null as absent here.
-            match map_of(heap, receiver).lookup(&comparable) {
-                Some(existing) if existing != JValue::NULL => Ok(Some(existing)),
-                _ => {
-                    map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
-                    Ok(Some(JValue::NULL))
-                }
-            }
-        }
-        ("remove", [key]) => {
-            let key = map_key(heap, *key);
-            Ok(Some(
-                map_of_mut(heap, receiver)?
-                    .remove(&key)
-                    .unwrap_or(JValue::NULL),
-            ))
-        }
-        ("remove", [key, value]) => {
-            let comparable = map_key(heap, *key);
-            let matches = map_of(heap, receiver)
-                .lookup(&comparable)
-                .is_some_and(|held| same_value(heap, held, *value));
-            if matches {
-                map_of_mut(heap, receiver)?.remove(&comparable);
-            }
-            Ok(Some(JValue::Int(i32::from(matches))))
-        }
-        ("replace", [key, value]) => {
-            let comparable = map_key(heap, *key);
-            if !map_of(heap, receiver).contains_key(&comparable) {
-                return Ok(Some(JValue::NULL));
-            }
-            let previous = map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
-            Ok(Some(previous.unwrap_or(JValue::NULL)))
-        }
-        ("replace", [key, expected, value]) => {
-            let comparable = map_key(heap, *key);
-            let matches = map_of(heap, receiver)
-                .lookup(&comparable)
-                .is_some_and(|held| same_value(heap, held, *expected));
-            if matches {
-                map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
-            }
-            Ok(Some(JValue::Int(i32::from(matches))))
-        }
-        ("clear", []) => {
-            map_of_mut(heap, receiver)?.clear();
-            Ok(None)
-        }
-        ("putAll", [JValue::Ref(Some(source))]) => {
-            let entries = entries_of(heap, *source);
-            for (key, value) in entries {
-                let comparable = map_key(heap, key);
-                map_of_mut(heap, receiver)?.insert(comparable, key, value);
-            }
-            Ok(None)
-        }
-        // `AbstractMap.equals`: the same entries, in whatever order, with
-        // values compared by `equals` — so two `Integer`s holding 20 match
-        // even though they are different objects.
-        ("equals", [other]) => {
-            let JValue::Ref(Some(other)) = other else {
-                return Ok(Some(JValue::Int(0)));
-            };
-            if !matches!(heap.get(*other), Some(HeapObject::HashMap(_))) {
-                return Ok(Some(JValue::Int(0)));
-            }
-            let ours = entries_of(heap, receiver);
-            let equal = ours.len() == map_of(heap, *other).len()
-                && ours.iter().all(|(key, value)| {
-                    let key = map_key(heap, *key);
-                    map_of(heap, *other)
-                        .lookup(&key)
-                        .is_some_and(|held| same_value(heap, held, *value))
-                });
-            Ok(Some(JValue::Int(i32::from(equal))))
-        }
-        // `AbstractMap.hashCode`: the sum of the entries', and an entry's is
-        // its key's hash XOR its value's.
-        ("hashCode", []) => {
-            let entries = entries_of(heap, receiver);
-            let hash = entries.iter().fold(0i32, |sum, (key, value)| {
-                let entry = map_key(heap, *key).hash_code() ^ map_key(heap, *value).hash_code();
-                sum.wrapping_add(entry)
-            });
-            Ok(Some(JValue::Int(hash)))
-        }
-        // Java's three views are live: a later `put` shows through them.
-        ("keySet", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Keys))),
-        ("values", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Values))),
-        ("entrySet", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Entries))),
-        _ => Err(VmError::UnknownIntrinsic(format!(
-            "HashMap.{method}{descriptor}"
-        ))),
-    }
-}
-
-/// Allocate one of a map's three views onto it.
-fn alloc_view(heap: &mut Heap, map: HeapRef, kind: MapViewKind) -> JValue {
-    JValue::Ref(Some(heap.alloc(HeapObject::MapView { map, kind })))
-}
-
-/// `keySet()` / `values()` / `entrySet()`. These are views, not copies, so
-/// every method reads through to the map as it stands now.
-///
-/// `__get(int)` is caturra's own: the enhanced-for loop compiles to an index
-/// loop over it, because caturra has no iterators. Mutating the map inside
-/// such a loop silently sees the new contents, where a real JDK would throw
-/// `ConcurrentModificationException`.
-fn map_view_method(
-    heap: &mut Heap,
-    map: HeapRef,
-    kind: MapViewKind,
-    method: &str,
-    descriptor: &str,
-    args: &[JValue],
-) -> Result<Option<JValue>, VmError> {
-    match (method, args) {
-        ("size", []) => Ok(Some(JValue::Int(
-            i32::try_from(map_of(heap, map).len()).unwrap_or(i32::MAX),
-        ))),
-        ("isEmpty", []) => Ok(Some(JValue::Int(i32::from(map_of(heap, map).is_empty())))),
-        ("contains", [value]) => {
-            let found = match kind {
-                MapViewKind::Keys => {
-                    let key = map_key(heap, *value);
-                    map_of(heap, map).contains_key(&key)
-                }
-                MapViewKind::Values => entries_of(heap, map)
-                    .iter()
-                    .any(|(_, held)| map_key(heap, *held) == map_key(heap, *value)),
-                // `entrySet().contains(entry)` would need entry equality; the
-                // compiler does not offer it.
-                MapViewKind::Entries => false,
-            };
-            Ok(Some(JValue::Int(i32::from(found))))
-        }
-        // The element at a position in the map's iteration order.
-        ("__get", [JValue::Int(position)]) => {
-            let position = usize::try_from(*position).unwrap_or(usize::MAX);
-            let Some((key, value)) = map_of(heap, map).entry_at(position) else {
-                return Err(throw(format!(
-                    "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
-                )));
-            };
-            Ok(Some(match kind {
-                MapViewKind::Keys => key,
-                MapViewKind::Values => value,
-                MapViewKind::Entries => {
-                    JValue::Ref(Some(heap.alloc(HeapObject::MapEntry { map, key })))
-                }
-            }))
-        }
-        _ => Err(VmError::UnknownIntrinsic(format!(
-            "Map view.{method}{descriptor}"
-        ))),
-    }
-}
-
-/// One `Map.Entry` from an `entrySet()`. Java's entry is a view onto its
-/// map, so `getValue` sees a later `put` and `setValue` writes through.
-fn map_entry_method(
-    heap: &mut Heap,
-    map: HeapRef,
-    key: JValue,
-    method: &str,
-    descriptor: &str,
-    args: &[JValue],
-) -> Result<Option<JValue>, VmError> {
-    let comparable = map_key(heap, key);
-    match (method, args) {
-        ("getKey", []) => Ok(Some(key)),
-        ("getValue", []) => Ok(Some(
-            map_of(heap, map)
-                .lookup(&comparable)
-                .unwrap_or(JValue::NULL),
-        )),
-        ("setValue", [value]) => {
-            let previous = map_of_mut(heap, map)?.insert(comparable, key, *value);
-            Ok(Some(previous.unwrap_or(JValue::NULL)))
-        }
-        // `Map.Entry.hashCode` is the key's hash XOR the value's.
-        ("hashCode", []) => {
-            let value = map_of(heap, map)
-                .lookup(&comparable)
-                .unwrap_or(JValue::NULL);
-            let hash = comparable.hash_code() ^ map_key(heap, value).hash_code();
-            Ok(Some(JValue::Int(hash)))
-        }
-        _ => Err(VmError::UnknownIntrinsic(format!(
-            "Map.Entry.{method}{descriptor}"
-        ))),
-    }
-}
-
-/// The receiver as a map (its kind is checked by the caller).
-fn map_of(heap: &Heap, receiver: HeapRef) -> &JavaHashMap {
-    let Some(HeapObject::HashMap(map)) = heap.get(receiver) else {
-        unreachable!("receiver kind checked by caller");
-    };
-    map
-}
-
-/// A map argument (`putAll`) may be any heap object; reject a non-map.
-fn map_of_mut(heap: &mut Heap, receiver: HeapRef) -> Result<&mut JavaHashMap, VmError> {
-    match heap.get_mut(receiver) {
-        Some(HeapObject::HashMap(map)) => Ok(map),
-        _ => Err(throw("java.lang.ClassCastException: not a Map")),
-    }
-}
-
-/// A map's entries in iteration order, detached from the heap borrow.
-fn entries_of(heap: &Heap, reference: HeapRef) -> Vec<(JValue, JValue)> {
-    match heap.get(reference) {
-        Some(HeapObject::HashMap(map)) => map.entries_in_order(),
-        _ => Vec::new(),
     }
 }
 
