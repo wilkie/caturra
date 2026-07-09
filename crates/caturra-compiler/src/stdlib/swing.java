@@ -1908,16 +1908,11 @@ class DefaultTableModel extends AbstractTableModel {
 // One node of a JTree: a user object plus its children. Its display text is
 // its toString(), so a subclass can override that.
 class DefaultMutableTreeNode {
-  static int __nextNid = 0;
-  String __nid;
   Object __userObject = null;
   DefaultMutableTreeNode __parent = null;
   java.util.ArrayList<DefaultMutableTreeNode> __children = new java.util.ArrayList<DefaultMutableTreeNode>();
-  // The JTree draws a node's children only while it is expanded.
-  boolean __expanded = false;
-  static String __newNid() { __nextNid = __nextNid + 1; return "n" + __nextNid; }
-  public DefaultMutableTreeNode() { __nid = __newNid(); }
-  public DefaultMutableTreeNode(Object userObject) { __nid = __newNid(); __userObject = userObject; }
+  public DefaultMutableTreeNode() {}
+  public DefaultMutableTreeNode(Object userObject) { __userObject = userObject; }
   public void add(DefaultMutableTreeNode child) {
     child.__parent = this;
     __children.add(child);
@@ -1942,9 +1937,9 @@ class DefaultMutableTreeNode {
     return level;
   }
   // Root-first path down to this node.
-  public DefaultMutableTreeNode[] getPath() {
+  public Object[] getPath() {
     int depth = getLevel() + 1;
-    DefaultMutableTreeNode[] path = new DefaultMutableTreeNode[depth];
+    Object[] path = new Object[depth];
     DefaultMutableTreeNode node = this;
     for (int i = depth - 1; i >= 0; i--) { path[i] = node; node = node.__parent; }
     return path;
@@ -1952,17 +1947,14 @@ class DefaultMutableTreeNode {
   public String toString() { return __userObject == null ? "" : "" + __userObject; }
 }
 
-// The path from the root down to a node.
+// The path from the root down to a node. Nodes are Objects, since a custom
+// TreeModel may use anything as a node.
 class TreePath {
-  DefaultMutableTreeNode[] __path;
-  public TreePath(DefaultMutableTreeNode[] path) { __path = path; }
+  Object[] __path;
+  public TreePath(Object[] path) { __path = path; }
   public Object getLastPathComponent() { return __path[__path.length - 1]; }
   public int getPathCount() { return __path.length; }
-  public Object[] getPath() {
-    Object[] out = new Object[__path.length];
-    for (int i = 0; i < __path.length; i++) out[i] = __path[i];
-    return out;
-  }
+  public Object[] getPath() { return __path; }
   public String toString() {
     StringBuilder s = new StringBuilder("[");
     for (int i = 0; i < __path.length; i++) {
@@ -1970,6 +1962,121 @@ class TreePath {
       s.append("" + __path[i]);
     }
     return s.append("]").toString();
+  }
+}
+
+// The data model behind a JTree. Nodes are plain Objects, so a custom model can
+// present any structure; DefaultTreeModel walks DefaultMutableTreeNodes.
+interface TreeModel {
+  Object getRoot();
+  Object getChild(Object parent, int index);
+  int getChildCount(Object parent);
+  boolean isLeaf(Object node);
+  int getIndexOfChild(Object parent, Object child);
+  void valueForPathChanged(TreePath path, Object newValue);
+  void addTreeModelListener(TreeModelListener l);
+  void removeTreeModelListener(TreeModelListener l);
+}
+
+// Fired by a TreeModel when its nodes or structure change.
+class TreeModelEvent {
+  Object __src;
+  TreePath __path;
+  int[] __childIndices;
+  Object[] __children;
+  public TreeModelEvent(Object source, TreePath path) {
+    __src = source;
+    __path = path;
+    __childIndices = new int[0];
+    __children = new Object[0];
+  }
+  public TreeModelEvent(Object source, TreePath path, int[] childIndices, Object[] children) {
+    __src = source;
+    __path = path;
+    __childIndices = childIndices;
+    __children = children;
+  }
+  public Object getSource() { return __src; }
+  public TreePath getTreePath() { return __path; }
+  public int[] getChildIndices() { return __childIndices; }
+  public Object[] getChildren() { return __children; }
+}
+
+interface TreeModelListener {
+  void treeNodesChanged(TreeModelEvent e);
+  void treeNodesInserted(TreeModelEvent e);
+  void treeNodesRemoved(TreeModelEvent e);
+  void treeStructureChanged(TreeModelEvent e);
+}
+
+// The usual TreeModel: a tree of DefaultMutableTreeNodes. Mutate it through
+// insertNodeInto / removeNodeFromParent / nodeChanged so listeners hear about it.
+class DefaultTreeModel implements TreeModel {
+  DefaultMutableTreeNode __root;
+  java.util.ArrayList<TreeModelListener> __listeners = new java.util.ArrayList<TreeModelListener>();
+  public DefaultTreeModel(DefaultMutableTreeNode root) { __root = root; }
+  public Object getRoot() { return __root; }
+  public void setRoot(DefaultMutableTreeNode root) { __root = root; reload(); }
+  public Object getChild(Object parent, int index) {
+    return ((DefaultMutableTreeNode) parent).getChildAt(index);
+  }
+  public int getChildCount(Object parent) { return ((DefaultMutableTreeNode) parent).getChildCount(); }
+  public boolean isLeaf(Object node) { return ((DefaultMutableTreeNode) node).isLeaf(); }
+  public int getIndexOfChild(Object parent, Object child) {
+    DefaultMutableTreeNode p = (DefaultMutableTreeNode) parent;
+    for (int i = 0; i < p.getChildCount(); i++) {
+      if (p.getChildAt(i) == child) return i;
+    }
+    return -1;
+  }
+  public void valueForPathChanged(TreePath path, Object newValue) {
+    DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+    node.setUserObject(newValue);
+    nodeChanged(node);
+  }
+  public void addTreeModelListener(TreeModelListener l) { __listeners.add(l); }
+  public void removeTreeModelListener(TreeModelListener l) { __listeners.remove(l); }
+  public void insertNodeInto(DefaultMutableTreeNode child, DefaultMutableTreeNode parent, int index) {
+    child.__parent = parent;
+    parent.__children.add(index, child);
+    int[] indices = new int[1];
+    indices[0] = index;
+    Object[] children = new Object[1];
+    children[0] = child;
+    TreeModelEvent e = new TreeModelEvent(this, new TreePath(parent.getPath()), indices, children);
+    for (TreeModelListener l : __listeners) l.treeNodesInserted(e);
+  }
+  public void removeNodeFromParent(DefaultMutableTreeNode node) {
+    DefaultMutableTreeNode parent = node.getParent();
+    if (parent == null) return;
+    int index = getIndexOfChild(parent, node);
+    parent.__children.remove(index);
+    node.__parent = null;
+    int[] indices = new int[1];
+    indices[0] = index;
+    Object[] children = new Object[1];
+    children[0] = node;
+    TreeModelEvent e = new TreeModelEvent(this, new TreePath(parent.getPath()), indices, children);
+    for (TreeModelListener l : __listeners) l.treeNodesRemoved(e);
+  }
+  public void nodeChanged(DefaultMutableTreeNode node) {
+    DefaultMutableTreeNode parent = node.getParent();
+    TreeModelEvent e;
+    if (parent == null) {
+      e = new TreeModelEvent(this, new TreePath(node.getPath()));
+    } else {
+      int[] indices = new int[1];
+      indices[0] = getIndexOfChild(parent, node);
+      Object[] children = new Object[1];
+      children[0] = node;
+      e = new TreeModelEvent(this, new TreePath(parent.getPath()), indices, children);
+    }
+    for (TreeModelListener l : __listeners) l.treeNodesChanged(e);
+  }
+  // The structure changed wholesale (e.g. a new root).
+  public void reload() {
+    TreeModelEvent e = new TreeModelEvent(this, new TreePath(__root.getPath()));
+    for (TreeModelListener l : __listeners) l.treeStructureChanged(e);
   }
 }
 
@@ -2008,14 +2115,39 @@ class DefaultTreeCellRenderer extends JLabel implements TreeCellRenderer {
 }
 
 class JTree extends Component {
-  DefaultMutableTreeNode __root;
+  TreeModel __model;
   boolean __rootVisible = true;
-  DefaultMutableTreeNode __selectedNode = null;
+  Object __selectedNode = null;
   TreeSelectionListener __listener = null;
   TreeCellRenderer __cellRenderer = null;
   int __rowCounter = 0; // the visible row a renderer is told about
+  // A node is any Object, so the view — not the node — remembers its id, whether
+  // it's expanded, and its parent. (Real Swing also keeps expansion in the tree.)
+  java.util.ArrayList<Object> __nodes = new java.util.ArrayList<Object>();
+  java.util.ArrayList<String> __nids = new java.util.ArrayList<String>();
+  java.util.ArrayList<Object> __parents = new java.util.ArrayList<Object>();
+  java.util.ArrayList<Object> __expandedNodes = new java.util.ArrayList<Object>();
+  int __nextNid = 0;
+
   // The root starts expanded, like a real JTree; deeper nodes start collapsed.
-  public JTree(DefaultMutableTreeNode root) { __root = root; root.__expanded = true; }
+  public JTree(DefaultMutableTreeNode root) {
+    __model = new DefaultTreeModel(root);
+    __setExpandedNode(root, true);
+  }
+  public JTree(TreeModel model) {
+    __model = model;
+    __setExpandedNode(model.getRoot(), true);
+  }
+  public TreeModel getModel() { return __model; }
+  public void setModel(TreeModel model) {
+    __model = model;
+    __nodes = new java.util.ArrayList<Object>();
+    __nids = new java.util.ArrayList<String>();
+    __parents = new java.util.ArrayList<Object>();
+    __expandedNodes = new java.util.ArrayList<Object>();
+    __selectedNode = null;
+    __setExpandedNode(model.getRoot(), true);
+  }
   public void setCellRenderer(TreeCellRenderer renderer) { __cellRenderer = renderer; }
   public TreeCellRenderer getCellRenderer() { return __cellRenderer; }
   public void setRootVisible(boolean visible) { __rootVisible = visible; }
@@ -2024,54 +2156,100 @@ class JTree extends Component {
     __listener = l;
     __SwingRuntime.__interactive = true;
   }
-  // The selected node itself (cast it to DefaultMutableTreeNode), or null.
-  public Object getLastSelectedPathComponent() { return __selectedNode; }
-  public TreePath getSelectionPath() {
-    return __selectedNode == null ? null : new TreePath(__selectedNode.getPath());
+
+  // ----- the node registry -----
+  // Nodes are matched with equals, not ==: a custom TreeModel may build a node
+  // object per call (getChild returning a fresh String), and it must still map
+  // to the same row. DefaultMutableTreeNode doesn't override equals, so for the
+  // usual tree this is plain identity.
+  static boolean __same(Object a, Object b) { return a == b || (a != null && a.equals(b)); }
+  int __indexOfNode(Object node) {
+    for (int i = 0; i < __nodes.size(); i++) {
+      if (__same(__nodes.get(i), node)) return i;
+    }
+    return -1;
   }
-  public void setSelectionPath(TreePath path) {
-    __selectedNode = (DefaultMutableTreeNode) path.getLastPathComponent();
+  int __ensure(Object node) {
+    int i = __indexOfNode(node);
+    if (i >= 0) return i;
+    __nodes.add(node);
+    __nextNid = __nextNid + 1;
+    __nids.add("n" + __nextNid);
+    __parents.add(null);
+    return __nodes.size() - 1;
   }
-  public void clearSelection() { __selectedNode = null; }
-  public boolean isExpanded(TreePath path) {
-    return ((DefaultMutableTreeNode) path.getLastPathComponent()).__expanded;
-  }
-  // Expanding a node also expands its ancestors, so it is actually visible.
-  public void expandPath(TreePath path) {
-    DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
-    node.__expanded = true;
-    DefaultMutableTreeNode parent = node.__parent;
-    while (parent != null) { parent.__expanded = true; parent = parent.__parent; }
-  }
-  public void collapsePath(TreePath path) {
-    ((DefaultMutableTreeNode) path.getLastPathComponent()).__expanded = false;
-  }
-  DefaultMutableTreeNode __find(String nid) { return __findIn(__root, nid); }
-  static DefaultMutableTreeNode __findIn(DefaultMutableTreeNode node, String nid) {
-    if (node.__nid.equals(nid)) return node;
-    for (int i = 0; i < node.getChildCount(); i++) {
-      DefaultMutableTreeNode found = __findIn(node.getChildAt(i), nid);
-      if (found != null) return found;
+  Object __findByNid(String nid) {
+    for (int i = 0; i < __nids.size(); i++) {
+      if (__nids.get(i).equals(nid)) return __nodes.get(i);
     }
     return null;
   }
+  Object __parentOf(Object node) {
+    int i = __indexOfNode(node);
+    return i < 0 ? null : __parents.get(i);
+  }
+  // Presence in the list means expanded — no boxed Booleans needed.
+  boolean __isExpandedNode(Object node) {
+    for (int i = 0; i < __expandedNodes.size(); i++) {
+      if (__same(__expandedNodes.get(i), node)) return true;
+    }
+    return false;
+  }
+  void __setExpandedNode(Object node, boolean expanded) {
+    __ensure(node);
+    for (int i = 0; i < __expandedNodes.size(); i++) {
+      if (__same(__expandedNodes.get(i), node)) {
+        if (!expanded) __expandedNodes.remove(i);
+        return;
+      }
+    }
+    if (expanded) __expandedNodes.add(node);
+  }
+
+  // The selected node itself (cast it to DefaultMutableTreeNode), or null.
+  public Object getLastSelectedPathComponent() { return __selectedNode; }
+  // Built from the parents recorded while drawing, so it works for any model.
+  public TreePath getSelectionPath() {
+    if (__selectedNode == null) return null;
+    int depth = 0;
+    Object node = __selectedNode;
+    while (node != null) { depth = depth + 1; node = __parentOf(node); }
+    Object[] path = new Object[depth];
+    node = __selectedNode;
+    for (int i = depth - 1; i >= 0; i--) { path[i] = node; node = __parentOf(node); }
+    return new TreePath(path);
+  }
+  public void setSelectionPath(TreePath path) { __selectedNode = path.getLastPathComponent(); }
+  public void clearSelection() { __selectedNode = null; }
+  public boolean isExpanded(TreePath path) { return __isExpandedNode(path.getLastPathComponent()); }
+  // Expanding a node also expands its ancestors — which the path already names.
+  public void expandPath(TreePath path) {
+    Object[] nodes = path.getPath();
+    for (int i = 0; i < nodes.length; i++) __setExpandedNode(nodes[i], true);
+  }
+  public void collapsePath(TreePath path) { __setExpandedNode(path.getLastPathComponent(), false); }
+
   // "sel:<nid>" selects; "exp:<nid>" / "col:<nid>" toggle a node's children.
   void __setFromHost(String value) {
     String nid = value.length() > 4 ? value.substring(4) : "";
     if (value.startsWith("sel:")) {
-      __selectedNode = __find(nid);
+      __selectedNode = __findByNid(nid);
     } else if (value.startsWith("exp:") || value.startsWith("col:")) {
-      DefaultMutableTreeNode node = __find(nid);
-      if (node != null) node.__expanded = value.startsWith("exp:");
+      Object node = __findByNid(nid);
+      if (node != null) __setExpandedNode(node, value.startsWith("exp:"));
     }
   }
   void __onEvent() {
     if (__listener != null) __listener.valueChanged(new TreeSelectionEvent(this, getSelectionPath()));
   }
   boolean __listens() { return __listener != null; }
-  String __nodeJson(DefaultMutableTreeNode node) {
-    boolean leaf = node.isLeaf();
-    boolean selected = node == __selectedNode;
+
+  String __nodeJson(Object node, Object parent) {
+    int index = __ensure(node);
+    __parents.set(index, parent); // recorded here, so getSelectionPath can walk up
+    boolean leaf = __model.isLeaf(node);
+    boolean expanded = __isExpandedNode(node);
+    boolean selected = __selectedNode != null && __same(node, __selectedNode);
     // Rows are counted over the VISIBLE nodes, in the order they're drawn.
     int row = __rowCounter;
     __rowCounter = __rowCounter + 1;
@@ -2081,24 +2259,24 @@ class JTree extends Component {
       // Ask the renderer to configure a component for this node, then take its
       // text and colours (all a node's label span can show).
       Component cell = __cellRenderer.getTreeCellRendererComponent(
-          this, node, selected, node.__expanded, leaf, row, false);
+          this, node, selected, expanded, leaf, row, false);
       text = cell.__displayText();
       if (cell.__fg != null) style = style + ",\"fg\":\"" + Component.__rgb(cell.__fg) + "\"";
       if (cell.__bg != null) style = style + ",\"bg\":\"" + Component.__rgb(cell.__bg) + "\"";
     }
-    StringBuilder s = new StringBuilder("{\"id\":\"" + node.__nid + "\",\"text\":\"");
+    StringBuilder s = new StringBuilder("{\"id\":\"" + __nids.get(index) + "\",\"text\":\"");
     s.append(Component.__esc(text)).append("\"");
     s.append(",\"leaf\":").append(leaf);
-    s.append(",\"expanded\":").append(node.__expanded);
+    s.append(",\"expanded\":").append(expanded);
     s.append(",\"selected\":").append(selected);
     s.append(style);
     // A collapsed node's children aren't drawn, so they aren't serialized (and
     // don't consume visible row numbers).
-    if (!leaf && node.__expanded) {
+    if (!leaf && expanded) {
       s.append(",\"children\":[");
-      for (int i = 0; i < node.getChildCount(); i++) {
+      for (int i = 0; i < __model.getChildCount(node); i++) {
         if (i > 0) s.append(",");
-        s.append(__nodeJson(node.getChildAt(i)));
+        s.append(__nodeJson(__model.getChild(node, i), node));
       }
       s.append("]");
     }
@@ -2107,8 +2285,8 @@ class JTree extends Component {
   String __json() {
     // A hidden root isn't drawn, so it takes row -1 and its children start at 0.
     __rowCounter = __rootVisible ? 0 : -1;
-    return "{\"type\":\"tree\",\"root\":" + __nodeJson(__root) + ",\"rootVisible\":" + __rootVisible
-        + "," + __commonJson() + "}";
+    return "{\"type\":\"tree\",\"root\":" + __nodeJson(__model.getRoot(), null)
+        + ",\"rootVisible\":" + __rootVisible + "," + __commonJson() + "}";
   }
 }
 

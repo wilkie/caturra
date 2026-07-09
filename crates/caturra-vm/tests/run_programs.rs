@@ -1036,6 +1036,109 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_default_tree_model_fires_tree_model_listener_events() {
+    // Mutating a DefaultTreeModel notifies its TreeModelListener with the parent
+    // path, the child index, and the child itself.
+    let (result, console) = compile_and_run(
+        r#"
+        import javax.swing.*;
+        import javax.swing.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                DefaultMutableTreeNode root = new DefaultMutableTreeNode("Colors");
+                DefaultMutableTreeNode warm = new DefaultMutableTreeNode("Warm");
+                root.add(warm);
+                DefaultTreeModel model = new DefaultTreeModel(root);
+                model.addTreeModelListener(new TreeModelListener() {
+                    public void treeNodesChanged(TreeModelEvent e) {
+                        System.out.println("changed " + e.getTreePath()
+                            + " at " + e.getChildIndices()[0]);
+                    }
+                    public void treeNodesInserted(TreeModelEvent e) {
+                        System.out.println("inserted " + e.getChildren()[0]
+                            + " at " + e.getChildIndices()[0] + " under " + e.getTreePath());
+                    }
+                    public void treeNodesRemoved(TreeModelEvent e) {
+                        System.out.println("removed " + e.getChildren()[0]);
+                    }
+                    public void treeStructureChanged(TreeModelEvent e) {
+                        System.out.println("structure " + e.getTreePath());
+                    }
+                });
+
+                DefaultMutableTreeNode red = new DefaultMutableTreeNode("Red");
+                model.insertNodeInto(red, warm, 0);
+                System.out.println("count=" + model.getChildCount(warm)
+                    + " leaf=" + model.isLeaf(red));
+                model.valueForPathChanged(new TreePath(red.getPath()), "Crimson");
+                System.out.println("now " + model.getChild(warm, 0));
+                model.removeNodeFromParent(red);
+                System.out.println("count=" + model.getChildCount(warm));
+                model.reload();
+
+                // A JTree accepts any TreeModel, not just a bare root node.
+                JTree tree = new JTree(model);
+                System.out.println("root=" + tree.getModel().getRoot());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "inserted Red at 0 under [Colors, Warm]\n\
+         count=1 leaf=true\n\
+         changed [Colors, Warm] at 0\n\
+         now Crimson\n\
+         removed Crimson\n\
+         count=0\n\
+         structure [Colors]\n\
+         root=Colors\n"
+    );
+}
+
+#[test]
+fn swing_tree_renders_a_custom_tree_model() {
+    // A custom TreeModel over plain Strings — nodes need not be
+    // DefaultMutableTreeNodes, and getChild may build them on the fly.
+    let tree = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        class NumbersModel implements TreeModel {
+            public Object getRoot() { return "Numbers"; }
+            public Object getChild(Object parent, int index) { return "" + (index + 1); }
+            public int getChildCount(Object parent) { return getRoot().equals(parent) ? 3 : 0; }
+            public boolean isLeaf(Object node) { return !getRoot().equals(node); }
+            public int getIndexOfChild(Object parent, Object child) { return -1; }
+            public void valueForPathChanged(TreePath path, Object newValue) {}
+            public void addTreeModelListener(TreeModelListener l) {}
+            public void removeTreeModelListener(TreeModelListener l) {}
+        }
+        public class Main {
+            public static void main(String[] args) {
+                JTree tree = new JTree(new NumbersModel());
+                JFrame frame = new JFrame("Numbers");
+                frame.add(tree);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(tree.contains(r#""text":"Numbers","leaf":false,"expanded":true"#), "{tree}");
+    assert!(tree.contains(r#""text":"1","leaf":true"#), "{tree}");
+    assert!(tree.contains(r#""text":"3","leaf":true"#), "{tree}");
+    // getChild builds a fresh String each call, but equals-matching keeps one
+    // stable id per node rather than minting a new one every render.
+    assert!(tree.contains(r#""id":"n1""#), "{tree}");
+    assert!(tree.contains(r#""id":"n4""#), "{tree}");
+    assert!(!tree.contains(r#""id":"n5""#), "{tree}");
+}
+
+#[test]
 fn swing_tree_cell_renderer_styles_nodes() {
     // A TreeCellRenderer decides each node's text and colour, and is told the
     // node's VISIBLE row (collapsed children are neither drawn nor numbered).

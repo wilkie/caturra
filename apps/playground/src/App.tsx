@@ -2022,7 +2022,9 @@ import javax.swing.event.*;
 
 public class Main {
   static JTree tree;
+  static DefaultTreeModel model;
   static JLabel status;
+  static int added = 0;
 
   public static void main(String[] args) {
     JFrame frame = new JFrame("Colors");
@@ -2040,7 +2042,18 @@ public class Main {
     root.add(warm);
     root.add(cool);
 
-    tree = new JTree(root);
+    // The model owns the nodes; mutate it so listeners hear about the change.
+    model = new DefaultTreeModel(root);
+    tree = new JTree(model);
+
+    model.addTreeModelListener(new TreeModelListener() {
+      public void treeNodesInserted(TreeModelEvent e) {
+        Main.status.setText("Added " + e.getChildren()[0] + " under " + e.getTreePath());
+      }
+      public void treeNodesRemoved(TreeModelEvent e) {}
+      public void treeNodesChanged(TreeModelEvent e) {}
+      public void treeStructureChanged(TreeModelEvent e) {}
+    });
 
     // A cell renderer decides how each node is drawn. It is asked once per
     // visible node, with the node, whether it is a leaf, and its row.
@@ -2072,6 +2085,20 @@ public class Main {
       }
     });
 
+    // Insert into the model: the tree redraws and the listener fires.
+    JButton add = new JButton("Add shade");
+    add.addActionListener(e -> {
+      DefaultMutableTreeNode node =
+          (DefaultMutableTreeNode) Main.tree.getLastSelectedPathComponent();
+      if (node != null && !node.isLeaf()) {
+        Main.added = Main.added + 1;
+        DefaultMutableTreeNode shade = new DefaultMutableTreeNode("Shade " + Main.added);
+        Main.model.insertNodeInto(shade, node, node.getChildCount());
+        Main.tree.expandPath(new TreePath(node.getPath()));
+      }
+    });
+
+    frame.add(add, BorderLayout.NORTH);
     frame.add(new JScrollPane(tree), BorderLayout.CENTER);
     frame.add(status, BorderLayout.SOUTH);
     frame.setVisible(true);

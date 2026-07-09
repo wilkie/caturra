@@ -2487,6 +2487,15 @@ test.describe('swing (interactive)', () => {
       'true',
     );
 
+    // Inserting into the DefaultTreeModel redraws the tree and fires the
+    // TreeModelListener. Select the Warm folder first.
+    await warm.locator('.swing-tree-label').first().click();
+    await root.getByRole('button', { name: 'Add shade' }).click();
+    await expect(root).toContainText('Added Shade 1 under [Colors, Warm]');
+    await expect(tree.getByRole('treeitem', { name: 'Shade 1' })).toBeVisible();
+    // The renderer's child count follows the model.
+    await expect(warm.locator('.swing-tree-label').first()).toHaveText('Warm (3)');
+
     // Keyboard: Arrow Right on a collapsed node expands it.
     const cool = tree.getByRole('treeitem', { name: 'Cool' });
     await cool.focus();
