@@ -7865,14 +7865,29 @@ impl BodyGen<'_> {
                 BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                     promote(self.type_of(lhs), self.type_of(rhs))
                 }
+                // These must agree with what `bitwise` / the shift arm actually
+                // emit: `long & long` yields a long, and a shift takes the type
+                // of its LEFT operand alone (JLS §15.19) — the count doesn't
+                // widen it. Reporting int here made `(x << 4) + y` emit IADD
+                // over a long and fail verification.
                 BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                    if self.type_of(lhs) == JType::Boolean {
+                    let (lt, rt) = (
+                        numeric_view(self.type_of(lhs)),
+                        numeric_view(self.type_of(rhs)),
+                    );
+                    if lt == JType::Boolean && rt == JType::Boolean {
                         JType::Boolean
+                    } else {
+                        promote(lt, rt)
+                    }
+                }
+                BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => {
+                    if numeric_view(self.type_of(lhs)) == JType::Long {
+                        JType::Long
                     } else {
                         JType::Int
                     }
                 }
-                BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr => JType::Int,
                 _ => JType::Boolean,
             },
             Expr::This { .. } => {

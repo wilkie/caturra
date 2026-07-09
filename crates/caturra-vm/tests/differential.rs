@@ -2755,3 +2755,71 @@ public class DiffCompound {
 }
 "
 );
+
+differential_test!(
+    diff_long_bit_ops_and_shifts,
+    "DiffLongBits",
+    r#"
+public class DiffLongBits {
+    static int f() { return 3; }
+    static long g() { return 5L; }
+    public static void main(String[] args) {
+        // A shift takes the type of its LEFT operand; long & | ^ stay long.
+        // caturra once typed all of these int, emitting IADD over a long value.
+        System.out.println(((long) f() << 4) + f());
+        System.out.println((g() & 0xFFL) + f());
+        System.out.println((g() | 0L) + 1);
+        System.out.println((g() ^ 1L) * 2);
+        System.out.println((f() << 2) + f());
+        System.out.println((f() & 1) + 1);
+        System.out.println((g() >>> 1) + 1);
+        System.out.println(((long) f() << 32) >> 32);
+        System.out.println(((long) f() << 32) >>> 40);
+        long mask = (1L << 48) - 1;
+        System.out.println(mask);
+        System.out.println((0x5DEECE66DL * 25214903917L + 0xBL) & mask);
+        boolean p = true, q = false;
+        System.out.println((p & q) + " " + (p | q) + " " + (p ^ q));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_random_seeded_sequences,
+    "DiffRandom",
+    r#"
+import java.util.Random;
+public class DiffRandom {
+    public static void main(String[] args) {
+        Random r = new Random(42);
+        System.out.println(r.nextInt() + " " + r.nextInt());
+        r = new Random(42);
+        System.out.println(r.nextInt(100) + " " + r.nextInt(100) + " " + r.nextInt(100));
+        r = new Random(42);            // a power-of-two bound takes the other branch
+        System.out.println(r.nextInt(64) + " " + r.nextInt(64));
+        r = new Random(0);
+        System.out.println(r.nextInt());
+        r = new Random(42);
+        System.out.println(r.nextDouble() + " " + r.nextDouble());
+        r = new Random(42);
+        System.out.println(r.nextBoolean() + " " + r.nextBoolean() + " " + r.nextBoolean());
+        r = new Random(42);
+        System.out.println(r.nextLong());
+        r = new Random(42);
+        System.out.println(r.nextFloat());
+        r = new Random(123456789L);
+        for (int i = 0; i < 8; i++) System.out.print(r.nextInt(10) + " ");
+        System.out.println();
+        r = new Random(42);
+        r.nextInt();
+        r.setSeed(42);
+        System.out.println(r.nextInt());
+        // nextGaussian goes through Math.log, which can differ from the JDK's
+        // StrictMath in the last ulp, so compare to 9 places.
+        r = new Random(42);
+        System.out.println(String.format("%.9f %.9f", r.nextGaussian(), r.nextGaussian()));
+    }
+}
+"#
+);

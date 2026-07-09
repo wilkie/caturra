@@ -897,7 +897,10 @@ fn swing_graphics_records_font_polygon_and_arc() {
         json.contains("fillPolygon 60 40 20 110 100 110"),
         "no polygon: {json}"
     );
-    assert!(json.contains("fillArc 120 40 60 60 30 220"), "no arc: {json}");
+    assert!(
+        json.contains("fillArc 120 40 60 60 30 220"),
+        "no arc: {json}"
+    );
     assert!(json.contains("setFont 1 26 SansSerif"), "no font: {json}");
 }
 
@@ -961,7 +964,10 @@ fn swing_request_focus_serializes_a_focus_request() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""focus":"c2:1""#), "no focus request: {json}");
+    assert!(
+        json.contains(r#""focus":"c2:1""#),
+        "no focus request: {json}"
+    );
 }
 
 #[test]
@@ -1128,7 +1134,10 @@ fn swing_tree_renders_a_custom_tree_model() {
         "#,
         "Main",
     );
-    assert!(tree.contains(r#""text":"Numbers","leaf":false,"expanded":true"#), "{tree}");
+    assert!(
+        tree.contains(r#""text":"Numbers","leaf":false,"expanded":true"#),
+        "{tree}"
+    );
     assert!(tree.contains(r#""text":"1","leaf":true"#), "{tree}");
     assert!(tree.contains(r#""text":"3","leaf":true"#), "{tree}");
     // getChild builds a fresh String each call, but equals-matching keeps one
@@ -1188,8 +1197,16 @@ fn swing_tree_cell_renderer_styles_nodes() {
     assert!(!tree.contains("Blue"), "{tree}");
     // Only the leaf is green — the shared instance resets colour between nodes,
     // so it doesn't leak onto Cool (drawn after Red).
-    assert!(tree.contains(r#""text":"2: Red","leaf":true,"expanded":false,"selected":false,"fg":"0,120,0""#), "{tree}");
-    assert!(tree.contains(r#""text":"3: Cool","leaf":false,"expanded":false,"selected":false}"#), "{tree}");
+    assert!(
+        tree.contains(
+            r#""text":"2: Red","leaf":true,"expanded":false,"selected":false,"fg":"0,120,0""#
+        ),
+        "{tree}"
+    );
+    assert!(
+        tree.contains(r#""text":"3: Cool","leaf":false,"expanded":false,"selected":false}"#),
+        "{tree}"
+    );
 }
 
 #[test]
@@ -1278,12 +1295,12 @@ fn swing_table_sorts_rows_and_converts_view_indices() {
         "#,
         "Main",
         vec![
-            Some(String::from("c2")),                 // unsorted: model order
-            Some(String::from("__sort\nc1=sort:1")),  // click Score -> ascending
+            Some(String::from("c2")),                // unsorted: model order
+            Some(String::from("__sort\nc1=sort:1")), // click Score -> ascending
             Some(String::from("c2")),
-            Some(String::from("__sort\nc1=sort:1")),  // again -> descending
+            Some(String::from("__sort\nc1=sort:1")), // again -> descending
             Some(String::from("c2")),
-            Some(String::from("__sort\nc1=sort:1")),  // third -> unsorted
+            Some(String::from("__sort\nc1=sort:1")), // third -> unsorted
             Some(String::from("c2")),
         ],
     );
@@ -1423,6 +1440,162 @@ fn swing_table_model_fires_table_model_listener_events() {
     );
 }
 
+/// Regression: `type_of` reported `int` for shifts and for `long`-typed
+/// `& | ^`, while the emitter produced a long — so `(x << 4) + y` emitted IADD
+/// over a long value and failed verification. Every expected value below comes
+/// from running the same program under a real JDK 11.
+#[test]
+fn long_bit_ops_and_shifts_promote_like_javac() {
+    let out = run_stdout(
+        r#"
+        public class Main {
+            static int f() { return 3; }
+            static long g() { return 5L; }
+            public static void main(String[] args) {
+                long x = 5L; int b = 2;
+                System.out.println(x + b);
+                System.out.println(((long) f() << 4) + f());   // shift keeps the left type
+                System.out.println((g() & 0xFFL) + f());       // long & long stays long
+                System.out.println((g() | 0L) + 1);
+                System.out.println((g() ^ 1L) * 2);
+                System.out.println((f() << 2) + f());          // an int shift stays int
+                System.out.println((f() & 1) + 1);
+                System.out.println((int) ((g() >>> 1) + 1));
+                System.out.println(((long) f() << 32) >> 32);
+                boolean p = true, q = false;
+                System.out.println((p & q) + " " + (p | q) + " " + (p ^ q));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "7\n51\n8\n6\n8\n15\n2\n3\n3\nfalse true true\n");
+}
+
+/// Every expected value below was produced by running the same program under a
+/// real JDK 11 (`java.util.Random`), not by re-deriving them from our own
+/// implementation — a seeded Random must replay the JVM's exact sequence.
+#[test]
+fn random_seeded_matches_the_jdk_sequence() {
+    let out = run_stdout(
+        r#"
+        import java.util.Random;
+        public class Main {
+            public static void main(String[] args) {
+                Random r = new Random(42);
+                System.out.println(r.nextInt() + " " + r.nextInt());
+                r = new Random(42);
+                System.out.println(r.nextInt(100) + " " + r.nextInt(100) + " " + r.nextInt(100));
+                // A power-of-two bound takes a different branch than the
+                // rejection loop, so pin both.
+                r = new Random(42);
+                System.out.println(r.nextInt(64) + " " + r.nextInt(64));
+                r = new Random(0);
+                System.out.println(r.nextInt());
+                r = new Random(123456789L);
+                System.out.println(r.nextInt(10) + " " + r.nextInt(10)
+                    + " " + r.nextInt(10) + " " + r.nextInt(10));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "-1170105035 234785527\n\
+         30 63 48\n\
+         46 3\n\
+         -1155484576\n\
+         5 0 3 4\n"
+    );
+}
+
+#[test]
+fn random_seeded_matches_the_jdk_for_every_draw_kind() {
+    let out = run_stdout(
+        r#"
+        import java.util.Random;
+        public class Main {
+            public static void main(String[] args) {
+                Random r = new Random(42);
+                System.out.println(r.nextDouble() + " " + r.nextDouble());
+                r = new Random(42);
+                System.out.println(r.nextBoolean() + " " + r.nextBoolean() + " " + r.nextBoolean());
+                r = new Random(42);
+                System.out.println(r.nextLong());
+                r = new Random(42);
+                System.out.println(r.nextFloat());
+                // nextGaussian goes through Math.log, whose last ulp can differ
+                // from the JDK's StrictMath — a deviation LANGUAGE.md records
+                // for every transcendental — so compare to 9 places. Real Java
+                // prints 1.1419053154730547 and 0.9194079489827879. The second
+                // draw comes from the polar method's cache, so both are pinned.
+                r = new Random(42);
+                System.out.println(String.format("%.9f %.9f", r.nextGaussian(), r.nextGaussian()));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "0.7275636800328681 0.6832234717598454\n\
+         true false true\n\
+         -5025562857975149833\n\
+         0.7275637\n\
+         1.141905315 0.919407949\n"
+    );
+}
+
+#[test]
+fn random_same_seed_replays_and_set_seed_resets() {
+    // The bug this fixes: `new Random(seed)` used to ignore the seed entirely,
+    // so two Randoms with the same seed diverged and nothing was reproducible.
+    let out = run_stdout(
+        r#"
+        import java.util.Random;
+        public class Main {
+            public static void main(String[] args) {
+                Random a = new Random(7);
+                Random b = new Random(7);
+                boolean same = true;
+                for (int i = 0; i < 50; i++) {
+                    if (a.nextInt(1000) != b.nextInt(1000)) same = false;
+                }
+                System.out.println("same=" + same);
+
+                Random r = new Random(42);
+                int first = r.nextInt();
+                r.nextInt();
+                r.setSeed(42);
+                System.out.println("reset=" + (r.nextInt() == first));
+
+                // Bounds stay in range across the rejection loop.
+                Random g = new Random(1);
+                boolean inRange = true;
+                for (int i = 0; i < 2000; i++) {
+                    int v = g.nextInt(7);
+                    if (v < 0 || v >= 7) inRange = false;
+                }
+                System.out.println("inRange=" + inRange);
+
+                try {
+                    g.nextInt(0);
+                    System.out.println("no throw");
+                } catch (IllegalArgumentException e) {
+                    System.out.println("caught: " + e.getMessage());
+                }
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "same=true\nreset=true\ninRange=true\ncaught: bound must be positive\n"
+    );
+}
+
 #[test]
 fn swing_list_cell_renderer_styles_each_row() {
     // A ListCellRenderer decides each row's text and colours. The renderer is
@@ -1464,7 +1637,10 @@ fn swing_list_cell_renderer_styles_each_row() {
     assert!(tree.contains(r#""3. walk dog""#), "{tree}");
     // Only the urgent row carries a colour — the shared renderer instance is
     // reset between rows, so red does not leak onto row 3.
-    assert!(tree.contains(r#""itemStyles":[{},{"fg":"200,0,0"},{}]"#), "{tree}");
+    assert!(
+        tree.contains(r#""itemStyles":[{},{"fg":"200,0,0"},{}]"#),
+        "{tree}"
+    );
 }
 
 #[test]
@@ -1747,7 +1923,10 @@ fn swing_editable_combo_box_custom_values_and_item_management() {
             Some(String::from("c1\nc1=Dragonfruit")), // typed a custom value
         ],
     );
-    assert_eq!(out, "count=2\nchose Banana idx=0\nchose Dragonfruit idx=-1\n");
+    assert_eq!(
+        out,
+        "count=2\nchose Banana idx=0\nchose Dragonfruit idx=-1\n"
+    );
 }
 
 #[test]
@@ -1781,9 +1960,9 @@ fn swing_document_listener_fires_insert_and_remove() {
         "#,
         "Main",
         vec![
-            Some(String::from("c1\nc1=ab\n__doc=c1")),  // typed "ab" (insert)
+            Some(String::from("c1\nc1=ab\n__doc=c1")), // typed "ab" (insert)
             Some(String::from("c1\nc1=abc\n__doc=c1")), // typed "c" (insert)
-            Some(String::from("c1\nc1=ab\n__doc=c1")),  // deleted (remove)
+            Some(String::from("c1\nc1=ab\n__doc=c1")), // deleted (remove)
         ],
     );
     assert_eq!(out, "insert len=2\ninsert len=3\nremove len=2\n");
@@ -1871,8 +2050,14 @@ fn swing_accessible_context_names_and_describes_a_component() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""accName":"Volume""#), "no accessible name: {json}");
-    assert!(json.contains(r#""accDesc":"Playback level, 0 to 11""#), "no accessible description: {json}");
+    assert!(
+        json.contains(r#""accName":"Volume""#),
+        "no accessible name: {json}"
+    );
+    assert!(
+        json.contains(r#""accDesc":"Playback level, 0 to 11""#),
+        "no accessible description: {json}"
+    );
 }
 
 #[test]
@@ -1905,8 +2090,14 @@ fn swing_menu_item_accelerator_serializes_shortcut_text() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""text":"Save","accel":"Ctrl+S""#), "no Ctrl+S: {json}");
-    assert!(json.contains(r#""text":"Save As","accel":"Ctrl+Shift+S""#), "no Ctrl+Shift+S: {json}");
+    assert!(
+        json.contains(r#""text":"Save","accel":"Ctrl+S""#),
+        "no Ctrl+S: {json}"
+    );
+    assert!(
+        json.contains(r#""text":"Save As","accel":"Ctrl+Shift+S""#),
+        "no Ctrl+Shift+S: {json}"
+    );
 }
 
 #[test]
@@ -1982,8 +2173,14 @@ fn swing_check_menu_item_serializes_selected_state() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""type":"checkmenuitem","text":"Word Wrap","selected":true"#), "no check item: {json}");
-    assert!(json.contains(r#""type":"radiomenuitem","text":"Light","selected":true"#), "no radio item: {json}");
+    assert!(
+        json.contains(r#""type":"checkmenuitem","text":"Word Wrap","selected":true"#),
+        "no check item: {json}"
+    );
+    assert!(
+        json.contains(r#""type":"radiomenuitem","text":"Light","selected":true"#),
+        "no radio item: {json}"
+    );
 }
 
 #[test]
@@ -2014,7 +2211,10 @@ fn swing_grid_bag_layout_serializes_per_child_constraints() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""layout":"gridbag""#), "not gridbag: {json}");
+    assert!(
+        json.contains(r#""layout":"gridbag""#),
+        "not gridbag: {json}"
+    );
     // First child: (0,0), no weight, no fill — its own copy (proving the add
     // took a copy, not a reference to the later-mutated gbc).
     assert!(
@@ -2127,8 +2327,14 @@ fn swing_password_field_and_editable() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""password":true"#), "no password flag: {json}");
-    assert!(json.contains(r#""text":"frozen","columns":0,"editable":false"#), "not read-only: {json}");
+    assert!(
+        json.contains(r#""password":true"#),
+        "no password flag: {json}"
+    );
+    assert!(
+        json.contains(r#""text":"frozen","columns":0,"editable":false"#),
+        "not read-only: {json}"
+    );
 }
 
 #[test]
@@ -2197,7 +2403,10 @@ fn swing_preferred_size_and_alignment_serialize() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""psize":"160,50""#), "no preferred size: {json}");
+    assert!(
+        json.contains(r#""psize":"160,50""#),
+        "no preferred size: {json}"
+    );
     assert!(json.contains(r#""halign":0"#), "no alignment: {json}");
 }
 
@@ -2227,9 +2436,14 @@ fn swing_invoke_later_content_pane_and_visibility() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""text":"Go""#), "content pane add failed: {json}");
-    assert!(json.contains(r#""text":"hidden","hidden":true"#)
-        || json.contains(r#""hidden":true"#), "no hidden flag: {json}");
+    assert!(
+        json.contains(r#""text":"Go""#),
+        "content pane add failed: {json}"
+    );
+    assert!(
+        json.contains(r#""text":"hidden","hidden":true"#) || json.contains(r#""hidden":true"#),
+        "no hidden flag: {json}"
+    );
 }
 
 #[test]
@@ -2285,7 +2499,10 @@ fn swing_invoke_later_with_lambda_runs_the_ui() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""text":"ready""#), "lambda invokeLater failed: {json}");
+    assert!(
+        json.contains(r#""text":"ready""#),
+        "lambda invokeLater failed: {json}"
+    );
 }
 
 #[test]
@@ -2311,8 +2528,14 @@ fn swing_set_bounds_and_null_layout_serialize_for_absolute_positioning() {
         "Main",
     );
     assert!(json.contains(r#""layout":"none""#), "not absolute: {json}");
-    assert!(json.contains(r#""width":400,"height":400"#), "no frame size: {json}");
-    assert!(json.contains(r#""bounds":"90,100,180,40""#), "no bounds: {json}");
+    assert!(
+        json.contains(r#""width":400,"height":400"#),
+        "no frame size: {json}"
+    );
+    assert!(
+        json.contains(r#""bounds":"90,100,180,40""#),
+        "no bounds: {json}"
+    );
 }
 
 #[test]
@@ -2343,8 +2566,14 @@ fn swing_tool_bar_serializes_buttons_separator_and_dispatches() {
         json.contains(r#""type":"toolbar","orientation":0,"name":"Actions""#),
         "no toolbar: {json}"
     );
-    assert!(json.contains(r#""type":"toolbarsep""#), "no separator: {json}");
-    assert!(json.contains(r#""type":"button""#), "no toolbar buttons: {json}");
+    assert!(
+        json.contains(r#""type":"toolbarsep""#),
+        "no separator: {json}"
+    );
+    assert!(
+        json.contains(r#""type":"button""#),
+        "no toolbar buttons: {json}"
+    );
 }
 
 #[test]
@@ -2399,8 +2628,14 @@ fn swing_split_pane_serializes_both_sides_and_divider() {
         json.contains(r#""type":"splitpane","orientation":1,"divider":120"#),
         "no splitpane: {json}"
     );
-    assert!(json.contains(r#""left":{"type":"label""#), "no left component: {json}");
-    assert!(json.contains(r#""right":{"type":"button""#), "no right component: {json}");
+    assert!(
+        json.contains(r#""left":{"type":"label""#),
+        "no left component: {json}"
+    );
+    assert!(
+        json.contains(r#""right":{"type":"button""#),
+        "no right component: {json}"
+    );
 }
 
 #[test]
@@ -2425,9 +2660,18 @@ fn swing_tabbed_pane_serializes_tabs_and_selection() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""type":"tabbedpane","placement":1,"selectedIndex":1"#), "no tabbedpane: {json}");
-    assert!(json.contains(r#""title":"Alpha","component":{"type":"label""#), "no alpha tab: {json}");
-    assert!(json.contains(r#""title":"Beta","component":{"type":"button""#), "no beta tab: {json}");
+    assert!(
+        json.contains(r#""type":"tabbedpane","placement":1,"selectedIndex":1"#),
+        "no tabbedpane: {json}"
+    );
+    assert!(
+        json.contains(r#""title":"Alpha","component":{"type":"label""#),
+        "no alpha tab: {json}"
+    );
+    assert!(
+        json.contains(r#""title":"Beta","component":{"type":"button""#),
+        "no beta tab: {json}"
+    );
 }
 
 #[test]
@@ -2511,11 +2755,15 @@ fn swing_border_factory_compound_matte_and_bevel() {
         "no compound border: {json}"
     );
     assert!(
-        json.contains(r#""border":{"type":"matte","thickness":1,"color":"220,140,40","insets":"4,0,4,0"}"#),
+        json.contains(
+            r#""border":{"type":"matte","thickness":1,"color":"220,140,40","insets":"4,0,4,0"}"#
+        ),
         "no matte border: {json}"
     );
     assert!(
-        json.contains(r#""border":{"type":"bevel","thickness":2,"insets":"0,0,0,0","raised":false}"#),
+        json.contains(
+            r#""border":{"type":"bevel","thickness":2,"insets":"0,0,0,0","raised":false}"#
+        ),
         "no lowered bevel: {json}"
     );
 }
@@ -2540,7 +2788,10 @@ fn swing_component_font_serializes() {
         "#,
         "Main",
     );
-    assert!(json.contains(r#""font":"1 22 Serif""#), "no widget font: {json}");
+    assert!(
+        json.contains(r#""font":"1 22 Serif""#),
+        "no widget font: {json}"
+    );
 }
 
 #[test]
@@ -7818,4 +8069,3 @@ fn anonymous_class_forwards_super_args_and_captures_a_local() {
     );
     assert_eq!(out, "105\n");
 }
-

@@ -151,6 +151,19 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     themselves). `random()` uses Java's LCG,
     seeded deterministically by default (tests) and from host entropy in
     the browser (`VmOptions::random_seed`).
+  - `java.util.Random` is Java's exact 48-bit LCG, so a seed replays the
+    JVM's sequence: `new Random(42).nextInt()` is `-1170105035` here as
+    it is there, and two `Random`s with the same seed agree. `setSeed`,
+    `nextInt`/`nextInt(bound)` (both the power-of-two and rejection
+    branches), `nextLong`, `nextDouble`, `nextFloat`, `nextBoolean` and
+    `nextGaussian` (the polar method, caching its second value) all
+    match, pinned by `diff_random_seeded_sequences` against a real JDK.
+    `nextGaussian` may differ in the last ulp because it goes through
+    `Math.log` (above). An unseeded `new Random()` draws its seed from
+    `Math.random()`, so it is reproducible in tests and entropic in the
+    browser, rather than following the JVM's uniquifier. The Java 17
+    two-arg `nextInt(origin, bound)` is `origin + nextInt(bound-origin)`
+    — right range and distribution, different sequence from the JDK's.
   - The full Java 11 int/double surfaces of `Integer` (radix parsing
     and formatting, the bit-twiddling family, the unsigned family,
     `compare`/`min`/`max`/`sum`/`signum`/`hashCode`, `SIZE`/`BYTES`),
