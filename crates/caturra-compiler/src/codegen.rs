@@ -3299,6 +3299,24 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         "(Ljava/util/Collection;)Z",
     ),
     bm(
+        "containsAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
         "addAll",
         &[I, BParam::SelfList],
         BRet::Boolean,

@@ -3009,6 +3009,31 @@ impl<'run> Interpreter<'run> {
         current
     }
 
+    /// `list.contains(probe)`: Java asks the *probe*, not the element.
+    fn list_contains(&mut self, list: HeapRef, probe: JValue) -> Result<bool, VmError> {
+        Ok(self.list_index_of(list, probe, false)? >= 0)
+    }
+
+    /// The `ArrayList` argument of `addAll`/`containsAll`/`removeAll`/
+    /// `retainAll`, seen through any unmodifiable view.
+    fn list_argument(&self, argument: JValue) -> Result<HeapRef, VmError> {
+        let JValue::Ref(Some(other)) = argument else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let other = self.backing_list(other);
+        if !matches!(
+            self.heap.get(other),
+            Some(crate::value::HeapObject::ArrayList(_))
+        ) {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.ClassCastException: not a Collection",
+            )));
+        }
+        Ok(other)
+    }
+
     /// `list.indexOf(probe)`: Java asks the *probe* whether it equals each
     /// element, so an asymmetric `equals` behaves as it does on a real JVM.
     fn list_index_of(
@@ -3081,6 +3106,38 @@ impl<'run> Interpreter<'run> {
                     equal = self.java_equals(*ours, *theirs)?;
                 }
                 JValue::Int(i32::from(equal))
+            }
+            // `AbstractCollection.containsAll` asks *this* list whether it
+            // contains each of the other's elements, so the probe is theirs.
+            ("containsAll", _, [other]) => {
+                let other = self.list_argument(*other)?;
+                let mut all = true;
+                for theirs in self.list_items(other) {
+                    if !self.list_contains(receiver, theirs)? {
+                        all = false;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(all))
+            }
+            // `removeAll`/`retainAll` ask the *other* collection whether it
+            // contains each of ours, so here the probe is ours. Both report
+            // whether the list changed.
+            ("removeAll" | "retainAll", _, [other]) => {
+                let other = self.list_argument(*other)?;
+                let keep_when_present = method_name == "retainAll";
+                let ours = self.list_items(receiver);
+                let mut kept = Vec::with_capacity(ours.len());
+                for item in ours {
+                    if self.list_contains(other, item)? == keep_when_present {
+                        kept.push(item);
+                    }
+                }
+                let changed = kept.len() != self.list_items(receiver).len();
+                if let Some(HeapObject::ArrayList(items)) = self.heap.get_mut(receiver) {
+                    *items = kept;
+                }
+                JValue::Int(i32::from(changed))
             }
             // `AbstractList.hashCode`: the 31-fold of the elements' own.
             ("hashCode", _, []) => {
@@ -5138,7 +5195,15 @@ fn int_element_hash(kind: crate::value::IntKind, value: i32) -> i32 {
 
 /// The `List` methods an unmodifiable view refuses. Java's throws
 /// `UnsupportedOperationException` from each of them.
-const LIST_MUTATORS: &[&str] = &["add", "remove", "set", "clear", "addAll"];
+const LIST_MUTATORS: &[&str] = &[
+    "add",
+    "remove",
+    "set",
+    "clear",
+    "addAll",
+    "removeAll",
+    "retainAll",
+];
 
 /// Java's marker for a container that holds itself, instead of recursing.
 const THIS_COLLECTION: &str = "(this Collection)";

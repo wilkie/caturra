@@ -4580,3 +4580,95 @@ public class DiffCollectionsUnmodifiable {
 }
 "#
 );
+
+differential_test!(
+    diff_list_contains_remove_retain_all,
+    "DiffBulkOps",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+class Point {
+    int x;
+    Point(int x) { this.x = x; }
+    public boolean equals(Object other) {
+        return other instanceof Point && ((Point) other).x == x;
+    }
+    public int hashCode() { return x; }
+    public String toString() { return "P" + x; }
+}
+
+public class DiffBulkOps {
+    public static void main(String[] args) {
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        Collections.addAll(numbers, 1, 2, 3, 2);
+        ArrayList<Integer> some = new ArrayList<Integer>();
+        Collections.addAll(some, 2, 4);
+        ArrayList<Integer> subset = new ArrayList<Integer>();
+        Collections.addAll(subset, 1, 3);
+        System.out.println(numbers.containsAll(some) + " " + numbers.containsAll(subset)
+                + " " + numbers.containsAll(numbers) + " " + numbers.containsAll(new ArrayList<Integer>()));
+
+        // removeAll and retainAll report whether the list changed, and remove
+        // every occurrence.
+        ArrayList<Integer> removed = new ArrayList<Integer>(numbers);
+        System.out.println(removed.removeAll(some) + " " + removed);
+        ArrayList<Integer> unchanged = new ArrayList<Integer>(numbers);
+        System.out.println(unchanged.removeAll(new ArrayList<Integer>()) + " " + unchanged);
+        ArrayList<Integer> retained = new ArrayList<Integer>(numbers);
+        System.out.println(retained.retainAll(some) + " " + retained);
+        ArrayList<Integer> emptied = new ArrayList<Integer>(numbers);
+        System.out.println(emptied.retainAll(new ArrayList<Integer>()) + " " + emptied);
+        ArrayList<Integer> all = new ArrayList<Integer>(numbers);
+        System.out.println(all.retainAll(numbers) + " " + all);
+
+        // They compare with the elements' own equals.
+        ArrayList<Point> points = new ArrayList<Point>();
+        Collections.addAll(points, new Point(1), new Point(2));
+        ArrayList<Point> twos = new ArrayList<Point>();
+        Collections.addAll(twos, new Point(2));
+        System.out.println(points.containsAll(twos));
+        ArrayList<Point> shrunk = new ArrayList<Point>(points);
+        System.out.println(shrunk.removeAll(twos) + " " + shrunk);
+
+        // Nulls compare too.
+        ArrayList<String> words = new ArrayList<String>();
+        Collections.addAll(words, "a", null, "b");
+        ArrayList<String> holes = new ArrayList<String>();
+        Collections.addAll(holes, (String) null);
+        System.out.println(words.containsAll(holes) + " " + words.removeAll(holes) + " " + words);
+
+        // An unmodifiable view reads, but refuses to change.
+        ArrayList<Integer> backing = new ArrayList<Integer>();
+        Collections.addAll(backing, 1, 2, 3, 2);
+        List<Integer> readOnly = Collections.unmodifiableList(backing);
+        System.out.println(readOnly.containsAll(some) + " " + backing.containsAll(readOnly));
+        try { readOnly.removeAll(some); } catch (UnsupportedOperationException e) { System.out.println("removeAll"); }
+        try { readOnly.retainAll(some); } catch (UnsupportedOperationException e) { System.out.println("retainAll"); }
+
+        try { numbers.containsAll(null); } catch (NullPointerException e) { System.out.println("null argument"); }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_cast_of_a_null_literal,
+    "DiffCastNull",
+    r#"
+public class DiffCastNull {
+    public static void main(String[] args) {
+        // A cast of `null` names an overload; it is not a parenthesized
+        // expression, and `(x) - 1` still is one.
+        String text = (String) null;
+        Object thing = (Object) null;
+        System.out.println(text + " " + thing + " " + (text == null));
+        int x = 5;
+        System.out.println((x) - 1);
+        System.out.println((x) + 1);
+    }
+}
+"#
+);

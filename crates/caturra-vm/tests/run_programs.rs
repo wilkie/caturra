@@ -9240,3 +9240,103 @@ fn collections_search_and_view_reject_like_javac() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// `containsAll`/`removeAll`/`retainAll` compare with the elements' own
+/// `equals`, and ask the side Java asks: `containsAll` asks the *other*
+/// collection's element, `removeAll` and `retainAll` ask this list's.
+/// Cross-checked against a real JDK by `diff_list_contains_remove_retain_all`.
+#[test]
+fn list_bulk_operations_use_equals() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Collections;
+        import java.util.List;
+
+        class Point {
+            int x;
+            Point(int x) { this.x = x; }
+            public boolean equals(Object other) {
+                return other instanceof Point && ((Point) other).x == x;
+            }
+            public int hashCode() { return x; }
+            public String toString() { return "P" + x; }
+        }
+
+        public class B {
+            public static void main(String[] args) {
+                ArrayList<Integer> numbers = new ArrayList<Integer>();
+                Collections.addAll(numbers, 1, 2, 3, 2);
+                ArrayList<Integer> some = new ArrayList<Integer>();
+                Collections.addAll(some, 2, 4);
+                System.out.println(numbers.containsAll(some) + " " + numbers.containsAll(numbers)
+                        + " " + numbers.containsAll(new ArrayList<Integer>()));
+
+                // Every occurrence goes, and the result says whether it changed.
+                ArrayList<Integer> removed = new ArrayList<Integer>(numbers);
+                System.out.println(removed.removeAll(some) + " " + removed);
+                ArrayList<Integer> unchanged = new ArrayList<Integer>(numbers);
+                System.out.println(unchanged.removeAll(new ArrayList<Integer>()) + " " + unchanged);
+                ArrayList<Integer> retained = new ArrayList<Integer>(numbers);
+                System.out.println(retained.retainAll(some) + " " + retained);
+
+                // The elements' own equals decides.
+                ArrayList<Point> points = new ArrayList<Point>();
+                Collections.addAll(points, new Point(1), new Point(2));
+                ArrayList<Point> twos = new ArrayList<Point>();
+                Collections.addAll(twos, new Point(2));
+                System.out.println(points.containsAll(twos));
+                System.out.println(points.removeAll(twos) + " " + points);
+
+                // Nulls compare, and an unmodifiable view refuses to change.
+                ArrayList<String> words = new ArrayList<String>();
+                Collections.addAll(words, "a", null);
+                ArrayList<String> holes = new ArrayList<String>();
+                Collections.addAll(holes, (String) null);
+                System.out.println(words.containsAll(holes) + " " + words.removeAll(holes) + " " + words);
+
+                List<Integer> readOnly = Collections.unmodifiableList(numbers);
+                System.out.println(readOnly.containsAll(some));
+                try { readOnly.removeAll(some); }
+                catch (UnsupportedOperationException e) { System.out.println("refused"); }
+                try { numbers.containsAll(null); }
+                catch (NullPointerException e) { System.out.println("null argument"); }
+            }
+        }
+        "#,
+        "B",
+    );
+    assert_eq!(
+        out,
+        "false true true\n\
+         true [1, 3]\n\
+         false [1, 2, 3, 2]\n\
+         true [2, 2]\n\
+         true\n\
+         true [P1]\n\
+         true true [a]\n\
+         false\n\
+         refused\n\
+         null argument\n"
+    );
+}
+
+/// A cast of a `null` literal names an overload. It used to fail to parse,
+/// while `(x) - 1` must stay a parenthesized expression.
+#[test]
+fn a_null_literal_can_be_cast() {
+    let out = run_stdout(
+        r#"
+        public class N {
+            public static void main(String[] args) {
+                String text = (String) null;
+                Object thing = (Object) null;
+                int x = 5;
+                System.out.println(text + " " + (thing == null) + " " + ((x) - 1) + " " + ((x) + 1));
+            }
+        }
+        "#,
+        "N",
+    );
+    assert_eq!(out, "null true 4 6\n");
+}

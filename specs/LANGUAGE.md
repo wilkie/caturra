@@ -117,7 +117,9 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   and field-initializer rules, inherited fields, subtype reference widening
   in assignments/arguments/overloads, `instanceof` (null is false), class
   casts with upcast elision and runtime `ClassCastException` ("class A
-  cannot be cast to class B"), and superclass-first static initialization.
+  cannot be cast to class B") — including a cast of a `null` literal,
+  `(String) null`, which names an overload without turning `(x) - 1`
+  into one — and superclass-first static initialization.
   Field hiding is rejected by design; `protected` currently behaves like
   public (no packages).
 
@@ -230,7 +232,13 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     hints as no-ops; `contains`/`indexOf`/`lastIndexOf`/`remove(Object)`/
     `equals`/`hashCode` compare elements with **their own `equals` and
     `hashCode`** (2026-07-09), overrides included, asking the probe as
-    Java does. Iterators, lambdas, comparators,
+    Java does. So do `containsAll`/`removeAll`/`retainAll`
+    (2026-07-09), which ask the side Java asks — `containsAll` the
+    _other_ collection's element, `removeAll` and `retainAll` this
+    list's — and return whether the list changed. Their argument must be
+    a list of the same element type, where javac takes any
+    `Collection<?>`: stricter, so anything compiling here compiles on a
+    JDK. Iterators, lambdas, comparators,
     streams, `toArray`, and `subList` report honest reasons. Autoboxing (a no-op in this VM — boxed-equality caching
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
