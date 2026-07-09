@@ -72,7 +72,8 @@ slice.
 - **Arrays** (any element of `int`/`double`/`boolean`/`char`/`String`, any
   dimension count): `new T[n]` / `new T[n][m]` / `new T[n][]` (via
   `newarray`/`anewarray`/`multianewarray`), `{...}` initializers in
-  declarations and `new T[] {...}` (nested for 2D, ragged rows fine),
+  declarations and `new T[] {...}` (nested for 2D, ragged rows fine, and a
+  trailing comma is legal — JLS §10.6),
   `a[i]` reads/writes with compound assignment and `++`/`--` on elements,
   `a.length` / `m[i].length`, arrays as parameters and returns (rows are
   references — aliasing behaves like Java), the C-style declarator spelling
@@ -309,6 +310,24 @@ null` is the way to test for absence, and unboxing an absent value
     compile in the first place: caturra's `sort` accepts any list, the
     one place it is more permissive than javac here. Pinned by
     `diff_collections_sort_uses_compare_to`.
+  - `java.util.Arrays` is bundled Java rather than a native intrinsic,
+    so every element operation dispatches. `toString` renders elements
+    through their own `toString`; `equals` and `hashCode` (2026-07-09,
+    nine overloads each) ask each element's own `equals`/`hashCode`,
+    null-safely, so two arrays of user objects compare by value; and
+    `sort` of a reference array (2026-07-09) orders elements by their
+    `compareTo`, stably. `Arrays.equals(double[], double[])` compares
+    raw bits, so `NaN` equals itself and `-0.0` does not equal `0.0` —
+    `==` says the opposite of both. An element that is itself an array
+    compares by identity, as Java's does. `Arrays.sort` of an array
+    whose element type is not `Comparable` is rejected at compile time,
+    where javac accepts it and throws `ClassCastException` at run time —
+    stricter, so anything compiling here still compiles on a JDK.
+    `asList` returns an `ArrayList` (a documented deviation), and
+    `binarySearch`/`copyOf`/`fill`/`deepEquals`/`deepToString` are
+    absent, as is any widening of `int[][]` to `Object[]`. Pinned
+    against a real JDK by `diff_arrays_equals_and_hash_code` and
+    `diff_arrays_sort_uses_compare_to`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get

@@ -2599,16 +2599,16 @@ impl Parser<'_> {
         let start = self.here();
         self.expect_symbol("{", "to open the array initializer")?;
         let mut elements = Vec::new();
-        if !self.at_symbol("}") {
-            loop {
-                if self.at_symbol("{") {
-                    elements.push(self.array_literal()?);
-                } else {
-                    elements.push(self.expression()?);
-                }
-                if !self.eat_symbol(",") {
-                    break;
-                }
+        // A trailing comma is legal here (JLS §10.6), so stop on `}` both
+        // before an element and after a comma: `{1, 2,}` and `{}` both parse.
+        while !self.at_symbol("}") {
+            if self.at_symbol("{") {
+                elements.push(self.array_literal()?);
+            } else {
+                elements.push(self.expression()?);
+            }
+            if !self.eat_symbol(",") {
+                break;
             }
         }
         self.expect_symbol("}", "to close the array initializer")?;

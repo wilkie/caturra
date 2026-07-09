@@ -3924,3 +3924,151 @@ public class DiffCompoundBoxing {
 }
 "#
 );
+
+differential_test!(
+    diff_arrays_equals_and_hash_code,
+    "DiffArraysEquals",
+    r#"
+import java.util.Arrays;
+
+class Point {
+    int x;
+    Point(int x) { this.x = x; }
+    public boolean equals(Object other) {
+        return other instanceof Point && ((Point) other).x == x;
+    }
+    public int hashCode() { return x; }
+    public String toString() { return "P" + x; }
+}
+
+// equals without hashCode: Arrays.equals still finds them equal, but
+// Arrays.hashCode does not agree, exactly as on a real JVM.
+class Loose {
+    int x;
+    Loose(int x) { this.x = x; }
+    public boolean equals(Object other) {
+        return other instanceof Loose && ((Loose) other).x == x;
+    }
+}
+
+public class DiffArraysEquals {
+    public static void main(String[] args) {
+        int[] ints = {1, 2};
+        int[] sameInts = {1, 2};
+        int[] otherInts = {1, 3};
+        System.out.println(Arrays.equals(ints, sameInts) + " " + Arrays.equals(ints, otherInts));
+        System.out.println(Arrays.equals(ints, new int[] {1}) + " " + Arrays.equals(new int[0], new int[0]));
+
+        // A reference array asks each element's own equals, null-safely.
+        String[] words = {"a", null};
+        String[] sameWords = {"a", null};
+        System.out.println(Arrays.equals(words, sameWords));
+        Point[] points = {new Point(1), new Point(2)};
+        Point[] samePoints = {new Point(1), new Point(2)};
+        System.out.println(Arrays.equals(points, samePoints));
+        System.out.println(Arrays.hashCode(points) == Arrays.hashCode(samePoints));
+
+        Loose[] loose = {new Loose(1)};
+        Loose[] sameLoose = {new Loose(1)};
+        System.out.println(Arrays.equals(loose, sameLoose) + " "
+                + (Arrays.hashCode(loose) == Arrays.hashCode(sameLoose)));
+
+        // Doubles and floats compare raw bits: NaN equals itself, -0.0 does
+        // not equal 0.0. `==` says the opposite of both.
+        double[] nan = {Double.NaN};
+        double[] alsoNan = {Double.NaN};
+        System.out.println(Arrays.equals(nan, alsoNan) + " " + (Double.NaN == Double.NaN));
+        double[] positiveZero = {0.0};
+        double[] negativeZero = {-0.0};
+        System.out.println(Arrays.equals(positiveZero, negativeZero) + " " + (0.0 == -0.0));
+        float[] nanFloat = {Float.NaN};
+        float[] alsoNanFloat = {Float.NaN};
+        System.out.println(Arrays.equals(nanFloat, alsoNanFloat));
+
+        // Every hash code, exactly.
+        System.out.println(Arrays.hashCode(ints) + " " + Arrays.hashCode(new int[0]));
+        System.out.println(Arrays.hashCode(nan) + " " + Arrays.hashCode(positiveZero)
+                + " " + Arrays.hashCode(negativeZero));
+        System.out.println(Arrays.hashCode(new boolean[] {true, false}));
+        System.out.println(Arrays.hashCode(new long[] {5L}) + " " + Arrays.hashCode(new char[] {'a'}));
+        System.out.println(Arrays.hashCode(words));
+
+        // A null array.
+        int[] none = null;
+        System.out.println(Arrays.equals(none, none) + " " + Arrays.equals(none, ints)
+                + " " + Arrays.hashCode(none));
+
+        // An element that is itself an array compares by identity.
+        int[] inner = {1};
+        Object[] holding = {inner};
+        Object[] holdingSame = {inner};
+        Object[] holdingCopy = {new int[] {1}};
+        System.out.println(Arrays.equals(holding, holdingSame) + " " + Arrays.equals(holding, holdingCopy));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_arrays_sort_uses_compare_to,
+    "DiffArraysSort",
+    r#"
+import java.util.Arrays;
+
+class Card implements Comparable<Card> {
+    int rank;
+    String tag;
+    Card(int rank, String tag) { this.rank = rank; this.tag = tag; }
+    public int compareTo(Card other) { return rank - other.rank; }
+    public String toString() { return "C" + rank + tag; }
+}
+
+public class DiffArraysSort {
+    public static void main(String[] args) {
+        // A reference array sorts by its elements' compareTo, and ties keep
+        // their original order: Arrays.sort of a reference array is stable.
+        Card[] cards = {
+            new Card(3, "a"), new Card(1, "b"), new Card(2, "c"),
+            new Card(1, "d"), new Card(1, "e"),
+        };
+        Arrays.sort(cards);
+        System.out.println(Arrays.toString(cards));
+
+        Card[] one = {new Card(5, "z")};
+        Arrays.sort(one);
+        System.out.println(Arrays.toString(one) + " " + Arrays.toString(new Card[0]));
+
+        // The primitive and String overloads still work.
+        int[] numbers = {3, 1, 2};
+        Arrays.sort(numbers);
+        System.out.println(Arrays.toString(numbers));
+        String[] words = {"pear", "fig", "kiwi"};
+        Arrays.sort(words);
+        System.out.println(Arrays.toString(words));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_array_initializer_trailing_comma,
+    "DiffTrailingComma",
+    r#"
+public class DiffTrailingComma {
+    public static void main(String[] args) {
+        // A trailing comma is legal in an array initializer (JLS §10.6).
+        int[] numbers = {1, 2,};
+        int[] empty = {};
+        String[] words = {"a",};
+        int[][] grid = {
+            {1, 2,},
+            {3, 4,},
+        };
+        System.out.println(numbers.length + " " + empty.length + " " + words[0]);
+        System.out.println(grid.length + " " + grid[1][1]);
+        int[] fromNew = new int[] {5, 6,};
+        System.out.println(fromNew[1]);
+    }
+}
+"#
+);

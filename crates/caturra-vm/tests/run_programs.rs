@@ -8643,3 +8643,106 @@ fn compound_assignment_unboxes_and_reboxes() {
     );
     assert_eq!(out, "1.5\n7 true\n6\n15\n4\nb\n");
 }
+
+/// `Arrays.equals`/`hashCode` ask each element's own `equals`/`hashCode`, and
+/// `Arrays.sort` of a reference array asks their `compareTo`. Cross-checked
+/// against a real JDK by `diff_arrays_equals_and_hash_code` and
+/// `diff_arrays_sort_uses_compare_to`.
+#[test]
+fn arrays_compare_elements_with_their_own_methods() {
+    let out = run_stdout(
+        r#"
+        import java.util.Arrays;
+
+        class Point {
+            int x;
+            Point(int x) { this.x = x; }
+            public boolean equals(Object other) {
+                return other instanceof Point && ((Point) other).x == x;
+            }
+            public int hashCode() { return x; }
+            public String toString() { return "P" + x; }
+        }
+
+        class Card implements Comparable<Card> {
+            int rank;
+            String tag;
+            Card(int rank, String tag) { this.rank = rank; this.tag = tag; }
+            public int compareTo(Card other) { return rank - other.rank; }
+            public String toString() { return "C" + rank + tag; }
+        }
+
+        public class A {
+            public static void main(String[] args) {
+                Point[] points = {new Point(1), new Point(2)};
+                Point[] same = {new Point(1), new Point(2)};
+                System.out.println(Arrays.equals(points, same) + " "
+                        + (Arrays.hashCode(points) == Arrays.hashCode(same)));
+
+                // A null element compares null-safely.
+                String[] words = {"a", null};
+                String[] sameWords = {"a", null};
+                System.out.println(Arrays.equals(words, sameWords));
+
+                // Doubles compare raw bits: NaN equals itself, -0.0 does not
+                // equal 0.0. `==` says the opposite of both.
+                System.out.println(Arrays.equals(new double[] {Double.NaN}, new double[] {Double.NaN})
+                        + " " + Arrays.equals(new double[] {0.0}, new double[] {-0.0}));
+
+                // A reference array sorts by compareTo, stably.
+                Card[] cards = {new Card(2, "a"), new Card(1, "b"), new Card(1, "c")};
+                Arrays.sort(cards);
+                System.out.println(Arrays.toString(cards));
+
+                // A null array, and an element that is itself an array.
+                int[] none = null;
+                System.out.println(Arrays.equals(none, none) + " " + Arrays.hashCode(none));
+                int[] inner = {1};
+                System.out.println(Arrays.equals(new Object[] {inner}, new Object[] {inner})
+                        + " " + Arrays.equals(new Object[] {inner}, new Object[] {new int[] {1}}));
+            }
+        }
+        "#,
+        "A",
+    );
+    assert_eq!(
+        out,
+        "true true\n\
+         true\n\
+         true false\n\
+         [C1b, C1c, C2a]\n\
+         true 0\n\
+         true false\n"
+    );
+}
+
+/// A trailing comma is legal in an array initializer (JLS §10.6), and an
+/// omitted element is not. Cross-checked by `diff_array_initializer_trailing_comma`.
+#[test]
+fn array_initializers_allow_a_trailing_comma() {
+    let out = run_stdout(
+        r#"
+        public class T {
+            public static void main(String[] args) {
+                int[] numbers = {1, 2,};
+                int[][] grid = {
+                    {1, 2,},
+                    {3, 4,},
+                };
+                System.out.println(numbers.length + " " + grid[1][1] + " " + new int[] {5,}[0]);
+            }
+        }
+        "#,
+        "T",
+    );
+    assert_eq!(out, "2 4 5\n");
+
+    let rejected = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("T.java"),
+        text: String::from("class T { static void r() { int[] x = {1,,2}; } }"),
+    }]);
+    assert!(
+        !rejected.success(),
+        "an omitted element is not a trailing comma"
+    );
+}
