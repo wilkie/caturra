@@ -3345,3 +3345,79 @@ public class DiffMapNull {
 }
 "#
 );
+
+differential_test!(
+    diff_hash_map_views,
+    "DiffMapViews",
+    r#"
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+public class DiffMapViews {
+    public static void main(String[] args) {
+        Map<String, Integer> counts = new HashMap<>();
+        counts.put("pear", 4);
+        counts.put("apple", 1);
+        counts.put("fig", 9);
+        counts.put("quince", 16);
+
+        System.out.println(counts.keySet());
+        System.out.println(counts.values());
+        System.out.println(counts.entrySet());
+
+        // The three views iterate in the map's order.
+        for (String key : counts.keySet()) {
+            System.out.print(key + " ");
+        }
+        System.out.println();
+        int total = 0;
+        for (int value : counts.values()) {
+            total += value;
+        }
+        System.out.println(total);
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            System.out.print(entry.getKey() + "=" + entry.getValue() + ";");
+        }
+        System.out.println();
+
+        Set<String> keys = counts.keySet();
+        Collection<Integer> values = counts.values();
+        System.out.println(keys.size() + " " + keys.contains("fig") + " " + keys.contains("zzz"));
+        System.out.println(values.size() + " " + values.contains(9) + " " + values.isEmpty());
+
+        // A view is live, not a copy.
+        counts.put("kiwi", 2);
+        System.out.println(keys + " " + keys.size());
+
+        // An entry is a view too: setValue writes through to the map.
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            entry.setValue(entry.getValue() * 10);
+        }
+        System.out.println(counts);
+
+        // Iterating a map with a primitive key unboxes the loop variable.
+        Map<Integer, String> byInt = new HashMap<>();
+        byInt.put(7, "seven");
+        byInt.put(3, "three");
+        int keySum = 0;
+        for (int key : byInt.keySet()) {
+            keySum += key;
+        }
+        System.out.println(keySum);
+        for (String value : byInt.values()) {
+            System.out.print(value + ".");
+        }
+        System.out.println();
+
+        Map<String, Integer> empty = new HashMap<>();
+        System.out.println(empty.keySet() + " " + empty.values() + " " + empty.entrySet());
+        for (String key : empty.keySet()) {
+            System.out.println("unreachable " + key);
+        }
+        System.out.println(empty.keySet().isEmpty());
+    }
+}
+"#
+);

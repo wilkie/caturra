@@ -231,11 +231,52 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
     Nested generics (`ArrayList<ArrayList<...>>`) are rejected kindly.
+  - `HashMap<K, V>` / `Map<K, V>` (2026-07-09), **with the JDK's own
+    iteration order**. A real map's order looks arbitrary but is a pure
+    function of the keys' hash codes, the table length, and insertion
+    order, and students see it whenever they print a map — so caturra
+    reproduces it (bucket index `(n - 1) & (h ^ h >>> 16)`, insertion
+    order within a bucket, the table doubling past a 0.75 load factor,
+    and `new HashMap<>(capacity)` / `new HashMap<>(map)` sizing their
+    tables as Java does). The one deviation: a real `HashMap` turns a
+    bucket of 8+ colliding keys in a table of 64+ into a red-black tree
+    and iterates it in tree order; caturra keeps the chain order.
+    Reaching it takes deliberately-crafted keys.
+    Methods: `size/isEmpty/containsKey/containsValue/get/getOrDefault/
+put/putIfAbsent/remove` (by key, and by key+value)/`replace` (both)/
+    `clear/putAll/equals/hashCode/toString`, and the three views
+    `keySet()` -> `Set<K>`, `values()` -> `Collection<V>`, `entrySet()`
+    -> `Set<Map.Entry<K, V>>`. The views are live, as Java's are: a
+    later `put` shows through, and `entry.setValue(...)` writes back.
+    for-each walks all three (an index loop over a synthetic accessor,
+    since caturra has no iterators — so mutating a map inside such a
+    loop silently sees the change where a real JDK throws
+    `ConcurrentModificationException`). Keys compare with `equals`
+    semantics, so `-0.0` and `0.0` are distinct keys, `NaN` equals
+    itself, and a `null` key is legal and lands in bucket 0.
+    Unlike `ArrayList`'s elements, a map's keys and values are **boxed**
+    at the boundary: `map.put(k, v);` as a statement must not throw on a
+    new key while `int old = map.put(k, v);` must, and only a boxed
+    return models both. So `map.get(missing)` is `null`, `map.get(k) ==
+null` is the way to test for absence, and unboxing an absent value
+    throws `NullPointerException` exactly where Java does. `get`,
+    `containsKey` and `remove` are typed to `K` rather than Java's
+    `Object`, which only rejects programs a JDK would accept (never the
+    reverse). Lambda members (`forEach`, `merge`, `compute*`,
+    `replaceAll`), `Map.of`, and mutation through a view report honest
+    reasons. `keySet`/`values`/`entrySet` and the core methods are
+    pinned against a real JDK by `diff_hash_map_iteration_order`,
+    `_core_methods`, `_null_and_unboxing` and `_views`.
+    `println(map)` of user-class values prints the default
+    `Class@hash` form, not their `toString` — the same long-standing
+    deviation `println(list)` has, since an intrinsic cannot re-enter
+    the interpreter.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
     an honest "not supported by caturra" instead), and using `Scanner`,
-    `ArrayList`, `File`, or `PrintWriter` without the matching import
+    `ArrayList`, `HashMap`, `Map`, `Set`, `Collection`, `File`, or
+    `PrintWriter` without the matching import
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
     imports (`IOException`, ...) are accepted for `throws` clauses;

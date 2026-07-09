@@ -21,6 +21,8 @@ const JAVA_UTIL: &[&str] = &[
     "List",
     "HashMap",
     "Map",
+    "Set",
+    "Collection",
     "Arrays",
     "Random",
     "Collections",
@@ -83,7 +85,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "LinkedList",
             "ArrayDeque",
             "Stack",
-            "Set",
             "Queue",
             "Deque",
             "Iterator",
@@ -130,6 +131,8 @@ const REQUIRES_IMPORT: &[&str] = &[
     "List",
     "HashMap",
     "Map",
+    "Set",
+    "Collection",
     "File",
     "PrintWriter",
     "InputMismatchException",
@@ -144,7 +147,14 @@ const REQUIRES_IMPORT: &[&str] = &[
 pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     let (package, class) = dotted.rsplit_once('.')?;
     let known: &[&str] = match package {
-        "java.util" => &["Scanner", "ArrayList", "HashMap", "Map"],
+        "java.util" => &[
+            "Scanner",
+            "ArrayList",
+            "HashMap",
+            "Map",
+            "Set",
+            "Collection",
+        ],
         "java.io" => &["File", "PrintWriter"],
         "java.lang" => &[
             "String",

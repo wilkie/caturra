@@ -8,6 +8,7 @@
 
 use crate::io::ConsoleIo;
 use crate::map::{JavaHashMap, map_key};
+use crate::value::MapViewKind;
 use crate::value::{Heap, HeapObject, HeapRef, JValue, StdStream};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
@@ -370,6 +371,14 @@ pub fn invoke_virtual(
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
         (HeapObject::HashMap(_), _) => map_method(heap, receiver, method, descriptor, args),
+        (HeapObject::MapView { map, kind }, _) => {
+            let (map, kind) = (*map, *kind);
+            map_view_method(heap, map, kind, method, descriptor, args)
+        }
+        (HeapObject::MapEntry { map, key }, _) => {
+            let (map, key) = (*map, *key);
+            map_entry_method(heap, map, key, method, descriptor, args)
+        }
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
         (
             HeapObject::Exception {
@@ -1987,23 +1996,149 @@ fn map_method(
             Ok(Some(JValue::Int(hash)))
         }
         ("toString", []) => {
-            let entries = entries_of(heap, receiver);
-            let rendered: Vec<String> = entries
-                .iter()
-                .map(|(key, value)| {
-                    format!(
-                        "{}={}",
-                        display_jvalue(heap, *key),
-                        display_jvalue(heap, *value)
-                    )
-                })
-                .collect();
-            let text = format!("{{{}}}", rendered.join(", "));
+            let text = render_entries(heap, receiver, MapViewKind::Entries, "{", "}");
             let reference = heap.alloc_string(&text);
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // Java's three views are live: a later `put` shows through them.
+        ("keySet", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Keys))),
+        ("values", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Values))),
+        ("entrySet", []) => Ok(Some(alloc_view(heap, receiver, MapViewKind::Entries))),
         _ => Err(VmError::UnknownIntrinsic(format!(
             "HashMap.{method}{descriptor}"
+        ))),
+    }
+}
+
+/// Allocate one of a map's three views onto it.
+fn alloc_view(heap: &mut Heap, map: HeapRef, kind: MapViewKind) -> JValue {
+    JValue::Ref(Some(heap.alloc(HeapObject::MapView { map, kind })))
+}
+
+/// Render a map's entries in iteration order, as `keySet`, `values` and
+/// `entrySet` each show them.
+fn render_entries(heap: &Heap, map: HeapRef, kind: MapViewKind, open: &str, close: &str) -> String {
+    let rendered: Vec<String> = entries_of(heap, map)
+        .iter()
+        .map(|(key, value)| match kind {
+            MapViewKind::Keys => display_jvalue(heap, *key),
+            MapViewKind::Values => display_jvalue(heap, *value),
+            MapViewKind::Entries => format!(
+                "{}={}",
+                display_jvalue(heap, *key),
+                display_jvalue(heap, *value)
+            ),
+        })
+        .collect();
+    format!("{open}{}{close}", rendered.join(", "))
+}
+
+/// `keySet()` / `values()` / `entrySet()`. These are views, not copies, so
+/// every method reads through to the map as it stands now.
+///
+/// `__get(int)` is caturra's own: the enhanced-for loop compiles to an index
+/// loop over it, because caturra has no iterators. Mutating the map inside
+/// such a loop silently sees the new contents, where a real JDK would throw
+/// `ConcurrentModificationException`.
+fn map_view_method(
+    heap: &mut Heap,
+    map: HeapRef,
+    kind: MapViewKind,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    match (method, args) {
+        ("size", []) => Ok(Some(JValue::Int(
+            i32::try_from(map_of(heap, map).len()).unwrap_or(i32::MAX),
+        ))),
+        ("isEmpty", []) => Ok(Some(JValue::Int(i32::from(map_of(heap, map).is_empty())))),
+        ("contains", [value]) => {
+            let found = match kind {
+                MapViewKind::Keys => {
+                    let key = map_key(heap, *value);
+                    map_of(heap, map).contains_key(&key)
+                }
+                MapViewKind::Values => entries_of(heap, map)
+                    .iter()
+                    .any(|(_, held)| map_key(heap, *held) == map_key(heap, *value)),
+                // `entrySet().contains(entry)` would need entry equality; the
+                // compiler does not offer it.
+                MapViewKind::Entries => false,
+            };
+            Ok(Some(JValue::Int(i32::from(found))))
+        }
+        ("toString", []) => {
+            let text = render_entries(heap, map, kind, "[", "]");
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        // The element at a position in the map's iteration order.
+        ("__get", [JValue::Int(position)]) => {
+            let position = usize::try_from(*position).unwrap_or(usize::MAX);
+            let Some((key, value)) = map_of(heap, map).entry_at(position) else {
+                return Err(throw(format!(
+                    "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
+                )));
+            };
+            Ok(Some(match kind {
+                MapViewKind::Keys => key,
+                MapViewKind::Values => value,
+                MapViewKind::Entries => {
+                    JValue::Ref(Some(heap.alloc(HeapObject::MapEntry { map, key })))
+                }
+            }))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "Map view.{method}{descriptor}"
+        ))),
+    }
+}
+
+/// One `Map.Entry` from an `entrySet()`. Java's entry is a view onto its
+/// map, so `getValue` sees a later `put` and `setValue` writes through.
+fn map_entry_method(
+    heap: &mut Heap,
+    map: HeapRef,
+    key: JValue,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let comparable = map_key(heap, key);
+    match (method, args) {
+        ("getKey", []) => Ok(Some(key)),
+        ("getValue", []) => Ok(Some(
+            map_of(heap, map)
+                .lookup(&comparable)
+                .unwrap_or(JValue::NULL),
+        )),
+        ("setValue", [value]) => {
+            let previous = map_of_mut(heap, map)?.insert(comparable, key, *value);
+            Ok(Some(previous.unwrap_or(JValue::NULL)))
+        }
+        ("toString", []) => {
+            let value = map_of(heap, map)
+                .lookup(&comparable)
+                .unwrap_or(JValue::NULL);
+            let text = format!(
+                "{}={}",
+                display_jvalue(heap, key),
+                display_jvalue(heap, value)
+            );
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        // `Map.Entry.hashCode` is the key's hash XOR the value's.
+        ("hashCode", []) => {
+            let value = map_of(heap, map)
+                .lookup(&comparable)
+                .unwrap_or(JValue::NULL);
+            let hash = comparable.hash_code() ^ map_key(heap, value).hash_code();
+            Ok(Some(JValue::Int(hash)))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "Map.Entry.{method}{descriptor}"
         ))),
     }
 }

@@ -1127,6 +1127,17 @@ impl MethodTable {
                     let key = elem_from_type_arg(&args[0], self)?;
                     let value = elem_from_type_arg(&args[1], self)?;
                     Some(JType::Map { key, value })
+                } else if simple == "Set" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::Set)
+                } else if simple == "Collection" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::Collection)
+                } else if matches!(simple, "Map.Entry" | "Entry")
+                    && args.len() == 2
+                    && !self.has_class(simple)
+                {
+                    let key = elem_from_type_arg(&args[0], self)?;
+                    let value = elem_from_type_arg(&args[1], self)?;
+                    Some(JType::MapEntry { key, value })
                 } else if !self.has_class(base)
                     && matches!(simple, "Class" | "Constructor" | "Field")
                 {
@@ -1800,6 +1811,20 @@ enum JType {
         key: ElemType,
         value: ElemType,
     },
+    /// `java.util.Set<E>` — a map's `keySet()` view.
+    Set(ElemType),
+    /// `java.util.Collection<E>` — a map's `values()` view.
+    Collection(ElemType),
+    /// `Set<Map.Entry<K, V>>` — a map's `entrySet()` view.
+    EntrySet {
+        key: ElemType,
+        value: ElemType,
+    },
+    /// One `java.util.Map.Entry<K, V>`.
+    MapEntry {
+        key: ElemType,
+        value: ElemType,
+    },
     /// A parameterized user class with a single tracked type argument
     /// (`Box<String>`). Erases to `Object(class)` at the bytecode
     /// level; the argument enables cast-free reads of type-variable
@@ -1835,6 +1860,20 @@ impl JType {
             }
             JType::Map { key, value } => format!(
                 "HashMap<{}, {}>",
+                key.base_type().describe(table),
+                value.base_type().describe(table)
+            ),
+            JType::Set(elem) => format!("Set<{}>", elem.base_type().describe(table)),
+            JType::Collection(elem) => {
+                format!("Collection<{}>", elem.base_type().describe(table))
+            }
+            JType::EntrySet { key, value } => format!(
+                "Set<Map.Entry<{}, {}>>",
+                key.base_type().describe(table),
+                value.base_type().describe(table)
+            ),
+            JType::MapEntry { key, value } => format!(
+                "Map.Entry<{}, {}>",
                 key.base_type().describe(table),
                 value.base_type().describe(table)
             ),
@@ -1904,6 +1943,10 @@ impl JType {
                 | JType::Writer
                 | JType::List(_)
                 | JType::Map { .. }
+                | JType::Set(_)
+                | JType::Collection(_)
+                | JType::EntrySet { .. }
+                | JType::MapEntry { .. }
                 | JType::Exception(_)
                 | JType::Generic { .. }
                 | JType::TypeVar
@@ -1955,6 +1998,9 @@ impl JType {
             JType::Boxed(elem) => format!("L{};", wrapper_internal(elem)),
             JType::Generic { class, .. } => format!("L{};", table.class_name(class)),
             JType::Map { .. } => String::from("Ljava/util/HashMap;"),
+            JType::Set(_) | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
+            JType::Collection(_) => String::from("Ljava/util/Collection;"),
+            JType::MapEntry { .. } => String::from("Ljava/util/Map$Entry;"),
             JType::Int => String::from("I"),
             JType::Double => String::from("D"),
             JType::Boolean => String::from("Z"),
@@ -2339,6 +2385,12 @@ fn method_descriptor(
                     out.push_str("Ljava/util/ArrayList;");
                 } else if simple == "HashMap" {
                     out.push_str("Ljava/util/HashMap;");
+                } else if simple == "Set" && !table.has_class(simple) {
+                    out.push_str("Ljava/util/Set;");
+                } else if simple == "Collection" && !table.has_class(simple) {
+                    out.push_str("Ljava/util/Collection;");
+                } else if matches!(simple, "Map.Entry" | "Entry") && !table.has_class(simple) {
+                    out.push_str("Ljava/util/Map$Entry;");
                 } else if !table.has_class(base) && simple == "Class" {
                     out.push_str("Ljava/lang/Class;");
                 } else if !table.has_class(base) && simple == "Constructor" {
@@ -2596,6 +2648,14 @@ enum BRet {
     /// A map's value type, boxed when primitive (`map.get(k)` returns
     /// `null` for a missing key, so it cannot be a bare primitive).
     Val,
+    /// A map's key type, boxed when primitive (`entry.getKey()`).
+    Key,
+    /// `Set<K>` (`map.keySet()`).
+    Keys,
+    /// `Collection<V>` (`map.values()`).
+    Values,
+    /// `Set<Map.Entry<K, V>>` (`map.entrySet()`).
+    Entries,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -2998,6 +3058,22 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("HashMap", "computeIfPresent", "lambdas are not supported by caturra"),
     ("HashMap", "merge", "lambdas are not supported by caturra"),
     ("HashMap", "clone", "clone is not supported by caturra"),
+    ("HashMap", "of", "varargs are not supported by caturra"),
+    ("HashMap", "ofEntries", "varargs are not supported by caturra"),
+    ("Set", "iterator", "iterators are not supported by caturra (use for-each)"),
+    ("Set", "stream", "streams are not supported by caturra"),
+    ("Set", "forEach", "lambdas are not supported by caturra"),
+    ("Set", "removeIf", "lambdas are not supported by caturra"),
+    ("Set", "add", "a map's keySet() does not support add — Java throws UnsupportedOperationException"),
+    ("Set", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
+    ("Set", "clear", "clearing through a map's view is not supported by caturra (clear the map itself)"),
+    ("Collection", "iterator", "iterators are not supported by caturra (use for-each)"),
+    ("Collection", "stream", "streams are not supported by caturra"),
+    ("Collection", "forEach", "lambdas are not supported by caturra"),
+    ("Collection", "removeIf", "lambdas are not supported by caturra"),
+    ("Collection", "add", "a map's values() does not support add — Java throws UnsupportedOperationException"),
+    ("Collection", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
+    ("Collection", "clear", "clearing through a map's view is not supported by caturra (clear the map itself)"),
 ];
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
@@ -3009,6 +3085,9 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Scanner => "Scanner",
         JType::List(_) => "ArrayList",
         JType::Map { .. } => "HashMap",
+        JType::Set(_) | JType::EntrySet { .. } => "Set",
+        JType::Collection(_) => "Collection",
+        JType::MapEntry { .. } => "Map.Entry",
         JType::StringBuilder => "StringBuilder",
         _ => "",
     }
@@ -4235,6 +4314,45 @@ const MAP_METHODS: &[BuiltinMethod] = &[
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("keySet", &[], BRet::Keys, "()Ljava/util/Set;"),
+    bm("values", &[], BRet::Values, "()Ljava/util/Collection;"),
+    bm("entrySet", &[], BRet::Entries, "()Ljava/util/Set;"),
+];
+
+/// `java.util.Set<E>` / `java.util.Collection<E>` — a map's `keySet()` and
+/// `values()` views. `__get` is caturra's own indexed accessor, standing in
+/// for the iterator the enhanced-for loop would otherwise need.
+const VIEW_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm(
+        "contains",
+        &[BParam::Key],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `Set<Map.Entry<K, V>>` — a map's `entrySet()` view.
+const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.util.Map.Entry<K, V>` — a live view onto one mapping.
+const ENTRY_METHODS: &[BuiltinMethod] = &[
+    bm("getKey", &[], BRet::Key, "()Ljava/lang/Object;"),
+    bm("getValue", &[], BRet::Val, "()Ljava/lang/Object;"),
+    bm(
+        "setValue",
+        &[BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
 /// The intrinsic method table and JVM class for a receiver type.
@@ -4253,6 +4371,10 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::Map { .. } => Some(("java/util/HashMap", MAP_METHODS)),
+        JType::Set(_) => Some(("java/util/Set", VIEW_METHODS)),
+        JType::Collection(_) => Some(("java/util/Collection", VIEW_METHODS)),
+        JType::EntrySet { .. } => Some(("java/util/Set", ENTRY_SET_METHODS)),
+        JType::MapEntry { .. } => Some(("java/util/Map$Entry", ENTRY_METHODS)),
         _ => None,
     }
 }
@@ -4353,11 +4475,15 @@ impl TypeArgs {
     /// The type arguments a receiver carries, if it is a generic intrinsic.
     fn of(receiver: JType) -> Self {
         match receiver {
-            JType::List(elem) => Self {
+            // A list's element, and a view's own element, are the first
+            // type argument; a map's key and value are the two.
+            JType::List(elem) | JType::Set(elem) | JType::Collection(elem) => Self {
                 first: Some(elem),
                 second: None,
             },
-            JType::Map { key, value } => Self {
+            JType::Map { key, value }
+            | JType::EntrySet { key, value }
+            | JType::MapEntry { key, value } => Self {
                 first: Some(key),
                 second: Some(value),
             },
@@ -4481,6 +4607,13 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         }),
         BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
         BRet::Val => Some(boxed_if_primitive(args.second)),
+        BRet::Key => Some(boxed_if_primitive(args.first)),
+        BRet::Keys => Some(args.first.map_or(JType::Error, JType::Set)),
+        BRet::Values => Some(args.second.map_or(JType::Error, JType::Collection)),
+        BRet::Entries => Some(match (args.first, args.second) {
+            (Some(key), Some(value)) => JType::EntrySet { key, value },
+            _ => JType::Error,
+        }),
         BRet::Class => Some(JType::Class),
         BRet::FieldArray => Some(JType::Array {
             elem: ElemType::Field,
@@ -6747,6 +6880,10 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::List(_)
             | JType::Map { .. }
+            | JType::Set(_)
+            | JType::Collection(_)
+            | JType::EntrySet { .. }
+            | JType::MapEntry { .. }
             | JType::Class
             | JType::Field
             | JType::Method
@@ -6940,6 +7077,10 @@ impl BodyGen<'_> {
                 JType::Object(_)
                 | JType::List(_)
                 | JType::Map { .. }
+                | JType::Set(_)
+                | JType::Collection(_)
+                | JType::EntrySet { .. }
+                | JType::MapEntry { .. }
                 | JType::File
                 | JType::Exception(_) => self.coerce_to_string_for_output(ty),
                 other => other,
@@ -7195,13 +7336,18 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return JType::Str;
         }
-        if matches!(ty, JType::Map { .. }) {
-            let method_ref = intern_method_ref(
-                self.pool,
-                "java/util/HashMap",
-                "toString",
-                "()Ljava/lang/String;",
-            );
+        if let Some((class, _)) = builtin_instance_table(ty)
+            && matches!(
+                ty,
+                JType::Map { .. }
+                    | JType::Set(_)
+                    | JType::Collection(_)
+                    | JType::EntrySet { .. }
+                    | JType::MapEntry { .. }
+            )
+        {
+            let method_ref =
+                intern_method_ref(self.pool, class, "toString", "()Ljava/lang/String;");
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
             self.code.drop_stack(1);
             return JType::Str;
@@ -7382,8 +7528,18 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) {
         let iterable_ty = self.expr(iterable);
-        if let JType::List(elem) = iterable_ty {
-            self.for_each_list(ty, name, elem, body, span);
+        // Every intrinsic collection compiles to the same index loop: caturra
+        // has no iterators, so each exposes a positional accessor instead.
+        let indexed = match iterable_ty {
+            JType::List(elem) => Some(("get", elem.base_type())),
+            JType::Set(elem) | JType::Collection(elem) => {
+                Some(("__get", boxed_if_primitive(Some(elem))))
+            }
+            JType::EntrySet { key, value } => Some(("__get", JType::MapEntry { key, value })),
+            _ => None,
+        };
+        if let Some((accessor, element)) = indexed {
+            self.for_each_indexed(ty, name, iterable_ty, accessor, element, body, span);
             return;
         }
         let Some(element) = iterable_ty.element_type() else {
@@ -7391,7 +7547,7 @@ impl BodyGen<'_> {
                 self.error(
                     iterable.span(),
                     format!(
-                        "for-each needs an array or ArrayList, but {} found",
+                        "for-each needs an array, an ArrayList, or a map view, but {} found",
                         iterable_ty.describe(self.table)
                     ),
                 );
@@ -7475,15 +7631,22 @@ impl BodyGen<'_> {
 
     /// `for (T x : list)` desugared to an indexed loop over
     /// `size()`/`get(int)` (the list reference is already on the stack).
-    fn for_each_list(
+    /// The enhanced-for loop over an intrinsic collection, compiled to an
+    /// index loop over `size()` and a positional accessor. `accessor` is
+    /// `get` for an `ArrayList` and caturra's own `__get` for a map view,
+    /// which has no positional method in Java because it has an iterator.
+    #[allow(clippy::too_many_arguments)] // the loop's five moving parts
+    fn for_each_indexed(
         &mut self,
         ty: &TypeRef,
         name: &str,
-        elem: ElemType,
+        iterable_ty: JType,
+        accessor: &str,
+        element: JType,
         body: &Stmt,
         span: SourceSpan,
     ) {
-        let element = elem.base_type();
+        let (class, _) = builtin_instance_table(iterable_ty).expect("an intrinsic collection");
         let Some(var_ty) = self.table.resolve_type(ty) else {
             self.error(span, "unknown type for the for-each variable");
             self.code.discard();
@@ -7494,7 +7657,7 @@ impl BodyGen<'_> {
         self.next_slot += 1;
         let index_slot = self.next_slot;
         self.next_slot += 1;
-        self.emit_store(list_slot, JType::List(elem));
+        self.emit_store(list_slot, iterable_ty);
         self.code.push_op(op::ICONST_0, 1);
         self.emit_store(index_slot, JType::Int);
 
@@ -7518,13 +7681,8 @@ impl BodyGen<'_> {
             },
         ));
 
-        let size_ref = intern_method_ref(self.pool, "java/util/ArrayList", "size", "()I");
-        let get_ref = intern_method_ref(
-            self.pool,
-            "java/util/ArrayList",
-            "get",
-            "(I)Ljava/lang/Object;",
-        );
+        let size_ref = intern_method_ref(self.pool, class, "size", "()I");
+        let get_ref = intern_method_ref(self.pool, class, accessor, "(I)Ljava/lang/Object;");
 
         let cond_label = self.code.new_label();
         let continue_label = self.code.new_label();
@@ -7532,12 +7690,12 @@ impl BodyGen<'_> {
 
         self.code.bind(cond_label);
         self.emit_load(index_slot, JType::Int);
-        self.emit_load(list_slot, JType::List(elem));
+        self.emit_load(list_slot, iterable_ty);
         self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
         self.code.drop_stack(1);
         self.code.branch(op::IF_ICMPGE, end, 2);
 
-        self.emit_load(list_slot, JType::List(elem));
+        self.emit_load(list_slot, iterable_ty);
         self.emit_load(index_slot, JType::Int);
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, get_ref, element.width());
@@ -7964,6 +8122,10 @@ impl BodyGen<'_> {
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Map { .. }
+            | JType::Set(_)
+            | JType::Collection(_)
+            | JType::EntrySet { .. }
+            | JType::MapEntry { .. }
             | JType::Class
             | JType::Field
             | JType::Method
@@ -8213,6 +8375,10 @@ impl BodyGen<'_> {
                         | JType::Writer
                         | JType::List(_)
                         | JType::Map { .. }
+                        | JType::Set(_)
+                        | JType::Collection(_)
+                        | JType::EntrySet { .. }
+                        | JType::MapEntry { .. }
                         | JType::Exception(_)
                         | JType::Class
                         | JType::Field
@@ -9896,10 +10062,17 @@ impl BodyGen<'_> {
 
     #[allow(clippy::too_many_lines)] // one arm per operand-type family
     fn comparison(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
-        let (lt, rt) = (
-            numeric_view(self.type_of(lhs)),
-            numeric_view(self.type_of(rhs)),
-        );
+        let (raw_l, raw_r) = (self.type_of(lhs), self.type_of(rhs));
+        // Comparing against `null` is a reference comparison (JLS §15.21.3),
+        // so a wrapper stays boxed: `map.get(k) == null` asks whether the
+        // mapping is absent, and must not try to unbox it first.
+        let against_null = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && (raw_l == JType::Null || raw_r == JType::Null);
+        let (lt, rt) = if against_null {
+            (raw_l, raw_r)
+        } else {
+            (numeric_view(raw_l), numeric_view(raw_r))
+        };
         if lt == JType::Error || rt == JType::Error {
             self.expr(lhs);
             self.expr(rhs);
@@ -10090,6 +10263,10 @@ impl BodyGen<'_> {
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Map { .. }
+            | JType::Set(_)
+            | JType::Collection(_)
+            | JType::EntrySet { .. }
+            | JType::MapEntry { .. }
             | JType::Class
             | JType::Field
             | JType::Method
@@ -10378,6 +10555,10 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::List(_)
             | JType::Map { .. }
+            | JType::Set(_)
+            | JType::Collection(_)
+            | JType::EntrySet { .. }
+            | JType::MapEntry { .. }
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
@@ -10398,6 +10579,10 @@ impl BodyGen<'_> {
             | JType::Writer
             | JType::List(_)
             | JType::Map { .. }
+            | JType::Set(_)
+            | JType::Collection(_)
+            | JType::EntrySet { .. }
+            | JType::MapEntry { .. }
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };

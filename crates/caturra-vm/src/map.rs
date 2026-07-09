@@ -213,11 +213,6 @@ impl JavaHashMap {
         self.order.take();
     }
 
-    #[must_use]
-    pub fn contains_value(&self, value: JValue) -> bool {
-        self.entries.iter().any(|entry| entry.value == value)
-    }
-
     /// The entries in the JDK's iteration order: by bucket, and within a
     /// bucket by insertion.
     pub fn iteration_order(&self) -> &[usize] {

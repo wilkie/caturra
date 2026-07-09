@@ -8253,3 +8253,98 @@ fn string_builder_exposes_the_java_11_api() {
          he\n"
     );
 }
+
+/// `java.util.HashMap` with the JDK's own iteration order, and the boxing
+/// that lets a missing key be `null`. Cross-checked against a real JDK by
+/// the `diff_hash_map_*` differential tests; this keeps the coverage on a
+/// JDK-less CI box.
+#[test]
+fn hash_map_iterates_and_boxes_like_the_jdk() {
+    let out = run_stdout(
+        r#"
+        import java.util.HashMap;
+        import java.util.Map;
+        public class H {
+            public static void main(String[] args) {
+                Map<String, Integer> counts = new HashMap<>();
+                counts.put("pear", 4);
+                counts.put("apple", 1);
+                counts.put("fig", 9);
+                // Bucket order, not insertion order.
+                System.out.println(counts);
+                System.out.println(counts.keySet() + " " + counts.values());
+
+                // A missing key is null, and unboxing it throws.
+                System.out.println(counts.get("zz"));
+                System.out.println(counts.get("zz") == null);
+                try {
+                    int bad = counts.get("zz");
+                    System.out.println(bad);
+                } catch (NullPointerException e) {
+                    System.out.println("npe");
+                }
+                // But `put` as a statement discards the null silently.
+                counts.put("kiwi", 2);
+                System.out.println(counts.size());
+
+                int total = 0;
+                for (int value : counts.values()) {
+                    total += value;
+                }
+                System.out.println(total);
+                for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+                    entry.setValue(entry.getValue() + 1);
+                }
+                System.out.println(counts);
+
+                // Keys compare with equals, so -0.0 and 0.0 are distinct.
+                Map<Double, String> byDouble = new HashMap<>();
+                byDouble.put(-0.0, "neg");
+                byDouble.put(0.0, "pos");
+                System.out.println(byDouble.size() + " " + byDouble.get(-0.0));
+            }
+        }
+        "#,
+        "H",
+    );
+    assert_eq!(
+        out,
+        "{apple=1, pear=4, fig=9}\n\
+         [apple, pear, fig] [1, 4, 9]\n\
+         null\n\
+         true\n\
+         npe\n\
+         4\n\
+         16\n\
+         {apple=2, pear=5, kiwi=3, fig=10}\n\
+         2 neg\n"
+    );
+}
+
+/// Java's `Map` members that caturra cannot model name a reason rather than
+/// pretending they do not exist.
+#[test]
+fn unsupported_map_members_explain_themselves() {
+    for (source, want) in [
+        (
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().merge(null, null, null); } }",
+            "HashMap.merge exists in Java, but lambdas are not supported by caturra",
+        ),
+        (
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().keySet().iterator(); } }",
+            "Set.iterator exists in Java, but iterators are not supported by caturra (use for-each)",
+        ),
+        (
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().stream(); } }",
+            "Collection.stream exists in Java, but streams are not supported by caturra",
+        ),
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}
