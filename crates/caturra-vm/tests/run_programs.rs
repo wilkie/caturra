@@ -8594,3 +8594,52 @@ fn collections_use_the_user_equals_and_hash_code() {
          {false=f, true=t}\n"
     );
 }
+
+/// A compound assignment unboxes a wrapper on either side and boxes the
+/// result back (JLS §15.26.2). `total += map.get(key)` is the reason it
+/// matters; `Integer x = 5; x += 1;` used to leave a raw int in a reference
+/// slot, which only failed later. Cross-checked by
+/// `diff_compound_assignment_unboxes`.
+#[test]
+fn compound_assignment_unboxes_and_reboxes() {
+    let out = run_stdout(
+        r#"
+        import java.util.HashMap;
+        import java.util.Map;
+        public class C {
+            static Integer field = 10;
+            public static void main(String[] args) {
+                Map<String, Double> weights = new HashMap<String, Double>();
+                weights.put("a", 1.5);
+                double total = 0;
+                total += weights.get("a");
+                System.out.println(total);
+
+                Integer counter = 5;
+                counter += 1;
+                counter++;
+                System.out.println(counter + " " + (counter instanceof Integer));
+
+                Long big = 5L;
+                big += 1;
+                System.out.println(big);
+
+                field += 5;
+                System.out.println(field);
+
+                int[] cells = {1};
+                Integer step = 3;
+                cells[0] += step;
+                System.out.println(cells[0]);
+
+                char letter = 'a';
+                Integer one = 1;
+                letter += one;
+                System.out.println(letter);
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(out, "1.5\n7 true\n6\n15\n4\nb\n");
+}

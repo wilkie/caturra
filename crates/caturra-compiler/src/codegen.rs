@@ -5719,8 +5719,15 @@ impl BodyGen<'_> {
                 }
 
                 let value_ty = self.type_of(value);
-                if var_ty == JType::Boolean || !value_ty.is_numeric() {
-                    if value_ty != JType::Error && var_ty != JType::Boolean {
+                // A wrapper on either side unboxes first (JLS §15.26.2), so
+                // `total += map.get(k)` and `count += 1` on an `Integer` both
+                // work. The result boxes back when the target is a wrapper.
+                let target = numeric_view(var_ty);
+                let operand = numeric_view(value_ty);
+                if target == JType::Boolean || !target.is_numeric() || !operand.is_numeric() {
+                    if target == JType::Boolean {
+                        self.error(span, "compound assignment cannot be applied to a boolean");
+                    } else if value_ty != JType::Error {
                         self.error(
                             value.span(),
                             format!(
@@ -5730,21 +5737,22 @@ impl BodyGen<'_> {
                                 value_ty.describe(self.table)
                             ),
                         );
-                    } else if var_ty == JType::Boolean {
-                        self.error(span, "compound assignment cannot be applied to a boolean");
                     }
                     return;
                 }
 
                 // Compound assignment: promote, operate, then cast back
                 // to the variable's type implicitly (JLS §15.26.2).
-                let promoted = promote(var_ty, value_ty);
+                let promoted = promote(target, operand);
                 self.emit_load(slot, var_ty);
                 self.numeric_conversion(var_ty, promoted);
                 let actual = self.expr(value);
                 self.numeric_conversion(actual, promoted);
                 self.arithmetic_op(op, promoted);
-                self.narrow_back(promoted, var_ty);
+                self.narrow_back(promoted, target);
+                if let JType::Boxed(elem) = var_ty {
+                    self.emit_box(elem);
+                }
                 self.emit_store(slot, var_ty);
             }
         }
@@ -5923,7 +5931,10 @@ impl BodyGen<'_> {
                     return;
                 }
                 let value_ty = self.type_of(value);
-                if field.ty == JType::Boolean || !field.ty.is_numeric() || !value_ty.is_numeric() {
+                // A wrapper field or value unboxes first, and boxes back.
+                let target = numeric_view(field.ty);
+                let operand = numeric_view(value_ty);
+                if target == JType::Boolean || !target.is_numeric() || !operand.is_numeric() {
                     if value_ty != JType::Error {
                         self.error(
                             span,
@@ -5937,7 +5948,7 @@ impl BodyGen<'_> {
                     }
                     return;
                 }
-                let promoted = promote(field.ty, value_ty);
+                let promoted = promote(target, operand);
                 if !is_static {
                     self.code.push_op(op::DUP, 1);
                 }
@@ -5957,7 +5968,10 @@ impl BodyGen<'_> {
                 let actual = self.expr(value);
                 self.numeric_conversion(actual, promoted);
                 self.arithmetic_op(op_kind, promoted);
-                self.narrow_back(promoted, field.ty);
+                self.narrow_back(promoted, target);
+                if let JType::Boxed(elem) = field.ty {
+                    self.emit_box(elem);
+                }
                 if is_static {
                     self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
                     self.code.drop_stack(field.ty.width());
@@ -7493,7 +7507,10 @@ impl BodyGen<'_> {
                     return;
                 }
                 let value_ty = self.type_of(value);
-                if element == JType::Boolean || !element.is_numeric() || !value_ty.is_numeric() {
+                // A wrapper value unboxes first; array elements are already
+                // primitive here.
+                let operand = numeric_view(value_ty);
+                if element == JType::Boolean || !element.is_numeric() || !operand.is_numeric() {
                     if value_ty != JType::Error {
                         self.error(
                             span,
@@ -7507,7 +7524,7 @@ impl BodyGen<'_> {
                     }
                     return;
                 }
-                let promoted = promote(element, value_ty);
+                let promoted = promote(element, operand);
                 self.code.push_op(op::DUP2, 2);
                 self.xaload(element);
                 self.numeric_conversion(element, promoted);

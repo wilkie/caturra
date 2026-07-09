@@ -232,6 +232,12 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
     Nested generics (`ArrayList<ArrayList<...>>`) are rejected kindly.
+  - Compound assignment unboxes a wrapper on either side and boxes the
+    result back (JLS §15.26.2, fixed 2026-07-09), so `total +=
+map.get(key)` and `Integer count; count += 1;` behave as javac
+    compiles them — the latter used to leave a raw `int` in a reference
+    slot and fail only when something later read it. The implicit
+    narrowing cast still applies (`char c; c += anInteger;`).
   - `HashMap<K, V>` / `Map<K, V>` (2026-07-09), **with the JDK's own
     iteration order**. A real map's order looks arbitrary but is a pure
     function of the keys' hash codes, the table length, and insertion

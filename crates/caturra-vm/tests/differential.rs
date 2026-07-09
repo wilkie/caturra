@@ -29,8 +29,13 @@ fn run_with_jdk(class_name: &str, source: &str) -> String {
 
 /// Run through the JDK with piped standard input.
 fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
+    // Two tests may legitimately declare the same class name; give each its
+    // own directory, or javac's output races between them.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(source, &mut hasher);
+    let fingerprint = std::hash::Hasher::finish(&hasher);
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("differential-{class_name}"));
+        .join(format!("differential-{class_name}-{fingerprint:x}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let java_file = dir.join(format!("{class_name}.java"));
     let mut file = std::fs::File::create(&java_file).expect("create source file");
@@ -3848,6 +3853,73 @@ public class DiffMapCollide {
             sized.put(new Collides(i), i);
         }
         System.out.println(sized.keySet());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_compound_assignment_unboxes,
+    "DiffCompoundBoxing",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+
+public class DiffCompoundBoxing {
+    static Integer field = 10;
+    static Double doubleField = 1.0;
+
+    public static void main(String[] args) {
+        // `total += map.get(k)` unboxes the wrapper the map hands back.
+        Map<String, Double> weights = new HashMap<String, Double>();
+        weights.put("a", 1.5);
+        weights.put("b", 2.5);
+        double total = 0;
+        for (String key : weights.keySet()) {
+            total += weights.get(key);
+        }
+        System.out.println(total);
+
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        numbers.add(3);
+        int sum = 0;
+        sum += numbers.get(0);
+        Integer boxed = 4;
+        sum += boxed;
+        System.out.println(sum);
+
+        // A wrapper target unboxes, operates, and boxes back.
+        Integer counter = 5;
+        counter += 1;
+        counter++;
+        ++counter;
+        counter--;
+        System.out.println(counter + " " + (counter instanceof Integer));
+
+        Long big = 5L;
+        big += 1;
+        System.out.println(big);
+
+        Double half = 1.5;
+        half += 1;
+        System.out.println(half);
+
+        // Fields and array elements too.
+        field += 5;
+        doubleField += 0.5;
+        System.out.println(field + " " + doubleField);
+
+        int[] cells = {1, 2};
+        Integer step = 3;
+        cells[0] += step;
+        System.out.println(cells[0]);
+
+        // The implicit narrowing cast still applies.
+        char letter = 'a';
+        Integer one = 1;
+        letter += one;
+        System.out.println(letter);
     }
 }
 "#
