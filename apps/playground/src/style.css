@@ -647,6 +647,55 @@ label {
   font-weight: 600;
 }
 
+/* JTree: a role=tree list with nested role=group children. */
+.swing-tree,
+.swing-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.swing-tree {
+  border: 1px solid var(--swing-control-border);
+  border-radius: var(--swing-radius);
+  background: var(--swing-field);
+  padding: 0.25rem;
+  min-width: 10rem;
+}
+
+/* Each nesting level indents its children. */
+.swing-tree ul {
+  padding-left: 1.1rem;
+}
+
+.swing-tree [role='treeitem']:focus-visible > .swing-tree-row {
+  outline: 2px solid var(--swing-focus);
+  outline-offset: -2px;
+}
+
+.swing-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.2rem;
+  border-radius: var(--swing-radius);
+}
+
+.swing-tree [role='treeitem'][aria-selected='true'] > .swing-tree-row {
+  background: var(--swing-control-hover);
+}
+
+.swing-tree-handle {
+  width: 1em;
+  font-size: 0.75em;
+  cursor: pointer;
+  text-align: center;
+}
+
+.swing-tree-label {
+  cursor: pointer;
+}
+
 /* setAutoCreateRowSorter: the header is a button that cycles the sort. */
 .swing-sort-header {
   width: 100%;

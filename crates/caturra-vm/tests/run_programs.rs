@@ -1036,6 +1036,56 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_tree_selects_nodes_and_tracks_expansion() {
+    // A JTree over DefaultMutableTreeNodes. Node ids are assigned in creation
+    // order (root n1, warm n2, red n3). Selecting fires the listener with a
+    // TreePath; the "__tree" sentinel expands without firing it. Ids: frame c0,
+    // tree c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        import javax.swing.event.*;
+        public class Main {
+            static JTree tree;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Colors");
+                DefaultMutableTreeNode root = new DefaultMutableTreeNode("Colors");
+                DefaultMutableTreeNode warm = new DefaultMutableTreeNode("Warm");
+                DefaultMutableTreeNode red = new DefaultMutableTreeNode("Red");
+                warm.add(red);
+                root.add(warm);
+                tree = new JTree(root);
+                tree.addTreeSelectionListener(e -> {
+                    DefaultMutableTreeNode node =
+                        (DefaultMutableTreeNode) Main.tree.getLastSelectedPathComponent();
+                    System.out.println("picked " + node.getUserObject()
+                        + " leaf=" + node.isLeaf()
+                        + " level=" + node.getLevel()
+                        + " path=" + Main.tree.getSelectionPath());
+                });
+                System.out.println("warm expanded=" + tree.isExpanded(new TreePath(warm.getPath())));
+                frame.add(tree);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("__tree\nc1=exp:n2")), // expand Warm, no listener
+            Some(String::from("c1\nc1=sel:n3")),     // select Red
+            Some(String::from("c1\nc1=sel:n1")),     // select the root
+        ],
+    );
+    assert_eq!(
+        out,
+        "warm expanded=false\n\
+         picked Red leaf=true level=2 path=[Colors, Warm, Red]\n\
+         picked Colors leaf=false level=0 path=[Colors]\n"
+    );
+}
+
+#[test]
 fn swing_table_sorts_rows_and_converts_view_indices() {
     // Clicking a header cycles ascending -> descending -> unsorted. Row indices
     // are VIEW indices; convertRowIndexToModel maps back. Ids: frame c0, table

@@ -2447,6 +2447,46 @@ test.describe('swing (interactive)', () => {
     await expect(table.getByRole('row', { name: /Bo/ })).toContainText('8');
   });
 
+  test('a JTree expands, selects, and navigates by keyboard', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Tree (JTree)' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const tree = root.getByRole('tree');
+
+    // The root starts expanded; its children are collapsed, so leaves are hidden.
+    const colors = tree.getByRole('treeitem', { name: 'Colors' });
+    await expect(colors).toHaveAttribute('aria-expanded', 'true');
+    const warm = tree.getByRole('treeitem', { name: 'Warm' });
+    await expect(warm).toHaveAttribute('aria-expanded', 'false');
+    await expect(tree.getByRole('treeitem', { name: 'Red' })).toHaveCount(0);
+
+    // Clicking the handle expands Warm, revealing its leaves — and does NOT
+    // fire the selection listener.
+    await warm.locator('.swing-tree-handle').click();
+    await expect(warm).toHaveAttribute('aria-expanded', 'true');
+    await expect(tree.getByRole('treeitem', { name: 'Red' })).toBeVisible();
+    await expect(root).toContainText('Click a node.');
+
+    // Clicking a label selects it; the listener reports the TreePath.
+    await tree.getByRole('treeitem', { name: 'Red' }).locator('.swing-tree-label').click();
+    await expect(root).toContainText('Red (leaf) at [Colors, Warm, Red]');
+    await expect(tree.getByRole('treeitem', { name: 'Red' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // Keyboard: Arrow Right on a collapsed node expands it.
+    const cool = tree.getByRole('treeitem', { name: 'Cool' });
+    await cool.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(cool).toHaveAttribute('aria-expanded', 'true');
+    // Enter selects the focused node.
+    await tree.getByRole('treeitem', { name: 'Blue' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(root).toContainText('Blue (leaf) at [Colors, Cool, Blue]');
+  });
+
   test('clicking a JTable header sorts rows, and view indices convert', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Sortable table' });

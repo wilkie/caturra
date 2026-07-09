@@ -56,6 +56,7 @@ interface SwingNode {
     | 'radio'
     | 'combobox'
     | 'list'
+    | 'tree'
     | 'slider'
     | 'scrollpane'
     | 'tabbedpane'
@@ -175,6 +176,9 @@ interface SwingNode {
   cellStyles?: SwingCellStyle[][];
   /** TableColumn.setPreferredWidth per column; -1 means "size it yourself". */
   colWidths?: number[];
+  /** JTree root node. */
+  root?: SwingTreeNode;
+  rootVisible?: boolean;
   /** setAutoCreateRowSorter: headers become sort buttons. */
   sortable?: boolean;
   /** The sorted column, or -1 when unsorted. */
@@ -198,6 +202,15 @@ interface SwingMenu {
 interface SwingItemStyle {
   fg?: string;
   bg?: string;
+}
+
+/** One JTree node: its children are present only while it is expanded. */
+interface SwingTreeNode {
+  id: string;
+  text?: string;
+  expanded?: boolean;
+  selected?: boolean;
+  children?: SwingTreeNode[];
 }
 
 /** Per-cell styling produced by a JTable column's TableCellRenderer. */
@@ -1004,6 +1017,9 @@ export class SwingViz {
       case 'table':
         this.#patchTable(el as HTMLTableElement, node);
         break;
+      case 'tree':
+        this.#patchTree(el, node);
+        break;
       case 'progressbar':
         this.#progressState(el, node);
         break;
@@ -1290,6 +1306,8 @@ export class SwingViz {
         return this.comboBox(node);
       case 'list':
         return this.listBox(node);
+      case 'tree':
+        return this.tree(node);
       case 'slider':
         return this.slider(node);
       case 'scrollpane':
@@ -2591,6 +2609,150 @@ export class SwingViz {
     this.#field(select, node, 'change');
     this.common(select, node);
     return select;
+  }
+
+  /** A JTree: the ARIA tree pattern — role=tree, nested role=group, each node a
+   * role=treeitem announcing aria-expanded / aria-selected. */
+  private tree(node: SwingNode): HTMLElement {
+    const root = document.createElement('ul');
+    root.className = 'swing-tree';
+    root.setAttribute('role', 'tree');
+    if (node.tooltip !== undefined) {
+      root.setAttribute('aria-label', node.tooltip);
+    }
+    const top = node.root;
+    if (top !== undefined) {
+      // A hidden root shows its children at the top level.
+      const roots = node.rootVisible === false ? (top.children ?? []) : [top];
+      for (const child of roots) {
+        root.appendChild(this.#treeItem(child, node.id));
+      }
+    }
+    this.#treeKeys(root, node.id);
+    this.common(root, node);
+    return root;
+  }
+
+  #treeItem(item: SwingTreeNode, treeId: string): HTMLElement {
+    const li = document.createElement('li');
+    li.setAttribute('role', 'treeitem');
+    li.dataset.nid = item.id;
+    const parent = (item.children ?? []).length > 0;
+    const expanded = item.expanded === true;
+    if (parent) {
+      li.setAttribute('aria-expanded', String(expanded));
+    }
+    const selected = item.selected === true;
+    li.setAttribute('aria-selected', String(selected));
+    li.tabIndex = selected ? 0 : -1;
+
+    const row = document.createElement('span');
+    row.className = 'swing-tree-row';
+    // The handle is decorative: aria-expanded already conveys the state, and the
+    // keyboard expands with Arrow Right / Left on the item itself.
+    const handle = document.createElement('span');
+    handle.className = 'swing-tree-handle';
+    handle.setAttribute('aria-hidden', 'true');
+    handle.textContent = parent ? (expanded ? '▾' : '▸') : '';
+    const label = document.createElement('span');
+    label.className = 'swing-tree-label';
+    label.id = `${item.id}-label`;
+    label.textContent = item.text ?? '';
+    // Name the item from its own label, not from its whole subtree.
+    li.setAttribute('aria-labelledby', label.id);
+    row.append(handle, label);
+    li.appendChild(row);
+
+    if (this.#onEvent !== null) {
+      handle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (parent) {
+          this.#toggleTreeNode(treeId, item.id, expanded);
+        }
+      });
+      label.addEventListener('click', () => {
+        this.#dispatch(`${this.#payload(treeId)}\n${treeId}=sel:${item.id}`);
+      });
+    }
+
+    // Children exist in the DOM only while the node is expanded.
+    if (parent && expanded) {
+      const group = document.createElement('ul');
+      group.setAttribute('role', 'group');
+      for (const child of item.children ?? []) {
+        group.appendChild(this.#treeItem(child, treeId));
+      }
+      li.appendChild(group);
+    }
+    return li;
+  }
+
+  /** Expand/collapse rides the "__tree" sentinel, so no selection listener fires. */
+  #toggleTreeNode(treeId: string, nid: string, expanded: boolean): void {
+    const command = expanded ? 'col' : 'exp';
+    this.#dispatch(`${this.#payload('__tree')}\n${treeId}=${command}:${nid}`);
+  }
+
+  #treeKeys(root: HTMLElement, treeId: string): void {
+    root.addEventListener('keydown', (event) => {
+      const items = [...root.querySelectorAll<HTMLElement>('[role="treeitem"]')];
+      const current = document.activeElement as HTMLElement | null;
+      const index = current === null ? -1 : items.indexOf(current);
+      if (index < 0) return;
+      const item = items[index];
+      if (item === undefined) return;
+      const nid = item.dataset.nid ?? '';
+      const expanded = item.getAttribute('aria-expanded');
+      const focus = (next: number): void => {
+        items[next]?.focus();
+      };
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focus(Math.min(index + 1, items.length - 1));
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        focus(Math.max(index - 1, 0));
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        focus(0);
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        focus(items.length - 1);
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        // Collapsed → expand; already expanded → step into the first child.
+        if (expanded === 'false') {
+          this.#toggleTreeNode(treeId, nid, false);
+        } else if (expanded === 'true') {
+          focus(index + 1);
+        }
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        if (expanded === 'true') {
+          this.#toggleTreeNode(treeId, nid, true);
+        } else {
+          // Step out to the parent item.
+          const parent = item.parentElement?.closest<HTMLElement>('[role="treeitem"]');
+          parent?.focus();
+        }
+      } else if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        this.#dispatch(`${this.#payload(treeId)}\n${treeId}=sel:${nid}`);
+      }
+    });
+  }
+
+  /** Rebuild a tree's items, restoring focus to the item that had it. */
+  #patchTree(el: HTMLElement, node: SwingNode): void {
+    const hadFocus = el.contains(document.activeElement);
+    const fresh = this.tree(node);
+    el.replaceChildren(...Array.from(fresh.childNodes));
+    if (hadFocus) {
+      const target =
+        el.querySelector<HTMLElement>('[role="treeitem"][aria-selected="true"]') ??
+        el.querySelector<HTMLElement>('[role="treeitem"]');
+      target?.focus();
+    }
   }
 
   /** Paint each option with the colours its ListCellRenderer chose. Re-applied

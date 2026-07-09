@@ -2015,6 +2015,52 @@ public class Main {
 `,
   },
   {
+    name: 'Tree (JTree)',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JTree tree;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Colors");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // Build the node tree; the root starts expanded, deeper nodes collapsed.
+    DefaultMutableTreeNode root = new DefaultMutableTreeNode("Colors");
+    DefaultMutableTreeNode warm = new DefaultMutableTreeNode("Warm");
+    warm.add(new DefaultMutableTreeNode("Red"));
+    warm.add(new DefaultMutableTreeNode("Orange"));
+    DefaultMutableTreeNode cool = new DefaultMutableTreeNode("Cool");
+    cool.add(new DefaultMutableTreeNode("Blue"));
+    cool.add(new DefaultMutableTreeNode("Green"));
+    root.add(warm);
+    root.add(cool);
+
+    tree = new JTree(root);
+
+    status = new JLabel("Click a node. Arrow keys navigate and expand.");
+    tree.addTreeSelectionListener(e -> {
+      DefaultMutableTreeNode node =
+          (DefaultMutableTreeNode) Main.tree.getLastSelectedPathComponent();
+      if (node != null) {
+        Main.status.setText(node.getUserObject()
+            + (node.isLeaf() ? " (leaf)" : " (" + node.getChildCount() + " children)")
+            + " at " + Main.tree.getSelectionPath());
+      }
+    });
+
+    frame.add(new JScrollPane(tree), BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Sortable table',
     starter: `import javax.swing.*;
 import java.awt.*;

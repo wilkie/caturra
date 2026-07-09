@@ -253,6 +253,9 @@ static JAVAX_SWING: &[&str] = &[
     "DefaultListModel",
     "ListCellRenderer",
     "DefaultListCellRenderer",
+    "JTree",
+    "DefaultMutableTreeNode",
+    "TreePath",
     "JTable",
     "TableModel",
     "AbstractTableModel",
@@ -341,6 +344,8 @@ static JAVAX_SWING_EVENT: &[&str] = &[
     "ListDataEvent",
     "TableModelListener",
     "TableModelEvent",
+    "TreeSelectionListener",
+    "TreeSelectionEvent",
     "DocumentListener",
     "DocumentEvent",
 ];
