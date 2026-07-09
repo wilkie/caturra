@@ -256,6 +256,8 @@ static JAVAX_SWING: &[&str] = &[
     "JTree",
     "DefaultMutableTreeNode",
     "TreePath",
+    "TreeCellRenderer",
+    "DefaultTreeCellRenderer",
     "JTable",
     "TableModel",
     "AbstractTableModel",

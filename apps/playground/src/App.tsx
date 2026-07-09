@@ -2042,6 +2042,25 @@ public class Main {
 
     tree = new JTree(root);
 
+    // A cell renderer decides how each node is drawn. It is asked once per
+    // visible node, with the node, whether it is a leaf, and its row.
+    tree.setCellRenderer(new DefaultTreeCellRenderer() {
+      public Component getTreeCellRendererComponent(JTree tree, Object value,
+          boolean selected, boolean expanded, boolean leaf, int row, boolean hasFocus) {
+        Component base = super.getTreeCellRendererComponent(
+            tree, value, selected, expanded, leaf, row, hasFocus);
+        JLabel label = (JLabel) base;
+        // Leaves are green; the colour resets between nodes, so it does not
+        // bleed onto the folders drawn after them.
+        if (leaf) {
+          label.setForeground(new Color(20, 120, 40));
+        } else {
+          label.setText(value + " (" + ((DefaultMutableTreeNode) value).getChildCount() + ")");
+        }
+        return label;
+      }
+    });
+
     status = new JLabel("Click a node. Arrow keys navigate and expand.");
     tree.addTreeSelectionListener(e -> {
       DefaultMutableTreeNode node =

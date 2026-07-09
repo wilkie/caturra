@@ -1985,13 +1985,39 @@ interface TreeSelectionListener {
   void valueChanged(TreeSelectionEvent e);
 }
 
+// Decides how one tree node is drawn: return a component configured for
+// `value` (the node). A node's label is a <span>, so its text and colours
+// reach the screen.
+interface TreeCellRenderer {
+  Component getTreeCellRendererComponent(JTree tree, Object value, boolean selected,
+      boolean expanded, boolean leaf, int row, boolean hasFocus);
+}
+
+// The default renderer: a JLabel showing the node's toString().
+class DefaultTreeCellRenderer extends JLabel implements TreeCellRenderer {
+  public DefaultTreeCellRenderer() { super(""); }
+  public Component getTreeCellRendererComponent(JTree tree, Object value, boolean selected,
+      boolean expanded, boolean leaf, int row, boolean hasFocus) {
+    setText(value == null ? "" : "" + value);
+    // The SAME instance draws every node, so clear the colours a subclass may
+    // have set on a previous node (real Swing resets them too).
+    __fg = null;
+    __bg = null;
+    return this;
+  }
+}
+
 class JTree extends Component {
   DefaultMutableTreeNode __root;
   boolean __rootVisible = true;
   DefaultMutableTreeNode __selectedNode = null;
   TreeSelectionListener __listener = null;
+  TreeCellRenderer __cellRenderer = null;
+  int __rowCounter = 0; // the visible row a renderer is told about
   // The root starts expanded, like a real JTree; deeper nodes start collapsed.
   public JTree(DefaultMutableTreeNode root) { __root = root; root.__expanded = true; }
+  public void setCellRenderer(TreeCellRenderer renderer) { __cellRenderer = renderer; }
+  public TreeCellRenderer getCellRenderer() { return __cellRenderer; }
   public void setRootVisible(boolean visible) { __rootVisible = visible; }
   public boolean isRootVisible() { return __rootVisible; }
   public void addTreeSelectionListener(TreeSelectionListener l) {
@@ -2044,11 +2070,31 @@ class JTree extends Component {
   }
   boolean __listens() { return __listener != null; }
   String __nodeJson(DefaultMutableTreeNode node) {
+    boolean leaf = node.isLeaf();
+    boolean selected = node == __selectedNode;
+    // Rows are counted over the VISIBLE nodes, in the order they're drawn.
+    int row = __rowCounter;
+    __rowCounter = __rowCounter + 1;
+    String text = "" + node;
+    String style = "";
+    if (__cellRenderer != null) {
+      // Ask the renderer to configure a component for this node, then take its
+      // text and colours (all a node's label span can show).
+      Component cell = __cellRenderer.getTreeCellRendererComponent(
+          this, node, selected, node.__expanded, leaf, row, false);
+      text = cell.__displayText();
+      if (cell.__fg != null) style = style + ",\"fg\":\"" + Component.__rgb(cell.__fg) + "\"";
+      if (cell.__bg != null) style = style + ",\"bg\":\"" + Component.__rgb(cell.__bg) + "\"";
+    }
     StringBuilder s = new StringBuilder("{\"id\":\"" + node.__nid + "\",\"text\":\"");
-    s.append(Component.__esc("" + node)).append("\"");
+    s.append(Component.__esc(text)).append("\"");
+    s.append(",\"leaf\":").append(leaf);
     s.append(",\"expanded\":").append(node.__expanded);
-    s.append(",\"selected\":").append(node == __selectedNode);
-    if (node.getChildCount() > 0) {
+    s.append(",\"selected\":").append(selected);
+    s.append(style);
+    // A collapsed node's children aren't drawn, so they aren't serialized (and
+    // don't consume visible row numbers).
+    if (!leaf && node.__expanded) {
       s.append(",\"children\":[");
       for (int i = 0; i < node.getChildCount(); i++) {
         if (i > 0) s.append(",");
@@ -2059,6 +2105,8 @@ class JTree extends Component {
     return s.append("}").toString();
   }
   String __json() {
+    // A hidden root isn't drawn, so it takes row -1 and its children start at 0.
+    __rowCounter = __rootVisible ? 0 : -1;
     return "{\"type\":\"tree\",\"root\":" + __nodeJson(__root) + ",\"rootVisible\":" + __rootVisible
         + "," + __commonJson() + "}";
   }

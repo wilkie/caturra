@@ -204,12 +204,17 @@ interface SwingItemStyle {
   bg?: string;
 }
 
-/** One JTree node: its children are present only while it is expanded. */
+/** One JTree node: its children are present only while it is expanded, so
+ * `leaf` (not the children count) says whether it has an expand handle. */
 interface SwingTreeNode {
   id: string;
   text?: string;
+  leaf?: boolean;
   expanded?: boolean;
   selected?: boolean;
+  /** Colours from the tree's TreeCellRenderer. */
+  fg?: string;
+  bg?: string;
   children?: SwingTreeNode[];
 }
 
@@ -2637,7 +2642,8 @@ export class SwingViz {
     const li = document.createElement('li');
     li.setAttribute('role', 'treeitem');
     li.dataset.nid = item.id;
-    const parent = (item.children ?? []).length > 0;
+    // A collapsed parent ships no children, so `leaf` is what distinguishes it.
+    const parent = item.leaf === false;
     const expanded = item.expanded === true;
     if (parent) {
       li.setAttribute('aria-expanded', String(expanded));
@@ -2658,6 +2664,9 @@ export class SwingViz {
     label.className = 'swing-tree-label';
     label.id = `${item.id}-label`;
     label.textContent = item.text ?? '';
+    // Colours chosen by the tree's TreeCellRenderer.
+    label.style.color = cssColor(item.fg) ?? '';
+    label.style.backgroundColor = cssColor(item.bg) ?? '';
     // Name the item from its own label, not from its whole subtree.
     li.setAttribute('aria-labelledby', label.id);
     row.append(handle, label);

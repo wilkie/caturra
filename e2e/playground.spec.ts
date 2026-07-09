@@ -2468,8 +2468,19 @@ test.describe('swing (interactive)', () => {
     await expect(tree.getByRole('treeitem', { name: 'Red' })).toBeVisible();
     await expect(root).toContainText('Click a node.');
 
-    // Clicking a label selects it; the listener reports the TreePath.
-    await tree.getByRole('treeitem', { name: 'Red' }).locator('.swing-tree-label').click();
+    // The TreeCellRenderer draws folders with a child count and leaves in green.
+    await expect(warm.locator('.swing-tree-label').first()).toHaveText('Warm (2)');
+    const redLabel = tree.getByRole('treeitem', { name: 'Red' }).locator('.swing-tree-label');
+    await expect(redLabel).toHaveCSS('color', 'rgb(20, 120, 40)');
+    // The colour resets between nodes, so it does not leak onto the next folder.
+    await expect(tree.getByRole('treeitem', { name: 'Cool' }).locator('.swing-tree-label')).not.toHaveCSS(
+      'color',
+      'rgb(20, 120, 40)',
+    );
+
+    // Clicking a label selects it; the listener reports the TreePath. The
+    // renderer is display-only, so the model still holds the plain user object.
+    await redLabel.click();
     await expect(root).toContainText('Red (leaf) at [Colors, Warm, Red]');
     await expect(tree.getByRole('treeitem', { name: 'Red' })).toHaveAttribute(
       'aria-selected',

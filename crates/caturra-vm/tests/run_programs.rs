@@ -1036,6 +1036,60 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_tree_cell_renderer_styles_nodes() {
+    // A TreeCellRenderer decides each node's text and colour, and is told the
+    // node's VISIBLE row (collapsed children are neither drawn nor numbered).
+    let tree = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                DefaultMutableTreeNode root = new DefaultMutableTreeNode("Colors");
+                DefaultMutableTreeNode warm = new DefaultMutableTreeNode("Warm");
+                warm.add(new DefaultMutableTreeNode("Red"));
+                DefaultMutableTreeNode cool = new DefaultMutableTreeNode("Cool");
+                cool.add(new DefaultMutableTreeNode("Blue"));
+                root.add(warm);
+                root.add(cool);
+
+                JTree tree = new JTree(root);
+                tree.expandPath(new TreePath(warm.getPath()));
+                tree.setCellRenderer(new DefaultTreeCellRenderer() {
+                    public Component getTreeCellRendererComponent(JTree tree, Object value,
+                            boolean selected, boolean expanded, boolean leaf, int row,
+                            boolean hasFocus) {
+                        Component base = super.getTreeCellRendererComponent(
+                            tree, value, selected, expanded, leaf, row, hasFocus);
+                        JLabel label = (JLabel) base;
+                        label.setText(row + ": " + value);
+                        if (leaf) label.setForeground(new Color(0, 120, 0));
+                        return label;
+                    }
+                });
+
+                JFrame frame = new JFrame("Colors");
+                frame.add(tree);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    // Visible rows: 0 Colors, 1 Warm, 2 Red, 3 Cool. Cool is collapsed, so Blue
+    // is neither serialized nor numbered.
+    assert!(tree.contains(r#""text":"0: Colors""#), "{tree}");
+    assert!(tree.contains(r#""text":"1: Warm""#), "{tree}");
+    assert!(tree.contains(r#""text":"2: Red""#), "{tree}");
+    assert!(tree.contains(r#""text":"3: Cool""#), "{tree}");
+    assert!(!tree.contains("Blue"), "{tree}");
+    // Only the leaf is green — the shared instance resets colour between nodes,
+    // so it doesn't leak onto Cool (drawn after Red).
+    assert!(tree.contains(r#""text":"2: Red","leaf":true,"expanded":false,"selected":false,"fg":"0,120,0""#), "{tree}");
+    assert!(tree.contains(r#""text":"3: Cool","leaf":false,"expanded":false,"selected":false}"#), "{tree}");
+}
+
+#[test]
 fn swing_tree_selects_nodes_and_tracks_expansion() {
     // A JTree over DefaultMutableTreeNodes. Node ids are assigned in creation
     // order (root n1, warm n2, red n3). Selecting fires the listener with a
