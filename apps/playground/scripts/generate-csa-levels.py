@@ -217,7 +217,9 @@ def load_level(key):
     except Exception:
         return None
     vm = pj.get("csa_view_mode")
-    # `playground` levels have no renderer yet; the other three do.
+    # The `playground` view mode isn't curriculum: its 68 artifacts are demos,
+    # sandboxes, and project templates, and not one is referenced by a csa1-9
+    # unit script. Nothing to recover there.
     if vm not in ("neighborhood", "console", "theater"):
         return None
     grid = grid_of(pj)
