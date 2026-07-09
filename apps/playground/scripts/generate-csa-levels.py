@@ -404,6 +404,20 @@ def build_frq_unit():
 units = [build_unit(s, n) for s, n in UNITS] + [build_frq_unit()]
 
 
+def prettify(paths):
+    """Format the emitted TypeScript with the repo's own prettier.
+
+    Cheaper and far more faithful than hand-matching prettier's style (quoting,
+    escaping, wrapping) in the emitter. These files used to be prettier-ignored,
+    so nothing checked them and their style drifted with the generator; now they
+    are ordinary lint-checked source and re-running this script is a no-op.
+    """
+    subprocess.run(
+        ["pnpm", "exec", "prettier", "--write", "--log-level", "warn", *paths],
+        cwd=REPO, check=True,
+    )
+
+
 def js(s):
     return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
@@ -439,7 +453,9 @@ for u in units:
         idx += [f"      {{ name: {js(l['name'])}, lesson: {js(l['lesson'])} }},"]
     idx += ["    ],", "  },"]
 idx += ["];", ""]
-open(os.path.join(SRC, "csa-index.ts"), "w").write("\n".join(idx))
+index_path = os.path.join(SRC, "csa-index.ts")
+open(index_path, "w").write("\n".join(idx))
+emitted = [index_path]
 
 # csa-units/unit-N.ts — COMMITTED. One code-split chunk per unit with the full
 # level content (start sources, validators, data) for that unit's levels.
@@ -466,7 +482,18 @@ for ui, u in enumerate(units):
         chunk += emit_files(l.get("data", []), "      ")
         chunk += ["    ],", "  },"]
     chunk += ["];", ""]
-    open(os.path.join(SRC, "csa-units", f"unit-{ui}.ts"), "w").write("\n".join(chunk))
+    chunk_path = os.path.join(SRC, "csa-units", f"unit-{ui}.ts")
+    open(chunk_path, "w").write("\n".join(chunk))
+    emitted.append(chunk_path)
+
+# Stale chunks from a previous run with more units would otherwise linger and
+# still be lint-checked (and imported by a stale index).
+for stale in sorted(glob.glob(os.path.join(SRC, "csa-units", "unit-*.ts"))):
+    if stale not in emitted:
+        os.remove(stale)
+        print(f"removed stale chunk {os.path.basename(stale)}")
+
+prettify(emitted)
 
 
 def emit_map(name, key):

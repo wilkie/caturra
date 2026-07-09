@@ -5,7 +5,7 @@ pnpm-lock.yaml
 packages/core/src/wasm/generated/
 e2e/test-results/
 e2e/playwright-report/
-# Auto-generated CSA level data (multi-MB; emitted by generate-csa-levels.py).
-apps/playground/src/csa-index.ts
-apps/playground/src/csa-units/
+# The teacher solutions are git-ignored, multi-MB, and never reviewed — the
+# other generated CSA level data IS checked, and generate-csa-levels.py runs
+# prettier over what it emits.
 apps/playground/src/csa-solutions.local.ts
