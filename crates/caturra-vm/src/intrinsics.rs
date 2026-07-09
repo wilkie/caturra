@@ -8,7 +8,7 @@
 
 use crate::io::ConsoleIo;
 use crate::map::JavaHashMap;
-use crate::value::{Heap, HeapObject, HeapRef, JValue, StdStream};
+use crate::value::{Heap, HeapObject, HeapRef, IntKind, JValue, StdStream};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
@@ -253,7 +253,7 @@ pub fn invoke_special(
         ("<init>", "([C)V") => {
             let units: Vec<u16> = match &args[0] {
                 JValue::Ref(Some(reference)) => match heap.get(*reference) {
-                    Some(HeapObject::IntArray(values)) => values
+                    Some(HeapObject::IntArray(_, values)) => values
                         .iter()
                         .map(|v| u16::try_from(v & 0xFFFF).unwrap_or(0))
                         .collect(),
@@ -658,7 +658,7 @@ fn string_method(
         }
         ("toCharArray", []) => {
             let values: Vec<i32> = units.iter().map(|u| i32::from(*u)).collect();
-            let reference = heap.alloc(HeapObject::IntArray(values));
+            let reference = heap.alloc(HeapObject::IntArray(IntKind::Char, values));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         (
@@ -718,7 +718,7 @@ fn get_chars(
             "java.lang.ArrayIndexOutOfBoundsException: Index {at} out of bounds"
         ))
     })?;
-    let Some(HeapObject::IntArray(values)) = heap.get_mut(target) else {
+    let Some(HeapObject::IntArray(_, values)) = heap.get_mut(target) else {
         return Err(throw("java.lang.NullPointerException"));
     };
     if at + source.len() > values.len() {
@@ -3107,7 +3107,7 @@ fn string_static(
                 ("(F)Ljava/lang/String;", JValue::Float(v)) => java_float_to_string(*v),
                 (_, JValue::Double(v)) => java_double_to_string(*v),
                 (_, JValue::Ref(Some(reference))) => match heap.get(*reference) {
-                    Some(HeapObject::IntArray(values)) => values
+                    Some(HeapObject::IntArray(_, values)) => values
                         .iter()
                         .map(|v| {
                             char::from_u32(u32::try_from(*v).unwrap_or(0)).unwrap_or('\u{FFFD}')
@@ -3207,7 +3207,7 @@ fn builder_value_text(heap: &Heap, param: &str, value: &JValue) -> Result<Vec<u1
 fn char_array_units(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
     match value {
         JValue::Ref(Some(reference)) => match heap.get(*reference) {
-            Some(HeapObject::IntArray(values)) => Ok(values
+            Some(HeapObject::IntArray(_, values)) => Ok(values
                 .iter()
                 .map(|v| u16::try_from(*v).unwrap_or(u16::MAX))
                 .collect()),

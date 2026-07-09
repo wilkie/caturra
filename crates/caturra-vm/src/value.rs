@@ -25,6 +25,16 @@ impl JValue {
     pub const NULL: JValue = JValue::Ref(None);
 }
 
+/// Which `int`-width primitive an [`HeapObject::IntArray`] holds. They share
+/// one representation, but a `boolean[]` prints `true` where an `int[]`
+/// prints `1`, and hashes 1231/1237 where an `int[]` hashes its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntKind {
+    Int,
+    Boolean,
+    Char,
+}
+
 /// Which of a map's three views a [`HeapObject::MapView`] presents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapViewKind {
@@ -54,8 +64,10 @@ pub enum HeapObject {
     /// The intrinsic object behind `System.out` / `System.err`.
     PrintStream(StdStream),
     /// An `int[]`, `boolean[]`, or `char[]` — all stored as i32 per
-    /// JVMS array-load semantics (stores mask to the element width).
-    IntArray(Vec<i32>),
+    /// JVMS array-load semantics (stores mask to the element width). The
+    /// kind is carried because the three render and hash differently once
+    /// their static type is gone (`Arrays.deepToString(boolean[][])`).
+    IntArray(IntKind, Vec<i32>),
     /// A `double[]`.
     DoubleArray(Vec<f64>),
     /// A `long[]`.

@@ -69,8 +69,10 @@ slice.
   `print` / `println` with zero arguments or one argument of any supported
   expression type.
 - Literals: exponent notation (`1e10`, `2.5E-3`) lexes as double.
-- **Arrays** (any element of `int`/`double`/`boolean`/`char`/`String`, any
-  dimension count): `new T[n]` / `new T[n][m]` / `new T[n][]` (via
+- **Arrays** (any element of `int`/`long`/`short`/`byte`/`double`/`float`/
+  `boolean`/`char`/`String`/a class, any dimension count — every primitive
+  leaf allocates correctly through `multianewarray`, which `long[][]`,
+  `float[][]`, `short[][]` and `byte[][]` did not until 2026-07-09): `new T[n]` / `new T[n][m]` / `new T[n][]` (via
   `newarray`/`anewarray`/`multianewarray`), `{...}` initializers in
   declarations and `new T[] {...}` (nested for 2D, ragged rows fine, and a
   trailing comma is legal — JLS §10.6),
@@ -324,10 +326,26 @@ null` is the way to test for absence, and unboxing an absent value
     where javac accepts it and throws `ClassCastException` at run time —
     stricter, so anything compiling here still compiles on a JDK.
     `asList` returns an `ArrayList` (a documented deviation), and
-    `binarySearch`/`copyOf`/`fill`/`deepEquals`/`deepToString` are
-    absent, as is any widening of `int[][]` to `Object[]`. Pinned
-    against a real JDK by `diff_arrays_equals_and_hash_code` and
+    `binarySearch`/`copyOf`/`fill` are absent. Pinned against a real
+    JDK by `diff_arrays_equals_and_hash_code` and
     `diff_arrays_sort_uses_compare_to`.
+  - `Arrays.deepToString`/`deepEquals`/`deepHashCode` (2026-07-09),
+    for 2D arrays. These three the VM answers rather than the bundled
+    Java, because only it can see an element array's kind once the
+    static type is gone — so `deepToString(boolean[][])` prints `true`
+    where `int[][]` prints `1`, and `deepHashCode` folds 1231/1237
+    rather than the value. Elements that are not arrays go through
+    their own `toString`/`equals`/`hashCode`. `deepEquals` compares
+    rows element-wise, where plain `equals` compares them by identity
+    and so reports `false` for equal-but-distinct rows — as Java's
+    does. A `boolean[]` never equals an `int[]` of the same shape.
+    `deepToString` of an array holding itself renders `[...]` rather
+    than recursing; `deepEquals` and `deepHashCode` have no such guard
+    and throw `StackOverflowError`, exactly as Java's do. A
+    multi-dimensional array widens to `Object[]` (its rows are
+    references), so `Object[] rows = grid;` and
+    `Arrays.equals(int[][], int[][])` compile; `int[]` does not.
+    Pinned by `diff_arrays_deep_operations`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get

@@ -1675,6 +1675,15 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Array { elem: ElemType::Object(sup), dims: d2 },
             ) if d1 == d2 && sup == table.object_id
         )
+        // A multi-dimensional array is an `Object[]` of its rows, whatever
+        // the leaf element type: `int[][]` is an `Object[]`, `int[]` is not.
+        || matches!(
+            (from, to),
+            (
+                JType::Array { dims: d1, .. },
+                JType::Array { elem: ElemType::Object(sup), dims: 1 },
+            ) if d1 >= 2 && sup == table.object_id
+        )
         // Autoboxing a primitive to the top `Object` type (`Object o = 5;`,
         // or a primitive in an `Object...` varargs).
         || matches!(
@@ -2037,6 +2046,33 @@ impl JType {
 }
 
 /// Binary numeric promotion (JLS §5.6.2), within the CSA type set.
+/// The arity, descriptor and return of `Arrays.deepToString`/`deepEquals`/
+/// `deepHashCode`, which the VM answers rather than the bundled Java.
+fn arrays_deep_signature(method: &str) -> Option<(usize, &'static str, JType)> {
+    match method {
+        "deepToString" => Some((1, "([Ljava/lang/Object;)Ljava/lang/String;", JType::Str)),
+        "deepHashCode" => Some((1, "([Ljava/lang/Object;)I", JType::Int)),
+        "deepEquals" => Some((
+            2,
+            "([Ljava/lang/Object;[Ljava/lang/Object;)Z",
+            JType::Boolean,
+        )),
+        _ => None,
+    }
+}
+
+/// Whether a type is an `Object[]`: a multi-dimensional array (whose elements
+/// are arrays, and so references) or a one-dimensional array of references.
+fn is_reference_array(ty: JType) -> bool {
+    match ty {
+        JType::Array { dims, .. } if dims >= 2 => true,
+        JType::Array { elem, .. } => elem.base_type().is_reference(),
+        // `Arrays.deepToString(null)` is legal.
+        JType::Null => true,
+        _ => false,
+    }
+}
+
 fn promote(a: JType, b: JType) -> JType {
     if a == JType::Double || b == JType::Double {
         JType::Double
@@ -7893,6 +7929,12 @@ impl BodyGen<'_> {
         if class == "Arrays" && method == "asList" {
             return self.emit_arrays_as_list(args, span);
         }
+        // `Arrays.deepToString/deepEquals/deepHashCode` recurse into element
+        // arrays, which needs each element array's kind at run time. The VM
+        // answers them; the bundled Java cannot.
+        if class == "Arrays" && arrays_deep_signature(method).is_some() {
+            return self.emit_arrays_deep_call(method, args, span);
+        }
         // `Collections.reverse/swap` are generic over the list element type;
         // emit the (uniform-at-runtime) list argument(s) and call the bundle,
         // bypassing invariant List<elem> parameter matching.
@@ -8059,6 +8101,46 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
         self.code.drop_stack(1); // the array argument
         Some(Some(JType::List(elem)))
+    }
+
+    /// `Arrays.deepToString(a)` / `deepEquals(a, b)` / `deepHashCode(a)`.
+    /// Each takes a reference array — `int[][]` is one, `int[]` is not, which
+    /// is exactly what javac accepts for an `Object[]` parameter.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_arrays_deep_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let (arity, descriptor, ret) = arrays_deep_signature(method).expect("caller checked");
+        if args.len() != arity {
+            let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+            let described = describe_types(&arg_types, self.table);
+            self.error(
+                span,
+                format!("no suitable method found for {method}({described}) in class Arrays"),
+            );
+            return None;
+        }
+        for arg in args {
+            let ty = self.expr(arg);
+            if ty != JType::Error && !is_reference_array(ty) {
+                self.error(
+                    arg.span(),
+                    format!(
+                        "incompatible types: {} cannot be converted to Object[]",
+                        ty.describe(self.table)
+                    ),
+                );
+            }
+        }
+        let method_ref = intern_method_ref(self.pool, "Arrays", method, descriptor);
+        self.code
+            .push_op_u16(op::INVOKESTATIC, method_ref, ret.width());
+        self.code
+            .drop_stack(u16::try_from(arity).unwrap_or(u16::MAX));
+        Some(Some(ret))
     }
 
     /// `System.out.println(...)` and friends.
@@ -8418,6 +8500,12 @@ impl BodyGen<'_> {
                     },
                 };
                 let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                // The VM answers these three, so they are in no method table.
+                if class == "Arrays"
+                    && let Some((_, _, ret)) = arrays_deep_signature(method)
+                {
+                    return ret;
+                }
                 let table = self.table;
                 match table.resolve(&class, method, &arg_types) {
                     Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
@@ -10720,6 +10808,14 @@ impl BodyGen<'_> {
                     dims: d2,
                 },
             ) if d1 == d2 && sup == self.table.object_id => {}
+            // A multi-dimensional array is an `Object[]` of its rows.
+            (
+                JType::Array { dims: d1, .. },
+                JType::Array {
+                    elem: ElemType::Object(sup),
+                    dims: 1,
+                },
+            ) if d1 >= 2 && sup == self.table.object_id => {}
             // Any reference stores into a type variable; a type variable
             // reads out as Object.
             (from, JType::TypeVar) if from.is_reference() => {}

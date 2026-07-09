@@ -8746,3 +8746,114 @@ fn array_initializers_allow_a_trailing_comma() {
         "an omitted element is not a trailing comma"
     );
 }
+
+/// `Arrays.deepToString`/`deepEquals`/`deepHashCode` recurse into element
+/// arrays, keeping each row's element type: a `boolean[]` prints `true` where
+/// an `int[]` prints `1`, and hashes 1231/1237 rather than its value.
+/// Cross-checked against a real JDK by `diff_arrays_deep_operations`.
+#[test]
+fn arrays_deep_operations_recurse_into_rows() {
+    let out = run_stdout(
+        r#"
+        import java.util.Arrays;
+
+        class Point {
+            int x;
+            Point(int x) { this.x = x; }
+            public boolean equals(Object other) {
+                return other instanceof Point && ((Point) other).x == x;
+            }
+            public int hashCode() { return x; }
+            public String toString() { return "P" + x; }
+        }
+
+        public class D {
+            public static void main(String[] args) {
+                int[][] ints = {{1, 2}, {3}};
+                System.out.println(Arrays.deepToString(ints));
+                System.out.println(Arrays.deepToString(new boolean[][] {{true, false}}));
+                System.out.println(Arrays.deepToString(new char[][] {{'a', 'b'}}));
+                System.out.println(Arrays.deepToString(new Point[][] {{new Point(1)}}));
+
+                // deepEquals compares rows element-wise; equals compares them
+                // by identity, so it says false for equal-but-distinct rows.
+                int[][] same = {{1, 2}, {3}};
+                System.out.println(Arrays.deepEquals(ints, same) + " " + Arrays.equals(ints, same));
+                System.out.println(Arrays.deepHashCode(ints) == Arrays.deepHashCode(same));
+                System.out.println(Arrays.deepHashCode(ints) + " "
+                        + Arrays.deepHashCode(new boolean[][] {{true, false}}));
+
+                // A boolean[] never equals an int[] of the same shape.
+                System.out.println(Arrays.deepEquals(
+                        new Object[] {new boolean[] {true}}, new Object[] {new int[] {1}}));
+
+                // Nulls, an empty array, and a self-reference.
+                System.out.println(Arrays.deepToString(null) + " " + Arrays.deepHashCode(null)
+                        + " " + Arrays.deepEquals(null, null));
+                System.out.println(Arrays.deepToString(new Object[0]));
+                Object[] self = new Object[1];
+                self[0] = self;
+                System.out.println(Arrays.deepToString(self));
+
+                // deepHashCode has no cycle guard, so it overflows as Java's does.
+                try {
+                    System.out.println(Arrays.deepHashCode(self));
+                } catch (StackOverflowError e) {
+                    System.out.println("overflows");
+                }
+            }
+        }
+        "#,
+        "D",
+    );
+    assert_eq!(
+        out,
+        "[[1, 2], [3]]\n\
+         [[true, false]]\n\
+         [[a, b]]\n\
+         [[P1]]\n\
+         true false\n\
+         true\n\
+         31809 40390\n\
+         false\n\
+         null 0 true\n\
+         []\n\
+         [[...]]\n\
+         overflows\n"
+    );
+}
+
+/// Every primitive leaf type survives `multianewarray`. `long[][]`,
+/// `float[][]`, `short[][]` and `byte[][]` used to allocate their rows as
+/// reference arrays, so the first store into one failed.
+#[test]
+fn two_dimensional_arrays_of_every_primitive() {
+    let out = run_stdout(
+        r#"
+        public class G {
+            public static void main(String[] args) {
+                long[][] longs = new long[2][2];
+                float[][] floats = new float[2][2];
+                short[][] shorts = new short[2][2];
+                byte[][] bytes = new byte[2][2];
+                boolean[][] flags = new boolean[2][2];
+                char[][] letters = new char[2][2];
+                longs[0][0] = 5L;
+                floats[0][0] = 1.5f;
+                shorts[0][0] = (short) 3;
+                bytes[0][0] = (byte) 4;
+                flags[0][0] = true;
+                letters[0][0] = 'x';
+                System.out.println(longs[0][0] + " " + floats[0][0] + " " + shorts[0][0]);
+                System.out.println(bytes[0][0] + " " + flags[0][0] + " " + letters[0][0]);
+                System.out.println(longs[1][1] + " " + floats[1][1] + " " + flags[1][1]);
+                // A multi-dimensional array is an Object[] of its rows.
+                Object[] rows = longs;
+                System.out.println(rows.length);
+            }
+        }
+        "#,
+        "G",
+    );
+    assert_eq!(out, "5 1.5 3\n4 true x\n0 0.0 false\n2\n");
+}

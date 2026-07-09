@@ -4072,3 +4072,142 @@ public class DiffTrailingComma {
 }
 "#
 );
+
+differential_test!(
+    diff_arrays_deep_operations,
+    "DiffArraysDeep",
+    r#"
+import java.util.Arrays;
+
+class Point {
+    int x;
+    Point(int x) { this.x = x; }
+    public boolean equals(Object other) {
+        return other instanceof Point && ((Point) other).x == x;
+    }
+    public int hashCode() { return x; }
+    public String toString() { return "P" + x; }
+}
+
+public class DiffArraysDeep {
+    public static void main(String[] args) {
+        // A row's element type survives erasure: a boolean[] prints `true`,
+        // a char[] prints its characters, an int[] prints numbers.
+        int[][] ints = {{1, 2}, {3}};
+        boolean[][] flags = {{true, false}};
+        char[][] letters = {{'a', 'b'}};
+        double[][] doubles = {{1.5, Double.NaN}};
+        float[][] floats = {{0.5f}};
+        long[][] longs = {{5L}};
+        short[][] shorts = {{(short) 3}};
+        byte[][] bytes = {{(byte) 4}};
+        String[][] words = {{"x", null}};
+        Point[][] points = {{new Point(1)}};
+
+        System.out.println(Arrays.deepToString(ints));
+        System.out.println(Arrays.deepToString(flags));
+        System.out.println(Arrays.deepToString(letters));
+        System.out.println(Arrays.deepToString(doubles));
+        System.out.println(Arrays.deepToString(floats));
+        System.out.println(Arrays.deepToString(longs));
+        System.out.println(Arrays.deepToString(shorts) + " " + Arrays.deepToString(bytes));
+        System.out.println(Arrays.deepToString(words));
+        System.out.println(Arrays.deepToString(points));
+
+        // deepEquals compares rows element-wise; equals compares them by
+        // identity, so it says false for equal-but-distinct rows.
+        int[][] sameInts = {{1, 2}, {3}};
+        System.out.println(Arrays.deepEquals(ints, sameInts) + " " + Arrays.equals(ints, sameInts));
+        System.out.println(Arrays.deepEquals(ints, new int[][] {{1, 2}, {4}}));
+        System.out.println(Arrays.deepEquals(points, new Point[][] {{new Point(1)}}));
+        System.out.println(Arrays.deepEquals(flags, new boolean[][] {{true, false}}));
+
+        // A boolean[] never equals an int[] of the same shape.
+        Object[] asBooleans = {new boolean[] {true}};
+        Object[] asInts = {new int[] {1}};
+        System.out.println(Arrays.deepEquals(asBooleans, asInts));
+
+        // deepHashCode agrees with deepEquals, exactly.
+        System.out.println(Arrays.deepHashCode(ints) + " " + Arrays.deepHashCode(sameInts));
+        System.out.println(Arrays.deepHashCode(flags) + " " + Arrays.deepHashCode(letters));
+        System.out.println(Arrays.deepHashCode(doubles) + " " + Arrays.deepHashCode(longs));
+        System.out.println(Arrays.deepHashCode(words) + " " + Arrays.deepHashCode(points));
+
+        // Ragged nesting, nulls, and a null array.
+        Object[] mixed = {new int[] {1}, "s", null, new Object[] {new int[] {2}}};
+        System.out.println(Arrays.deepToString(mixed) + " " + Arrays.deepHashCode(mixed));
+        System.out.println(Arrays.deepToString(null) + " " + Arrays.deepHashCode(null)
+                + " " + Arrays.deepEquals(null, null) + " " + Arrays.deepEquals(null, ints));
+        System.out.println(Arrays.deepToString(new Object[0]) + " " + Arrays.deepHashCode(new Object[0]));
+
+        // An array that holds itself renders as [...] rather than recursing,
+        // but two arrays holding the same inner array are not a cycle.
+        Object[] self = new Object[1];
+        self[0] = self;
+        System.out.println(Arrays.deepToString(self));
+        Object[] inner = {1};
+        System.out.println(Arrays.deepToString(new Object[] {inner, inner}));
+
+        // deepEquals and deepHashCode have no such guard: they overflow.
+        Object[] otherSelf = new Object[1];
+        otherSelf[0] = otherSelf;
+        try {
+            System.out.println(Arrays.deepEquals(self, otherSelf));
+        } catch (StackOverflowError e) {
+            System.out.println("deepEquals overflows");
+        }
+        try {
+            System.out.println(Arrays.deepHashCode(self));
+        } catch (StackOverflowError e) {
+            System.out.println("deepHashCode overflows");
+        }
+        System.out.println("still running");
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_two_dimensional_primitive_arrays,
+    "DiffTwoDimPrimitives",
+    r#"
+import java.util.Arrays;
+
+public class DiffTwoDimPrimitives {
+    public static void main(String[] args) {
+        // Every primitive leaf type, allocated through multianewarray.
+        int[][] ints = new int[2][2];
+        boolean[][] flags = new boolean[2][2];
+        char[][] letters = new char[2][2];
+        double[][] doubles = new double[2][2];
+        long[][] longs = new long[2][2];
+        float[][] floats = new float[2][2];
+        short[][] shorts = new short[2][2];
+        byte[][] bytes = new byte[2][2];
+
+        ints[0][0] = 1;
+        flags[0][0] = true;
+        letters[0][0] = 'x';
+        doubles[0][0] = 1.5;
+        longs[0][0] = 5L;
+        floats[0][0] = 1.5f;
+        shorts[0][0] = (short) 3;
+        bytes[0][0] = (byte) 4;
+
+        System.out.println(ints[0][0] + " " + flags[0][0] + " " + letters[0][0] + " " + doubles[0][0]);
+        System.out.println(longs[0][0] + " " + floats[0][0] + " " + shorts[0][0] + " " + bytes[0][0]);
+        System.out.println(longs[1][1] + " " + floats[1][1] + " " + shorts[1][1] + " " + bytes[1][1]);
+        System.out.println(Arrays.toString(longs[0]) + " " + Arrays.toString(bytes[0]));
+
+        // A ragged allocation leaves the rows null.
+        long[][] ragged = new long[2][];
+        ragged[0] = new long[] {7L};
+        System.out.println(ragged[0][0] + " " + (ragged[1] == null));
+
+        // A multi-dimensional array is an Object[] of its rows.
+        Object[] rows = ints;
+        System.out.println(rows.length + " " + Arrays.deepToString(rows));
+    }
+}
+"#
+);

@@ -48,6 +48,27 @@ class Arrays {
     for (int i = 1; i < a.length; i++) s = s + ", " + a[i];
     return s + "]";
   }
+  public static String toString(float[] a) {
+    if (a == null) return "null";
+    if (a.length == 0) return "[]";
+    String s = "[" + a[0];
+    for (int i = 1; i < a.length; i++) s = s + ", " + a[i];
+    return s + "]";
+  }
+  public static String toString(short[] a) {
+    if (a == null) return "null";
+    if (a.length == 0) return "[]";
+    String s = "[" + a[0];
+    for (int i = 1; i < a.length; i++) s = s + ", " + a[i];
+    return s + "]";
+  }
+  public static String toString(byte[] a) {
+    if (a == null) return "null";
+    if (a.length == 0) return "[]";
+    String s = "[" + a[0];
+    for (int i = 1; i < a.length; i++) s = s + ", " + a[i];
+    return s + "]";
+  }
   // In-place ascending sort (insertion sort — stable, small inputs).
   public static void sort(int[] a) {
     for (int i = 1; i < a.length; i++) {
@@ -76,6 +97,30 @@ class Arrays {
   public static void sort(char[] a) {
     for (int i = 1; i < a.length; i++) {
       char key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(float[] a) {
+    for (int i = 1; i < a.length; i++) {
+      float key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(short[] a) {
+    for (int i = 1; i < a.length; i++) {
+      short key = a[i];
+      int j = i - 1;
+      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(byte[] a) {
+    for (int i = 1; i < a.length; i++) {
+      byte key = a[i];
       int j = i - 1;
       while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;

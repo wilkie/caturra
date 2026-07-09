@@ -393,8 +393,8 @@ impl<'run> Interpreter<'run> {
                 Some(crate::value::HeapObject::JavaString(units)) => {
                     format!("\"{}\"", String::from_utf16_lossy(units))
                 }
-                Some(crate::value::HeapObject::IntArray(values)) => {
-                    render_array(values.iter().map(i32::to_string))
+                Some(crate::value::HeapObject::IntArray(kind, values)) => {
+                    render_array(values.iter().map(|v| int_element_text(*kind, *v)))
                 }
                 Some(crate::value::HeapObject::DoubleArray(values)) => {
                     render_array(values.iter().map(|v| intrinsics::java_double_to_string(*v)))
@@ -1182,9 +1182,18 @@ impl<'run> Interpreter<'run> {
                             let atype = read_u8(bytes, &mut pc, &malformed)?;
                             let length = check_array_size(frame.pop_int()?)?;
                             let object = match atype {
-                                op::T_INT | op::T_BOOLEAN | op::T_CHAR => {
-                                    crate::value::HeapObject::IntArray(vec![0; length])
-                                }
+                                op::T_INT => crate::value::HeapObject::IntArray(
+                                    crate::value::IntKind::Int,
+                                    vec![0; length],
+                                ),
+                                op::T_BOOLEAN => crate::value::HeapObject::IntArray(
+                                    crate::value::IntKind::Boolean,
+                                    vec![0; length],
+                                ),
+                                op::T_CHAR => crate::value::HeapObject::IntArray(
+                                    crate::value::IntKind::Char,
+                                    vec![0; length],
+                                ),
                                 op::T_DOUBLE => {
                                     crate::value::HeapObject::DoubleArray(vec![0.0; length])
                                 }
@@ -1237,7 +1246,7 @@ impl<'run> Interpreter<'run> {
                         op::ARRAYLENGTH => {
                             let reference = frame.pop_ref()?.ok_or_else(null_array)?;
                             let length = match self.heap.get(reference) {
-                                Some(crate::value::HeapObject::IntArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::IntArray(_, v)) => v.len(),
                                 Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::RefArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::LongArray(v)) => v.len(),
@@ -1257,7 +1266,7 @@ impl<'run> Interpreter<'run> {
                         op::IALOAD | op::BALOAD | op::CALOAD | op::SALOAD => {
                             let (reference, index) = frame.pop_array_access()?;
                             let value = match self.heap.get(reference) {
-                                Some(crate::value::HeapObject::IntArray(values)) => {
+                                Some(crate::value::HeapObject::IntArray(_, values)) => {
                                     *array_get(values, index)?
                                 }
                                 Some(crate::value::HeapObject::ByteArray(values))
@@ -1326,7 +1335,7 @@ impl<'run> Interpreter<'run> {
                             let value = frame.pop_int()?;
                             let (reference, index) = frame.pop_array_access()?;
                             match self.heap.get_mut(reference) {
-                                Some(crate::value::HeapObject::IntArray(values)) => {
+                                Some(crate::value::HeapObject::IntArray(_, values)) => {
                                     let slot = array_get_mut(values, index)?;
                                     // castore masks to the element width
                                     // (JVMS); boolean arrays hold 0/1.
@@ -2135,6 +2144,257 @@ impl<'run> Interpreter<'run> {
         self.string_value_of(item, depth + 1)
     }
 
+    /// `Arrays.toString(primitiveArray)`, for an element array whose static
+    /// type is gone. Returns `None` when the object is not a primitive array.
+    fn primitive_array_text(&self, reference: HeapRef) -> Option<String> {
+        use crate::value::HeapObject;
+        let joined = |parts: Vec<String>| parts.join(", ");
+        let rendered = match self.heap.get(reference)? {
+            HeapObject::IntArray(kind, values) => joined(
+                values
+                    .iter()
+                    .map(|value| int_element_text(*kind, *value))
+                    .collect(),
+            ),
+            HeapObject::DoubleArray(values) => joined(
+                values
+                    .iter()
+                    .map(|value| intrinsics::java_double_to_string(*value))
+                    .collect(),
+            ),
+            HeapObject::FloatArray(values) => joined(
+                values
+                    .iter()
+                    .map(|value| intrinsics::java_float_to_string(*value))
+                    .collect(),
+            ),
+            HeapObject::LongArray(values) => joined(values.iter().map(i64::to_string).collect()),
+            HeapObject::ShortArray(values) => joined(values.iter().map(i16::to_string).collect()),
+            HeapObject::ByteArray(values) => joined(values.iter().map(i8::to_string).collect()),
+            _ => return None,
+        };
+        Some(format!("[{rendered}]"))
+    }
+
+    /// `Arrays.hashCode(primitiveArray)`. `None` when not a primitive array.
+    fn primitive_array_hash(&self, reference: HeapRef) -> Option<i32> {
+        use crate::value::HeapObject;
+        let fold = |hashes: Vec<i32>| {
+            hashes.into_iter().fold(1i32, |result, hash| {
+                result.wrapping_mul(31).wrapping_add(hash)
+            })
+        };
+        let hash = match self.heap.get(reference)? {
+            HeapObject::IntArray(kind, values) => fold(
+                values
+                    .iter()
+                    .map(|value| int_element_hash(*kind, *value))
+                    .collect(),
+            ),
+            HeapObject::DoubleArray(values) => fold(
+                values
+                    .iter()
+                    .map(|value| intrinsics::java_double_hash_public(*value))
+                    .collect(),
+            ),
+            HeapObject::FloatArray(values) => {
+                fold(values.iter().map(|value| float_hash(*value)).collect())
+            }
+            HeapObject::LongArray(values) => fold(
+                values
+                    .iter()
+                    .map(|value| intrinsics::fold_to_int(*value))
+                    .collect(),
+            ),
+            HeapObject::ShortArray(values) => fold(values.iter().map(|v| i32::from(*v)).collect()),
+            HeapObject::ByteArray(values) => fold(values.iter().map(|v| i32::from(*v)).collect()),
+            _ => return None,
+        };
+        Some(hash)
+    }
+
+    /// `Arrays.equals` of two primitive arrays. `None` when they are not both
+    /// primitive arrays of the same kind — Java then falls back to `equals`,
+    /// which for arrays is identity.
+    fn primitive_arrays_equal(&self, a: HeapRef, b: HeapRef) -> Option<bool> {
+        use crate::value::HeapObject;
+        Some(match (self.heap.get(a)?, self.heap.get(b)?) {
+            (HeapObject::IntArray(ka, va), HeapObject::IntArray(kb, vb)) if ka == kb => va == vb,
+            // `Double.equals` compares raw bits: NaN equals itself, -0.0 does
+            // not equal 0.0.
+            (HeapObject::DoubleArray(va), HeapObject::DoubleArray(vb)) => {
+                va.len() == vb.len()
+                    && va
+                        .iter()
+                        .zip(vb)
+                        .all(|(x, y)| x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan()))
+            }
+            (HeapObject::FloatArray(va), HeapObject::FloatArray(vb)) => {
+                va.len() == vb.len()
+                    && va
+                        .iter()
+                        .zip(vb)
+                        .all(|(x, y)| x.to_bits() == y.to_bits() || (x.is_nan() && y.is_nan()))
+            }
+            (HeapObject::LongArray(va), HeapObject::LongArray(vb)) => va == vb,
+            (HeapObject::ShortArray(va), HeapObject::ShortArray(vb)) => va == vb,
+            (HeapObject::ByteArray(va), HeapObject::ByteArray(vb)) => va == vb,
+            _ => return None,
+        })
+    }
+
+    /// `Arrays.deepToString`. `path` holds the arrays we are inside, so an
+    /// array that contains itself renders as `[...]` rather than recursing —
+    /// which is what Java's `dejaVu` set is for.
+    fn deep_to_string(
+        &mut self,
+        value: JValue,
+        path: &mut Vec<HeapRef>,
+    ) -> Result<String, VmError> {
+        use crate::value::HeapObject;
+        if path.len() > MAX_RENDER_DEPTH as usize {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.StackOverflowError",
+            )));
+        }
+        let JValue::Ref(Some(reference)) = value else {
+            return Ok(String::from("null"));
+        };
+        let Some(HeapObject::RefArray(items)) = self.heap.get(reference) else {
+            return self.string_value_of(value, 0);
+        };
+        let items = items.clone();
+        if items.is_empty() {
+            return Ok(String::from("[]"));
+        }
+        path.push(reference);
+        let mut parts = Vec::with_capacity(items.len());
+        for item in items {
+            parts.push(self.deep_element_text(item, path)?);
+        }
+        path.pop();
+        Ok(format!("[{}]", parts.join(", ")))
+    }
+
+    fn deep_element_text(
+        &mut self,
+        item: JValue,
+        path: &mut Vec<HeapRef>,
+    ) -> Result<String, VmError> {
+        use crate::value::HeapObject;
+        if let JValue::Ref(Some(reference)) = item {
+            if let Some(text) = self.primitive_array_text(reference) {
+                return Ok(text);
+            }
+            if matches!(self.heap.get(reference), Some(HeapObject::RefArray(_))) {
+                if path.contains(&reference) {
+                    return Ok(String::from("[...]"));
+                }
+                return self.deep_to_string(item, path);
+            }
+        }
+        // Not an array: its own toString, `null` included.
+        self.string_value_of(item, 0)
+    }
+
+    /// `Arrays.deepEquals`. A cycle overflows the stack here as it does on a
+    /// real JVM — unlike `deepToString`, Java's has no `dejaVu` guard.
+    fn deep_equals(&mut self, a: JValue, b: JValue, depth: u32) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        if depth > MAX_RENDER_DEPTH {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.StackOverflowError",
+            )));
+        }
+        if a == b {
+            return Ok(true);
+        }
+        let (JValue::Ref(Some(left)), JValue::Ref(Some(right))) = (a, b) else {
+            return Ok(false);
+        };
+        let (Some(HeapObject::RefArray(ours)), Some(HeapObject::RefArray(theirs))) =
+            (self.heap.get(left), self.heap.get(right))
+        else {
+            return Ok(false);
+        };
+        let (ours, theirs) = (ours.clone(), theirs.clone());
+        if ours.len() != theirs.len() {
+            return Ok(false);
+        }
+        for (ours, theirs) in ours.into_iter().zip(theirs) {
+            if !self.deep_element_equals(ours, theirs, depth)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn deep_element_equals(
+        &mut self,
+        ours: JValue,
+        theirs: JValue,
+        depth: u32,
+    ) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        if ours == theirs {
+            return Ok(true);
+        }
+        if ours == JValue::NULL || theirs == JValue::NULL {
+            return Ok(false);
+        }
+        if let (JValue::Ref(Some(left)), JValue::Ref(Some(right))) = (ours, theirs) {
+            if matches!(
+                (self.heap.get(left), self.heap.get(right)),
+                (Some(HeapObject::RefArray(_)), Some(HeapObject::RefArray(_)))
+            ) {
+                return self.deep_equals(ours, theirs, depth + 1);
+            }
+            if let Some(equal) = self.primitive_arrays_equal(left, right) {
+                return Ok(equal);
+            }
+        }
+        self.java_equals(ours, theirs)
+    }
+
+    /// `Arrays.deepHashCode`.
+    fn deep_hash_code(&mut self, value: JValue, depth: u32) -> Result<i32, VmError> {
+        use crate::value::HeapObject;
+        if depth > MAX_RENDER_DEPTH {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.StackOverflowError",
+            )));
+        }
+        let JValue::Ref(Some(reference)) = value else {
+            return Ok(0);
+        };
+        let Some(HeapObject::RefArray(items)) = self.heap.get(reference) else {
+            return Ok(0);
+        };
+        let items = items.clone();
+        let mut result = 1i32;
+        for item in items {
+            let element = self.deep_element_hash(item, depth)?;
+            result = result.wrapping_mul(31).wrapping_add(element);
+        }
+        Ok(result)
+    }
+
+    fn deep_element_hash(&mut self, item: JValue, depth: u32) -> Result<i32, VmError> {
+        use crate::value::HeapObject;
+        if item == JValue::NULL {
+            return Ok(0);
+        }
+        if let JValue::Ref(Some(reference)) = item {
+            if matches!(self.heap.get(reference), Some(HeapObject::RefArray(_))) {
+                return self.deep_hash_code(item, depth + 1);
+            }
+            if let Some(hash) = self.primitive_array_hash(reference) {
+                return Ok(hash);
+            }
+        }
+        self.java_hash_code(item)
+    }
+
     /// `list.toString()` / `map.toString()` and the two map views'. Answered
     /// here rather than in the intrinsic layer because rendering an element
     /// may call a user `toString()`, which needs the interpreter.
@@ -2891,10 +3151,17 @@ impl<'run> Interpreter<'run> {
             .ok_or_else(|| malformed(format!("bad array descriptor {descriptor}")))?;
 
         if rest_counts.is_empty() {
+            use crate::value::{HeapObject, IntKind};
             let object = match element_descriptor {
-                "I" | "Z" | "C" => crate::value::HeapObject::IntArray(vec![0; length]),
-                "D" => crate::value::HeapObject::DoubleArray(vec![0.0; length]),
-                _ => crate::value::HeapObject::RefArray(vec![JValue::NULL; length]),
+                "I" => HeapObject::IntArray(IntKind::Int, vec![0; length]),
+                "Z" => HeapObject::IntArray(IntKind::Boolean, vec![0; length]),
+                "C" => HeapObject::IntArray(IntKind::Char, vec![0; length]),
+                "D" => HeapObject::DoubleArray(vec![0.0; length]),
+                "J" => HeapObject::LongArray(vec![0; length]),
+                "F" => HeapObject::FloatArray(vec![0.0; length]),
+                "S" => HeapObject::ShortArray(vec![0; length]),
+                "B" => HeapObject::ByteArray(vec![0; length]),
+                _ => HeapObject::RefArray(vec![JValue::NULL; length]),
             };
             return Ok(self.heap.alloc(object));
         }
@@ -2951,6 +3218,31 @@ impl<'run> Interpreter<'run> {
                 }
             }
             return Ok(None);
+        }
+        // `Arrays.deepToString/deepEquals/deepHashCode` recurse into element
+        // arrays. Only the VM knows an element array's kind once its static
+        // type is gone, and the elements' own toString/equals/hashCode may be
+        // the user's — so the bundled Java cannot express these three.
+        if class_name == "Arrays" {
+            match (method_name, args) {
+                ("deepToString", [value]) => {
+                    let text = self.deep_to_string(*value, &mut Vec::new())?;
+                    let reference = self.heap.alloc_string(&text);
+                    frame.stack.push(JValue::Ref(Some(reference)));
+                    return Ok(None);
+                }
+                ("deepEquals", [ours, theirs]) => {
+                    let equal = self.deep_equals(*ours, *theirs, 0)?;
+                    frame.stack.push(JValue::Int(i32::from(equal)));
+                    return Ok(None);
+                }
+                ("deepHashCode", [value]) => {
+                    let hash = self.deep_hash_code(*value, 0)?;
+                    frame.stack.push(JValue::Int(hash));
+                    return Ok(None);
+                }
+                _ => {}
+            }
         }
         // `Class.forName(name)` — a reflection handle for a loaded class.
         // Needs the class table, which the intrinsic layer lacks.
@@ -4281,6 +4573,42 @@ enum Flow<'run> {
 }
 
 /// The outcome of dispatching a virtual call on a user object.
+/// One element of an `int[]`, `boolean[]` or `char[]`, printed as Java prints
+/// it. The three share a representation, so only the kind tells them apart.
+fn int_element_text(kind: crate::value::IntKind, value: i32) -> String {
+    match kind {
+        crate::value::IntKind::Int => value.to_string(),
+        crate::value::IntKind::Boolean => (value != 0).to_string(),
+        crate::value::IntKind::Char => char::from_u32(value.cast_unsigned())
+            .unwrap_or('\u{FFFD}')
+            .to_string(),
+    }
+}
+
+/// `Float.hashCode`, which collapses every NaN payload to one.
+fn float_hash(value: f32) -> i32 {
+    if value.is_nan() {
+        f32::NAN.to_bits().cast_signed()
+    } else {
+        value.to_bits().cast_signed()
+    }
+}
+
+/// One element of an `int[]`, `boolean[]` or `char[]`, hashed as Java hashes
+/// it: `Boolean.hashCode` is 1231/1237, not the value.
+fn int_element_hash(kind: crate::value::IntKind, value: i32) -> i32 {
+    match kind {
+        crate::value::IntKind::Int | crate::value::IntKind::Char => value,
+        crate::value::IntKind::Boolean => {
+            if value != 0 {
+                1231
+            } else {
+                1237
+            }
+        }
+    }
+}
+
 /// Java's marker for a container that holds itself, instead of recursing.
 const THIS_COLLECTION: &str = "(this Collection)";
 const THIS_MAP: &str = "(this Map)";
@@ -4687,7 +5015,7 @@ fn is_array_object(object: Option<&crate::value::HeapObject>) -> bool {
         object,
         Some(
             HeapObject::RefArray(_)
-                | HeapObject::IntArray(_)
+                | HeapObject::IntArray(..)
                 | HeapObject::DoubleArray(_)
                 | HeapObject::LongArray(_)
                 | HeapObject::FloatArray(_)
