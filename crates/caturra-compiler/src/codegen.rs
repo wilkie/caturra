@@ -7190,6 +7190,10 @@ impl BodyGen<'_> {
             Expr::SuperMethodCall { method, args, span } => {
                 self.super_method_call(method, args, *span)
             }
+            // `new Foo();` — a class instance creation is a statement
+            // expression (JLS §14.8). Run the constructor for its effects and
+            // drop the reference, which the discard below does.
+            Expr::NewObject { .. } => Some(Some(self.expr(expr))),
             _ => {
                 self.error(expr.span(), "this expression is not a statement in Java");
                 return;

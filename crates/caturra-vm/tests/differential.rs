@@ -2852,3 +2852,35 @@ public class DiffCStyle {
 }
 "#
 );
+
+differential_test!(
+    diff_bare_new_statement,
+    "DiffBareNew",
+    r#"
+class Counter {
+    static int made = 0;
+    int id;
+    Counter() { made++; id = made; System.out.println("ctor " + id); }
+    Counter(int n) { made += n; System.out.println("ctor+" + n); }
+    void go() { System.out.println("go " + id); }
+}
+public class DiffBareNew {
+    public static void main(String[] args) {
+        // A class instance creation is a statement expression (JLS 14.8): the
+        // constructor runs for its effects and the reference is discarded.
+        new Counter();
+        new Counter();
+        new Counter(5);
+        new Counter().go();
+        System.out.println("made=" + Counter.made);
+        new String("ignored");
+        StringBuilder sb = new StringBuilder("keep");
+        new StringBuilder("dropped");
+        System.out.println(sb.toString() + " " + sb.length());
+        for (int i = 0; i < 2; i++) new Counter();
+        if (Counter.made > 0) new Counter();
+        System.out.println("made=" + Counter.made);
+    }
+}
+"#
+);

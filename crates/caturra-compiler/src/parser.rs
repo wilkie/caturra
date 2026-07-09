@@ -64,10 +64,6 @@ fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
         // level generator keys off "caturra"/"not supported" to tell an engine
         // gap apart from a student's mistake.
         Keyword::Var => Some("'var' is not supported by caturra; write the type explicitly"),
-        Keyword::New => Some(
-            "a bare 'new' object creation is not supported by caturra as a statement; \
-             assign it to a variable",
-        ),
         Keyword::Class => Some(
             "a class declared inside a method (a local class) is not supported by caturra; \
              declare it at the top level",
@@ -87,9 +83,11 @@ fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
         Keyword::Enum => Some("enum types must not be local"),
         Keyword::Abstract | Keyword::Strictfp => Some("class, interface, or enum expected"),
 
-        // Types, `final` and `this` legitimately begin a declaration or an
-        // expression: let the normal parse continue.
-        Keyword::Int
+        // `new` begins a class instance creation, which JLS §14.8 allows as a
+        // statement expression. Types, `final` and `this` legitimately begin a
+        // declaration or an expression. Let the normal parse continue.
+        Keyword::New
+        | Keyword::Int
         | Keyword::Double
         | Keyword::Boolean
         | Keyword::Char
@@ -1293,7 +1291,13 @@ impl Parser<'_> {
             ));
         }
 
-        if !matches!(expr, Expr::Call { .. } | Expr::SuperMethodCall { .. }) {
+        // JLS §14.8 statement expressions: calls, and class instance creation
+        // (`new Foo();`). Array creation (`new int[3];`) is NOT one, and javac
+        // rejects it — so `Expr::NewArray` still falls through to the error.
+        if !matches!(
+            expr,
+            Expr::Call { .. } | Expr::SuperMethodCall { .. } | Expr::NewObject { .. }
+        ) {
             self.error_at(expr.span(), "this expression is not a statement in Java");
             return Err(Abort);
         }
@@ -3459,7 +3463,6 @@ mod tests {
         // tooling can recognise it as an engine gap.
         for body in [
             "var q = 1;",
-            "new Object();",
             "class Inner {}",
             "assert 1 > 0;",
             "synchronized (a) { }",
@@ -3471,6 +3474,15 @@ mod tests {
                 "`{body}` is valid Java we don't implement; say so: {first}"
             );
         }
+
+        // `new Foo();` IS a statement expression (JLS 14.8); `new int[3];` is
+        // not, and javac rejects it too.
+        assert!(parse_errors(&in_main("new Object();")).is_empty());
+        let array_new = parse_errors(&in_main("new int[3];"));
+        assert_eq!(
+            array_new.first().expect("new int[3];").message,
+            "this expression is not a statement in Java"
+        );
     }
 
     #[test]

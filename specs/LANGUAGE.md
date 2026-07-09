@@ -25,7 +25,10 @@ slice.
 - Class declaration: modifiers, name, `{ ... }` body of method declarations.
 - Method declaration: modifiers (`public` / `static` etc.), `void` or named /
   primitive / array return type, parameter list, block body.
-- Statements: blocks, expression statements (method calls only, as in Java),
+- Statements: blocks, expression statements — method calls and class
+  instance creation (`new Foo();` runs the constructor and discards the
+  reference), the JLS §14.8 set; array creation (`new int[3];`) is not a
+  statement, as in javac —
   local variable declarations (`int a = 1, b;`, `final double d = 2.5;`,
   `String s = "hi";`), assignment (`=`, `+=`, `-=`, `*=`, `/=`, `%=`), and
   statement-position `++`/`--` (prefix or postfix), which lower to

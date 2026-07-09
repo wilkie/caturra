@@ -1440,6 +1440,33 @@ fn swing_table_model_fires_table_model_listener_events() {
     );
 }
 
+/// `new Foo();` is a statement expression (JLS 14.8): the constructor runs and
+/// the reference is discarded. Array creation is not one, and stays an error.
+/// Cross-checked against a real JDK by `diff_bare_new_statement`.
+#[test]
+fn bare_new_runs_the_constructor_and_discards_the_reference() {
+    let out = run_stdout(
+        r#"
+        class Counter {
+            static int made = 0;
+            Counter() { made++; System.out.println("ctor " + made); }
+        }
+        public class Main {
+            public static void main(String[] args) {
+                new Counter();
+                new Counter();
+                for (int i = 0; i < 2; i++) new Counter();
+                // A bundled library type works the same way.
+                new StringBuilder("dropped");
+                System.out.println("made=" + Counter.made);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "ctor 1\nctor 2\nctor 3\nctor 4\nmade=4\n");
+}
+
 /// C-style declarators (`String args[]`), which javac accepts. The brackets
 /// bind to the NAME, so in `int a[], b;` only `a` is an array — the asymmetry
 /// this test exists to pin. Cross-checked against a real JDK by
