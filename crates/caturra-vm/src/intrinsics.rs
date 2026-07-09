@@ -1047,11 +1047,7 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(has))))
         }
         "nextLong" => {
-            let token = scanner_next_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-            let value: i64 = token
-                .parse()
-                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            let value = scanner_take(heap, console, receiver, |t| t.parse::<i64>().ok())?;
             Ok(Some(JValue::Long(value)))
         }
         "hasNextLong" => {
@@ -1060,16 +1056,16 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextFloat" => {
-            let token = scanner_next_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-            let value: f32 = token
-                .parse()
-                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            let value = scanner_take(heap, console, receiver, |t| {
+                is_java_float_token(t)
+                    .then(|| t.parse::<f32>().ok())
+                    .flatten()
+            })?;
             Ok(Some(JValue::Float(value)))
         }
         "hasNextFloat" => {
             let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token.is_some_and(|t| t.parse::<f32>().is_ok());
+            let ok = token.is_some_and(|t| is_java_float_token(&t));
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextShort" | "nextByte" => {
@@ -1078,14 +1074,9 @@ fn scanner_method(
             } else {
                 (i32::from(i8::MIN), i32::from(i8::MAX))
             };
-            let token = scanner_next_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-            let value: i32 = token
-                .parse()
-                .map_err(|_| throw("java.util.InputMismatchException"))?;
-            if value < lo || value > hi {
-                return Err(throw("java.util.InputMismatchException"));
-            }
+            let value = scanner_take(heap, console, receiver, |t| {
+                t.parse::<i32>().ok().filter(|v| *v >= lo && *v <= hi)
+            })?;
             Ok(Some(JValue::Int(value)))
         }
         "hasNextShort" | "hasNextByte" => {
@@ -1101,15 +1092,16 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextBoolean" => {
-            let token = scanner_next_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-            if token.eq_ignore_ascii_case("true") {
-                Ok(Some(JValue::Int(1)))
-            } else if token.eq_ignore_ascii_case("false") {
-                Ok(Some(JValue::Int(0)))
-            } else {
-                Err(throw("java.util.InputMismatchException"))
-            }
+            let value = scanner_take(heap, console, receiver, |t| {
+                if t.eq_ignore_ascii_case("true") {
+                    Some(1)
+                } else if t.eq_ignore_ascii_case("false") {
+                    Some(0)
+                } else {
+                    None
+                }
+            })?;
+            Ok(Some(JValue::Int(value)))
         }
         "hasNextBoolean" => {
             let token = scanner_peek_token(heap, console, receiver)?;
@@ -1130,11 +1122,7 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(token.is_some()))))
         }
         "nextInt" => {
-            let token = scanner_next_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-            let value: i32 = token
-                .parse()
-                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            let value = scanner_take(heap, console, receiver, |t| t.parse::<i32>().ok())?;
             Ok(Some(JValue::Int(value)))
         }
         "hasNextInt" => {
@@ -1143,16 +1131,16 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextDouble" => {
-            let token = scanner_next_token(heap, console, receiver)?
-                .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
-            let value: f64 = token
-                .parse()
-                .map_err(|_| throw("java.util.InputMismatchException"))?;
+            let value = scanner_take(heap, console, receiver, |t| {
+                is_java_float_token(t)
+                    .then(|| t.parse::<f64>().ok())
+                    .flatten()
+            })?;
             Ok(Some(JValue::Double(value)))
         }
         "hasNextDouble" => {
             let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token.is_some_and(|t| t.parse::<f64>().is_ok());
+            let ok = token.is_some_and(|t| is_java_float_token(&t));
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         _ => Err(VmError::UnknownIntrinsic(format!("Scanner.{method}"))),
@@ -1228,6 +1216,48 @@ fn scanner_peek_line(
         }
         scanner_fill(heap, console, receiver);
     }
+}
+
+/// Read one token and translate it, consuming it only if the translation works.
+///
+/// `java.util.Scanner` "will not pass the token that caused the exception", so
+/// after `nextInt()` throws `InputMismatchException` the offending token is
+/// still there — which is what makes the usual recovery loop
+/// (`catch (InputMismatchException e) { in.next(); }`) skip the bad word rather
+/// than the one after it. `None` from `parse` means a mismatch.
+fn scanner_take<T>(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> Result<T, VmError> {
+    let token = scanner_peek_token(heap, console, receiver)?
+        .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+    let value = parse(&token).ok_or_else(|| throw("java.util.InputMismatchException"))?;
+    scanner_next_token(heap, console, receiver)?;
+    Ok(value)
+}
+
+/// Whether a token is a float/double literal *as `java.util.Scanner` reads it*:
+/// an optional sign, then either exactly `NaN` / `Infinity` or a decimal number.
+///
+/// Rust's `from_str` is more generous — it also takes `nan`, `inf`, `infinity`
+/// in any case — so parsing directly would make `hasNextDouble("inf")` true
+/// where Java says false. Anything with a letter other than an exponent `e`/`E`
+/// is rejected, which also covers `1.5f`, `1.5d` and `0x10` exactly as Java does.
+fn is_java_float_token(token: &str) -> bool {
+    let digits = token.strip_prefix(['-', '+']).unwrap_or(token);
+    if digits == "NaN" || digits == "Infinity" {
+        return true;
+    }
+    if digits.is_empty()
+        || digits
+            .bytes()
+            .any(|b| b.is_ascii_alphabetic() && b != b'e' && b != b'E')
+    {
+        return false;
+    }
+    token.parse::<f64>().is_ok()
 }
 
 /// Advance past whitespace and read one token; `None` at EOF.

@@ -7952,6 +7952,61 @@ fn scanner_boolean_and_close() {
     assert_eq!(console.stdout_text(), "true\ntrue false\nfalse\n");
 }
 
+/// `java.util.Scanner` "will not pass the token that caused the exception", so a
+/// failed `nextX` leaves the token in place. Without that, the usual recovery
+/// loop skips the token AFTER the bad one. Also pins Java's float grammar, which
+/// is narrower than Rust's `from_str` (`nan`/`inf` are not floats to Java).
+/// Cross-checked against a real JDK by `diff_scanner_values_and_mismatch_recovery`.
+#[test]
+fn scanner_mismatch_leaves_the_token_and_honours_javas_float_grammar() {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("S.java"),
+        text: r#"
+        import java.util.Scanner;
+        import java.util.InputMismatchException;
+        public class S {
+            public static void main(String[] args) {
+                Scanner in = new Scanner(System.in);
+                // A bad token stays put, so the recovery loop skips the RIGHT word.
+                try { in.nextInt(); } catch (InputMismatchException e) { System.out.println("mismatch"); }
+                System.out.println("same: " + in.next());
+                // In range for int, out of range for byte: still not consumed.
+                try { in.nextByte(); } catch (InputMismatchException e) { System.out.println("range"); }
+                System.out.println("as int: " + in.nextInt());
+                // Rust parses these as floats; java.util.Scanner does not.
+                System.out.println(in.hasNextDouble() + " " + in.hasNextFloat() + " " + in.next());
+                System.out.println(in.hasNextDouble() + " " + in.next());
+                // But the exact spellings are floats, sign and all.
+                System.out.println(in.nextDouble() + " " + in.nextDouble());
+                System.out.println(in.nextLong() + " " + in.nextShort() + " " + in.nextByte());
+            }
+        }
+        "#
+        .into(),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::with_input([
+        "abc 999 inf nan NaN -Infinity 9223372036854775807 -32768 -128",
+    ]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    vm.run_main("S", &[]).unwrap();
+    assert_eq!(
+        console.stdout_text(),
+        "mismatch\n\
+         same: abc\n\
+         range\n\
+         as int: 999\n\
+         false false inf\n\
+         false nan\n\
+         NaN -Infinity\n\
+         9223372036854775807 -32768 -128\n"
+    );
+}
+
 #[test]
 fn current_time_millis_is_wired() {
     let out = run_stdout(

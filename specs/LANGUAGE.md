@@ -185,11 +185,19 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     Long/float/byte-dependent members report honest "the long type is
     not supported" style errors, with
     `NumberFormatException: For input string: "x"`.
-  - `Scanner` over `System.in` (`nextInt/nextDouble/nextBoolean/next/`
-    `nextLine/hasNext*` and `close`), tokenizing like Java, fed by the
-    host console — in the browser this is the SharedArrayBuffer
-    blocking-stdin path. Pattern/regex members, streams, and the
-    long/float/byte readers report honest reasons.
+  - `Scanner` over `System.in` — `next`/`nextLine`, the full numeric set
+    (`nextInt`/`nextLong`/`nextShort`/`nextByte`/`nextFloat`/`nextDouble`/
+    `nextBoolean`), every matching `hasNextX`, and `close` — tokenizing
+    like Java, fed by the host console; in the browser this is the
+    SharedArrayBuffer blocking-stdin path. A failed `nextX` throws
+    `InputMismatchException` and **does not consume the token**, as the
+    JDK documents, so `catch (InputMismatchException e) { in.next(); }`
+    skips the offending word rather than the one after it. The float
+    grammar is Java's, not Rust's: `[-+]?(NaN|Infinity)` exactly, so
+    `nan`, `inf`, `infinity`, `1.5f` and `0x10` are not numbers to
+    `hasNextDouble`. Every `hasNextX` classification and the mismatch
+    behaviour are pinned against a real JDK by the differential suite.
+    Pattern/regex members and streams report honest reasons.
   - `ArrayList<E>` with the CSA generics surface: wrapper/String/class
     element types, the diamond, and the full Java 11 method set
     (2026-07-03): `size/add/get/set/remove` (by index and by value),

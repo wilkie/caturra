@@ -134,6 +134,20 @@ macro_rules! differential_test {
     };
 }
 
+/// The same, for programs that read stdin.
+macro_rules! differential_test_stdin {
+    ($name:ident, $class:literal, $source:literal, $stdin:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            assert_same_output_with_stdin($class, $source, $stdin);
+        }
+    };
+}
+
 differential_test!(
     diff_arithmetic_and_formatting,
     "DiffArith",
@@ -2883,4 +2897,82 @@ public class DiffBareNew {
     }
 }
 "#
+);
+
+// Every `hasNextX` classification, over the tokens that separate Java's Scanner
+// grammar from Rust's `from_str`: `nan`/`inf`/`infinity` are floats to Rust but
+// not to Java, and `1.5f`/`0x10`/`1_000` are floats to neither.
+differential_test_stdin!(
+    diff_scanner_token_classification,
+    "DiffScanTok",
+    r#"
+import java.util.Scanner;
+public class DiffScanTok {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        while (in.hasNext()) {
+            String f = "";
+            f += in.hasNextInt()     ? "I" : ".";
+            f += in.hasNextLong()    ? "L" : ".";
+            f += in.hasNextShort()   ? "S" : ".";
+            f += in.hasNextByte()    ? "B" : ".";
+            f += in.hasNextFloat()   ? "F" : ".";
+            f += in.hasNextDouble()  ? "D" : ".";
+            f += in.hasNextBoolean() ? "Z" : ".";
+            System.out.println(f + "  " + in.next());
+        }
+    }
+}
+"#,
+    "5 -5 +5 0 127 128 -128 -129 32767 32768 2147483647 2147483648 \
+9223372036854775807 9223372036854775808 1.5 -1.5 1e5 1E5 .5 5. NaN Infinity -Infinity +NaN \
+nan inf infinity INFINITY Nan 0x10 010 1_000 true TRUE False fALSe abc 1.5f 1.5d -0.0 1e400"
+);
+
+// Values, and the rule that makes the usual recovery loop work: a failed
+// `nextX` does NOT consume the offending token.
+differential_test_stdin!(
+    diff_scanner_values_and_mismatch_recovery,
+    "DiffScanVal",
+    r#"
+import java.util.Scanner;
+import java.util.InputMismatchException;
+import java.util.NoSuchElementException;
+public class DiffScanVal {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        System.out.println(in.nextLong() + " " + in.nextLong());
+        System.out.println(in.nextFloat() + " " + in.nextFloat() + " " + in.nextFloat());
+        System.out.println(in.nextDouble() + " " + in.nextDouble());
+        System.out.println(in.nextShort() + " " + in.nextByte());
+        System.out.println(in.nextBoolean() + " " + in.nextBoolean());
+
+        // hasNextX peeks; it must not consume.
+        System.out.println(in.hasNextInt() + " " + in.hasNextLong() + " " + in.hasNextFloat()
+            + " " + in.hasNextShort() + " " + in.hasNextByte() + " " + in.hasNextBoolean());
+        System.out.println("still: " + in.next());
+
+        // A mismatch leaves the token in place, so `next()` sees it again.
+        try { in.nextInt(); } catch (InputMismatchException e) { System.out.println("int mismatch"); }
+        System.out.println("same token: " + in.next());
+        // Out of range for byte, but a fine int.
+        try { in.nextByte(); } catch (InputMismatchException e) { System.out.println("byte range"); }
+        System.out.println("as int: " + in.nextInt());
+        // Too big for int, fine for long.
+        try { in.nextInt(); } catch (InputMismatchException e) { System.out.println("int range"); }
+        System.out.println("as long: " + in.nextLong());
+
+        System.out.println("line[" + in.nextLine() + "]");
+        System.out.println("hasNext=" + in.hasNext() + " hasNextLine=" + in.hasNextLine());
+        try { in.next(); } catch (NoSuchElementException e) { System.out.println("no element"); }
+        try { in.nextLine(); } catch (NoSuchElementException e) { System.out.println("no line"); }
+    }
+}
+"#,
+    "9223372036854775807 -9223372036854775808\n\
+1.5 -0.25 3\n\
+1e5 -0.0\n\
+-32768 -128\n\
+TRUE false\n\
+42 abc 999 2147483648 trailing\n"
 );
