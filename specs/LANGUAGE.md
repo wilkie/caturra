@@ -151,7 +151,8 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     `toDegrees`/`toRadians`/`copySign`/`ulp`/`nextUp`/`nextDown`/
     `nextAfter`/`fma`/`IEEEremainder`/`getExponent`, `floorDiv`/
     `floorMod` with Java's negative semantics, the `xxxExact` family
-    throwing `ArithmeticException: integer overflow`, plus `PI`/`E`
+    throwing `ArithmeticException: integer overflow` (`absExact` is Java
+    15 and so is absent), plus `PI`/`E`
     (`round` returns int, not long — the classroom idiom is
     `(int) Math.round(x)` anyway; transcendentals may differ from a
     given JVM by 1 ulp on irrational results, as JVMs differ among
@@ -168,9 +169,10 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     `nextGaussian` may differ in the last ulp because it goes through
     `Math.log` (above). An unseeded `new Random()` draws its seed from
     `Math.random()`, so it is reproducible in tests and entropic in the
-    browser, rather than following the JVM's uniquifier. The Java 17
-    two-arg `nextInt(origin, bound)` is `origin + nextInt(bound-origin)`
-    — right range and distribution, different sequence from the JDK's.
+    browser, rather than following the JVM's uniquifier. Java 17's two-arg
+    `nextInt(origin, bound)` is deliberately absent: caturra models the
+    Java 11 surface, and offering a later API would let code compile here
+    that a real JDK 11 rejects.
   - The full Java 11 int/double surfaces of `Integer` (radix parsing
     and formatting, the bit-twiddling family, the unsigned family,
     `compare`/`min`/`max`/`sum`/`signum`/`hashCode`, `SIZE`/`BYTES`),

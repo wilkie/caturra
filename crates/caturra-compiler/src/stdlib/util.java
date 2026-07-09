@@ -46,13 +46,6 @@ class Random {
     return r;
   }
 
-  // Java 17's two-arg form. Its sequence differs from the JDK's (which uses a
-  // different bounded algorithm); the range and distribution are right.
-  public int nextInt(int origin, int bound) {
-    if (origin >= bound) throw new IllegalArgumentException("bound must be greater than origin");
-    return origin + nextInt(bound - origin);
-  }
-
   public long nextLong() { return ((long) next(32) << 32) + next(32); }
 
   public boolean nextBoolean() { return next(1) != 0; }

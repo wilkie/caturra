@@ -2137,7 +2137,6 @@ fn math_static(
             Ok(Some(JValue::Long((product >> 64) as i64)))
         }
         ("abs", [JValue::Double(v)]) => d(v.abs()),
-        ("absExact", [JValue::Int(v)]) => v.checked_abs().map_or_else(|| Err(overflow()), i),
         ("sqrt", [JValue::Double(v)]) => d(v.sqrt()),
         ("cbrt", [JValue::Double(v)]) => d(v.cbrt()),
         ("pow", [JValue::Double(a), JValue::Double(b)]) => d(a.powf(*b)),

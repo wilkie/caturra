@@ -3395,7 +3395,6 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("negateExact", &[I], BRet::Int, "(I)I"),
     bm("incrementExact", &[I], BRet::Int, "(I)I"),
     bm("decrementExact", &[I], BRet::Int, "(I)I"),
-    bm("absExact", &[I], BRet::Int, "(I)I"),
     bm("abs", &[L], BRet::Long, "(J)J"),
     bm("abs", &[F], BRet::Float, "(F)F"),
     bm("max", &[F, F], BRet::Float, "(FF)F"),

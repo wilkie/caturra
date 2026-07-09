@@ -561,6 +561,36 @@ mod tests {
     }
 
     #[test]
+    /// caturra targets the Java 11 subset, so an API added later must be
+    /// rejected exactly as javac 11 rejects it. Accepting it would be worse than
+    /// missing it: the student's code compiles here and fails on a real JDK.
+    #[test]
+    fn post_java_11_apis_are_not_offered() {
+        // Math.absExact is Java 15; Random.nextInt(origin, bound) is Java 17.
+        // Both messages match what javac 11 prints for the same source.
+        let cases = [
+            (
+                "class Main { static void run() { int x = Math.absExact(-5); } }",
+                "cannot find symbol",
+            ),
+            (
+                "import java.util.Random; \
+                 class Main { static void run() { int x = new Random(1).nextInt(2, 5); } }",
+                "no suitable method found for nextInt(int,int)",
+            ),
+        ];
+        for (source, want) in cases {
+            let result = compile(&[SourceFile {
+                path: String::from("Main.java"),
+                text: String::from(source),
+            }]);
+            assert!(!result.success(), "should not compile: {source}");
+            let message = &result.diagnostics[0].message;
+            assert!(message.contains(want), "expected {want:?}, got: {message}");
+        }
+    }
+
+    #[test]
     fn unsupported_features_fail_with_friendly_messages() {
         let result = compile(&[SourceFile {
             path: String::from("Main.java"),
