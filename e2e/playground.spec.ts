@@ -2320,6 +2320,30 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('3 topping(s): Cheese, Pepperoni, Olive');
   });
 
+  test('a ListCellRenderer styles each JList row without changing its value', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'List cell renderer' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const list = root.getByRole('listbox');
+
+    // The renderer numbers every row and shouts the urgent ones.
+    await expect(list.getByRole('option')).toHaveCount(4);
+    await expect(list.getByRole('option', { name: '1. buy milk' })).toBeVisible();
+    const urgent = list.getByRole('option', { name: '2. CALL THE BANK' });
+    await expect(urgent).toBeVisible();
+
+    // Urgent rows are red; ordinary rows keep the default colour. The shared
+    // renderer instance is reset per row, so red does not leak onto row 3.
+    await expect(urgent).toHaveCSS('color', 'rgb(190, 30, 30)');
+    const plain = list.getByRole('option', { name: '3. walk the dog' });
+    await expect(plain).not.toHaveCSS('color', 'rgb(190, 30, 30)');
+
+    // The renderer only affects display: the selected VALUE is the raw element.
+    await list.selectOption({ label: '2. CALL THE BANK' });
+    await expect(root).toContainText('Picked !call the bank');
+  });
+
   test('a custom AbstractListModel subclass backs a JList and fires on add', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Custom list model' });

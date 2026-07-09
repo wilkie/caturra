@@ -118,6 +118,8 @@ interface SwingNode {
   docListen?: boolean;
   /** JComboBox option labels. */
   items?: string[];
+  /** Per-row colours from a JList's ListCellRenderer (parallel to `items`). */
+  itemStyles?: SwingItemStyle[];
   /** JComboBox selected option index. */
   selectedIndex?: number;
   /** JSlider/JSpinner/JProgressBar range and value; JSpinner step. */
@@ -181,6 +183,12 @@ interface SwingMenu {
 }
 // A menu entry is a leaf item, a separator, or a nested submenu (which is
 // itself a SwingMenu with its own items).
+/** Per-row colours produced by a JList's ListCellRenderer. */
+interface SwingItemStyle {
+  fg?: string;
+  bg?: string;
+}
+
 interface SwingMenuEntry {
   type: 'menuitem' | 'checkmenuitem' | 'radiomenuitem' | 'separator' | 'menu';
   text?: string;
@@ -1035,6 +1043,7 @@ export class SwingViz {
       );
     }
     if (node.type === 'list') {
+      this.#applyItemStyles(select, node);
       const selected = new Set(node.selectedIndices ?? []);
       for (let i = 0; i < select.options.length; i++) {
         const option = select.options[i];
@@ -2523,12 +2532,26 @@ export class SwingViz {
       option.selected = selected.has(index);
       select.appendChild(option);
     }
+    this.#applyItemStyles(select, node);
     if (node.tooltip !== undefined) {
       select.setAttribute('aria-label', node.tooltip);
     }
     this.#field(select, node, 'change');
     this.common(select, node);
     return select;
+  }
+
+  /** Paint each option with the colours its ListCellRenderer chose. Re-applied
+   * on every render: a renderer can recolour a row without its text changing. */
+  #applyItemStyles(select: HTMLSelectElement, node: SwingNode): void {
+    const styles = node.itemStyles;
+    for (let i = 0; i < select.options.length; i++) {
+      const option = select.options[i];
+      if (!option) continue;
+      const style = styles?.[i];
+      option.style.color = cssColor(style?.fg) ?? '';
+      option.style.backgroundColor = cssColor(style?.bg) ?? '';
+    }
   }
 
   /**

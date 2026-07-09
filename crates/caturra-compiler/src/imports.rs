@@ -251,6 +251,8 @@ static JAVAX_SWING: &[&str] = &[
     "ListModel",
     "AbstractListModel",
     "DefaultListModel",
+    "ListCellRenderer",
+    "DefaultListCellRenderer",
     "JTable",
     "TableModel",
     "AbstractTableModel",

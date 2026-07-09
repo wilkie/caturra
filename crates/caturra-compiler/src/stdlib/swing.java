@@ -400,6 +400,10 @@ class Component {
   public void setToolTipText(String text) { __ttip = text; }
   public void setBackground(Color c) { __bg = c; }
   public void setForeground(Color c) { __fg = c; }
+  static String __rgb(Color c) { return c.__r + "," + c.__g + "," + c.__b; }
+  // The text a cell renderer's component contributes to a list row. Only the
+  // text-bearing components (JLabel) have anything to say.
+  String __displayText() { return ""; }
   public void setFont(Font f) { __font = f; }
   public Font getFont() { return __font; }
   public void setBorder(Border b) { __border = b; }
@@ -875,6 +879,7 @@ class JLabel extends Component {
   public JLabel(String text, int horizontalAlignment) { __text = text; __halign = horizontalAlignment; }
   public void setText(String text) { __text = text; }
   public String getText() { return __text; }
+  String __displayText() { return __text; }
   public void setLabelFor(Component c) { __labelFor = c; }
   // A mnemonic underlines its letter; with setLabelFor, Alt+letter focuses the
   // associated component (int form takes a KeyEvent.VK_* code == the char).
@@ -1449,9 +1454,33 @@ class DefaultComboBoxModel extends AbstractListModel implements MutableComboBoxM
   }
 }
 
+// Decides how one list row is drawn: return a component configured for `value`.
+// A JList row is a native <option>, so only the component's text and its
+// foreground/background colours reach the screen.
+interface ListCellRenderer {
+  Component getListCellRendererComponent(JList list, Object value, int index,
+      boolean isSelected, boolean cellHasFocus);
+}
+
+// The default renderer: a JLabel showing the value's toString(). Subclass it and
+// call super first, then restyle the returned label.
+class DefaultListCellRenderer extends JLabel implements ListCellRenderer {
+  public DefaultListCellRenderer() { super(""); }
+  public Component getListCellRendererComponent(JList list, Object value, int index,
+      boolean isSelected, boolean cellHasFocus) {
+    setText(value == null ? "" : "" + value);
+    // The SAME instance is reused for every row, so reset the colours a
+    // subclass may have set on a previous row (real Swing resets them too).
+    __fg = null;
+    __bg = null;
+    return this;
+  }
+}
+
 class JList extends Component {
   java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
   ListModel __model = null;
+  ListCellRenderer __cellRenderer = null;
   // Selected indices, in the order the host reports them.
   java.util.ArrayList<Integer> __selected = new java.util.ArrayList<Integer>();
   int __visibleRows = 8;
@@ -1470,11 +1499,14 @@ class JList extends Component {
   // The live elements: read through the model when model-backed (so ANY
   // ListModel works), else the static data set by setListData.
   int __size() { return __model != null ? __model.getSize() : __items.size(); }
+  // The raw element, as a cell renderer sees it.
+  Object __valueAt(int index) { return __model != null ? __model.getElementAt(index) : __items.get(index); }
   String __elementAt(int index) {
-    if (__model == null) return __items.get(index);
-    Object value = __model.getElementAt(index);
+    Object value = __valueAt(index);
     return value == null ? "" : "" + value;
   }
+  public void setCellRenderer(ListCellRenderer renderer) { __cellRenderer = renderer; }
+  public ListCellRenderer getCellRenderer() { return __cellRenderer; }
   public int getSelectedIndex() { return __selected.isEmpty() ? -1 : __selected.get(0); }
   public void setSelectedIndex(int index) {
     __selected = new java.util.ArrayList<Integer>();
@@ -1527,18 +1559,36 @@ class JList extends Component {
   boolean __listens() { return __listener != null; }
   String __json() {
     StringBuilder opts = new StringBuilder("[");
+    StringBuilder styles = new StringBuilder("[");
     for (int i = 0; i < __size(); i++) {
-      if (i > 0) opts.append(",");
-      opts.append("\"").append(Component.__esc(__elementAt(i))).append("\"");
+      if (i > 0) { opts.append(","); styles.append(","); }
+      String text = __elementAt(i);
+      if (__cellRenderer != null) {
+        // Ask the renderer to configure a component for this row, then take its
+        // text and colours (all a native <option> can show).
+        Component cell = __cellRenderer.getListCellRendererComponent(
+            this, __valueAt(i), i, isSelectedIndex(i), false);
+        text = cell.__displayText();
+        styles.append("{");
+        if (cell.__fg != null) styles.append("\"fg\":\"").append(Component.__rgb(cell.__fg)).append("\"");
+        if (cell.__bg != null) {
+          if (cell.__fg != null) styles.append(",");
+          styles.append("\"bg\":\"").append(Component.__rgb(cell.__bg)).append("\"");
+        }
+        styles.append("}");
+      }
+      opts.append("\"").append(Component.__esc(text)).append("\"");
     }
     opts.append("]");
+    styles.append("]");
+    String cells = __cellRenderer != null ? ",\"itemStyles\":" + styles.toString() : "";
     StringBuilder sel = new StringBuilder("[");
     for (int i = 0; i < __selected.size(); i++) {
       if (i > 0) sel.append(",");
       sel.append(__selected.get(i));
     }
     sel.append("]");
-    return "{\"type\":\"list\",\"items\":" + opts.toString() + ",\"selectedIndices\":" + sel.toString()
+    return "{\"type\":\"list\",\"items\":" + opts.toString() + cells + ",\"selectedIndices\":" + sel.toString()
         + ",\"multiple\":" + __multiple() + ",\"rows\":" + __visibleRows + "," + __commonJson() + "}";
   }
 }

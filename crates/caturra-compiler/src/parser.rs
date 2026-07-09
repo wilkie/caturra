@@ -2120,14 +2120,15 @@ impl Parser<'_> {
         // Class cast: `(Shape) x`, `(java.util.ArrayList) x`, or
         // `(ArrayList<Object>) x`. A `(type)` followed by a token that can
         // only start an operand is a cast, not a parenthesized expression
-        // (`(a) - b` stays arithmetic).
+        // (`(a) - b` stays arithmetic). `super` starts an operand too, as in
+        // `(JLabel) super.getListCellRendererComponent(...)`.
         if self.at_symbol("(")
             && let Some(after) = self.scan_cast_type()
             && matches!(
                 self.peek_at(after),
                 Some(
                     TokenKind::Identifier(_)
-                        | TokenKind::Keyword(Keyword::New | Keyword::This)
+                        | TokenKind::Keyword(Keyword::New | Keyword::This | Keyword::Super)
                         | TokenKind::StringLiteral(_)
                 )
             )

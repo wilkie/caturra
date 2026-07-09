@@ -136,6 +136,27 @@ fn compile_and_run(source: &str, main: &str) -> (Result<ExitStatus, VmError>, Bu
 }
 
 #[test]
+fn casts_a_super_method_call() {
+    // `(Type) super.method()` — a cast whose operand starts with `super`.
+    let (result, console) = compile_and_run(
+        r#"
+        class Base {
+            Object describe() { return "base"; }
+        }
+        public class Main extends Base {
+            String shout() { return ((String) super.describe()).toUpperCase(); }
+            public static void main(String[] args) {
+                System.out.println(new Main().shout());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "BASE\n");
+}
+
+#[test]
 fn system_exit_terminates_with_a_status_code() {
     // System.exit(code) ends the program immediately — the code returns the
     // given status and nothing after the call runs.
@@ -1091,6 +1112,50 @@ fn swing_table_model_fires_table_model_listener_events() {
         console.stdout_text(),
         "type=1 rows=1..1 col=-1\ntype=0 rows=0..0 col=1\ntype=-1 rows=0..0 col=-1\n"
     );
+}
+
+#[test]
+fn swing_list_cell_renderer_styles_each_row() {
+    // A ListCellRenderer decides each row's text and colours. The renderer is
+    // asked once per row at paint time, with the raw value and its index.
+    let tree = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                String[] tasks = {"buy milk", "!urgent call", "walk dog"};
+                JList list = new JList(tasks);
+                list.setCellRenderer(new DefaultListCellRenderer() {
+                    public Component getListCellRendererComponent(JList list, Object value,
+                            int index, boolean isSelected, boolean cellHasFocus) {
+                        JLabel label = (JLabel) super.getListCellRendererComponent(
+                            list, value, index, isSelected, cellHasFocus);
+                        String text = "" + value;
+                        if (text.startsWith("!")) {
+                            label.setText((index + 1) + ". " + text.substring(1).toUpperCase());
+                            label.setForeground(new Color(200, 0, 0));
+                        } else {
+                            label.setText((index + 1) + ". " + text);
+                        }
+                        return label;
+                    }
+                });
+                JFrame frame = new JFrame("Tasks");
+                frame.add(list);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    // Renderer-produced text, numbered per index.
+    assert!(tree.contains(r#""1. buy milk""#), "{tree}");
+    assert!(tree.contains(r#""2. URGENT CALL""#), "{tree}");
+    assert!(tree.contains(r#""3. walk dog""#), "{tree}");
+    // Only the urgent row carries a colour — the shared renderer instance is
+    // reset between rows, so red does not leak onto row 3.
+    assert!(tree.contains(r#""itemStyles":[{},{"fg":"200,0,0"},{}]"#), "{tree}");
 }
 
 #[test]

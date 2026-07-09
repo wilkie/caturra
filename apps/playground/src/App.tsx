@@ -1710,6 +1710,56 @@ public class Main {
 `,
   },
   {
+    name: 'List cell renderer',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JList list;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Tasks");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    String[] tasks = {"buy milk", "!call the bank", "walk the dog", "!pay rent"};
+    list = new JList(tasks);
+    list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+    list.setVisibleRowCount(6);
+
+    // A cell renderer decides how each row is drawn. It is asked once per row,
+    // with the row's value and index. Rows starting with "!" are urgent: they
+    // get shouted and painted red.
+    list.setCellRenderer(new DefaultListCellRenderer() {
+      public Component getListCellRendererComponent(JList list, Object value,
+          int index, boolean isSelected, boolean cellHasFocus) {
+        Component base = super.getListCellRendererComponent(
+            list, value, index, isSelected, cellHasFocus);
+        JLabel label = (JLabel) base;
+        String text = "" + value;
+        if (text.startsWith("!")) {
+          label.setText((index + 1) + ". " + text.substring(1).toUpperCase());
+          label.setForeground(new Color(190, 30, 30));
+        } else {
+          label.setText((index + 1) + ". " + text);
+        }
+        return label;
+      }
+    });
+
+    status = new JLabel("Pick a task.");
+    list.addListSelectionListener(e ->
+        Main.status.setText("Picked " + Main.list.getSelectedValue()));
+
+    frame.add(new JScrollPane(list), BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Custom list model',
     starter: `import javax.swing.*;
 import java.awt.*;
