@@ -1117,8 +1117,16 @@ impl MethodTable {
                 if simple == "List" && !self.has_class("List") {
                     simple = "ArrayList";
                 }
+                // `Map<K, V>` is the interface form of the HashMap caturra models.
+                if simple == "Map" && !self.has_class("Map") {
+                    simple = "HashMap";
+                }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
+                } else if simple == "HashMap" && args.len() == 2 && !self.has_class(simple) {
+                    let key = elem_from_type_arg(&args[0], self)?;
+                    let value = elem_from_type_arg(&args[1], self)?;
+                    Some(JType::Map { key, value })
                 } else if !self.has_class(base)
                     && matches!(simple, "Class" | "Constructor" | "Field")
                 {
@@ -1786,6 +1794,12 @@ enum JType {
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
+    /// `java.util.HashMap<K, V>` / `java.util.Map<K, V>` (intrinsic; K and
+    /// V tracked at compile time, erased at runtime).
+    Map {
+        key: ElemType,
+        value: ElemType,
+    },
     /// A parameterized user class with a single tracked type argument
     /// (`Box<String>`). Erases to `Object(class)` at the bytecode
     /// level; the argument enables cast-free reads of type-variable
@@ -1819,6 +1833,11 @@ impl JType {
                     arg.base_type().describe(table)
                 )
             }
+            JType::Map { key, value } => format!(
+                "HashMap<{}, {}>",
+                key.base_type().describe(table),
+                value.base_type().describe(table)
+            ),
             JType::TypeVar => String::from("Object"),
             JType::Int => String::from("int"),
             JType::Double => String::from("double"),
@@ -1884,6 +1903,7 @@ impl JType {
                 | JType::File
                 | JType::Writer
                 | JType::List(_)
+                | JType::Map { .. }
                 | JType::Exception(_)
                 | JType::Generic { .. }
                 | JType::TypeVar
@@ -1934,6 +1954,7 @@ impl JType {
             // variable is Object.
             JType::Boxed(elem) => format!("L{};", wrapper_internal(elem)),
             JType::Generic { class, .. } => format!("L{};", table.class_name(class)),
+            JType::Map { .. } => String::from("Ljava/util/HashMap;"),
             JType::Int => String::from("I"),
             JType::Double => String::from("D"),
             JType::Boolean => String::from("Z"),
@@ -2311,8 +2332,13 @@ fn method_descriptor(
                 if simple == "List" && !table.has_class("List") {
                     simple = "ArrayList";
                 }
+                if simple == "Map" && !table.has_class("Map") {
+                    simple = "HashMap";
+                }
                 if simple == "ArrayList" {
                     out.push_str("Ljava/util/ArrayList;");
+                } else if simple == "HashMap" {
+                    out.push_str("Ljava/util/HashMap;");
                 } else if !table.has_class(base) && simple == "Class" {
                     out.push_str("Ljava/lang/Class;");
                 } else if !table.has_class(base) && simple == "Constructor" {
@@ -2516,6 +2542,12 @@ enum BParam {
     Object,
     /// `java.lang.StringBuilder` (`StringBuilder.compareTo(StringBuilder)`).
     Builder,
+    /// A map's key type, boxed when primitive (`map.get(k)`).
+    Key,
+    /// A map's value type, boxed when primitive (`map.put(k, v)`).
+    Val,
+    /// The receiver's own map type (`putAll(otherMap)`).
+    SelfMap,
 }
 
 /// The return of an intrinsic method.
@@ -2561,6 +2593,9 @@ enum BRet {
     Builder,
     /// `java.lang.Object` (`Constructor.newInstance`).
     Object,
+    /// A map's value type, boxed when primitive (`map.get(k)` returns
+    /// `null` for a missing key, so it cannot be a bare primitive).
+    Val,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -2956,6 +2991,13 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Scanner", "findAll", "streams are not supported by caturra"),
     ("Scanner", "nextBigInteger", "BigInteger is not supported by caturra"),
     ("Scanner", "nextBigDecimal", "BigDecimal is not supported by caturra"),
+    ("HashMap", "forEach", "lambdas are not supported by caturra"),
+    ("HashMap", "replaceAll", "lambdas are not supported by caturra"),
+    ("HashMap", "compute", "lambdas are not supported by caturra"),
+    ("HashMap", "computeIfAbsent", "lambdas are not supported by caturra"),
+    ("HashMap", "computeIfPresent", "lambdas are not supported by caturra"),
+    ("HashMap", "merge", "lambdas are not supported by caturra"),
+    ("HashMap", "clone", "clone is not supported by caturra"),
 ];
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
@@ -2966,6 +3008,7 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Str => "String",
         JType::Scanner => "Scanner",
         JType::List(_) => "ArrayList",
+        JType::Map { .. } => "HashMap",
         JType::StringBuilder => "StringBuilder",
         _ => "",
     }
@@ -4111,6 +4154,89 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
 ];
 
 /// `java.util.Arrays` static methods.
+/// `java.util.HashMap<K, V>` methods. Keys and values are erased to `Object`
+/// in the descriptors, as javac erases them; the compiler autoboxes at the
+/// boundary so that a missing key can hand back a real `null`.
+const MAP_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm(
+        "containsKey",
+        &[BParam::Key],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "containsValue",
+        &[BParam::Val],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::Key],
+        BRet::Val,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "getOrDefault",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "put",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "putIfAbsent",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "remove",
+        &[BParam::Key],
+        BRet::Val,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "remove",
+        &[BParam::Key, BParam::Val],
+        BRet::Boolean,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "replace",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "replace",
+        &[BParam::Key, BParam::Val, BParam::Val],
+        BRet::Boolean,
+        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
+    ),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "putAll",
+        &[BParam::SelfMap],
+        BRet::Void,
+        "(Ljava/util/Map;)V",
+    ),
+    bm(
+        "equals",
+        &[BParam::SelfMap],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
 /// The intrinsic method table and JVM class for a receiver type.
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match ty {
@@ -4126,6 +4252,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
+        JType::Map { .. } => Some(("java/util/HashMap", MAP_METHODS)),
         _ => None,
     }
 }
@@ -4212,7 +4339,56 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
     }
 }
 
-fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
+/// The receiver's type arguments, for the builtin parameter and return
+/// kinds that depend on them. `ArrayList<E>` supplies one; `Map<K,V>` two.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct TypeArgs {
+    /// A list's element type, or a map's key type.
+    first: Option<ElemType>,
+    /// A map's value type.
+    second: Option<ElemType>,
+}
+
+impl TypeArgs {
+    /// The type arguments a receiver carries, if it is a generic intrinsic.
+    fn of(receiver: JType) -> Self {
+        match receiver {
+            JType::List(elem) => Self {
+                first: Some(elem),
+                second: None,
+            },
+            JType::Map { key, value } => Self {
+                first: Some(key),
+                second: Some(value),
+            },
+            _ => Self::default(),
+        }
+    }
+}
+
+/// A type argument as it appears in a method signature: a primitive one is
+/// really its wrapper, since `Map<String, Integer>.get` returns `Integer`
+/// and can return `null`. This is what lets `map.put(k, v);` discard a
+/// reference while `int old = map.put(k, v);` throws on a new key, exactly
+/// as Java's unboxing does.
+fn boxed_if_primitive(elem: Option<ElemType>) -> JType {
+    match elem {
+        Some(
+            primitive @ (ElemType::Int
+            | ElemType::Double
+            | ElemType::Long
+            | ElemType::Float
+            | ElemType::Short
+            | ElemType::Byte
+            | ElemType::Boolean
+            | ElemType::Char),
+        ) => JType::Boxed(primitive),
+        Some(reference) => reference.base_type(),
+        None => JType::Error,
+    }
+}
+
+fn bparam_type(param: BParam, args: TypeArgs) -> JType {
     match param {
         BParam::Int => JType::Int,
         BParam::Double => JType::Double,
@@ -4227,22 +4403,28 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
             elem: ElemType::Char,
             dims: 1,
         },
-        BParam::SelfList => elem.map_or(JType::Error, JType::List),
-        BParam::Elem => elem.map_or(JType::Error, ElemType::base_type),
+        BParam::SelfList => args.first.map_or(JType::Error, JType::List),
+        BParam::Elem => args.first.map_or(JType::Error, ElemType::base_type),
         BParam::Class => JType::Class,
         BParam::RefArray => JType::Error,
         BParam::Object => JType::Object(ClassId(0)),
         BParam::Builder => JType::StringBuilder,
+        BParam::Key => boxed_if_primitive(args.first),
+        BParam::Val => boxed_if_primitive(args.second),
+        BParam::SelfMap => match (args.first, args.second) {
+            (Some(key), Some(value)) => JType::Map { key, value },
+            _ => JType::Error,
+        },
     }
 }
 
 /// Whether an argument type satisfies a builtin parameter (widening).
-fn bparam_matches(param: BParam, arg: JType, elem: Option<ElemType>, table: &MethodTable) -> bool {
+fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable) -> bool {
     match param {
         BParam::RefArray => matches!(arg, JType::Array { .. }),
         // Any reference (or boxable value) satisfies an `Object` parameter.
         BParam::Object => widens(arg, JType::Object(table.object_id), table),
-        other => widens(arg, bparam_type(other, elem), table),
+        other => widens(arg, bparam_type(other, args), table),
     }
 }
 
@@ -4252,7 +4434,7 @@ fn pick_builtin<'m>(
     methods: &'m [BuiltinMethod],
     name: &str,
     args: &[JType],
-    elem: Option<ElemType>,
+    type_args: TypeArgs,
     table: &MethodTable,
 ) -> Option<&'m BuiltinMethod> {
     let applicable: Vec<&BuiltinMethod> = methods
@@ -4263,21 +4445,21 @@ fn pick_builtin<'m>(
                 && m.params
                     .iter()
                     .zip(args)
-                    .all(|(p, a)| bparam_matches(*p, *a, elem, table))
+                    .all(|(p, a)| bparam_matches(*p, *a, type_args, table))
         })
         .collect();
     if let Some(exact) = applicable.iter().find(|m| {
         m.params
             .iter()
             .zip(args)
-            .all(|(p, a)| bparam_type(*p, elem) == *a)
+            .all(|(p, a)| bparam_type(*p, type_args) == *a)
     }) {
         return Some(exact);
     }
     applicable.first().copied()
 }
 
-fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<JType> {
+fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
         BRet::Int => Some(JType::Int),
@@ -4297,7 +4479,8 @@ fn bret_type(ret: BRet, elem: Option<ElemType>, table: &MethodTable) -> Option<J
             elem: ElemType::Char,
             dims: 1,
         }),
-        BRet::Elem => Some(elem.map_or(JType::Error, ElemType::base_type)),
+        BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
+        BRet::Val => Some(boxed_if_primitive(args.second)),
         BRet::Class => Some(JType::Class),
         BRet::FieldArray => Some(JType::Array {
             elem: ElemType::Field,
@@ -5896,6 +6079,16 @@ impl BodyGen<'_> {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::List),
                 _ => JType::Null,
             },
+            "HashMap" | "Map" => match type_args {
+                [key, value] => match (
+                    elem_from_type_arg(key, self.table),
+                    elem_from_type_arg(value, self.table),
+                ) {
+                    (Some(key), Some(value)) => JType::Map { key, value },
+                    _ => JType::Null,
+                },
+                _ => JType::Null,
+            },
             _ => JType::Error,
         }
     }
@@ -5965,6 +6158,7 @@ impl BodyGen<'_> {
                 "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
                 "ArrayList" => return self.new_array_list(type_args, args, span),
+                "HashMap" => return self.new_hash_map(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
                 "Integer" | "Double" | "Long" | "Float" | "Short" | "Byte" | "Character"
@@ -6364,6 +6558,71 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `new HashMap<K, V>()`, `new HashMap<>(initialCapacity)`, or the copy
+    /// constructor `new HashMap<>(otherMap)`.
+    fn new_hash_map(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        if args.len() > 1 {
+            self.error(span, "HashMap takes at most one constructor argument");
+            return JType::Error;
+        }
+        let mut entry = match type_args {
+            // Diamond `new HashMap<>()`: the key and value types come from
+            // the assignment context (or the copy source below).
+            [] => None,
+            [key, value] => {
+                let key = elem_from_type_arg(key, self.table);
+                let value = elem_from_type_arg(value, self.table);
+                let (Some(key), Some(value)) = (key, value) else {
+                    self.error(
+                        span,
+                        "HashMap key and value types must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some((key, value))
+            }
+            _ => {
+                self.error(span, "HashMap takes two type arguments");
+                return JType::Error;
+            }
+        };
+        let map_class = intern_class(self.pool, "java/util/HashMap");
+        self.code.push_op_u16(op::NEW, map_class, 1);
+        self.code.push_op(op::DUP, 1);
+        match args {
+            [] => {
+                let init_ref = intern_method_ref(self.pool, "java/util/HashMap", "<init>", "()V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(1);
+            }
+            [source] => {
+                let source_ty = self.expr(source);
+                // `new HashMap<>(map)` copies; `new HashMap<>(16)` sizes.
+                let descriptor = if let JType::Map { key, value } = source_ty {
+                    if entry.is_none() {
+                        entry = Some((key, value));
+                    }
+                    "(Ljava/util/Map;)V"
+                } else {
+                    if !widens(source_ty, JType::Int, self.table) {
+                        self.error(span, "new HashMap(...) takes a Map or an int capacity");
+                    }
+                    "(I)V"
+                };
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/HashMap", "<init>", descriptor);
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2); // the dup'd receiver + the argument
+            }
+            _ => unreachable!("arg count checked above"),
+        }
+        match entry {
+            Some((key, value)) => JType::Map { key, value },
+            None => JType::Null,
+        }
+    }
+
     /// Substitute a tracked type argument for a type variable on a
     /// read: emits a `checkcast` to the argument's class and returns
     /// its concrete type. Non-type-variable types pass through.
@@ -6487,6 +6746,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::List(_)
+            | JType::Map { .. }
             | JType::Class
             | JType::Field
             | JType::Method
@@ -6588,10 +6848,7 @@ impl BodyGen<'_> {
         }
         let (class, methods) =
             builtin_instance_table(receiver_ty).expect("caller checked receiver kind");
-        let elem = match receiver_ty {
-            JType::List(elem) => Some(elem),
-            _ => None,
-        };
+        let elem = TypeArgs::of(receiver_ty);
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             for arg in args {
@@ -6637,7 +6894,13 @@ impl BodyGen<'_> {
         for (arg, param) in args.iter().zip(chosen.params) {
             let param_ty = bparam_type(*param, elem);
             let actual = self.expr(arg);
-            self.numeric_conversion(actual, param_ty);
+            if matches!(param_ty, JType::Boxed(_)) {
+                // `numeric_conversion` unboxes a wrapper argument but never
+                // boxes a primitive one, which `Map.put(K, V)` needs.
+                self.convert_for_assignment(actual, param_ty, span);
+            } else {
+                self.numeric_conversion(actual, param_ty);
+            }
             args_width += param_ty.width();
         }
         let method_ref = intern_method_ref(self.pool, class, chosen.name, chosen.descriptor);
@@ -6674,9 +6937,11 @@ impl BodyGen<'_> {
             let ty = self.expr(arg);
             // Objects format via toString, like Java's %s.
             let ty = match ty {
-                JType::Object(_) | JType::List(_) | JType::File | JType::Exception(_) => {
-                    self.coerce_to_string_for_output(ty)
-                }
+                JType::Object(_)
+                | JType::List(_)
+                | JType::Map { .. }
+                | JType::File
+                | JType::Exception(_) => self.coerce_to_string_for_output(ty),
                 other => other,
             };
             match ty {
@@ -6757,7 +7022,9 @@ impl BodyGen<'_> {
             }
             return None;
         }
-        let Some(chosen) = pick_builtin(methods, method, &arg_types, None, self.table) else {
+        let Some(chosen) =
+            pick_builtin(methods, method, &arg_types, TypeArgs::default(), self.table)
+        else {
             if let Some(reason) = unsupported_member(class, method) {
                 self.error(
                     span,
@@ -6776,13 +7043,13 @@ impl BodyGen<'_> {
         };
         let mut args_width: u16 = 0;
         for (arg, param) in args.iter().zip(chosen.params) {
-            let param_ty = bparam_type(*param, None);
+            let param_ty = bparam_type(*param, TypeArgs::default());
             let actual = self.expr(arg);
             self.numeric_conversion(actual, param_ty);
             args_width += param_ty.width();
         }
         let method_ref = intern_method_ref(self.pool, jvm_class, chosen.name, chosen.descriptor);
-        let ret = bret_type(chosen.ret, None, self.table);
+        let ret = bret_type(chosen.ret, TypeArgs::default(), self.table);
         let ret_width = ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
@@ -6928,15 +7195,20 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return JType::Str;
         }
-        if let JType::Boxed(elem) = ty {
-            // A boxed wrapper is never null here; call its toString.
-            let internal = wrapper_internal(elem);
-            let method_ref =
-                intern_method_ref(self.pool, internal, "toString", "()Ljava/lang/String;");
+        if matches!(ty, JType::Map { .. }) {
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/util/HashMap",
+                "toString",
+                "()Ljava/lang/String;",
+            );
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
             self.code.drop_stack(1);
             return JType::Str;
         }
+        // A boxed wrapper is left alone: it may be null (`map.get(absent)`),
+        // and printing/appending it as an Object renders "null" as Java does
+        // rather than throwing on `Integer.toString()`.
         if let JType::Object(class_id) = ty {
             // String.valueOf semantics: null prints as "null" instead
             // of throwing, so guard the toString call.
@@ -7691,6 +7963,7 @@ impl BodyGen<'_> {
             | JType::StringBuilder
             | JType::TypeVar
             | JType::Boxed(_)
+            | JType::Map { .. }
             | JType::Class
             | JType::Field
             | JType::Method
@@ -7908,9 +8181,15 @@ impl BodyGen<'_> {
                         // Intrinsic static (Math.abs, ...).
                         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                         let (_, methods) = builtin_static_table(&path[0]).expect("checked above");
-                        return pick_builtin(methods, method, &arg_types, None, self.table)
-                            .and_then(|m| bret_type(m.ret, None, self.table))
-                            .unwrap_or(JType::Error);
+                        return pick_builtin(
+                            methods,
+                            method,
+                            &arg_types,
+                            TypeArgs::default(),
+                            self.table,
+                        )
+                        .and_then(|m| bret_type(m.ret, TypeArgs::default(), self.table))
+                        .unwrap_or(JType::Error);
                     }
                     Some(other) => match self.type_of(other) {
                         JType::Object(id) => self.table.class_name(id).to_owned(),
@@ -7933,16 +8212,14 @@ impl BodyGen<'_> {
                         | JType::File
                         | JType::Writer
                         | JType::List(_)
+                        | JType::Map { .. }
                         | JType::Exception(_)
                         | JType::Class
                         | JType::Field
                         | JType::Method
                         | JType::Type
                         | JType::Constructor) => {
-                            let elem = match receiver_ty {
-                                JType::List(elem) => Some(elem),
-                                _ => None,
-                            };
+                            let elem = TypeArgs::of(receiver_ty);
                             let arg_types: Vec<JType> =
                                 args.iter().map(|a| self.type_of(a)).collect();
                             let (_, methods) = builtin_instance_table(receiver_ty)
@@ -8216,6 +8493,7 @@ impl BodyGen<'_> {
             JType::Str => String::from("java/lang/String"),
             // `x instanceof ArrayList<…>` — a runtime list check.
             JType::List(_) => String::from("java/util/ArrayList"),
+            JType::Map { .. } => String::from("java/util/HashMap"),
             // `type instanceof ParameterizedType` — a runtime check on the
             // reflect Type's kind (the VM inspects the value).
             JType::Type => match ty {
@@ -9811,6 +10089,7 @@ impl BodyGen<'_> {
             | JType::StringBuilder
             | JType::TypeVar
             | JType::Boxed(_)
+            | JType::Map { .. }
             | JType::Class
             | JType::Field
             | JType::Method
@@ -10098,6 +10377,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::List(_)
+            | JType::Map { .. }
             | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
@@ -10117,6 +10397,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::List(_)
+            | JType::Map { .. }
             | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };

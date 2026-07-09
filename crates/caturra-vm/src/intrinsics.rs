@@ -7,6 +7,7 @@
 //! `specs/LANGUAGE.md` staging.
 
 use crate::io::ConsoleIo;
+use crate::map::{JavaHashMap, map_key};
 use crate::value::{Heap, HeapObject, HeapRef, JValue, StdStream};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
@@ -66,6 +67,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             eof: false,
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
+        "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
         "java/io/File" => Some(HeapObject::File(String::new())),
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),
@@ -128,6 +130,46 @@ pub fn invoke_special(
         // `new StringBuilder(capacity)`: a sizing hint with no observable
         // effect — caturra models contents, not the backing array.
         ("<init>", "(I)V") if matches!(heap.get(receiver), Some(HeapObject::StringBuilder(_))) => {
+            Ok(())
+        }
+        // `new HashMap<>(initialCapacity)`: unlike a builder's, a map's
+        // capacity IS observable — it sets the table length, and so the
+        // iteration order.
+        ("<init>", "(I)V") => {
+            let JValue::Int(capacity) = args[0] else {
+                return Err(throw("java.lang.VerifyError: expected an int argument"));
+            };
+            if capacity < 0 {
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: Illegal initial capacity: {capacity}"
+                )));
+            }
+            match heap.get_mut(receiver) {
+                Some(HeapObject::HashMap(map)) => {
+                    *map = JavaHashMap::with_capacity_hint(capacity);
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
+        }
+        // `new HashMap<>(otherMap)`: copies the entries; the copy's own
+        // table is sized to fit, so its order may differ from the source's.
+        ("<init>", "(Ljava/util/Map;)V") => {
+            let JValue::Ref(Some(source)) = args[0] else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let entries = match heap.get(source) {
+                Some(HeapObject::HashMap(map)) => map.entries_in_order(),
+                _ => return Err(throw("java.lang.ClassCastException: not a Map")),
+            };
+            let mut copy = JavaHashMap::sized_for(entries.len());
+            for (key, value) in entries {
+                copy.insert(map_key(heap, key), key, value);
+            }
+            match heap.get_mut(receiver) {
+                Some(HeapObject::HashMap(map)) => *map = copy,
+                _ => return Err(throw("java.lang.ClassCastException: not a Map")),
+            }
             Ok(())
         }
         ("<init>", "(Ljava/lang/String;)V") => {
@@ -327,6 +369,7 @@ pub fn invoke_virtual(
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
+        (HeapObject::HashMap(_), _) => map_method(heap, receiver, method, descriptor, args),
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
         (
             HeapObject::Exception {
@@ -1803,6 +1846,192 @@ fn list_method(
     }
 }
 
+/// `java.util.HashMap` methods. Keys and values arrive boxed (the compiler
+/// autoboxes at the boundary, as javac does), so a missing key can return a
+/// real `null` and unboxing it throws where Java throws.
+#[allow(clippy::too_many_lines)] // one arm per documented method
+fn map_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    // `equals`/`containsValue` compare values the way `Object.equals` does,
+    // which for the types caturra can compare by value is exactly what
+    // `MapKey` equality means.
+    let same_value = |heap: &Heap, a: JValue, b: JValue| map_key(heap, a) == map_key(heap, b);
+
+    match (method, args) {
+        ("size", []) => Ok(Some(JValue::Int(
+            i32::try_from(map_of(heap, receiver).len()).unwrap_or(i32::MAX),
+        ))),
+        ("isEmpty", []) => Ok(Some(JValue::Int(i32::from(
+            map_of(heap, receiver).is_empty(),
+        )))),
+        ("containsKey", [key]) => {
+            let key = map_key(heap, *key);
+            Ok(Some(JValue::Int(i32::from(
+                map_of(heap, receiver).contains_key(&key),
+            ))))
+        }
+        ("containsValue", [value]) => {
+            let entries = entries_of(heap, receiver);
+            let found = entries.iter().any(|(_, v)| same_value(heap, *v, *value));
+            Ok(Some(JValue::Int(i32::from(found))))
+        }
+        ("get", [key]) => {
+            let key = map_key(heap, *key);
+            Ok(Some(
+                map_of(heap, receiver).lookup(&key).unwrap_or(JValue::NULL),
+            ))
+        }
+        ("getOrDefault", [key, fallback]) => {
+            let key = map_key(heap, *key);
+            Ok(Some(
+                map_of(heap, receiver).lookup(&key).unwrap_or(*fallback),
+            ))
+        }
+        ("put", [key, value]) => {
+            let comparable = map_key(heap, *key);
+            let previous = map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
+            Ok(Some(previous.unwrap_or(JValue::NULL)))
+        }
+        ("putIfAbsent", [key, value]) => {
+            let comparable = map_key(heap, *key);
+            // Java treats a key mapped to null as absent here.
+            match map_of(heap, receiver).lookup(&comparable) {
+                Some(existing) if existing != JValue::NULL => Ok(Some(existing)),
+                _ => {
+                    map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
+                    Ok(Some(JValue::NULL))
+                }
+            }
+        }
+        ("remove", [key]) => {
+            let key = map_key(heap, *key);
+            Ok(Some(
+                map_of_mut(heap, receiver)?
+                    .remove(&key)
+                    .unwrap_or(JValue::NULL),
+            ))
+        }
+        ("remove", [key, value]) => {
+            let comparable = map_key(heap, *key);
+            let matches = map_of(heap, receiver)
+                .lookup(&comparable)
+                .is_some_and(|held| same_value(heap, held, *value));
+            if matches {
+                map_of_mut(heap, receiver)?.remove(&comparable);
+            }
+            Ok(Some(JValue::Int(i32::from(matches))))
+        }
+        ("replace", [key, value]) => {
+            let comparable = map_key(heap, *key);
+            if !map_of(heap, receiver).contains_key(&comparable) {
+                return Ok(Some(JValue::NULL));
+            }
+            let previous = map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
+            Ok(Some(previous.unwrap_or(JValue::NULL)))
+        }
+        ("replace", [key, expected, value]) => {
+            let comparable = map_key(heap, *key);
+            let matches = map_of(heap, receiver)
+                .lookup(&comparable)
+                .is_some_and(|held| same_value(heap, held, *expected));
+            if matches {
+                map_of_mut(heap, receiver)?.insert(comparable, *key, *value);
+            }
+            Ok(Some(JValue::Int(i32::from(matches))))
+        }
+        ("clear", []) => {
+            map_of_mut(heap, receiver)?.clear();
+            Ok(None)
+        }
+        ("putAll", [JValue::Ref(Some(source))]) => {
+            let entries = entries_of(heap, *source);
+            for (key, value) in entries {
+                let comparable = map_key(heap, key);
+                map_of_mut(heap, receiver)?.insert(comparable, key, value);
+            }
+            Ok(None)
+        }
+        // `AbstractMap.equals`: the same entries, in whatever order, with
+        // values compared by `equals` — so two `Integer`s holding 20 match
+        // even though they are different objects.
+        ("equals", [other]) => {
+            let JValue::Ref(Some(other)) = other else {
+                return Ok(Some(JValue::Int(0)));
+            };
+            if !matches!(heap.get(*other), Some(HeapObject::HashMap(_))) {
+                return Ok(Some(JValue::Int(0)));
+            }
+            let ours = entries_of(heap, receiver);
+            let equal = ours.len() == map_of(heap, *other).len()
+                && ours.iter().all(|(key, value)| {
+                    let key = map_key(heap, *key);
+                    map_of(heap, *other)
+                        .lookup(&key)
+                        .is_some_and(|held| same_value(heap, held, *value))
+                });
+            Ok(Some(JValue::Int(i32::from(equal))))
+        }
+        // `AbstractMap.hashCode`: the sum of the entries', and an entry's is
+        // its key's hash XOR its value's.
+        ("hashCode", []) => {
+            let entries = entries_of(heap, receiver);
+            let hash = entries.iter().fold(0i32, |sum, (key, value)| {
+                let entry = map_key(heap, *key).hash_code() ^ map_key(heap, *value).hash_code();
+                sum.wrapping_add(entry)
+            });
+            Ok(Some(JValue::Int(hash)))
+        }
+        ("toString", []) => {
+            let entries = entries_of(heap, receiver);
+            let rendered: Vec<String> = entries
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}={}",
+                        display_jvalue(heap, *key),
+                        display_jvalue(heap, *value)
+                    )
+                })
+                .collect();
+            let text = format!("{{{}}}", rendered.join(", "));
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "HashMap.{method}{descriptor}"
+        ))),
+    }
+}
+
+/// The receiver as a map (its kind is checked by the caller).
+fn map_of(heap: &Heap, receiver: HeapRef) -> &JavaHashMap {
+    let Some(HeapObject::HashMap(map)) = heap.get(receiver) else {
+        unreachable!("receiver kind checked by caller");
+    };
+    map
+}
+
+/// A map argument (`putAll`) may be any heap object; reject a non-map.
+fn map_of_mut(heap: &mut Heap, receiver: HeapRef) -> Result<&mut JavaHashMap, VmError> {
+    match heap.get_mut(receiver) {
+        Some(HeapObject::HashMap(map)) => Ok(map),
+        _ => Err(throw("java.lang.ClassCastException: not a Map")),
+    }
+}
+
+/// A map's entries in iteration order, detached from the heap borrow.
+fn entries_of(heap: &Heap, reference: HeapRef) -> Vec<(JValue, JValue)> {
+    match heap.get(reference) {
+        Some(HeapObject::HashMap(map)) => map.entries_in_order(),
+        _ => Vec::new(),
+    }
+}
+
 /// Best-effort display of a stored value for `ArrayList.toString`
 /// (ints print as ints; the VM cannot distinguish boxed Character /
 /// Boolean, a documented deviation).
@@ -1815,6 +2044,7 @@ fn display_jvalue(heap: &Heap, value: JValue) -> String {
         JValue::Ref(None) => String::from("null"),
         JValue::Ref(Some(reference)) => match heap.get(reference) {
             Some(HeapObject::JavaString(units)) => String::from_utf16_lossy(units),
+            Some(HeapObject::Boxed { class_name, value }) => boxed_to_string(class_name, *value),
             Some(HeapObject::Instance { class_name, .. }) => {
                 // User toString would need re-entering the interpreter;
                 // fall back to the default form here.
@@ -3183,6 +3413,21 @@ fn object_display(heap: &Heap, value: JValue) -> String {
                 }
             }
             Some(HeapObject::Instance { class_name, .. }) => format!("{class_name}@{reference:x}"),
+            // A map renders as its entries, in iteration order.
+            Some(HeapObject::HashMap(map)) => {
+                let rendered: Vec<String> = map
+                    .entries_in_order()
+                    .iter()
+                    .map(|(key, value)| {
+                        format!(
+                            "{}={}",
+                            display_jvalue(heap, *key),
+                            display_jvalue(heap, *value)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", rendered.join(", "))
+            }
             _ => format!("object@{reference:x}"),
         },
         other => format!("{other:?}"),
@@ -3263,6 +3508,9 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
                 VmError::UnknownIntrinsic(String::from("println argument is not a string object"))
             })?,
         },
+        // `println(Object)` — `String.valueOf(Object)` semantics, so a null
+        // (a wrapper from `map.get(absent)`) prints "null" rather than throwing.
+        ("(Ljava/lang/Object;)V", [value]) => object_display(heap, *value),
         _ => {
             return Err(VmError::UnknownIntrinsic(format!(
                 "PrintStream overload {descriptor} with {} args",

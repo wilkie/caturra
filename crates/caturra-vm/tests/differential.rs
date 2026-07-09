@@ -3194,3 +3194,154 @@ public class DiffBuilderEdges {
 }
 "#
 );
+
+differential_test!(
+    diff_hash_map_iteration_order,
+    "DiffMapOrder",
+    r#"
+import java.util.HashMap;
+
+public class DiffMapOrder {
+    public static void main(String[] args) {
+        // Enough keys to force two resizes, so the final table length —
+        // and therefore the bucket order — depends on the growth history.
+        String[] words = ("the quick brown fox jumps over a lazy dog and then some more "
+                + "words alpha beta gamma delta epsilon zeta eta theta iota kappa lambda "
+                + "mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega").split(" ");
+        HashMap<String, Integer> counts = new HashMap<String, Integer>();
+        for (int i = 0; i < words.length; i++) {
+            counts.put(words[i], i);
+        }
+        System.out.println(counts);
+        System.out.println(counts.size());
+
+        // Removal never shrinks the table, so what remains keeps its order.
+        counts.remove("fox");
+        counts.remove("alpha");
+        counts.remove("omega");
+        System.out.println(counts);
+
+        // Re-putting an existing key keeps its position.
+        counts.put("the", 99);
+        System.out.println(counts);
+
+        HashMap<Integer, String> byInt = new HashMap<Integer, String>();
+        for (int i = 40; i >= 0; i -= 3) {
+            byInt.put(i, "v" + i);
+        }
+        System.out.println(byInt);
+
+        // -0.0 and 0.0 are distinct keys: Double.equals compares raw bits.
+        HashMap<Double, String> byDouble = new HashMap<Double, String>();
+        byDouble.put(1.5, "a");
+        byDouble.put(-0.0, "b");
+        byDouble.put(0.0, "c");
+        byDouble.put(2.25, "d");
+        byDouble.put(100.0, "e");
+        System.out.println(byDouble);
+        System.out.println(byDouble.get(-0.0) + " " + byDouble.get(0.0));
+
+        // An initial-capacity hint changes the table length, hence the order.
+        HashMap<String, Integer> sized = new HashMap<String, Integer>(4);
+        for (int i = 0; i < 8; i++) {
+            sized.put("k" + i, i);
+        }
+        System.out.println(sized);
+
+        // A copy pre-sizes its own table, so its order may differ.
+        HashMap<String, Integer> copy = new HashMap<String, Integer>(counts);
+        System.out.println(copy);
+        System.out.println(copy.equals(counts));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_hash_map_core_methods,
+    "DiffMapCore",
+    r#"
+import java.util.HashMap;
+import java.util.Map;
+
+public class DiffMapCore {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        System.out.println(m.isEmpty() + " " + m.size() + " " + m);
+        System.out.println(m.put("a", 1) + " " + m.put("a", 2));
+        m.put("b", 3);
+        System.out.println(m.get("a") + " " + m.get("zz"));
+        System.out.println(m.containsKey("a") + " " + m.containsKey("zz"));
+        System.out.println(m.containsValue(3) + " " + m.containsValue(99));
+        System.out.println(m.getOrDefault("a", -1) + " " + m.getOrDefault("zz", -1));
+        System.out.println(m.putIfAbsent("a", 50) + " " + m.putIfAbsent("c", 7) + " " + m);
+        System.out.println(m.replace("a", 20) + " " + m.replace("zz", 1));
+        System.out.println(m.replace("b", 3, 30) + " " + m.replace("b", 999, 40) + " " + m);
+        System.out.println(m.remove("c") + " " + m.remove("zz"));
+        System.out.println(m.remove("b", 999) + " " + m.remove("b", 30) + " " + m);
+
+        Map<String, Integer> other = new HashMap<>();
+        other.put("a", 20);
+        System.out.println(m.equals(other) + " " + (m.hashCode() == other.hashCode()));
+        other.put("q", 1);
+        System.out.println(m.equals(other));
+
+        Map<String, Integer> all = new HashMap<>();
+        all.putAll(other);
+        System.out.println(all + " " + all.size());
+        all.clear();
+        System.out.println(all + " " + all.isEmpty());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_hash_map_null_and_unboxing,
+    "DiffMapNull",
+    r#"
+import java.util.HashMap;
+
+public class DiffMapNull {
+    public static void main(String[] args) {
+        HashMap<String, Double> sentiment = new HashMap<String, Double>();
+        sentiment.put("good", 1.5);
+
+        // A missing key is null, and printing it prints "null".
+        System.out.println(sentiment.get("nope"));
+
+        // Unboxing that null throws, which is what the Review Lab relies on.
+        try {
+            double bad = sentiment.get("nope");
+            System.out.println(bad);
+        } catch (NullPointerException e) {
+            System.out.println("npe on missing");
+        }
+
+        // But `put` as a statement discards a null previous value silently,
+        // while reading that value unboxes it.
+        sentiment.put("fresh", 2.0);
+        try {
+            double previous = sentiment.put("brand-new", 3.0);
+            System.out.println(previous);
+        } catch (NullPointerException e) {
+            System.out.println("npe on new key");
+        }
+        System.out.println(sentiment.size());
+
+        // A null value is a legal mapping, and distinct from an absent key.
+        HashMap<String, String> names = new HashMap<String, String>();
+        names.put("here", null);
+        System.out.println(names.get("here") + " " + names.get("gone"));
+        System.out.println(names.containsKey("here") + " " + names.containsKey("gone"));
+        System.out.println(names.putIfAbsent("here", "now") + " " + names);
+
+        // A null key is legal too, and always lands in bucket 0.
+        HashMap<String, Integer> withNull = new HashMap<String, Integer>();
+        withNull.put("z", 1);
+        withNull.put(null, 0);
+        System.out.println(withNull + " " + withNull.get(null));
+    }
+}
+"#
+);

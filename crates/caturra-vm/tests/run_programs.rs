@@ -6221,8 +6221,8 @@ fn stage6_compile_errors_match_javac_wording() {
             "package foo.bar does not exist",
         ),
         (
-            "import java.util.HashMap; class M { }",
-            "java.util.HashMap is not supported by caturra (the class library covers the AP CS A subset)",
+            "import java.util.TreeMap; class M { }",
+            "java.util.TreeMap is not supported by caturra (the class library covers the AP CS A subset)",
         ),
         (
             // java.awt / javax.swing (and java.awt.event listeners) are

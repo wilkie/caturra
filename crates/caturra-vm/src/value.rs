@@ -25,6 +25,14 @@ impl JValue {
     pub const NULL: JValue = JValue::Ref(None);
 }
 
+/// Which of a map's three views a [`HeapObject::MapView`] presents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapViewKind {
+    Keys,
+    Values,
+    Entries,
+}
+
 /// Which standard stream an intrinsic `PrintStream` writes to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StdStream {
@@ -33,7 +41,11 @@ pub enum StdStream {
 }
 
 /// An object on the heap.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Deliberately not `PartialEq`: Java equality is heap-aware (two `Integer`
+/// objects holding 20 are equal; two references are not), so comparing
+/// heap objects structurally would quietly give the wrong answer.
+#[derive(Debug, Clone)]
 pub enum HeapObject {
     /// A `java.lang.String`: UTF-16 code units for exact Java semantics.
     JavaString(Vec<u16>),
@@ -77,6 +89,15 @@ pub enum HeapObject {
     /// A `java.util.ArrayList` (element types erased; values are
     /// stored directly — boxing is a no-op in this VM).
     ArrayList(Vec<JValue>),
+    /// A `java.util.HashMap` (key/value types erased), carrying the JDK's
+    /// iteration order. See [`crate::map`].
+    HashMap(crate::map::JavaHashMap),
+    /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
+    /// Java's are views too, so a later `put` shows through.
+    MapView { map: HeapRef, kind: MapViewKind },
+    /// One `Map.Entry` from an `entrySet()`, resolved against its map so
+    /// that `getValue`/`setValue` see the current value.
+    MapEntry { map: HeapRef, key: JValue },
     /// The marker object behind `System.in`.
     InputStream,
     /// A `java.io.File`: a path into the virtual filesystem.

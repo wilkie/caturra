@@ -13,6 +13,7 @@ pub(crate) mod format;
 mod interpreter;
 pub mod intrinsics;
 pub mod io;
+pub mod map;
 pub mod value;
 pub mod vfs;
 pub mod vm;
