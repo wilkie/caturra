@@ -1770,12 +1770,15 @@ class TableColumn {
   int __modelIndex;
   Object __headerValue = null; // null => use the model's column name
   TableCellRenderer __renderer = null;
+  int __prefWidth = -1; // -1 => let the browser size the column
   public TableColumn(int modelIndex) { __modelIndex = modelIndex; }
   public int getModelIndex() { return __modelIndex; }
   public void setHeaderValue(Object value) { __headerValue = value; }
   public Object getHeaderValue() { return __headerValue; }
   public void setCellRenderer(TableCellRenderer renderer) { __renderer = renderer; }
   public TableCellRenderer getCellRenderer() { return __renderer; }
+  public void setPreferredWidth(int width) { __prefWidth = width; }
+  public int getPreferredWidth() { return __prefWidth; }
 }
 
 class TableColumnModel {
@@ -1909,6 +1912,9 @@ class JTable extends Component {
   int __selectedRow = -1;
   ListSelectionModel __selectionModel = new ListSelectionModel();
   TableColumnModel __columnModel = new TableColumnModel();
+  boolean __autoSorter = false;
+  int __sortColumn = -1; // -1 => unsorted
+  boolean __sortAscending = true;
   public JTable() { __data = new Object[0][0]; __columns = new Object[0]; }
   public JTable(Object[][] data, Object[] columns) { __data = data; __columns = columns; }
   public JTable(TableModel model) { __data = new Object[0][0]; __columns = new Object[0]; __model = model; }
@@ -1919,12 +1925,97 @@ class JTable extends Component {
   public String getColumnName(int col) {
     return __model != null ? __model.getColumnName(col) : "" + __columns[col];
   }
-  public Object getValueAt(int row, int col) {
+  // Raw model access (no view conversion) — used for sorting and serialization.
+  Object __modelValue(int row, int col) {
     return __model != null ? __model.getValueAt(row, col) : __data[row][col];
   }
+  String __modelText(int row, int col) {
+    Object value = __modelValue(row, col);
+    return value == null ? "" : "" + value;
+  }
+  // Like real Swing, a JTable's row indices are VIEW indices: with a row sorter
+  // they differ from the model's, so convert before reaching the model.
+  public Object getValueAt(int row, int col) { return __modelValue(convertRowIndexToModel(row), col); }
   public void setValueAt(Object value, int row, int col) {
-    if (__model != null) __model.setValueAt(value, row, col);
-    else __data[row][col] = value;
+    int modelRow = convertRowIndexToModel(row);
+    if (__model != null) __model.setValueAt(value, modelRow, col);
+    else __data[modelRow][col] = value;
+  }
+  // Sorting: a stable order of model rows, as the view shows them.
+  public void setAutoCreateRowSorter(boolean auto) {
+    __autoSorter = auto;
+    __SwingRuntime.__interactive = true; // header clicks need the event loop
+  }
+  public boolean getAutoCreateRowSorter() { return __autoSorter; }
+  int[] __viewOrder() {
+    int rows = getRowCount();
+    int[] order = new int[rows];
+    for (int i = 0; i < rows; i++) order[i] = i;
+    if (__sortColumn < 0 || __sortColumn >= getColumnCount()) return order;
+    // Insertion sort: stable, like Swing's, so equal keys keep model order.
+    for (int i = 1; i < rows; i++) {
+      int current = order[i];
+      int j = i - 1;
+      while (j >= 0 && __compareRows(order[j], current) > 0) {
+        order[j + 1] = order[j];
+        j = j - 1;
+      }
+      order[j + 1] = current;
+    }
+    return order;
+  }
+  int __compareRows(int rowA, int rowB) {
+    int cmp = __compareValues(__modelText(rowA, __sortColumn), __modelText(rowB, __sortColumn));
+    return __sortAscending ? cmp : -cmp;
+  }
+  // Numbers compare numerically ("10" after "9"), everything else as text.
+  static int __compareValues(String a, String b) {
+    if (__isNumeric(a) && __isNumeric(b)) {
+      double da = Double.parseDouble(a);
+      double db = Double.parseDouble(b);
+      if (da < db) return -1;
+      return da > db ? 1 : 0;
+    }
+    return a.compareTo(b);
+  }
+  static boolean __isNumeric(String s) {
+    if (s.length() == 0) return false;
+    boolean digit = false;
+    for (int i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (c >= '0' && c <= '9') { digit = true; continue; }
+      if (c == '-' && i == 0) continue;
+      if (c == '.') continue;
+      return false;
+    }
+    return digit;
+  }
+  public int convertRowIndexToModel(int viewRow) {
+    if (__sortColumn < 0) return viewRow;
+    int[] order = __viewOrder();
+    if (viewRow < 0 || viewRow >= order.length) return viewRow;
+    return order[viewRow];
+  }
+  public int convertRowIndexToView(int modelRow) {
+    if (__sortColumn < 0) return modelRow;
+    int[] order = __viewOrder();
+    for (int i = 0; i < order.length; i++) {
+      if (order[i] == modelRow) return i;
+    }
+    return -1;
+  }
+  // Cycle the header: ascending -> descending -> unsorted, like Swing's sorter.
+  void __toggleSort(int column) {
+    int selectedModel = __selectedRow >= 0 ? convertRowIndexToModel(__selectedRow) : -1;
+    if (__sortColumn == column) {
+      if (__sortAscending) __sortAscending = false;
+      else { __sortColumn = -1; __sortAscending = true; }
+    } else {
+      __sortColumn = column;
+      __sortAscending = true;
+    }
+    // The selection follows its row, not its old position.
+    __selectedRow = selectedModel >= 0 ? convertRowIndexToView(selectedModel) : -1;
   }
   public int getSelectedRow() { return __selectedRow; }
   public void setRowSelectionInterval(int index0, int index1) { __selectedRow = index0; }
@@ -1984,6 +2075,8 @@ class JTable extends Component {
       int row = Integer.parseInt(rest.substring(0, c1));
       int col = Integer.parseInt(rest.substring(c1 + 1, c2));
       setValueAt(rest.substring(c2 + 1), row, col);
+    } else if (value.startsWith("sort:")) {
+      __toggleSort(Integer.parseInt(value.substring(5)));
     } else {
       __selectedRow = Integer.parseInt(value);
     }
@@ -2005,9 +2098,24 @@ class JTable extends Component {
     }
     return s.append("]").toString();
   }
+  // Preferred column widths, when any were set.
+  String __widthsJson() {
+    boolean any = false;
+    StringBuilder s = new StringBuilder("[");
+    for (int c = 0; c < getColumnCount(); c++) {
+      if (c > 0) s.append(",");
+      int width = __columnModel.getColumn(c).getPreferredWidth();
+      if (width >= 0) any = true;
+      s.append(width);
+    }
+    s.append("]");
+    return any ? ",\"colWidths\":" + s.toString() : "";
+  }
   String __json() {
     __syncColumns();
     boolean hasRenderer = __hasRenderer();
+    // Resolve the sorted order once: converting per cell would be quadratic.
+    int[] order = __viewOrder();
     StringBuilder rows = new StringBuilder("[");
     StringBuilder styles = new StringBuilder("[");
     for (int r = 0; r < getRowCount(); r++) {
@@ -2016,7 +2124,7 @@ class JTable extends Component {
       styles.append("[");
       for (int c = 0; c < getColumnCount(); c++) {
         if (c > 0) { rows.append(","); styles.append(","); }
-        Object value = getValueAt(r, c);
+        Object value = __modelValue(order[r], c);
         String text = value == null ? "" : "" + value;
         if (hasRenderer) {
           TableCellRenderer renderer = __columnModel.getColumn(c).getCellRenderer();
@@ -2039,7 +2147,11 @@ class JTable extends Component {
     rows.append("]");
     styles.append("]");
     String cellStyles = hasRenderer ? ",\"cellStyles\":" + styles.toString() : "";
+    String sorting = __autoSorter
+        ? ",\"sortable\":true,\"sortColumn\":" + __sortColumn + ",\"sortAsc\":" + __sortAscending
+        : "";
     return "{\"type\":\"table\",\"headers\":" + __colsJson() + ",\"cells\":" + rows.toString() + cellStyles
+        + __widthsJson() + sorting
         + ",\"selectedRow\":" + __selectedRow + ",\"editable\":" + __editable()
         + "," + __commonJson() + "}";
   }

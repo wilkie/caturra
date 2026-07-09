@@ -173,6 +173,13 @@ interface SwingNode {
   cells?: string[][];
   /** Per-cell styling from a column's TableCellRenderer (parallel to `cells`). */
   cellStyles?: SwingCellStyle[][];
+  /** TableColumn.setPreferredWidth per column; -1 means "size it yourself". */
+  colWidths?: number[];
+  /** setAutoCreateRowSorter: headers become sort buttons. */
+  sortable?: boolean;
+  /** The sorted column, or -1 when unsorted. */
+  sortColumn?: number;
+  sortAsc?: boolean;
   selectedRow?: number;
   children?: SwingNode[];
 }
@@ -2620,12 +2627,56 @@ export class SwingViz {
       table.setAttribute('aria-label', node.tooltip);
     }
 
+    // TableColumn.setPreferredWidth: a <colgroup> sizes the columns. A <col>
+    // width is only a hint under the default auto layout, and even a fixed
+    // layout shrinks an auto-width table to its container — so also pin the
+    // table's width. It then overflows its scroll pane instead of squeezing.
+    const widths = node.colWidths;
+    if (widths !== undefined) {
+      table.style.tableLayout = 'fixed';
+      const total = widths.reduce((sum, width) => sum + Math.max(width, 0), 0);
+      if (widths.every((width) => width >= 0)) {
+        table.style.width = `${String(total)}px`;
+      } else {
+        table.style.minWidth = `${String(total)}px`;
+      }
+      const group = document.createElement('colgroup');
+      for (const width of widths) {
+        const col = document.createElement('col');
+        if (width >= 0) {
+          col.style.width = `${String(width)}px`;
+        }
+        group.appendChild(col);
+      }
+      table.appendChild(group);
+    }
+
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
-    for (const name of headers) {
+    for (const [c, name] of headers.entries()) {
       const th = document.createElement('th');
       th.scope = 'col';
-      th.textContent = name;
+      if (node.sortable === true && this.#onEvent !== null) {
+        // A sortable header is a button, and announces its sort state.
+        const sorted = c === node.sortColumn;
+        th.setAttribute('aria-sort', sorted ? (node.sortAsc === true ? 'ascending' : 'descending') : 'none');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'swing-sort-header';
+        // The arrow is decorative — aria-sort already conveys the state.
+        const arrow = document.createElement('span');
+        arrow.setAttribute('aria-hidden', 'true');
+        arrow.className = 'swing-sort-arrow';
+        arrow.textContent = sorted ? (node.sortAsc === true ? ' ▲' : ' ▼') : '';
+        button.append(document.createTextNode(name), arrow);
+        button.addEventListener('click', () => {
+          // The "__sort" sentinel means no selection listener fires.
+          this.#dispatch(`${this.#payload('__sort')}\n${node.id}=sort:${String(c)}`);
+        });
+        th.appendChild(button);
+      } else {
+        th.textContent = name;
+      }
       headRow.appendChild(th);
     }
     thead.appendChild(headRow);

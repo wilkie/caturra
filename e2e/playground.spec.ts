@@ -2447,6 +2447,42 @@ test.describe('swing (interactive)', () => {
     await expect(table.getByRole('row', { name: /Bo/ })).toContainText('8');
   });
 
+  test('clicking a JTable header sorts rows, and view indices convert', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Sortable table' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const grid = root.getByRole('grid');
+
+    const players = () => grid.locator('tbody tr td:first-child').allTextContents();
+    const scoreHeader = grid.getByRole('columnheader', { name: 'Score' });
+    const sortButton = scoreHeader.getByRole('button', { name: 'Score' });
+
+    // Preferred widths reach the <colgroup>.
+    await expect(grid.locator('colgroup col').first()).toHaveCSS('width', '160px');
+
+    // Unsorted: model order, and the header announces no sort.
+    expect(await players()).toEqual(['Ada', 'Bo', 'Cy']);
+    await expect(scoreHeader).toHaveAttribute('aria-sort', 'none');
+
+    // Ascending — numeric, so 2 < 9 < 10 (not "10" < "2" as text).
+    await sortButton.click();
+    await expect(scoreHeader).toHaveAttribute('aria-sort', 'ascending');
+    expect(await players()).toEqual(['Cy', 'Ada', 'Bo']);
+
+    // Selecting reports the view row and the model row it maps back to.
+    await grid.getByRole('row', { name: /Ada/ }).click();
+    await expect(root).toContainText('Row 1 is model row 0: Ada');
+
+    // Descending, then a third click clears the sort.
+    await sortButton.click();
+    await expect(scoreHeader).toHaveAttribute('aria-sort', 'descending');
+    expect(await players()).toEqual(['Bo', 'Ada', 'Cy']);
+    await sortButton.click();
+    await expect(scoreHeader).toHaveAttribute('aria-sort', 'none');
+    expect(await players()).toEqual(['Ada', 'Bo', 'Cy']);
+  });
+
   test('a TableCellRenderer styles one column of a JTable', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Table cell renderer' });

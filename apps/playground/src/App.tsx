@@ -2015,6 +2015,53 @@ public class Main {
 `,
   },
   {
+    name: 'Sortable table',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static JTable table;
+  static DefaultTableModel model;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Scores");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    String[] cols = {"Player", "Score"};
+    Object[][] data = {{"Ada", "9"}, {"Bo", "10"}, {"Cy", "2"}};
+    model = new DefaultTableModel(data, cols);
+    table = new JTable(model);
+
+    // Click a header to sort: ascending, then descending, then unsorted.
+    // Numbers sort numerically, so 10 comes after 9.
+    table.setAutoCreateRowSorter(true);
+
+    // Preferred widths come from the column model.
+    table.getColumnModel().getColumn(0).setPreferredWidth(160);
+    table.getColumnModel().getColumn(1).setPreferredWidth(60);
+
+    status = new JLabel("Click a header to sort; click a row to select.");
+    table.getSelectionModel().addListSelectionListener(e -> {
+      int viewRow = Main.table.getSelectedRow();
+      if (viewRow >= 0) {
+        // Row indices are VIEW indices — convert before asking the model.
+        int modelRow = Main.table.convertRowIndexToModel(viewRow);
+        Main.status.setText("Row " + viewRow + " is model row " + modelRow
+            + ": " + Main.model.getValueAt(modelRow, 0));
+      }
+    });
+
+    frame.add(new JScrollPane(table), BorderLayout.CENTER);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Table cell renderer',
     starter: `import javax.swing.*;
 import java.awt.*;

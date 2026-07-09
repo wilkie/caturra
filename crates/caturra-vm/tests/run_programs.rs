@@ -1036,6 +1036,60 @@ fn swing_abstract_action_shared_by_button_and_menu_item() {
 }
 
 #[test]
+fn swing_table_sorts_rows_and_converts_view_indices() {
+    // Clicking a header cycles ascending -> descending -> unsorted. Row indices
+    // are VIEW indices; convertRowIndexToModel maps back. Ids: frame c0, table
+    // c1, button c2. Scores sort numerically ("10" after "9"), not as text.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static JTable table;
+            static DefaultTableModel model;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Scores");
+                String[] cols = {"Player", "Score"};
+                Object[][] data = {{"Ada", "9"}, {"Bo", "10"}, {"Cy", "2"}};
+                model = new DefaultTableModel(data, cols);
+                table = new JTable(model);
+                table.setAutoCreateRowSorter(true);
+                JButton show = new JButton("Show");
+                show.addActionListener(e -> {
+                    StringBuilder s = new StringBuilder();
+                    for (int r = 0; r < Main.table.getRowCount(); r++) {
+                        if (r > 0) s.append(" ");
+                        s.append(Main.table.getValueAt(r, 0));
+                    }
+                    System.out.println(s + " | row0 model=" + Main.table.convertRowIndexToModel(0));
+                });
+                frame.add(table);
+                frame.add(show);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c2")),                 // unsorted: model order
+            Some(String::from("__sort\nc1=sort:1")),  // click Score -> ascending
+            Some(String::from("c2")),
+            Some(String::from("__sort\nc1=sort:1")),  // again -> descending
+            Some(String::from("c2")),
+            Some(String::from("__sort\nc1=sort:1")),  // third -> unsorted
+            Some(String::from("c2")),
+        ],
+    );
+    assert_eq!(
+        out,
+        "Ada Bo Cy | row0 model=0\n\
+         Cy Ada Bo | row0 model=2\n\
+         Bo Ada Cy | row0 model=1\n\
+         Ada Bo Cy | row0 model=0\n"
+    );
+}
+
+#[test]
 fn swing_table_cell_renderer_styles_a_column() {
     // Per-column renderers: one right-aligns the Score column (alignment set
     // once, and it sticks) and colours negative scores red.

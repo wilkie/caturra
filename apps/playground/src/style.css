@@ -647,6 +647,27 @@ label {
   font-weight: 600;
 }
 
+/* setAutoCreateRowSorter: the header is a button that cycles the sort. */
+.swing-sort-header {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.swing-sort-header:hover {
+  color: var(--swing-accent, inherit);
+}
+
+.swing-sort-arrow {
+  font-size: 0.75em;
+}
+
 .swing-table tbody tr {
   cursor: default;
 }
