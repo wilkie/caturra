@@ -2976,3 +2976,114 @@ public class DiffScanVal {
 TRUE false\n\
 42 abc 999 2147483648 trailing\n"
 );
+
+// The overflow-throwing arithmetic. Every one of these must throw exactly at the
+// boundary and nowhere else, and `Math.abs(MIN_VALUE)` must NOT throw.
+// (`Math.absExact` is Java 15+, so it cannot appear here — see run_programs.)
+differential_test!(
+    diff_math_exact_overflow,
+    "DiffExact",
+    r#"
+public class DiffExact {
+    static void show(String label, int value) { System.out.println(label + " = " + value); }
+    public static void main(String[] args) {
+        int min = Integer.MIN_VALUE;
+        int max = Integer.MAX_VALUE;
+        try { show("addExact(max,1)", Math.addExact(max, 1)); }
+        catch (ArithmeticException e) { System.out.println("addExact(max,1) ! " + e.getMessage()); }
+        try { show("addExact(min,-1)", Math.addExact(min, -1)); }
+        catch (ArithmeticException e) { System.out.println("addExact(min,-1) ! " + e.getMessage()); }
+        show("addExact(max,0)", Math.addExact(max, 0));
+
+        try { show("subExact(min,1)", Math.subtractExact(min, 1)); }
+        catch (ArithmeticException e) { System.out.println("subExact(min,1) ! " + e.getMessage()); }
+        try { show("subExact(max,-1)", Math.subtractExact(max, -1)); }
+        catch (ArithmeticException e) { System.out.println("subExact(max,-1) ! " + e.getMessage()); }
+        show("subExact(min,0)", Math.subtractExact(min, 0));
+
+        try { show("mulExact(min,-1)", Math.multiplyExact(min, -1)); }
+        catch (ArithmeticException e) { System.out.println("mulExact(min,-1) ! " + e.getMessage()); }
+        try { show("mulExact(65536,65536)", Math.multiplyExact(65536, 65536)); }
+        catch (ArithmeticException e) { System.out.println("mulExact(65536,65536) ! " + e.getMessage()); }
+        show("mulExact(max,1)", Math.multiplyExact(max, 1));
+
+        try { show("negExact(min)", Math.negateExact(min)); }
+        catch (ArithmeticException e) { System.out.println("negExact(min) ! " + e.getMessage()); }
+        show("negExact(max)", Math.negateExact(max));
+
+        try { show("incExact(max)", Math.incrementExact(max)); }
+        catch (ArithmeticException e) { System.out.println("incExact(max) ! " + e.getMessage()); }
+        show("incExact(max-1)", Math.incrementExact(max - 1));
+
+        try { show("decExact(min)", Math.decrementExact(min)); }
+        catch (ArithmeticException e) { System.out.println("decExact(min) ! " + e.getMessage()); }
+        show("decExact(min+1)", Math.decrementExact(min + 1));
+
+        try { show("toIntExact(2^31)", Math.toIntExact(2147483648L)); }
+        catch (ArithmeticException e) { System.out.println("toIntExact(2^31) ! " + e.getMessage()); }
+        try { show("toIntExact(-2^31-1)", Math.toIntExact(-2147483649L)); }
+        catch (ArithmeticException e) { System.out.println("toIntExact(-2^31-1) ! " + e.getMessage()); }
+        show("toIntExact(max)", Math.toIntExact(2147483647L));
+        show("toIntExact(min)", Math.toIntExact(-2147483648L));
+
+        // Plain abs wraps at MIN_VALUE rather than throwing.
+        show("abs(min)", Math.abs(min));
+    }
+}
+"#
+);
+
+// `Field.getX`/`setX` widen the field's type but never narrow it, and refuse
+// anything else with IllegalArgumentException. caturra used to return the raw
+// value for every typed getter, so `getLong` on an int field produced an Int
+// where the bytecode expected a Long.
+differential_test!(
+    diff_reflect_field_typed_accessors,
+    "DiffFieldAcc",
+    r#"
+import java.lang.reflect.Field;
+class Box {
+    private int i = 7;
+    private long l = 9000000000L;
+    private double d = 2.5;
+    private boolean b = true;
+    private char c = 'A';
+    private byte y = 3;
+}
+public class DiffFieldAcc {
+    static Field f(String name) throws Exception {
+        Field field = Box.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
+    }
+    public static void main(String[] args) throws Exception {
+        Box box = new Box();
+        // Widening reads.
+        System.out.println(f("i").getInt(box) + " " + f("i").getLong(box) + " " + f("i").getDouble(box));
+        System.out.println(f("l").getLong(box) + " " + f("l").getDouble(box));
+        System.out.println(f("d").getDouble(box) + " " + f("b").getBoolean(box));
+        System.out.println(f("c").getInt(box) + " " + f("y").getInt(box));
+        // Narrowing or mismatched reads are refused.
+        try { f("l").getInt(box); } catch (IllegalArgumentException e) { System.out.println("getInt(long) IAE"); }
+        try { f("d").getLong(box); } catch (IllegalArgumentException e) { System.out.println("getLong(double) IAE"); }
+        try { f("b").getInt(box); } catch (IllegalArgumentException e) { System.out.println("getInt(boolean) IAE"); }
+        try { f("i").getBoolean(box); } catch (IllegalArgumentException e) { System.out.println("getBoolean(int) IAE"); }
+        // Widening writes.
+        f("i").setInt(box, 42);
+        f("l").setInt(box, 5);
+        f("d").setLong(box, 6L);
+        f("b").setBoolean(box, false);
+        System.out.println(f("i").getInt(box) + " " + f("l").getLong(box)
+            + " " + f("d").getDouble(box) + " " + f("b").getBoolean(box));
+        f("d").setInt(box, 5);
+        System.out.println(f("d").getDouble(box));
+        // Narrowing writes are refused.
+        try { f("i").setLong(box, 5L); } catch (IllegalArgumentException e) { System.out.println("setLong(int) IAE"); }
+        try { f("i").setDouble(box, 1.5); } catch (IllegalArgumentException e) { System.out.println("setDouble(int) IAE"); }
+        try { f("i").setBoolean(box, true); } catch (IllegalArgumentException e) { System.out.println("setBoolean(int) IAE"); }
+        // `get` still boxes, as in Java.
+        System.out.println(f("i").get(box));
+    }
+}
+"#
+);

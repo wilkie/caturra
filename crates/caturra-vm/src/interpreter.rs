@@ -3000,9 +3000,10 @@ impl<'run> Interpreter<'run> {
                     // `setAccessible` is a no-op (caturra enforces no access control).
                     "setAccessible" => Ok(None),
                     "getInt" | "getLong" | "getDouble" | "getBoolean" => {
-                        // Primitive accessors return the raw value unboxed.
-                        self.read_reflected_field(&declaring, &name, access, args.first())
-                            .map(Some)
+                        // Primitive accessors widen the field's value, or refuse.
+                        let raw =
+                            self.read_reflected_field(&declaring, &name, access, args.first())?;
+                        Self::reflect_get_as(method, &descriptor, raw).map(Some)
                     }
                     "get" => {
                         // `Field.get` returns Object — a primitive field boxes
@@ -3012,15 +3013,15 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(self.box_if_primitive(raw, &descriptor)))
                     }
                     "set" | "setInt" | "setLong" | "setDouble" | "setBoolean" => {
-                        // The primitive setters unbox nothing (the raw value
-                        // arrives directly); `set` stores whatever it is given.
-                        self.write_reflected_field(
-                            &declaring,
-                            &name,
-                            access,
-                            args.first(),
-                            args.get(1).copied(),
-                        )?;
+                        // `set` stores whatever it is given; the typed setters
+                        // widen the value into the field, or refuse.
+                        let value = match args.get(1).copied() {
+                            Some(value) if method != "set" => {
+                                Some(Self::reflect_set_as(method, &descriptor, value)?)
+                            }
+                            other => other,
+                        };
+                        self.write_reflected_field(&declaring, &name, access, args.first(), value)?;
                         Ok(None)
                     }
                     other => Err(VmError::UnknownIntrinsic(format!("Field.{other}"))),
@@ -3126,6 +3127,67 @@ impl<'run> Interpreter<'run> {
                 }
             }
             _ => Err(VmError::UnknownIntrinsic(format!("reflect.{method}"))),
+        }
+    }
+
+    /// Convert a field's raw value for `Field.getInt/getLong/getDouble/
+    /// getBoolean`. Java lets a typed accessor WIDEN the field's type but never
+    /// narrow it — `getLong` on an `int` field is `7L`, while `getInt` on a
+    /// `long` field is an `IllegalArgumentException`. Returning the raw value,
+    /// as this used to, put a `Long` where the bytecode expected an `Int`.
+    fn reflect_get_as(method: &str, descriptor: &str, raw: JValue) -> Result<JValue, VmError> {
+        let bad = || {
+            Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: cannot read a field of type \
+                 '{descriptor}' with {method}"
+            )))
+        };
+        // `byte`, `short` and `char` are already Ints at runtime.
+        let integral = matches!(descriptor, "B" | "S" | "C" | "I");
+        match method {
+            "getBoolean" if descriptor == "Z" => Ok(raw),
+            "getInt" if integral => Ok(raw),
+            "getLong" => match (descriptor, raw) {
+                (_, JValue::Int(v)) if integral => Ok(JValue::Long(i64::from(v))),
+                ("J", value @ JValue::Long(_)) => Ok(value),
+                _ => bad(),
+            },
+            "getDouble" => match (descriptor, raw) {
+                (_, JValue::Int(v)) if integral => Ok(JValue::Double(f64::from(v))),
+                #[allow(clippy::cast_precision_loss)] // Java widens long->double the same way
+                ("J", JValue::Long(v)) => Ok(JValue::Double(v as f64)),
+                ("F", JValue::Float(v)) => Ok(JValue::Double(f64::from(v))),
+                ("D", value @ JValue::Double(_)) => Ok(value),
+                _ => bad(),
+            },
+            _ => bad(),
+        }
+    }
+
+    /// The mirror image for `Field.setInt/setLong/setDouble/setBoolean`: the
+    /// value may widen into the field, never narrow. `setInt` into a `long`
+    /// field stores `5L`; `setLong` into an `int` field is an error.
+    fn reflect_set_as(method: &str, descriptor: &str, value: JValue) -> Result<JValue, VmError> {
+        let bad = || {
+            Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: cannot write a field of type \
+                 '{descriptor}' with {method}"
+            )))
+        };
+        #[allow(clippy::cast_precision_loss)] // Java widens long->double/float likewise
+        match (method, descriptor, value) {
+            // Exact match: store as given.
+            ("setBoolean", "Z", v)
+            | ("setInt", "I", v)
+            | ("setLong", "J", v)
+            | ("setDouble", "D", v) => Ok(v),
+            // Widening conversions.
+            ("setInt", "J", JValue::Int(v)) => Ok(JValue::Long(i64::from(v))),
+            ("setInt", "F", JValue::Int(v)) => Ok(JValue::Float(v as f32)),
+            ("setInt", "D", JValue::Int(v)) => Ok(JValue::Double(f64::from(v))),
+            ("setLong", "F", JValue::Long(v)) => Ok(JValue::Float(v as f32)),
+            ("setLong", "D", JValue::Long(v)) => Ok(JValue::Double(v as f64)),
+            _ => bad(),
         }
     }
 

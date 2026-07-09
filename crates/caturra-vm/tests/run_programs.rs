@@ -8007,6 +8007,85 @@ fn scanner_mismatch_leaves_the_token_and_honours_javas_float_grammar() {
     );
 }
 
+/// `Math.absExact` is Java 15+, so JDK 11 cannot be the oracle (the
+/// differential suite covers every other *Exact method). Pin caturra's
+/// behaviour: `|a|` everywhere except `MIN_VALUE`, which throws. The exception
+/// message is caturra's own — real Java 15 words it differently, which
+/// LANGUAGE.md records.
+/// `Field.getX`/`setX` widen but never narrow, refusing anything else with
+/// `IllegalArgumentException`. Returning the raw value (the old behaviour) put a
+/// Long where the bytecode expected an Int. Cross-checked against a real JDK by
+/// `diff_reflect_field_typed_accessors`.
+#[test]
+fn reflect_field_typed_accessors_widen_and_refuse_narrowing() {
+    let out = run_stdout(
+        r#"
+        import java.lang.reflect.Field;
+        class Box { private int i = 7; private long l = 90L; private boolean b = true; }
+        public class Main {
+            static Field f(String name) throws Exception {
+                Field field = Box.class.getDeclaredField(name);
+                field.setAccessible(true);
+                return field;
+            }
+            public static void main(String[] args) throws Exception {
+                Box box = new Box();
+                System.out.println(f("i").getInt(box) + " " + f("i").getLong(box)
+                    + " " + f("i").getDouble(box));
+                try { f("l").getInt(box); } catch (IllegalArgumentException e) {
+                    System.out.println("getInt(long) refused");
+                }
+                try { f("i").getBoolean(box); } catch (IllegalArgumentException e) {
+                    System.out.println("getBoolean(int) refused");
+                }
+                f("l").setInt(box, 5);
+                System.out.println("widened: " + f("l").getLong(box));
+                try { f("i").setLong(box, 5); } catch (IllegalArgumentException e) {
+                    System.out.println("setLong(int) refused");
+                }
+                System.out.println("unchanged: " + f("i").getInt(box) + " " + f("b").getBoolean(box));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "7 7 7.0\n\
+         getInt(long) refused\n\
+         getBoolean(int) refused\n\
+         widened: 5\n\
+         setLong(int) refused\n\
+         unchanged: 7 true\n"
+    );
+}
+
+#[test]
+fn math_abs_exact_throws_only_at_min_value() {
+    let out = run_stdout(
+        r#"
+        public class Main {
+            public static void main(String[] args) {
+                System.out.println(Math.absExact(-5) + " " + Math.absExact(5)
+                    + " " + Math.absExact(0) + " " + Math.absExact(Integer.MAX_VALUE));
+                try {
+                    System.out.println(Math.absExact(Integer.MIN_VALUE));
+                } catch (ArithmeticException e) {
+                    System.out.println("threw: " + e.getMessage());
+                }
+                // Plain abs wraps instead of throwing, as in Java.
+                System.out.println(Math.abs(Integer.MIN_VALUE));
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "5 5 0 2147483647\nthrew: integer overflow\n-2147483648\n"
+    );
+}
+
 #[test]
 fn current_time_millis_is_wired() {
     let out = run_stdout(
