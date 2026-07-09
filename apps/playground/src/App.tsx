@@ -2815,6 +2815,9 @@ export function App(): React.JSX.Element {
         currentGridRef.current = level.grid;
         setView('neighborhood');
         neighborhoodVizRef.current?.load(level.grid, '');
+      } else if (level.view === 'theater') {
+        // Show the stage straight away; Run fills it (dispatch is by imports).
+        setView('theater');
       } else {
         setView('none');
       }
@@ -3763,7 +3766,11 @@ export function App(): React.JSX.Element {
                 slotProps={{
                   select: {
                     native: true,
-                    inputProps: { id: 'swing-laf', 'data-testid': 'swing-laf', 'aria-label': 'Look and Feel' },
+                    inputProps: {
+                      id: 'swing-laf',
+                      'data-testid': 'swing-laf',
+                      'aria-label': 'Look and Feel',
+                    },
                   },
                   inputLabel: { shrink: true },
                 }}

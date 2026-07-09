@@ -217,7 +217,8 @@ def load_level(key):
     except Exception:
         return None
     vm = pj.get("csa_view_mode")
-    if vm not in ("neighborhood", "console"):
+    # `playground` levels have no renderer yet; the other three do.
+    if vm not in ("neighborhood", "console", "theater"):
         return None
     grid = grid_of(pj)
     if vm == "neighborhood" and not grid:
@@ -272,7 +273,10 @@ def verify(files, grid, validators=(), data=()):
     with tempfile.NamedTemporaryFile("w", suffix=".rec", delete=False) as f:
         f.write("\x1e".join(rec)); path = f.name
     try:
-        return subprocess.run([BIN, path], capture_output=True, text=True, timeout=20).stdout.strip()
+        # Generous: an infinite-loop debugging level runs until the VM's
+        # instruction budget trips (~16s), and we want that deterministic
+        # "BUDGET" rather than a load-dependent "TIMEOUT" that silently drops it.
+        return subprocess.run([BIN, path], capture_output=True, text=True, timeout=90).stdout.strip()
     except subprocess.TimeoutExpired:
         return "TIMEOUT"
     finally:
@@ -320,12 +324,32 @@ def build_unit(script, unit_name):
                     "lesson": lessons.get(lk, lk), "name": nm, "view": vm, "grid": grid,
                     "files": student, "validation": validators, "data": data, "solution": solution,
                 })
-    cnt = Counter((l["lesson"], l["name"]) for l in levels); seen2 = Counter()
-    for l in levels:
-        k = (l["lesson"], l["name"]); seen2[k] += 1
-        if cnt[k] > 1:
-            l["name"] = f"{l['name']} #{seen2[k]}"
-    return {"name": unit_name, "levels": levels}
+    return {"name": unit_name, "levels": disambiguate(levels)}
+
+
+VIEW_LABEL = {"console": "Console", "theater": "Theater", "neighborhood": "Neighborhood"}
+
+
+def disambiguate(levels):
+    """Make (lesson, name) unique. A lesson often has two BubbleChoice sets with
+    the same display name — one console, one theater — so name the view rather
+    than emitting a meaningless "#1"/"#2". Same-view clashes still fall back to #N.
+    """
+    def group(ls):
+        out = {}
+        for l in ls:
+            out.setdefault((l["lesson"], l["name"]), []).append(l)
+        return out
+
+    for clash in group(levels).values():
+        if len(clash) > 1 and len({l["view"] for l in clash}) > 1:
+            for l in clash:
+                l["name"] = f"{l['name']} — {VIEW_LABEL[l['view']]}"
+    for clash in group(levels).values():
+        if len(clash) > 1:
+            for i, l in enumerate(clash, 1):
+                l["name"] = f"{l['name']} #{i}"
+    return levels
 
 
 # ----- AP FRQ unit: student stubs + a JUnit validator, verified to run -----
@@ -403,7 +427,7 @@ idx = [
     "",
     "export interface CsaLevelFile {", "  path: string;", "  text: string;", "}",
     "export interface CsaLevelData {", "  name: string;", "  lesson: string;",
-    "  view: 'neighborhood' | 'console';", "  grid: string;", "  files: CsaLevelFile[];",
+    "  view: 'neighborhood' | 'console' | 'theater';", "  grid: string;", "  files: CsaLevelFile[];",
     "  validationFiles: CsaLevelFile[];", "  dataFiles: CsaLevelFile[];", "}",
     "export interface CsaLevelMeta {", "  name: string;", "  lesson: string;", "}",
     "export interface CsaUnitMeta {", "  name: string;", "  levels: CsaLevelMeta[];", "}",

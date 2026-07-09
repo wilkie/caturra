@@ -180,6 +180,42 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('loads a corpus theater level and draws it on the stage', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 4' });
+    await page.getByTestId('level-select').selectOption({ label: 'Predict and Run: The Theater' });
+    await waitLevel(page);
+
+    // A theater level shows the stage on selection (the neighborhood grid stays
+    // hidden), and its starter really is a theater program.
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+    await expect(page.getByTestId('viz')).toBeHidden();
+    const source = await page.evaluate(() =>
+      (window as unknown as { playground: PlaygroundHooks }).playground.getSource(),
+    );
+    expect(source).toContain('org.code.theater');
+
+    // Run dispatches on the imports, so the scene paints onto the stage.
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('$ java Main');
+    const painted = await page.waitForFunction(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="theater-canvas"]');
+      const ctx = canvas?.getContext('2d');
+      if (!ctx) {
+        return null;
+      }
+      // Any non-white pixel means the scene actually drew something.
+      const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) {
+          return { width, height };
+        }
+      }
+      return null;
+    });
+    expect(await painted.jsonValue()).toBeTruthy();
+  });
+
   test('Stop button interrupts a running program and the session recovers', async ({ page }) => {
     await page.goto('/');
     await setSource(
@@ -1603,7 +1639,9 @@ test.describe('swing (interactive)', () => {
     expect(await red(160, 203)).toBe(true); // 2px off — only a thick pen reaches here
   });
 
-  test('the Look and Feel picker re-skins every Swing widget via the token layer', async ({ page }) => {
+  test('the Look and Feel picker re-skins every Swing widget via the token layer', async ({
+    page,
+  }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Click counter' });
     await page.getByTestId('run').click();
@@ -1611,7 +1649,8 @@ test.describe('swing (interactive)', () => {
     const button = root.getByRole('button', { name: 'Click me' });
     await expect(button).toBeVisible();
 
-    const radius = (): Promise<string> => button.evaluate((el) => getComputedStyle(el).borderTopLeftRadius);
+    const radius = (): Promise<string> =>
+      button.evaluate((el) => getComputedStyle(el).borderTopLeftRadius);
     // Default (system) look: 4px radius.
     expect(await radius()).toBe('4px');
 
@@ -1659,7 +1698,10 @@ test.describe('swing (interactive)', () => {
 
     // Reopen: Light is the selected radio; picking Dark switches the selection.
     await root.getByRole('button', { name: 'View' }).click();
-    await expect(root.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true');
+    await expect(root.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
     const dark = root.getByRole('menuitemradio', { name: 'Dark' });
     await expect(dark).toHaveAttribute('aria-checked', 'false');
     await dark.click();
@@ -1667,9 +1709,18 @@ test.describe('swing (interactive)', () => {
 
     // Reopen: the group is now Dark-selected, Light cleared, and Wrap still on.
     await root.getByRole('button', { name: 'View' }).click();
-    await expect(root.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
-    await expect(root.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute('aria-checked', 'false');
-    await expect(root.getByRole('menuitemcheckbox', { name: 'Word Wrap' })).toHaveAttribute('aria-checked', 'true');
+    await expect(root.getByRole('menuitemradio', { name: 'Dark' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await expect(root.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+    await expect(root.getByRole('menuitemcheckbox', { name: 'Word Wrap' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
   });
 
   test('a GridBagLayout places labelled fields in a grid', async ({ page }) => {
@@ -1720,12 +1771,18 @@ test.describe('swing (interactive)', () => {
 
     // Clicking presses it and fires the listener (the preview updates).
     await bold.click();
-    await expect(root.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(root.getByRole('button', { name: 'Bold' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await expect(root).toContainText('Style: bold');
 
     // Clicking again releases it.
     await root.getByRole('button', { name: 'Bold' }).click();
-    await expect(root.getByRole('button', { name: 'Bold' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(root.getByRole('button', { name: 'Bold' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     await expect(root).toContainText('Style: plain');
   });
 
@@ -1956,7 +2013,9 @@ test.describe('swing (interactive)', () => {
     await expect(root.getByText('Clicked!')).toBeVisible();
   });
 
-  test('SwingUtilities.invokeLater bootstraps and setVisible toggles a component', async ({ page }) => {
+  test('SwingUtilities.invokeLater bootstraps and setVisible toggles a component', async ({
+    page,
+  }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Show / hide' });
     await page.getByTestId('run').click();
@@ -2189,7 +2248,9 @@ test.describe('swing (interactive)', () => {
     // The popup opens as a top-layer popover, so it escapes the window's
     // `overflow: hidden` and is never clipped by a small frame.
     const asPopover = await page.evaluate(
-      () => document.querySelector('[data-testid="swing-root"] .swing-menu-popup:popover-open') !== null,
+      () =>
+        document.querySelector('[data-testid="swing-root"] .swing-menu-popup:popover-open') !==
+        null,
     );
     expect(asPopover).toBe(true);
     await expect(root.getByRole('menuitem', { name: 'New' })).toBeFocused();
@@ -2473,10 +2534,9 @@ test.describe('swing (interactive)', () => {
     const redLabel = tree.getByRole('treeitem', { name: 'Red' }).locator('.swing-tree-label');
     await expect(redLabel).toHaveCSS('color', 'rgb(20, 120, 40)');
     // The colour resets between nodes, so it does not leak onto the next folder.
-    await expect(tree.getByRole('treeitem', { name: 'Cool' }).locator('.swing-tree-label')).not.toHaveCSS(
-      'color',
-      'rgb(20, 120, 40)',
-    );
+    await expect(
+      tree.getByRole('treeitem', { name: 'Cool' }).locator('.swing-tree-label'),
+    ).not.toHaveCSS('color', 'rgb(20, 120, 40)');
 
     // Clicking a label selects it; the listener reports the TreePath. The
     // renderer is display-only, so the model still holds the plain user object.
