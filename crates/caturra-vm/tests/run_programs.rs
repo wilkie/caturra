@@ -8322,10 +8322,20 @@ fn hash_map_iterates_and_boxes_like_the_jdk() {
 }
 
 /// Java's `Map` members that caturra cannot model name a reason rather than
-/// pretending they do not exist.
+/// pretending they do not exist. The reason has to win over the arguments'
+/// own errors: `map.forEach(lambda)` must blame the missing lambda support,
+/// not the lambda, which is in a perfectly good position.
 #[test]
 fn unsupported_map_members_explain_themselves() {
     for (source, want) in [
+        (
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().forEach((k, v) -> System.out.println(k)); } }",
+            "HashMap.forEach exists in Java, but lambdas are not supported by caturra",
+        ),
+        (
+            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().forEach(s -> System.out.println(s)); } }",
+            "ArrayList.forEach exists in Java, but lambdas are not supported by caturra",
+        ),
         (
             "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().merge(null, null, null); } }",
             "HashMap.merge exists in Java, but lambdas are not supported by caturra",

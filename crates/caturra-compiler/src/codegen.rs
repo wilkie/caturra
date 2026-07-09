@@ -6985,6 +6985,19 @@ impl BodyGen<'_> {
         }
         let (class, methods) =
             builtin_instance_table(receiver_ty).expect("caller checked receiver kind");
+        // A real Java member caturra cannot model: say so before type-checking
+        // the arguments, whose own errors would mask it. `map.forEach(...)`
+        // should blame the missing lambda support, not the lambda.
+        let receiver_class = receiver_class_name(receiver_ty);
+        if !methods.iter().any(|m| m.name == method)
+            && let Some(reason) = unsupported_member(receiver_class, method)
+        {
+            self.error(
+                span,
+                format!("{receiver_class}.{method} exists in Java, but {reason}"),
+            );
+            return None;
+        }
         let elem = TypeArgs::of(receiver_ty);
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
@@ -7003,16 +7016,6 @@ impl BodyGen<'_> {
                         describe_types(&arg_types, self.table),
                         receiver_ty.describe(self.table)
                     ),
-                );
-            } else if let Some(reason) =
-                unsupported_member(receiver_class_name(receiver_ty), method)
-            {
-                // A real Java method we cannot model: say so honestly
-                // instead of a misleading "cannot find symbol".
-                let class = receiver_class_name(receiver_ty);
-                self.error(
-                    span,
-                    format!("{class}.{method} exists in Java, but {reason}"),
                 );
             } else {
                 self.error(
