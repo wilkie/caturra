@@ -144,8 +144,27 @@ public class Main {
   },
 ];
 
+/** The picker's optgroups, in the order they appear. Widening `group` to this
+ * union means a typo in a demo's group fails the build rather than silently
+ * dropping it from the list. */
+const SWING_GROUPS = [
+  'Getting started',
+  'Layout',
+  'Text',
+  'Choosers & indicators',
+  'Lists',
+  'Tables',
+  'Trees',
+  'Menus, actions & dialogs',
+  'Graphics & animation',
+  'Styling & accessibility',
+] as const;
+
+type SwingGroup = (typeof SWING_GROUPS)[number];
+
 interface SwingLevel {
   name: string;
+  group: SwingGroup;
   starter: string;
 }
 
@@ -155,6 +174,7 @@ interface SwingLevel {
 const SWING_LEVELS: SwingLevel[] = [
   {
     name: 'Click counter',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -185,6 +205,7 @@ public class Main {
   },
   {
     name: 'Quit button',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -219,6 +240,7 @@ public class Main {
   },
   {
     name: 'Greeter form',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -251,6 +273,7 @@ public class Main {
   },
   {
     name: 'Controls demo',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -303,6 +326,7 @@ public class Main {
   },
   {
     name: 'Custom drawing',
+    group: 'Graphics & animation',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -352,6 +376,7 @@ class DrawPanel extends JPanel {
   },
   {
     name: 'Click to draw',
+    group: 'Graphics & animation',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -402,6 +427,7 @@ class DotPanel extends JPanel {
   },
   {
     name: 'Bouncing ball',
+    group: 'Graphics & animation',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -452,6 +478,7 @@ class BallPanel extends JPanel {
   },
   {
     name: 'Keyboard mover',
+    group: 'Graphics & animation',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -510,6 +537,7 @@ class Board extends JPanel {
   },
   {
     name: 'Shapes and fonts',
+    group: 'Graphics & animation',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -566,6 +594,7 @@ class ShapePanel extends JPanel {
   },
   {
     name: 'Bordered form',
+    group: 'Styling & accessibility',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.border.*;
@@ -605,6 +634,7 @@ public class Main {
   },
   {
     name: 'Tabbed pane',
+    group: 'Layout',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -651,6 +681,7 @@ public class Main {
   },
   {
     name: 'Show / hide',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -687,6 +718,7 @@ public class Main {
   },
   {
     name: 'Menu options',
+    group: 'Menus, actions & dialogs',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -740,6 +772,7 @@ public class Main {
   },
   {
     name: 'GridBag form',
+    group: 'Layout',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -790,6 +823,7 @@ public class Main {
   },
   {
     name: 'Toggle buttons',
+    group: 'Choosers & indicators',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -831,6 +865,7 @@ public class Main {
   },
   {
     name: 'Accessible controls',
+    group: 'Styling & accessibility',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -870,6 +905,7 @@ public class Main {
   },
   {
     name: 'Login form',
+    group: 'Text',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -910,6 +946,7 @@ public class Main {
   },
   {
     name: 'Combo box model',
+    group: 'Choosers & indicators',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -966,6 +1003,7 @@ public class Main {
   },
   {
     name: 'Editable combo',
+    group: 'Choosers & indicators',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -997,6 +1035,7 @@ public class Main {
   },
   {
     name: 'Search box',
+    group: 'Text',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1028,6 +1067,7 @@ public class Main {
   },
   {
     name: 'Live counter',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -1067,6 +1107,7 @@ public class Main {
   },
   {
     name: 'Styled widgets',
+    group: 'Styling & accessibility',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1103,6 +1144,7 @@ public class Main {
   },
   {
     name: 'Absolute layout',
+    group: 'Layout',
     starter: `import javax.swing.*;
 
 public class Main {
@@ -1134,6 +1176,7 @@ public class Main {
   },
   {
     name: 'Shared action',
+    group: 'Menus, actions & dialogs',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -1187,6 +1230,7 @@ public class Main {
   },
   {
     name: 'Toolbar',
+    group: 'Menus, actions & dialogs',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1222,6 +1266,7 @@ public class Main {
   },
   {
     name: 'Split pane',
+    group: 'Layout',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1259,6 +1304,7 @@ public class Main {
   },
   {
     name: 'Sketch pad',
+    group: 'Graphics & animation',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -1307,6 +1353,7 @@ class Pad extends JPanel {
   },
   {
     name: 'Dialogs (JOptionPane)',
+    group: 'Menus, actions & dialogs',
     starter: `import javax.swing.*;
 
 public class Main {
@@ -1331,6 +1378,7 @@ public class Main {
   },
   {
     name: 'BorderLayout regions',
+    group: 'Layout',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1372,6 +1420,7 @@ public class Main {
   },
   {
     name: 'Menus (JMenuBar)',
+    group: 'Menus, actions & dialogs',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -1430,6 +1479,7 @@ public class Main {
   },
   {
     name: 'Notepad (JTextArea)',
+    group: 'Text',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1474,6 +1524,7 @@ public class Main {
   },
   {
     name: 'Caret and selection',
+    group: 'Text',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1521,6 +1572,7 @@ public class Main {
   },
   {
     name: 'Text area ops',
+    group: 'Text',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1570,6 +1622,7 @@ public class Main {
   },
   {
     name: 'Scroll pane (JScrollPane)',
+    group: 'Layout',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1604,6 +1657,7 @@ public class Main {
   },
   {
     name: 'List (JList)',
+    group: 'Lists',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -1640,6 +1694,7 @@ public class Main {
   },
   {
     name: 'Multi-select list (JList)',
+    group: 'Lists',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -1685,6 +1740,7 @@ public class Main {
   },
   {
     name: 'To-do list (DefaultListModel)',
+    group: 'Lists',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -1758,6 +1814,7 @@ public class Main {
   },
   {
     name: 'List cell renderer',
+    group: 'Lists',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -1808,6 +1865,7 @@ public class Main {
   },
   {
     name: 'Custom list model',
+    group: 'Lists',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.util.ArrayList;
@@ -1871,6 +1929,7 @@ public class Main {
   },
   {
     name: 'Table (JTable)',
+    group: 'Tables',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -1928,6 +1987,7 @@ public class Main {
   },
   {
     name: 'Editable table (DefaultTableModel)',
+    group: 'Tables',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -2016,6 +2076,7 @@ public class Main {
   },
   {
     name: 'Tree (JTree)',
+    group: 'Trees',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -2108,6 +2169,7 @@ public class Main {
   },
   {
     name: 'Sortable table',
+    group: 'Tables',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -2155,6 +2217,7 @@ public class Main {
   },
   {
     name: 'Table cell renderer',
+    group: 'Tables',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -2199,6 +2262,7 @@ public class Main {
   },
   {
     name: 'Custom table model',
+    group: 'Tables',
     starter: `import javax.swing.*;
 import java.awt.*;
 import java.util.ArrayList;
@@ -2275,6 +2339,7 @@ public class Main {
   },
   {
     name: 'Progress + spinner',
+    group: 'Choosers & indicators',
     starter: `import javax.swing.*;
 import java.awt.*;
 import javax.swing.event.*;
@@ -2320,6 +2385,7 @@ public class Main {
   },
   {
     name: 'Edit cells (JTable)',
+    group: 'Tables',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -2361,6 +2427,7 @@ public class Main {
   },
   {
     name: 'Box layout',
+    group: 'Layout',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -2401,6 +2468,7 @@ public class Main {
   },
   {
     name: 'Sign-up form',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -2436,6 +2504,7 @@ public class Main {
   },
   {
     name: 'Button panel',
+    group: 'Getting started',
     starter: `import javax.swing.*;
 import java.awt.*;
 
@@ -3531,11 +3600,7 @@ export function App(): React.JSX.Element {
               value={swingValue}
               onChange={onSwingChange}
             >
-              {SWING_LEVELS.map((level, index) => (
-                <option key={level.name} value={index}>
-                  {level.name}
-                </option>
-              ))}
+              {groupSwingLevels(SWING_LEVELS)}
             </PickerSelect>
           </Box>
         </Paper>
@@ -3808,6 +3873,28 @@ function renderFrames(snapshot: DebugPauseSnapshot): string {
     }
   }
   return lines.join('\n');
+}
+
+/** Group the Swing demos into optgroups. The option's value stays its index in
+ * SWING_LEVELS, so grouping is purely presentational and the array need not be
+ * ordered by group. */
+function groupSwingLevels(levels: SwingLevel[]): React.JSX.Element[] {
+  const indexed = levels.map((level, index) => ({ level, index }));
+  return SWING_GROUPS.flatMap((group) => {
+    const items = indexed.filter((entry) => entry.level.group === group);
+    if (items.length === 0) {
+      return [];
+    }
+    return [
+      <optgroup key={group} label={group}>
+        {items.map(({ level, index }) => (
+          <option key={level.name} value={index}>
+            {level.name}
+          </option>
+        ))}
+      </optgroup>,
+    ];
+  });
 }
 
 function groupLevels(levels: CsaLevelMeta[]): React.JSX.Element[] {
