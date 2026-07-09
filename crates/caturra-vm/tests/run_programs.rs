@@ -9006,3 +9006,117 @@ fn arrays_copy_fill_reject_like_javac() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// `Collections.max`/`min`/`frequency`/`nCopies`/`shuffle`. The VM answers the
+/// first four, because a list stores unboxed primitives and `max`/`min` must
+/// hand back the element's own type; `shuffle` is bundled Java over `Random`,
+/// so a seeded one replays the JDK's permutation. Cross-checked against a real
+/// JDK by `diff_collections_helpers`.
+#[test]
+fn collections_helpers_use_compare_to_and_equals() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Collections;
+        import java.util.List;
+        import java.util.Random;
+
+        class Card implements Comparable<Card> {
+            int rank;
+            String tag;
+            Card(int rank, String tag) { this.rank = rank; this.tag = tag; }
+            public int compareTo(Card other) { return rank - other.rank; }
+            public String toString() { return "C" + rank + tag; }
+        }
+
+        public class C {
+            public static void main(String[] args) {
+                ArrayList<Integer> numbers = new ArrayList<Integer>();
+                numbers.add(3);
+                numbers.add(1);
+                numbers.add(5);
+                numbers.add(1);
+                int biggest = Collections.max(numbers);
+                System.out.println(biggest + " " + Collections.min(numbers));
+                System.out.println(Collections.frequency(numbers, 1) + " "
+                        + Collections.frequency(numbers, 9));
+
+                // A user class compares by its own compareTo; ties keep the first.
+                ArrayList<Card> cards = new ArrayList<Card>();
+                cards.add(new Card(5, "b"));
+                cards.add(new Card(5, "c"));
+                cards.add(new Card(1, "d"));
+                System.out.println(Collections.max(cards) + " " + Collections.min(cards));
+
+                List<String> copies = Collections.nCopies(3, "z");
+                System.out.println(copies + " " + Collections.nCopies(0, "q"));
+
+                // A seeded Random replays the JDK's permutation exactly.
+                ArrayList<Integer> deck = new ArrayList<Integer>();
+                for (int i = 0; i < 8; i++) {
+                    deck.add(i);
+                }
+                Collections.shuffle(deck, new Random(42));
+                System.out.println(deck);
+
+                // max/min call compareTo, so a null element throws, and an
+                // empty collection has no maximum.
+                ArrayList<Integer> empty = new ArrayList<Integer>();
+                try { Collections.max(empty); }
+                catch (java.util.NoSuchElementException e) { System.out.println("empty"); }
+                try { Collections.nCopies(-1, "a"); }
+                catch (IllegalArgumentException e) { System.out.println("negative"); }
+                ArrayList<String> holes = new ArrayList<String>();
+                holes.add("a");
+                holes.add(null);
+                try { Collections.max(holes); }
+                catch (NullPointerException e) { System.out.println("null element"); }
+                System.out.println(Collections.frequency(holes, null));
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(
+        out,
+        "5 1\n\
+         2 0\n\
+         C5b C1d\n\
+         [z, z, z] []\n\
+         [2, 6, 3, 1, 4, 0, 7, 5]\n\
+         empty\n\
+         negative\n\
+         null element\n\
+         1\n"
+    );
+}
+
+/// The `Collections` helpers reject what javac rejects. `shuffle`'s second
+/// argument is a `Random` and nothing else — accepting an `int` there would
+/// compile here and fail on a JDK.
+#[test]
+fn collections_helpers_reject_like_javac() {
+    for (source, want) in [
+        (
+            "Collections.max(5);",
+            "incompatible types: int cannot be converted to List",
+        ),
+        (
+            "ArrayList<Integer> l = new ArrayList<Integer>(); Collections.shuffle(l, 5);",
+            "incompatible types: int cannot be converted to Random",
+        ),
+        (
+            "ArrayList<Integer> l = new ArrayList<Integer>(); Collections.max(l, l);",
+            "Collections.max takes 1 argument(s)",
+        ),
+    ] {
+        let text = format!("import java.util.*; class M {{ static void r() {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}

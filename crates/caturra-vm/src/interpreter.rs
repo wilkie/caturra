@@ -2144,6 +2144,93 @@ impl<'run> Interpreter<'run> {
         self.string_value_of(item, depth + 1)
     }
 
+    /// The `java.util.Collections` helpers the VM answers rather than the
+    /// bundled Java: a list stores unboxed primitives, so bundled Java could
+    /// not compare them (`get` yields a bare `int`, not a `Comparable`), and
+    /// `max`/`min` must hand back the element's own type. Returns whether it
+    /// answered.
+    fn collections_static_intrinsic(
+        &mut self,
+        frame: &mut Frame<'run>,
+        class_name: &str,
+        method_name: &str,
+        args: &[JValue],
+    ) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        if class_name != "Collections" {
+            return Ok(false);
+        }
+        // `nCopies` builds a list rather than reading one.
+        if let ("nCopies", [JValue::Int(count), value]) = (method_name, args) {
+            let Ok(count) = usize::try_from(*count) else {
+                return Err(VmError::UncaughtException(format!(
+                    "java.lang.IllegalArgumentException: List length = {count}"
+                )));
+            };
+            let list = self.heap.alloc(HeapObject::ArrayList(vec![*value; count]));
+            frame.stack.push(JValue::Ref(Some(list)));
+            return Ok(true);
+        }
+        let items = match args.first() {
+            Some(JValue::Ref(Some(reference))) => match self.heap.get(*reference) {
+                Some(HeapObject::ArrayList(items)) => Some((*reference, items.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+        match (method_name, args) {
+            ("sort", [_]) => {
+                let Some((reference, items)) = items else {
+                    return Ok(true);
+                };
+                let sorted = self.merge_sort(items)?;
+                if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(reference) {
+                    *slot = sorted;
+                }
+            }
+            // `Collections.max`/`min` keep the first of equal elements, because
+            // they only replace the candidate on a strict improvement.
+            ("max" | "min", [_]) => {
+                let Some((_, items)) = items else {
+                    return Ok(true);
+                };
+                let (first, rest) = items.split_first().ok_or_else(|| {
+                    VmError::UncaughtException(String::from("java.util.NoSuchElementException"))
+                })?;
+                let mut candidate = *first;
+                for item in rest {
+                    let order = self.compare_for_sort(*item, candidate)?;
+                    let better = if method_name == "max" {
+                        order > 0
+                    } else {
+                        order < 0
+                    };
+                    if better {
+                        candidate = *item;
+                    }
+                }
+                frame.stack.push(candidate);
+            }
+            // `Collections.frequency` asks the probe, as `Objects.equals` does.
+            ("frequency", [_, probe]) => {
+                let Some((_, items)) = items else {
+                    frame.stack.push(JValue::Int(0));
+                    return Ok(true);
+                };
+                let mut count = 0i32;
+                for item in items {
+                    if self.java_equals(*probe, item)? {
+                        count += 1;
+                    }
+                }
+                frame.stack.push(JValue::Int(count));
+            }
+            // reverse/swap/shuffle are bundled Java.
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     /// The `java.util.Arrays` methods the VM answers rather than the bundled
     /// Java: they need an array's element kind at run time, which only the
     /// heap knows once the static type is gone. Returns whether it answered.
@@ -3497,18 +3584,7 @@ impl<'run> Interpreter<'run> {
         // version could not compare them (`get` yields a bare `int`, not a
         // `Comparable`). Strings compare by UTF-16 code units (Java semantics),
         // and a user class compares with its own `compareTo`.
-        if class_name == "Collections" && method_name == "sort" {
-            if let Some(JValue::Ref(Some(reference))) = args.first().copied()
-                && let Some(crate::value::HeapObject::ArrayList(items)) = self.heap.get(reference)
-            {
-                let items = items.clone();
-                let sorted = self.merge_sort(items)?;
-                if let Some(crate::value::HeapObject::ArrayList(slot)) =
-                    self.heap.get_mut(reference)
-                {
-                    *slot = sorted;
-                }
-            }
+        if self.collections_static_intrinsic(frame, class_name, method_name, args)? {
             return Ok(None);
         }
         if self.arrays_static_intrinsic(frame, class_name, method_name, args)? {

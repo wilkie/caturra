@@ -93,4 +93,14 @@ class Collections {
     list.set(i, list.get(j));
     list.set(j, tmp);
   }
+
+  // Fisher-Yates from the end, exactly as java.util.Collections does it, so a
+  // seeded Random replays the JDK's permutation.
+  public static void shuffle(java.util.ArrayList<Object> list, Random rnd) {
+    for (int i = list.size(); i > 1; i--) swap(list, i - 1, rnd.nextInt(i));
+  }
+
+  public static void shuffle(java.util.ArrayList<Object> list) {
+    shuffle(list, new Random());
+  }
 }

@@ -4359,3 +4359,132 @@ public class DiffSortNull {
 }
 "#
 );
+
+differential_test!(
+    diff_collections_helpers,
+    "DiffCollectionsHelpers",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Random;
+
+class Card implements Comparable<Card> {
+    int rank;
+    String tag;
+    Card(int rank, String tag) { this.rank = rank; this.tag = tag; }
+    public int compareTo(Card other) { return rank - other.rank; }
+    public String toString() { return "C" + rank + tag; }
+}
+
+public class DiffCollectionsHelpers {
+    public static void main(String[] args) {
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        numbers.add(3);
+        numbers.add(1);
+        numbers.add(5);
+        numbers.add(1);
+        System.out.println(Collections.max(numbers) + " " + Collections.min(numbers));
+        int biggest = Collections.max(numbers);
+        System.out.println(biggest);
+
+        ArrayList<String> words = new ArrayList<String>();
+        words.add("pear");
+        words.add("fig");
+        words.add("apple");
+        System.out.println(Collections.max(words) + " " + Collections.min(words));
+
+        // A user class compares by its own compareTo, and ties keep the first.
+        ArrayList<Card> cards = new ArrayList<Card>();
+        cards.add(new Card(2, "a"));
+        cards.add(new Card(5, "b"));
+        cards.add(new Card(5, "c"));
+        cards.add(new Card(1, "d"));
+        System.out.println(Collections.max(cards) + " " + Collections.min(cards));
+
+        // frequency asks the probe's own equals; Card has none, so identity.
+        System.out.println(Collections.frequency(numbers, 1) + " " + Collections.frequency(numbers, 9));
+        System.out.println(Collections.frequency(words, "fig"));
+        ArrayList<Card> pair = new ArrayList<Card>();
+        pair.add(new Card(1, "x"));
+        pair.add(new Card(1, "y"));
+        System.out.println(Collections.frequency(pair, new Card(1, "z")));
+
+        List<String> copies = Collections.nCopies(3, "z");
+        System.out.println(copies + " " + copies.size());
+        System.out.println(Collections.nCopies(2, 0) + " " + Collections.nCopies(0, "q"));
+        int total = 0;
+        for (int value : Collections.nCopies(3, 7)) {
+            total += value;
+        }
+        System.out.println(total);
+
+        // A seeded Random makes shuffle replay the JDK's own permutation.
+        ArrayList<Integer> deck = new ArrayList<Integer>();
+        for (int i = 0; i < 8; i++) {
+            deck.add(i);
+        }
+        Collections.shuffle(deck, new Random(42));
+        System.out.println(deck);
+        Collections.shuffle(deck, new Random(7));
+        System.out.println(deck);
+        ArrayList<String> letters = new ArrayList<String>();
+        letters.add("a");
+        letters.add("b");
+        letters.add("c");
+        Collections.shuffle(letters, new Random(1));
+        System.out.println(letters);
+
+        // Degenerate sizes.
+        ArrayList<Integer> empty = new ArrayList<Integer>();
+        Collections.shuffle(empty, new Random(1));
+        System.out.println(empty + " " + Collections.frequency(empty, 1));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_collections_helper_errors,
+    "DiffCollectionsErrors",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+
+public class DiffCollectionsErrors {
+    public static void main(String[] args) {
+        ArrayList<Integer> empty = new ArrayList<Integer>();
+        try {
+            Collections.max(empty);
+        } catch (java.util.NoSuchElementException e) {
+            System.out.println("max of empty");
+        }
+        try {
+            Collections.min(empty);
+        } catch (java.util.NoSuchElementException e) {
+            System.out.println("min of empty");
+        }
+        try {
+            Collections.nCopies(-1, "a");
+        } catch (IllegalArgumentException e) {
+            System.out.println("negative count");
+        }
+
+        // max/min call compareTo, so a null element throws.
+        ArrayList<String> holes = new ArrayList<String>();
+        holes.add("a");
+        holes.add(null);
+        try {
+            Collections.max(holes);
+        } catch (NullPointerException e) {
+            System.out.println("null element");
+        }
+        // But a lone element is never compared, and frequency counts nulls.
+        ArrayList<String> lone = new ArrayList<String>();
+        lone.add(null);
+        System.out.println(Collections.max(lone) + " " + Collections.frequency(holes, null));
+        System.out.println("done");
+    }
+}
+"#
+);

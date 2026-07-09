@@ -2061,6 +2061,15 @@ fn arrays_deep_signature(method: &str) -> Option<(usize, &'static str, JType)> {
     }
 }
 
+/// The `java.util.Collections` helpers caturra models, whether in the bundled
+/// Java or in the VM.
+fn is_collections_method(method: &str) -> bool {
+    matches!(
+        method,
+        "reverse" | "swap" | "sort" | "shuffle" | "max" | "min" | "frequency" | "nCopies"
+    )
+}
+
 /// The four `Arrays` methods the VM answers over any array kind.
 fn is_arrays_array_method(method: &str) -> bool {
     matches!(method, "copyOf" | "copyOfRange" | "fill" | "binarySearch")
@@ -7950,7 +7959,7 @@ impl BodyGen<'_> {
         // `Collections.reverse/swap` are generic over the list element type;
         // emit the (uniform-at-runtime) list argument(s) and call the bundle,
         // bypassing invariant List<elem> parameter matching.
-        if class == "Collections" && (method == "reverse" || method == "swap" || method == "sort") {
+        if class == "Collections" && is_collections_method(method) {
             return self.emit_collections_call(method, args, span);
         }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
@@ -8034,15 +8043,56 @@ impl BodyGen<'_> {
     /// arguments and call the bundle directly (the list element type does not
     /// affect the runtime representation).
     #[allow(clippy::option_option, clippy::unnecessary_wraps)] // call-dispatch return shape
+    #[allow(clippy::too_many_lines)] // one method per arm
     fn emit_collections_call(
         &mut self,
         method: &str,
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
-        let (descriptor, want) = match method {
-            "reverse" | "sort" => ("(Ljava/util/ArrayList;)V", 1usize),
-            "swap" => ("(Ljava/util/ArrayList;II)V", 3usize),
+        // `nCopies(n, value)` is the only one whose first argument is not a
+        // list; its element type comes from the value.
+        if method == "nCopies" {
+            let [count, value] = args else {
+                self.error(span, "Collections.nCopies takes 2 arguments");
+                return None;
+            };
+            let count_ty = self.expr(count);
+            self.numeric_conversion(count_ty, JType::Int);
+            let value_ty = self.expr(value);
+            let Some(elem) = elem_type_of(value_ty) else {
+                self.error(
+                    value.span(),
+                    format!(
+                        "Collections.nCopies cannot make a list of {}",
+                        value_ty.describe(self.table)
+                    ),
+                );
+                self.code.discard();
+                return None;
+            };
+            let descriptor = format!(
+                "(I{})Ljava/util/ArrayList;",
+                elem.base_type().descriptor(self.table)
+            );
+            let method_ref = intern_method_ref(self.pool, "Collections", "nCopies", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(1 + value_ty.width());
+            return Some(Some(JType::List(elem)));
+        }
+
+        let want = match method {
+            "reverse" | "sort" | "max" | "min" => 1usize,
+            "frequency" => 2,
+            "swap" => 3,
+            // `shuffle(list)` or `shuffle(list, random)`.
+            "shuffle" => {
+                if args.len() == 2 {
+                    2
+                } else {
+                    1
+                }
+            }
             _ => unreachable!("caller checked method"),
         };
         if args.len() != want {
@@ -8052,18 +8102,80 @@ impl BodyGen<'_> {
             );
             return None;
         }
-        let mut width: u16 = 0;
-        for (i, arg) in args.iter().enumerate() {
-            let ty = self.expr(arg);
-            if i > 0 {
-                self.numeric_conversion(ty, JType::Int);
+        let list_ty = self.type_of(&args[0]);
+        let JType::List(elem) = list_ty else {
+            if list_ty != JType::Error {
+                self.error(
+                    args[0].span(),
+                    format!(
+                        "incompatible types: {} cannot be converted to List",
+                        list_ty.describe(self.table)
+                    ),
+                );
             }
-            width += 1;
-        }
-        let method_ref = intern_method_ref(self.pool, "Collections", method, descriptor);
-        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+            return None;
+        };
+        let element_ty = elem.base_type();
+        let element_descriptor = element_ty.descriptor(self.table);
+
+        self.expr(&args[0]);
+        let mut width: u16 = 1;
+        let (descriptor, ret) = match method {
+            "reverse" | "sort" => (String::from("(Ljava/util/ArrayList;)V"), None),
+            "swap" => {
+                for index in &args[1..] {
+                    let ty = self.expr(index);
+                    self.numeric_conversion(ty, JType::Int);
+                    width += 1;
+                }
+                (String::from("(Ljava/util/ArrayList;II)V"), None)
+            }
+            "shuffle" => {
+                if let Some(random) = args.get(1) {
+                    let ty = self.expr(random);
+                    // The two-argument form takes a `java.util.Random`, and
+                    // nothing else: a seeded one replays the JDK's permutation.
+                    let is_random =
+                        matches!(ty, JType::Object(id) if self.table.class_name(id) == "Random");
+                    if !is_random && ty != JType::Error {
+                        self.error(
+                            random.span(),
+                            format!(
+                                "incompatible types: {} cannot be converted to Random",
+                                ty.describe(self.table)
+                            ),
+                        );
+                    }
+                    width += 1;
+                    (String::from("(Ljava/util/ArrayList;LRandom;)V"), None)
+                } else {
+                    (String::from("(Ljava/util/ArrayList;)V"), None)
+                }
+            }
+            // The VM answers these: a list stores unboxed primitives, so a
+            // bundled Java version could not compare them, and `max`/`min`
+            // must hand back the element's own type.
+            "max" | "min" => (
+                format!("(Ljava/util/ArrayList;){element_descriptor}"),
+                Some(element_ty),
+            ),
+            "frequency" => {
+                let actual = self.expr(&args[1]);
+                self.convert_for_assignment(actual, element_ty, args[1].span());
+                width += element_ty.width();
+                (
+                    format!("(Ljava/util/ArrayList;{element_descriptor})I"),
+                    Some(JType::Int),
+                )
+            }
+            _ => unreachable!("arity checked above"),
+        };
+        let method_ref = intern_method_ref(self.pool, "Collections", method, &descriptor);
+        let ret_width = ret.map_or(0, JType::width);
+        self.code
+            .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
         self.code.drop_stack(width);
-        Some(None)
+        Some(ret)
     }
 
     /// `Arrays.asList(T...)`: pack the arguments into an `Object[]`, call the
@@ -8643,6 +8755,25 @@ impl BodyGen<'_> {
                     },
                 };
                 let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                // `Collections.max/min/frequency/nCopies` are in no method
+                // table either: the VM answers them.
+                if class == "Collections" {
+                    match method.as_str() {
+                        "max" | "min" => {
+                            let list = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return match list {
+                                JType::List(elem) => elem.base_type(),
+                                _ => JType::Error,
+                            };
+                        }
+                        "frequency" => return JType::Int,
+                        "nCopies" => {
+                            let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
+                            return elem_type_of(value).map_or(JType::Error, JType::List);
+                        }
+                        _ => {}
+                    }
+                }
                 // The VM answers these, so they are in no method table.
                 if class == "Arrays" {
                     if let Some((_, _, ret)) = arrays_deep_signature(method) {

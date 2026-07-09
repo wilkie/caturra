@@ -312,6 +312,25 @@ null` is the way to test for absence, and unboxing an absent value
     compile in the first place: caturra's `sort` accepts any list, the
     one place it is more permissive than javac here. Pinned by
     `diff_collections_sort_uses_compare_to`.
+  - `Collections.reverse`/`swap`/`shuffle`/`max`/`min`/`frequency`/
+    `nCopies` (2026-07-09). `reverse`, `swap` and `shuffle` are bundled
+    Java; `shuffle(list, random)` is Java's own Fisher-Yates over
+    caturra's exact `Random`, so a seeded one replays the JDK's
+    permutation. The VM answers `max`/`min`/`frequency`/`nCopies`,
+    because a list stores unboxed primitives (a bundled version could
+    not compare them) and `max`/`min` must hand back the element's own
+    type. `max`/`min` compare with the element's `compareTo`, keep the
+    first of equal elements, throw `NoSuchElementException` on an empty
+    collection and `NullPointerException` on a null element (a lone
+    element is never compared, so it does not); `frequency` asks the
+    probe's own `equals`; `nCopies` throws
+    `IllegalArgumentException` on a negative count and returns a
+    **mutable** `ArrayList`, where Java's is immutable — the same
+    deviation `Arrays.asList` has. `frequency(list, wrongType)` is
+    rejected at compile time, where javac takes its `Object` parameter
+    and answers 0; and `shuffle`'s second argument must be a `Random`.
+    The `Comparator` overloads are absent. Pinned by
+    `diff_collections_helpers` and `_errors`.
   - `java.util.Arrays` is bundled Java rather than a native intrinsic,
     so every element operation dispatches. `toString` renders elements
     through their own `toString`; `equals` and `hashCode` (2026-07-09,
