@@ -3570,3 +3570,69 @@ public class DiffToStringEdges {
 }
 "#
 );
+
+differential_test!(
+    diff_collections_sort_uses_compare_to,
+    "DiffSort",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+
+class Card implements Comparable<Card> {
+    int rank;
+    String tag;
+    Card(int rank, String tag) { this.rank = rank; this.tag = tag; }
+    public int compareTo(Card other) { return rank - other.rank; }
+    public String toString() { return "C" + rank + tag; }
+}
+
+class Reversed implements Comparable<Reversed> {
+    int n;
+    Reversed(int n) { this.n = n; }
+    public int compareTo(Reversed other) { return other.n - n; }
+    public String toString() { return "R" + n; }
+}
+
+public class DiffSort {
+    public static void main(String[] args) {
+        // A user class sorts by its own compareTo, and ties keep their
+        // original order: Collections.sort is stable.
+        ArrayList<Card> cards = new ArrayList<Card>();
+        cards.add(new Card(3, "a"));
+        cards.add(new Card(1, "b"));
+        cards.add(new Card(2, "c"));
+        cards.add(new Card(1, "d"));
+        cards.add(new Card(1, "e"));
+        Collections.sort(cards);
+        System.out.println(cards);
+
+        ArrayList<Reversed> reversed = new ArrayList<Reversed>();
+        reversed.add(new Reversed(1));
+        reversed.add(new Reversed(3));
+        reversed.add(new Reversed(2));
+        Collections.sort(reversed);
+        System.out.println(reversed);
+
+        ArrayList<String> words = new ArrayList<String>();
+        words.add("pear");
+        words.add("apple");
+        words.add("fig");
+        Collections.sort(words);
+        System.out.println(words);
+
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        numbers.add(3);
+        numbers.add(-1);
+        numbers.add(2);
+        Collections.sort(numbers);
+        System.out.println(numbers);
+
+        // Degenerate sizes.
+        ArrayList<Card> one = new ArrayList<Card>();
+        one.add(new Card(5, "z"));
+        Collections.sort(one);
+        System.out.println(one + " " + new ArrayList<Card>());
+    }
+}
+"#
+);

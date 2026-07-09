@@ -286,6 +286,15 @@ null` is the way to test for absence, and unboxing an absent value
     One consequence for the debugger: pausing on a breakpoint inside a
     `toString()` that a container is rendering shows only that call's
     frames, because the frames beneath it are suspended.
+  - `Collections.sort(list)` is a stable natural-ordering sort, and a
+    user class sorts by its own `compareTo` (2026-07-09) — it reaches
+    that through the same nested-call machinery `toString` uses. Before,
+    it compared every pair of user objects as equal and so silently left
+    the list alone. A class that declares no `compareTo` throws
+    `ClassCastException`, which is what javac would have refused to
+    compile in the first place: caturra's `sort` accepts any list, the
+    one place it is more permissive than javac here. Pinned by
+    `diff_collections_sort_uses_compare_to`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get

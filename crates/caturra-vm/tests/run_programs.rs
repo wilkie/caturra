@@ -8437,3 +8437,72 @@ fn collections_render_elements_with_their_own_to_string() {
          cycle overflows\n"
     );
 }
+
+/// `Collections.sort` orders user objects by their own `compareTo`, stably.
+/// Before the interpreter could call back into Java it compared every pair of
+/// instances as equal, and so silently left the list alone. Cross-checked
+/// against a real JDK by `diff_collections_sort_uses_compare_to`.
+#[test]
+fn collections_sort_calls_compare_to() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Collections;
+
+        class Card implements Comparable<Card> {
+            int rank;
+            String tag;
+            Card(int rank, String tag) { this.rank = rank; this.tag = tag; }
+            public int compareTo(Card other) { return rank - other.rank; }
+            public String toString() { return "C" + rank + tag; }
+        }
+
+        public class S {
+            public static void main(String[] args) {
+                ArrayList<Card> cards = new ArrayList<Card>();
+                cards.add(new Card(3, "a"));
+                cards.add(new Card(1, "b"));
+                cards.add(new Card(2, "c"));
+                cards.add(new Card(1, "d"));
+                Collections.sort(cards);
+                // Sorted, and the two rank-1 cards keep their original order.
+                System.out.println(cards);
+            }
+        }
+        "#,
+        "S",
+    );
+    assert_eq!(out, "[C1b, C1d, C2c, C3a]\n");
+}
+
+/// javac rejects `Collections.sort` on a list whose element type is not
+/// `Comparable`. caturra's `sort` accepts any list, so it has to say at
+/// runtime what javac would have said at compile time.
+#[test]
+fn collections_sort_of_a_non_comparable_throws() {
+    let (result, console) = compile_and_run(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Collections;
+
+        class Plain { int x; }
+
+        public class S {
+            public static void main(String[] args) {
+                ArrayList<Plain> items = new ArrayList<Plain>();
+                items.add(new Plain());
+                items.add(new Plain());
+                try {
+                    Collections.sort(items);
+                    System.out.println("sorted");
+                } catch (ClassCastException e) {
+                    System.out.println("not comparable");
+                }
+            }
+        }
+        "#,
+        "S",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "not comparable\n");
+}

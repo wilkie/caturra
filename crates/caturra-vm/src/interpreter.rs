@@ -2454,17 +2454,18 @@ impl<'run> Interpreter<'run> {
         // `Collections.sort(list)` — natural-ordering sort. Done natively
         // because caturra stores unboxed primitives in a list, so a bundled Java
         // version could not compare them (`get` yields a bare `int`, not a
-        // `Comparable`). Strings compare by UTF-16 code units (Java semantics).
+        // `Comparable`). Strings compare by UTF-16 code units (Java semantics),
+        // and a user class compares with its own `compareTo`.
         if class_name == "Collections" && method_name == "sort" {
-            if let Some(JValue::Ref(Some(reference))) = args.first()
-                && let Some(crate::value::HeapObject::ArrayList(items)) = self.heap.get(*reference)
+            if let Some(JValue::Ref(Some(reference))) = args.first().copied()
+                && let Some(crate::value::HeapObject::ArrayList(items)) = self.heap.get(reference)
             {
-                let mut items = items.clone();
-                items.sort_by(|a, b| self.compare_values(a, b));
+                let items = items.clone();
+                let sorted = self.merge_sort(items)?;
                 if let Some(crate::value::HeapObject::ArrayList(slot)) =
-                    self.heap.get_mut(*reference)
+                    self.heap.get_mut(reference)
                 {
-                    *slot = items;
+                    *slot = sorted;
                 }
             }
             return Ok(None);
@@ -2855,6 +2856,87 @@ impl<'run> Interpreter<'run> {
             class_name: String::from(class_name),
             value,
         })
+    }
+
+    /// A stable merge sort, as `Collections.sort` is. It cannot use
+    /// `slice::sort_by`, because comparing two user objects runs their
+    /// `compareTo` — which may throw, and so must be able to fail.
+    fn merge_sort(&mut self, mut items: Vec<JValue>) -> Result<Vec<JValue>, VmError> {
+        if items.len() <= 1 {
+            return Ok(items);
+        }
+        let right = items.split_off(items.len() / 2);
+        let left = self.merge_sort(items)?;
+        let right = self.merge_sort(right)?;
+
+        let mut merged = Vec::with_capacity(left.len() + right.len());
+        let (mut i, mut j) = (0, 0);
+        while i < left.len() && j < right.len() {
+            // `<= 0` takes from the left on a tie, which is what keeps the
+            // sort stable.
+            if self.compare_for_sort(left[i], right[j])? <= 0 {
+                merged.push(left[i]);
+                i += 1;
+            } else {
+                merged.push(right[j]);
+                j += 1;
+            }
+        }
+        merged.extend_from_slice(&left[i..]);
+        merged.extend_from_slice(&right[j..]);
+        Ok(merged)
+    }
+
+    /// Compare two list elements the way `Collections.sort` does: a user
+    /// object by its own `compareTo`, everything else natively.
+    fn compare_for_sort(&mut self, a: JValue, b: JValue) -> Result<i32, VmError> {
+        if let JValue::Ref(Some(reference)) = a
+            && let Some(crate::value::HeapObject::Instance { class_name, .. }) =
+                self.heap.get(reference)
+        {
+            let class_name = class_name.clone();
+            return self.call_compare_to(reference, &class_name, b);
+        }
+        Ok(match self.compare_values(&a, &b) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        })
+    }
+
+    /// `a.compareTo(b)` on a user object. The erased descriptor finds a
+    /// `compareTo(Card)` through the dispatch bridge; a class that declares
+    /// none is not `Comparable`, which is what Java complains about.
+    fn call_compare_to(
+        &mut self,
+        receiver: HeapRef,
+        class_name: &str,
+        other: JValue,
+    ) -> Result<i32, VmError> {
+        let dispatched = self.user_virtual_dispatch(
+            receiver,
+            class_name,
+            "compareTo",
+            "(Ljava/lang/Object;)I",
+            &[other],
+        );
+        let returned = match dispatched {
+            Ok(UserDispatch::Call(frame)) => self.run_nested(frame)?,
+            Ok(UserDispatch::Value(value)) => value,
+            Err(VmError::UnknownIntrinsic(_)) => {
+                return Err(VmError::UncaughtException(format!(
+                    "java.lang.ClassCastException: class {class_name} cannot be cast to \
+                     class java.lang.Comparable"
+                )));
+            }
+            Err(other) => return Err(other),
+        };
+        match returned {
+            Some(JValue::Int(order)) => Ok(order),
+            _ => Err(VmError::UnknownIntrinsic(format!(
+                "{class_name}.compareTo did not return an int"
+            ))),
+        }
     }
 
     /// Natural-ordering comparison of two list elements for `Collections.sort`:
