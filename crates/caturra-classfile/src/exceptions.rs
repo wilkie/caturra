@@ -27,6 +27,14 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
     ),
     ("java/lang/ClassCastException", "java/lang/RuntimeException"),
     (
+        "java/lang/UnsupportedOperationException",
+        "java/lang/RuntimeException",
+    ),
+    (
+        "java/lang/ArrayStoreException",
+        "java/lang/RuntimeException",
+    ),
+    (
         "java/lang/NegativeArraySizeException",
         "java/lang/RuntimeException",
     ),

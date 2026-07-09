@@ -331,6 +331,23 @@ null` is the way to test for absence, and unboxing an absent value
     and answers 0; and `shuffle`'s second argument must be a `Random`.
     The `Comparator` overloads are absent. Pinned by
     `diff_collections_helpers` and `_errors`.
+  - `Collections.binarySearch`/`addAll`/`unmodifiableList`/`emptyList`
+    (2026-07-09). `binarySearch` compares with the element's own
+    `compareTo`; `addAll(list, e1, e2, ...)` is variadic and returns
+    whether the list changed — a lone `T[]` is the varargs array, but
+    only for a reference `T`, since javac has no `Integer[]`/`int[]`
+    conflation and rejects `addAll(List<Integer>, int[])`.
+    `unmodifiableList` is a real **view**, as Java's is: a later change
+    to the backing list shows through, and every mutator throws
+    `UnsupportedOperationException`, whether reached through the list
+    (`add`, `set`, `remove`, `clear`) or through `Collections`
+    (`sort`, `reverse`, `shuffle`, `swap`, `addAll`). `emptyList()` is
+    an unmodifiable empty view; it types as `null` does — assignable to
+    any `List<T>` — because caturra has no target typing, so
+    `System.out.println(Collections.emptyList())` is a compile error
+    where javac infers `List<Object>`. Pinned by
+    `diff_collections_binary_search_and_add_all` and
+    `_unmodifiable_and_empty`.
   - `java.util.Arrays` is bundled Java rather than a native intrinsic,
     so every element operation dispatches. `toString` renders elements
     through their own `toString`; `equals` and `hashCode` (2026-07-09,
@@ -346,7 +363,9 @@ null` is the way to test for absence, and unboxing an absent value
     whose element type is not `Comparable` is rejected at compile time,
     where javac accepts it and throws `ClassCastException` at run time —
     stricter, so anything compiling here still compiles on a JDK.
-    `asList` returns an `ArrayList` (a documented deviation). Pinned
+    `asList` returns a mutable `ArrayList` (a documented deviation) and
+    keeps its elements unboxed, so `Arrays.asList(1, 2).get(0)` reads
+    back as an `int` — it used to box them and fail at run time. Pinned
     against a real JDK by `diff_arrays_equals_and_hash_code` and
     `diff_arrays_sort_uses_compare_to`.
   - `Arrays.copyOf`/`copyOfRange`/`fill`/`binarySearch` (2026-07-09),

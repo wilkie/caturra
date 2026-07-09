@@ -101,6 +101,10 @@ pub enum HeapObject {
     /// A `java.util.ArrayList` (element types erased; values are
     /// stored directly — boxing is a no-op in this VM).
     ArrayList(Vec<JValue>),
+    /// An unmodifiable *view* of a list (`Collections.unmodifiableList`,
+    /// `Collections.emptyList`). Java's is a view too: a later `add` to the
+    /// backing list shows through, and every mutator throws.
+    UnmodifiableList(HeapRef),
     /// A `java.util.HashMap` (key/value types erased), carrying the JDK's
     /// iteration order. See [`crate::map`].
     HashMap(crate::map::JavaHashMap),

@@ -2066,7 +2066,18 @@ fn arrays_deep_signature(method: &str) -> Option<(usize, &'static str, JType)> {
 fn is_collections_method(method: &str) -> bool {
     matches!(
         method,
-        "reverse" | "swap" | "sort" | "shuffle" | "max" | "min" | "frequency" | "nCopies"
+        "reverse"
+            | "swap"
+            | "sort"
+            | "shuffle"
+            | "max"
+            | "min"
+            | "frequency"
+            | "nCopies"
+            | "binarySearch"
+            | "addAll"
+            | "unmodifiableList"
+            | "emptyList"
     )
 }
 
@@ -8050,8 +8061,25 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
-        // `nCopies(n, value)` is the only one whose first argument is not a
-        // list; its element type comes from the value.
+        // `emptyList()` has no arguments at all. Its element type comes from
+        // whatever it is assigned to, so it types as `null` does: assignable
+        // to any list.
+        if method == "emptyList" {
+            if !args.is_empty() {
+                self.error(span, "Collections.emptyList takes 0 arguments");
+                return None;
+            }
+            let method_ref = intern_method_ref(
+                self.pool,
+                "Collections",
+                "emptyList",
+                "()Ljava/util/ArrayList;",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            return Some(Some(JType::Null));
+        }
+        // `nCopies(n, value)` is the only other one whose first argument is
+        // not a list; its element type comes from the value.
         if method == "nCopies" {
             let [count, value] = args else {
                 self.error(span, "Collections.nCopies takes 2 arguments");
@@ -8082,9 +8110,11 @@ impl BodyGen<'_> {
         }
 
         let want = match method {
-            "reverse" | "sort" | "max" | "min" => 1usize,
-            "frequency" => 2,
+            "reverse" | "sort" | "max" | "min" | "unmodifiableList" => 1usize,
+            "frequency" | "binarySearch" => 2,
             "swap" => 3,
+            // `addAll(list, elements...)` is variadic.
+            "addAll" => args.len().max(1),
             // `shuffle(list)` or `shuffle(list, random)`.
             "shuffle" => {
                 if args.len() == 2 {
@@ -8159,13 +8189,42 @@ impl BodyGen<'_> {
                 format!("(Ljava/util/ArrayList;){element_descriptor}"),
                 Some(element_ty),
             ),
-            "frequency" => {
+            "frequency" | "binarySearch" => {
                 let actual = self.expr(&args[1]);
                 self.convert_for_assignment(actual, element_ty, args[1].span());
                 width += element_ty.width();
                 (
                     format!("(Ljava/util/ArrayList;{element_descriptor})I"),
                     Some(JType::Int),
+                )
+            }
+            "unmodifiableList" => (
+                String::from("(Ljava/util/ArrayList;)Ljava/util/ArrayList;"),
+                Some(list_ty),
+            ),
+            // `addAll(list, e1, e2, ...)`: pack the varargs into an array of
+            // the list's element type, as javac packs them into a `T[]`. A
+            // lone array argument already *is* that array.
+            "addAll" => {
+                let elements = JType::Array { elem, dims: 1 };
+                // A lone `T[]` already *is* the varargs array — but only for a
+                // reference `T`. javac has no `Integer[]`/`int[]` conflation,
+                // and rejects `addAll(List<Integer>, int[])`.
+                if let [single] = &args[1..]
+                    && elem.base_type().is_reference()
+                    && self.type_of(single) == elements
+                {
+                    self.expr(single);
+                } else {
+                    self.emit_array_literal(&args[1..], elements, span);
+                }
+                width += 1;
+                (
+                    format!(
+                        "(Ljava/util/ArrayList;{})Z",
+                        elements.descriptor(self.table)
+                    ),
+                    Some(JType::Boolean),
                 )
             }
             _ => unreachable!("arity checked above"),
@@ -8184,6 +8243,8 @@ impl BodyGen<'_> {
     #[allow(clippy::option_option, clippy::unnecessary_wraps)] // call-dispatch return shape
     fn emit_arrays_as_list(&mut self, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
         let object_elem = ElemType::Object(self.table.object_id);
+        // Pack into an array of the ELEMENT type, not `Object[]`: a list holds
+        // its primitives unboxed, so `Arrays.asList(1, 2)` must not box them.
         let elem = if let [single] = args {
             if let JType::Array { elem, dims: 1 } = self.type_of(single) {
                 // The lone array argument *is* the varargs array.
@@ -8194,7 +8255,7 @@ impl BodyGen<'_> {
                 self.emit_array_literal(
                     args,
                     JType::Array {
-                        elem: object_elem,
+                        elem: scalar,
                         dims: 1,
                     },
                     span,
@@ -8209,19 +8270,20 @@ impl BodyGen<'_> {
             self.emit_array_literal(
                 args,
                 JType::Array {
-                    elem: object_elem,
+                    elem: scalar,
                     dims: 1,
                 },
                 span,
             );
             scalar
         };
-        let method_ref = intern_method_ref(
-            self.pool,
-            "Arrays",
-            "asList",
-            "([Ljava/lang/Object;)Ljava/util/ArrayList;",
+        // The VM builds the list, so the array's element kind carries through
+        // rather than erasing to `Object`.
+        let descriptor = format!(
+            "({})Ljava/util/ArrayList;",
+            JType::Array { elem, dims: 1 }.descriptor(self.table)
         );
+        let method_ref = intern_method_ref(self.pool, "Arrays", "asList", &descriptor);
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
         self.code.drop_stack(1); // the array argument
         Some(Some(JType::List(elem)))
@@ -8766,7 +8828,13 @@ impl BodyGen<'_> {
                                 _ => JType::Error,
                             };
                         }
-                        "frequency" => return JType::Int,
+                        "frequency" | "binarySearch" => return JType::Int,
+                        "addAll" => return JType::Boolean,
+                        "unmodifiableList" => {
+                            return args.first().map_or(JType::Error, |a| self.type_of(a));
+                        }
+                        // Its element type comes from the assignment context.
+                        "emptyList" => return JType::Null,
                         "nCopies" => {
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
                             return elem_type_of(value).map_or(JType::Error, JType::List);

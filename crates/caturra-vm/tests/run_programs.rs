@@ -9120,3 +9120,123 @@ fn collections_helpers_reject_like_javac() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// `Collections.binarySearch`/`addAll`/`unmodifiableList`/`emptyList`.
+/// The unmodifiable list is a *view*: a later change to the backing list shows
+/// through, and every mutator throws. Cross-checked against a real JDK by
+/// `diff_collections_binary_search_and_add_all` and `_unmodifiable_and_empty`.
+#[test]
+fn collections_binary_search_add_all_and_unmodifiable() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Arrays;
+        import java.util.Collections;
+        import java.util.List;
+
+        class Card implements Comparable<Card> {
+            int rank;
+            Card(int rank) { this.rank = rank; }
+            public int compareTo(Card other) { return rank - other.rank; }
+            public String toString() { return "C" + rank; }
+        }
+
+        public class C {
+            public static void main(String[] args) {
+                ArrayList<Integer> numbers = new ArrayList<Integer>();
+                System.out.println(Collections.addAll(numbers, 1, 3, 5, 7) + " " + numbers);
+                System.out.println(Collections.addAll(numbers) + " " + numbers.size());
+                System.out.println(Collections.binarySearch(numbers, 5) + " "
+                        + Collections.binarySearch(numbers, 4));
+
+                ArrayList<String> words = new ArrayList<String>();
+                String[] more = {"g", "i"};
+                Collections.addAll(words, "a");
+                Collections.addAll(words, more);
+                System.out.println(words);
+
+                // binarySearch compares with the element's own compareTo.
+                ArrayList<Card> cards = new ArrayList<Card>();
+                Collections.addAll(cards, new Card(1), new Card(3));
+                System.out.println(Collections.binarySearch(cards, new Card(3)));
+
+                // Arrays.asList keeps its elements unboxed, so they read back.
+                List<Integer> boxed = Arrays.asList(1, 2, 3);
+                int first = boxed.get(0);
+                System.out.println(boxed + " " + first + " " + (boxed.get(1) + 1));
+
+                // An unmodifiable list is a view: it refuses every mutator, and
+                // a later change to the backing list shows through.
+                List<Integer> readOnly = Collections.unmodifiableList(numbers);
+                try { readOnly.add(9); }
+                catch (UnsupportedOperationException e) { System.out.println("add"); }
+                try { Collections.sort(readOnly); }
+                catch (UnsupportedOperationException e) { System.out.println("sort"); }
+                try { Collections.reverse(readOnly); }
+                catch (UnsupportedOperationException e) { System.out.println("reverse"); }
+                numbers.add(11);
+                int total = 0;
+                for (int value : readOnly) {
+                    total += value;
+                }
+                System.out.println(readOnly + " " + total + " " + readOnly.equals(numbers));
+
+                List<String> empty = Collections.emptyList();
+                System.out.println(empty + " " + empty.isEmpty());
+                try { empty.add("x"); }
+                catch (UnsupportedOperationException e) { System.out.println("empty add"); }
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(
+        out,
+        "true [1, 3, 5, 7]\n\
+         false 4\n\
+         2 -3\n\
+         [a, g, i]\n\
+         1\n\
+         [1, 2, 3] 1 3\n\
+         add\n\
+         sort\n\
+         reverse\n\
+         [1, 3, 5, 7, 11] 27 true\n\
+         [] true\n\
+         empty add\n"
+    );
+}
+
+/// These four reject what javac rejects. `Collections.addAll(List<Integer>,
+/// int[])` is the one to watch: javac has no `Integer[]`/`int[]` conflation,
+/// so accepting it would compile here and fail on a JDK.
+#[test]
+fn collections_search_and_view_reject_like_javac() {
+    for (source, want) in [
+        (
+            "ArrayList<Integer> l = new ArrayList<Integer>(); Collections.addAll(l, \"x\");",
+            "incompatible types: String cannot be converted to int",
+        ),
+        (
+            "ArrayList<Integer> l = new ArrayList<Integer>(); int[] a = {1}; Collections.addAll(l, a);",
+            "incompatible types: int[] cannot be converted to int",
+        ),
+        (
+            "ArrayList<Integer> l = new ArrayList<Integer>(); int i = Collections.binarySearch(l, \"x\");",
+            "incompatible types: String cannot be converted to int",
+        ),
+        (
+            "Collections.unmodifiableList(5);",
+            "incompatible types: int cannot be converted to List",
+        ),
+    ] {
+        let text = format!("import java.util.*; class M {{ static void r() {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}

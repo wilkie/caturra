@@ -2064,6 +2064,7 @@ impl<'run> Interpreter<'run> {
                 Renderable::Instance(class_name.clone())
             }
             Some(HeapObject::ArrayList(items)) => Renderable::List(items.clone()),
+            Some(HeapObject::UnmodifiableList(_)) => Renderable::List(self.list_items(reference)),
             Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
@@ -2149,6 +2150,7 @@ impl<'run> Interpreter<'run> {
     /// not compare them (`get` yields a bare `int`, not a `Comparable`), and
     /// `max`/`min` must hand back the element's own type. Returns whether it
     /// answered.
+    #[allow(clippy::too_many_lines)] // one method per arm
     fn collections_static_intrinsic(
         &mut self,
         frame: &mut Frame<'run>,
@@ -2160,22 +2162,40 @@ impl<'run> Interpreter<'run> {
         if class_name != "Collections" {
             return Ok(false);
         }
-        // `nCopies` builds a list rather than reading one.
-        if let ("nCopies", [JValue::Int(count), value]) = (method_name, args) {
-            let Ok(count) = usize::try_from(*count) else {
-                return Err(VmError::UncaughtException(format!(
-                    "java.lang.IllegalArgumentException: List length = {count}"
-                )));
-            };
-            let list = self.heap.alloc(HeapObject::ArrayList(vec![*value; count]));
-            frame.stack.push(JValue::Ref(Some(list)));
+        // These two build a list rather than reading one.
+        match (method_name, args) {
+            ("nCopies", [JValue::Int(count), value]) => {
+                let Ok(count) = usize::try_from(*count) else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IllegalArgumentException: List length = {count}"
+                    )));
+                };
+                let list = self.heap.alloc(HeapObject::ArrayList(vec![*value; count]));
+                frame.stack.push(JValue::Ref(Some(list)));
+                return Ok(true);
+            }
+            ("emptyList", []) => {
+                let empty = self.heap.alloc(HeapObject::ArrayList(Vec::new()));
+                let view = self.heap.alloc(HeapObject::UnmodifiableList(empty));
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            _ => {}
+        }
+
+        let Some(JValue::Ref(Some(list))) = args.first().copied() else {
+            return Ok(false);
+        };
+        if method_name == "unmodifiableList" {
+            let view = self.heap.alloc(HeapObject::UnmodifiableList(list));
+            frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
-        let items = match args.first() {
-            Some(JValue::Ref(Some(reference))) => match self.heap.get(*reference) {
-                Some(HeapObject::ArrayList(items)) => Some((*reference, items.clone())),
-                _ => None,
-            },
+        // Everything below reads, or writes, the list itself.
+        let unmodifiable = self.is_unmodifiable_list(list);
+        let reference = self.backing_list(list);
+        let items = match self.heap.get(reference) {
+            Some(HeapObject::ArrayList(items)) => Some((reference, items.clone())),
             _ => None,
         };
         match (method_name, args) {
@@ -2183,6 +2203,11 @@ impl<'run> Interpreter<'run> {
                 let Some((reference, items)) = items else {
                     return Ok(true);
                 };
+                if unmodifiable {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
                 let sorted = self.merge_sort(items)?;
                 if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(reference) {
                     *slot = sorted;
@@ -2225,10 +2250,72 @@ impl<'run> Interpreter<'run> {
                 }
                 frame.stack.push(JValue::Int(count));
             }
-            // reverse/swap/shuffle are bundled Java.
+            // `Collections.binarySearch` over a sorted list, by the elements'
+            // own `compareTo`.
+            ("binarySearch", [_, key]) => {
+                let Some((_, items)) = items else {
+                    return Ok(true);
+                };
+                let (mut low, mut high) = (0usize, items.len());
+                let mut found = None;
+                while low < high {
+                    let mid = low + (high - low) / 2;
+                    match self.compare_for_sort(items[mid], *key)?.cmp(&0) {
+                        std::cmp::Ordering::Less => low = mid + 1,
+                        std::cmp::Ordering::Greater => high = mid,
+                        std::cmp::Ordering::Equal => {
+                            found = Some(mid);
+                            break;
+                        }
+                    }
+                }
+                let index = match found {
+                    Some(at) => i32::try_from(at).unwrap_or(i32::MAX),
+                    None => -(i32::try_from(low).unwrap_or(i32::MAX) + 1),
+                };
+                frame.stack.push(JValue::Int(index));
+            }
+            // `Collections.addAll(list, elements...)`: the compiler packed the
+            // varargs into an array of the list's element type.
+            ("addAll", [_, JValue::Ref(Some(elements))]) => {
+                if unmodifiable {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                let elements = self.array_elements(*elements).ok_or_else(|| {
+                    VmError::UnknownIntrinsic(String::from("addAll needs an array"))
+                })?;
+                let changed = !elements.is_empty();
+                if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(reference) {
+                    slot.extend(elements);
+                }
+                frame.stack.push(JValue::Int(i32::from(changed)));
+            }
+            // reverse/swap/shuffle are bundled Java, and mutate through
+            // `set`, which an unmodifiable view already refuses.
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    /// Every element of any array, as the values a list would store.
+    fn array_elements(&self, reference: HeapRef) -> Option<Vec<JValue>> {
+        use crate::value::HeapObject as Object;
+        Some(match self.heap.get(reference)? {
+            Object::IntArray(_, values) => values.iter().copied().map(JValue::Int).collect(),
+            Object::DoubleArray(values) => values.iter().copied().map(JValue::Double).collect(),
+            Object::LongArray(values) => values.iter().copied().map(JValue::Long).collect(),
+            Object::FloatArray(values) => values.iter().copied().map(JValue::Float).collect(),
+            Object::ShortArray(values) => {
+                values.iter().map(|v| JValue::Int(i32::from(*v))).collect()
+            }
+            Object::ByteArray(values) => {
+                values.iter().map(|v| JValue::Int(i32::from(*v))).collect()
+            }
+            Object::RefArray(values) => values.clone(),
+            _ => return None,
+        })
     }
 
     /// The `java.util.Arrays` methods the VM answers rather than the bundled
@@ -2243,6 +2330,16 @@ impl<'run> Interpreter<'run> {
     ) -> Result<bool, VmError> {
         if class_name != "Arrays" {
             return Ok(false);
+        }
+        // `asList` builds a list from the varargs array the compiler packed,
+        // keeping the elements as a list stores them: unboxed.
+        if let ("asList", [JValue::Ref(Some(elements))]) = (method_name, args) {
+            let items = self.array_elements(*elements).ok_or_else(|| {
+                VmError::UnknownIntrinsic(String::from("Arrays.asList needs an array"))
+            })?;
+            let list = self.heap.alloc(crate::value::HeapObject::ArrayList(items));
+            frame.stack.push(JValue::Ref(Some(list)));
+            return Ok(true);
         }
         // These three recurse into element arrays, so an element array's kind
         // decides how it renders and hashes, and the elements' own
@@ -2789,6 +2886,7 @@ impl<'run> Interpreter<'run> {
             self.heap.get(receiver),
             Some(
                 HeapObject::ArrayList(_)
+                    | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashMap(_)
                     | HeapObject::MapView { .. }
                     | HeapObject::MapEntry { .. }
@@ -2882,12 +2980,33 @@ impl<'run> Interpreter<'run> {
         Ok(intrinsics::native_hash(&self.heap, value))
     }
 
-    /// The list's elements, detached from the heap borrow.
+    /// The list's elements, detached from the heap borrow. An unmodifiable
+    /// view reads through to what it wraps.
     fn list_items(&self, receiver: HeapRef) -> Vec<JValue> {
-        match self.heap.get(receiver) {
+        match self.heap.get(self.backing_list(receiver)) {
             Some(crate::value::HeapObject::ArrayList(items)) => items.clone(),
             _ => Vec::new(),
         }
+    }
+
+    fn is_unmodifiable_list(&self, reference: HeapRef) -> bool {
+        matches!(
+            self.heap.get(reference),
+            Some(crate::value::HeapObject::UnmodifiableList(_))
+        )
+    }
+
+    /// The list a reference ultimately names, unwrapping unmodifiable views.
+    fn backing_list(&self, reference: HeapRef) -> HeapRef {
+        let mut current = reference;
+        // Views of views are possible; the chain is short and acyclic.
+        for _ in 0..MAX_RENDER_DEPTH {
+            match self.heap.get(current) {
+                Some(crate::value::HeapObject::UnmodifiableList(inner)) => current = *inner,
+                _ => break,
+            }
+        }
+        current
     }
 
     /// `list.indexOf(probe)`: Java asks the *probe* whether it equals each
@@ -2946,9 +3065,13 @@ impl<'run> Interpreter<'run> {
             // order — asking *this* list's element, not the other's.
             ("equals", _, [JValue::Ref(other)]) => {
                 let ours = self.list_items(receiver);
-                let theirs = match other.map(|other| self.heap.get(other)) {
-                    Some(Some(HeapObject::ArrayList(items))) => items.clone(),
-                    _ => return Ok(Answered::Value(JValue::Int(0))),
+                // An unmodifiable view equals the list it wraps.
+                let theirs = match other.map(|other| self.backing_list(other)) {
+                    Some(other) => match self.heap.get(other) {
+                        Some(HeapObject::ArrayList(items)) => items.clone(),
+                        _ => return Ok(Answered::Value(JValue::Int(0))),
+                    },
+                    None => return Ok(Answered::Value(JValue::Int(0))),
                 };
                 let mut equal = ours.len() == theirs.len();
                 for (ours, theirs) in ours.iter().zip(&theirs) {
@@ -3685,6 +3808,19 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException: cannot invoke \
                  \"{target_class}.{method_name}\" because the receiver is null"
             )));
+        };
+
+        // An unmodifiable view refuses every mutator and forwards the rest to
+        // the list it wraps, so `size`, `get` and `toString` read through.
+        let receiver = if self.is_unmodifiable_list(receiver) {
+            if LIST_MUTATORS.contains(&method_name.as_str()) {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.UnsupportedOperationException",
+                )));
+            }
+            self.backing_list(receiver)
+        } else {
+            receiver
         };
 
         // User-defined objects dispatch on the instance's actual class;
@@ -4999,6 +5135,10 @@ fn int_element_hash(kind: crate::value::IntKind, value: i32) -> i32 {
         }
     }
 }
+
+/// The `List` methods an unmodifiable view refuses. Java's throws
+/// `UnsupportedOperationException` from each of them.
+const LIST_MUTATORS: &[&str] = &["add", "remove", "set", "clear", "addAll"];
 
 /// Java's marker for a container that holds itself, instead of recursing.
 const THIS_COLLECTION: &str = "(this Collection)";

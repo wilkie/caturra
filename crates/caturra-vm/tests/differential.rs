@@ -4488,3 +4488,95 @@ public class DiffCollectionsErrors {
 }
 "#
 );
+
+differential_test!(
+    diff_collections_binary_search_and_add_all,
+    "DiffCollectionsSearch",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+class Card implements Comparable<Card> {
+    int rank;
+    String tag;
+    Card(int rank, String tag) { this.rank = rank; this.tag = tag; }
+    public int compareTo(Card other) { return rank - other.rank; }
+    public String toString() { return "C" + rank + tag; }
+}
+
+public class DiffCollectionsSearch {
+    public static void main(String[] args) {
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        System.out.println(Collections.addAll(numbers, 1, 3, 5, 7) + " " + numbers);
+        System.out.println(Collections.addAll(numbers) + " " + numbers.size());
+        System.out.println(Collections.binarySearch(numbers, 5) + " " + Collections.binarySearch(numbers, 4)
+                + " " + Collections.binarySearch(numbers, 0) + " " + Collections.binarySearch(numbers, 9));
+
+        ArrayList<String> words = new ArrayList<String>();
+        Collections.addAll(words, "a", "c", "e");
+        System.out.println(Collections.binarySearch(words, "c") + " " + Collections.binarySearch(words, "b"));
+        String[] more = {"g", "i"};
+        Collections.addAll(words, more);
+        System.out.println(words);
+
+        // binarySearch compares with the element's own compareTo.
+        ArrayList<Card> cards = new ArrayList<Card>();
+        Collections.addAll(cards, new Card(1, "a"), new Card(3, "b"));
+        System.out.println(Collections.binarySearch(cards, new Card(3, "z")) + " " + cards);
+        System.out.println(Collections.binarySearch(new ArrayList<Integer>(), 5));
+
+        // Arrays.asList keeps its elements unboxed, so a primitive list reads back.
+        List<Integer> boxed = Arrays.asList(1, 2, 3);
+        int first = boxed.get(0);
+        System.out.println(boxed + " " + first + " " + (boxed.get(1) + 1) + " " + boxed.indexOf(3));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_collections_unmodifiable_and_empty,
+    "DiffCollectionsUnmodifiable",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public class DiffCollectionsUnmodifiable {
+    public static void main(String[] args) {
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        Collections.addAll(numbers, 1, 3, 5, 7);
+
+        List<Integer> readOnly = Collections.unmodifiableList(numbers);
+        System.out.println(readOnly + " " + readOnly.size() + " " + readOnly.get(1)
+                + " " + readOnly.contains(5) + " " + readOnly.indexOf(7));
+
+        // Every mutator refuses, through the list and through Collections.
+        try { readOnly.add(9); } catch (UnsupportedOperationException e) { System.out.println("add"); }
+        try { readOnly.set(0, 9); } catch (UnsupportedOperationException e) { System.out.println("set"); }
+        try { readOnly.remove(0); } catch (UnsupportedOperationException e) { System.out.println("remove"); }
+        try { readOnly.clear(); } catch (UnsupportedOperationException e) { System.out.println("clear"); }
+        try { Collections.sort(readOnly); } catch (UnsupportedOperationException e) { System.out.println("sort"); }
+        try { Collections.reverse(readOnly); } catch (UnsupportedOperationException e) { System.out.println("reverse"); }
+        try { Collections.addAll(readOnly, 9); } catch (UnsupportedOperationException e) { System.out.println("addAll"); }
+
+        // It is a view: a later change to the backing list shows through.
+        numbers.add(11);
+        System.out.println(readOnly + " " + readOnly.size());
+        int total = 0;
+        for (int value : readOnly) {
+            total += value;
+        }
+        System.out.println(total);
+        System.out.println(readOnly.equals(numbers) + " " + numbers.equals(readOnly));
+        System.out.println(Collections.max(readOnly) + " " + Collections.frequency(readOnly, 3));
+
+        List<String> empty = Collections.emptyList();
+        System.out.println(empty + " " + empty.size() + " " + empty.isEmpty());
+        try { empty.add("x"); } catch (UnsupportedOperationException e) { System.out.println("empty add"); }
+    }
+}
+"#
+);
