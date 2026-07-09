@@ -1857,6 +1857,38 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Size: Huge');
   });
 
+  test('a text field reports its live caret and selection, and selectAll moves it', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Caret and selection' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const field = root.getByRole('textbox', { name: 'Text:' });
+
+    // Select "world" (offsets 6..11) in the real input, then ask the program.
+    await field.evaluate((el: HTMLInputElement) => {
+      el.focus();
+      el.setSelectionRange(6, 11);
+    });
+    await root.getByRole('button', { name: 'Inspect' }).click();
+    await expect(root).toContainText('Selected "world" at [6,11]');
+
+    // A bare caret, nothing selected → getSelectedText() is null.
+    await field.evaluate((el: HTMLInputElement) => {
+      el.focus();
+      el.setSelectionRange(5, 5);
+    });
+    await root.getByRole('button', { name: 'Inspect' }).click();
+    await expect(root).toContainText('Caret at 5, nothing selected');
+
+    // selectAll() moves the browser's real cursor (once the re-render lands).
+    await root.getByRole('button', { name: 'Select all' }).click();
+    await expect
+      .poll(() => field.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd]))
+      .toEqual([0, 11]);
+  });
+
   test('a JTextField ActionListener fires on Enter', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Search box' });

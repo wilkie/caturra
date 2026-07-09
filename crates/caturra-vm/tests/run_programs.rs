@@ -1297,6 +1297,74 @@ fn swing_list_model_fires_data_listener_events() {
 }
 
 #[test]
+fn swing_text_field_reads_the_users_live_caret_and_selection() {
+    // The host reports the real cursor with each event ("__caret:<cid>=s,e"),
+    // so the listener sees what the user actually has selected. Ids: frame c0,
+    // field c1, button c2.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            static JTextField field;
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Caret");
+                field = new JTextField("hello world", 20);
+                JButton show = new JButton("Show");
+                show.addActionListener(e -> {
+                    System.out.println("caret=" + Main.field.getCaretPosition()
+                        + " sel=[" + Main.field.getSelectionStart()
+                        + "," + Main.field.getSelectionEnd() + "]"
+                        + " text=" + Main.field.getSelectedText());
+                });
+                frame.add(field);
+                frame.add(show);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            // The user selected "world" (offsets 6..11) and clicked Show.
+            Some(String::from("c2\nc1=hello world\n__caret:c1=6,11")),
+            // Now just a caret at 5, nothing selected.
+            Some(String::from("c2\nc1=hello world\n__caret:c1=5,5")),
+        ],
+    );
+    assert_eq!(
+        out,
+        "caret=11 sel=[6,11] text=world\ncaret=5 sel=[5,5] text=null\n"
+    );
+}
+
+#[test]
+fn swing_text_component_select_all_requests_a_caret_move() {
+    // Programmatic select/selectAll asks the host to move the real caret; the
+    // request is serialized once (and then cleared, so it can't fight the user).
+    let tree = run_swing(
+        r#"
+        import javax.swing.*;
+        import java.awt.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("Caret");
+                JTextField field = new JTextField("hello", 10);
+                field.selectAll();
+                JTextArea area = new JTextArea("abc", 3, 10);
+                area.setCaretPosition(2);
+                frame.add(field);
+                frame.add(area);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(tree.contains(r#""caretReq":"0,5""#), "{tree}");
+    assert!(tree.contains(r#""caretReq":"2,2""#), "{tree}");
+}
+
+#[test]
 fn swing_text_area_text_operations() {
     // JTextArea's text ops: line queries, offsets, insert, replaceRange, and a
     // bounds error raising the checked BadLocationException (like the JDK).

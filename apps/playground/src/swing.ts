@@ -102,6 +102,8 @@ interface SwingNode {
   columns?: number;
   rows?: number;
   editable?: boolean;
+  /** A one-shot `"start,end"` caret move requested by setCaretPosition/select. */
+  caretReq?: string;
   /** JPasswordField: render as a masked <input type=password>. */
   password?: boolean;
   wrap?: boolean;
@@ -255,6 +257,31 @@ function keyComboString(event: KeyboardEvent): string {
     Delete: 'Delete',
   };
   return s + (named[event.key] ?? (event.key.length === 1 ? event.key.toUpperCase() : event.key));
+}
+
+/** A text control's `"start,end"` selection, or null for anything else. The
+ * editable combo's input is registered under the JComboBox's id, but the engine
+ * ignores a caret it can't use, so reporting one is harmless. */
+function caretOf(el: FieldElement): string | null {
+  const isText =
+    (el instanceof HTMLInputElement && (el.type === 'text' || el.type === 'password')) ||
+    el instanceof HTMLTextAreaElement;
+  if (!isText || el.selectionStart === null || el.selectionEnd === null) {
+    return null;
+  }
+  return `${String(el.selectionStart)},${String(el.selectionEnd)}`;
+}
+
+/** Apply a one-shot caret/selection move the program asked for (setCaretPosition
+ * / select / selectAll). Absent on renders the program didn't request. */
+function applyCaretRequest(el: HTMLInputElement | HTMLTextAreaElement, node: SwingNode): void {
+  if (node.caretReq === undefined) {
+    return;
+  }
+  const [start, end] = node.caretReq.split(',').map(Number);
+  if (start !== undefined && end !== undefined) {
+    el.setSelectionRange(start, end);
+  }
 }
 
 /** Turn a `"r,g,b"` triple from the engine into a CSS color. */
@@ -929,6 +956,7 @@ export class SwingViz {
         }
         input.disabled = node.enabled === false;
         input.readOnly = node.editable === false; // JTextField / JTextArea setEditable
+        applyCaretRequest(input, node); // after the value: setting it resets the caret
         this.#fields.set(node.id, input);
         break;
       }
@@ -1094,6 +1122,12 @@ export class SwingViz {
     let payload = clickedId;
     for (const [id, el] of this.#fields) {
       payload += `\n${id}=${fieldValue(el)}`;
+      // A text component also reports its live cursor, so getCaretPosition()
+      // and getSelectedText() see what the user actually has selected.
+      const caret = caretOf(el);
+      if (caret !== null) {
+        payload += `\n__caret:${id}=${caret}`;
+      }
     }
     return payload;
   }
@@ -2236,6 +2270,7 @@ export class SwingViz {
     input.value = node.text ?? '';
     input.disabled = node.enabled === false;
     input.readOnly = node.editable === false;
+    applyCaretRequest(input, node);
     if (node.columns !== undefined && node.columns > 0) {
       input.size = node.columns;
     }
@@ -2267,6 +2302,7 @@ export class SwingViz {
     textarea.value = node.text ?? '';
     textarea.disabled = node.enabled === false;
     textarea.readOnly = node.editable === false;
+    applyCaretRequest(textarea, node);
     if (node.rows !== undefined && node.rows > 0) {
       textarea.rows = node.rows;
     }

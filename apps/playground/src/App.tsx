@@ -1473,6 +1473,53 @@ public class Main {
 `,
   },
   {
+    name: 'Caret and selection',
+    starter: `import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+  static JTextField field;
+  static JLabel status;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Caret");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new FlowLayout());
+
+    field = new JTextField("hello world", 18);
+    JLabel prompt = new JLabel("Text:");
+    prompt.setLabelFor(field);
+
+    status = new JLabel("Select some text, then Inspect.");
+
+    // The host keeps the caret in sync with the real cursor, so these read
+    // whatever the user has actually selected.
+    JButton inspect = new JButton("Inspect");
+    inspect.addActionListener(e -> {
+      String selected = Main.field.getSelectedText();
+      if (selected == null) {
+        Main.status.setText("Caret at " + Main.field.getCaretPosition() + ", nothing selected");
+      } else {
+        Main.status.setText("Selected \\"" + selected + "\\" at ["
+            + Main.field.getSelectionStart() + "," + Main.field.getSelectionEnd() + "]");
+      }
+    });
+
+    // selectAll() moves the real cursor in the browser.
+    JButton all = new JButton("Select all");
+    all.addActionListener(e -> Main.field.selectAll());
+
+    frame.add(prompt);
+    frame.add(field);
+    frame.add(inspect);
+    frame.add(all);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Text area ops',
     starter: `import javax.swing.*;
 import java.awt.*;

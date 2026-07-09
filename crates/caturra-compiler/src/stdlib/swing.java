@@ -401,6 +401,9 @@ class Component {
   public void setBackground(Color c) { __bg = c; }
   public void setForeground(Color c) { __fg = c; }
   static String __rgb(Color c) { return c.__r + "," + c.__g + "," + c.__b; }
+  // The host reports the caret/selection of text components; everything else
+  // ignores it.
+  void __setCaretFromHost(String value) {}
   // The text a cell renderer's component contributes to a list row. Only the
   // text-bearing components (JLabel) have anything to say.
   String __displayText() { return ""; }
@@ -976,16 +979,85 @@ class JToggleButton extends Component {
   }
 }
 
-class JTextField extends Component {
+// The shared base of the text components (JTextField, JTextArea). Holds the
+// text, and the caret/selection — which the host keeps in sync with the real
+// cursor on every event, so getCaretPosition/getSelectedText see what the user
+// actually has selected.
+abstract class JTextComponent extends Component {
+  String __text = "";
+  boolean __editable = true;
+  // The live selection, as last reported by the host. When empty, both are the
+  // caret ("the dot").
+  int __selStart = 0;
+  int __selEnd = 0;
+  // A pending programmatic caret/selection move ("start,end"), sent to the host
+  // once and then cleared, so it doesn't fight the user's own cursor.
+  String __caretReq = null;
+
+  public String getText() { return __text; }
+  // Like real Swing, replacing the text leaves the caret at the end.
+  public void setText(String text) {
+    __text = text;
+    __selStart = __text.length();
+    __selEnd = __selStart;
+  }
+  public void setEditable(boolean editable) { __editable = editable; }
+  public boolean isEditable() { return __editable; }
+  public int getCaretPosition() { return __selEnd; }
+  public void setCaretPosition(int position) { select(position, position); }
+  public int getSelectionStart() { return __selStart < __selEnd ? __selStart : __selEnd; }
+  public int getSelectionEnd() { return __selStart < __selEnd ? __selEnd : __selStart; }
+  // null when nothing is selected, matching real Swing.
+  public String getSelectedText() {
+    int start = getSelectionStart();
+    int end = getSelectionEnd();
+    if (start == end) return null;
+    return __text.substring(start, end);
+  }
+  public void select(int start, int end) {
+    __selStart = __clamp(start);
+    __selEnd = __clamp(end);
+    __caretReq = __selStart + "," + __selEnd;
+  }
+  public void selectAll() { select(0, __text.length()); }
+  int __clamp(int position) {
+    if (position < 0) return 0;
+    return position > __text.length() ? __text.length() : position;
+  }
+  void __setCaretFromHost(String value) {
+    int comma = value.indexOf(",");
+    if (comma < 0) return;
+    __selStart = Integer.parseInt(value.substring(0, comma));
+    __selEnd = Integer.parseInt(value.substring(comma + 1));
+  }
+  // Serialized once, then cleared — the host moves the caret and the user's own
+  // cursor takes over again.
+  String __caretJson() {
+    if (__caretReq == null) return "";
+    String s = ",\"caretReq\":\"" + __caretReq + "\"";
+    __caretReq = null;
+    return s;
+  }
+  void __setFromHost(String value) { __text = value; }
+  // The text synced into __text before this; fire insert/remove by length delta.
+  void __onDoc() {
+    if (__document == null || __document.__listener == null) return;
+    DocumentEvent e = new DocumentEvent(__document);
+    if (__text.length() > __lastText.length()) __document.__listener.insertUpdate(e);
+    else if (__text.length() < __lastText.length()) __document.__listener.removeUpdate(e);
+    else __document.__listener.changedUpdate(e);
+    __lastText = __text;
+  }
+}
+
+class JTextField extends JTextComponent {
   public static final int LEFT = 2;
   public static final int CENTER = 0;
   public static final int RIGHT = 4;
   public static final int LEADING = 10;
   public static final int TRAILING = 11;
 
-  String __text;
   int __cols;
-  boolean __editable = true;
   boolean __password = false;
   String __command = null;
   ActionListener __actionListener = null;
@@ -993,12 +1065,8 @@ class JTextField extends Component {
   public JTextField(int cols) { __text = ""; __cols = cols; }
   public JTextField(String text) { __text = text; __cols = 0; }
   public JTextField(String text, int cols) { __text = text; __cols = cols; }
-  public String getText() { return __text; }
-  public void setText(String text) { __text = text; }
   public int getColumns() { return __cols; }
   public void setColumns(int cols) { __cols = cols; }
-  public void setEditable(boolean editable) { __editable = editable; }
-  public boolean isEditable() { return __editable; }
   public void setHorizontalAlignment(int alignment) { __halign = alignment; }
   public int getHorizontalAlignment() { return __halign < 0 ? LEADING : __halign; }
   // The ActionListener fires when the user presses Enter in the field.
@@ -1009,20 +1077,10 @@ class JTextField extends Component {
   void __onEvent() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this, getActionCommand()));
   }
-  // The text synced into __text before this; fire insert/remove by length delta.
-  void __onDoc() {
-    if (__document == null || __document.__listener == null) return;
-    DocumentEvent e = new DocumentEvent(__document);
-    if (__text.length() > __lastText.length()) __document.__listener.insertUpdate(e);
-    else if (__text.length() < __lastText.length()) __document.__listener.removeUpdate(e);
-    else __document.__listener.changedUpdate(e);
-    __lastText = __text;
-  }
-  void __setFromHost(String value) { __text = value; }
   String __json() {
     String pw = __password ? ",\"password\":true" : "";
     return "{\"type\":\"textfield\",\"text\":\"" + Component.__esc(__text) + "\",\"columns\":" + __cols
-        + ",\"editable\":" + __editable + pw + "," + __commonJson() + "}";
+        + ",\"editable\":" + __editable + pw + __caretJson() + "," + __commonJson() + "}";
   }
 }
 
@@ -1038,17 +1096,13 @@ class JPasswordField extends JTextField {
   public char getEchoChar() { return '*'; }
 }
 
-class JTextArea extends Component {
-  String __text;
+class JTextArea extends JTextComponent {
   int __rows, __cols;
-  boolean __editable = true;
   boolean __wrap = false;
   public JTextArea() { __text = ""; __rows = 0; __cols = 0; }
   public JTextArea(int rows, int cols) { __text = ""; __rows = rows; __cols = cols; }
   public JTextArea(String text) { __text = text; __rows = 0; __cols = 0; }
   public JTextArea(String text, int rows, int cols) { __text = text; __rows = rows; __cols = cols; }
-  public String getText() { return __text; }
-  public void setText(String text) { __text = text; }
   public void append(String text) { __text = __text + text; }
   // Insert str at position pos (0..length); shifts the rest right.
   public void insert(String str, int pos) {
@@ -1112,25 +1166,14 @@ class JTextArea extends Component {
     }
     return __text.substring(offset, offset + length);
   }
-  public void setEditable(boolean editable) { __editable = editable; }
-  public boolean isEditable() { return __editable; }
   public void setLineWrap(boolean wrap) { __wrap = wrap; }
   public void setWrapStyleWord(boolean word) {}
   public int getRows() { return __rows; }
   public int getColumns() { return __cols; }
-  void __onDoc() {
-    if (__document == null || __document.__listener == null) return;
-    DocumentEvent e = new DocumentEvent(__document);
-    if (__text.length() > __lastText.length()) __document.__listener.insertUpdate(e);
-    else if (__text.length() < __lastText.length()) __document.__listener.removeUpdate(e);
-    else __document.__listener.changedUpdate(e);
-    __lastText = __text;
-  }
-  void __setFromHost(String value) { __text = value; }
   String __json() {
     return "{\"type\":\"textarea\",\"text\":\"" + Component.__esc(__text) + "\",\"rows\":" + __rows
         + ",\"columns\":" + __cols + ",\"editable\":" + __editable + ",\"wrap\":" + __wrap
-        + "," + __commonJson() + "}";
+        + __caretJson() + "," + __commonJson() + "}";
   }
 }
 
@@ -2824,6 +2867,12 @@ class __SwingRuntime {
       // Values are percent-escaped (%25 -> %, %0A -> newline) so a multi-line
       // JTextArea survives the newline-delimited payload. Decode %0A first.
       String value = line.substring(eq + 1).replace("%0A", "\n").replace("%25", "%");
+      // "__caret:<cid>=start,end" carries a text component's live cursor.
+      if (id.startsWith("__caret:")) {
+        Component target = __find(id.substring(8));
+        if (target != null) target.__setCaretFromHost(value);
+        continue;
+      }
       Component c = __find(id);
       if (c != null) c.__setFromHost(value);
     }
