@@ -564,7 +564,10 @@ function sizeDim(size: string | undefined, index: 0 | 1): string {
 /** Set a control's label text, underlining the mnemonic letter and exposing
  * its Alt-shortcut (setMnemonic). The full text remains the accessible name. */
 function setMnemonicLabel(el: HTMLElement, text: string, mnemonic: string | undefined): void {
-  const at = mnemonic === undefined || mnemonic === '' ? -1 : text.toUpperCase().indexOf(mnemonic.toUpperCase());
+  const at =
+    mnemonic === undefined || mnemonic === ''
+      ? -1
+      : text.toUpperCase().indexOf(mnemonic.toUpperCase());
   if (at < 0) {
     el.textContent = text;
     el.removeAttribute('aria-keyshortcuts');
@@ -595,7 +598,10 @@ function horizAlign(align: number): string {
  * resolve grid positions (RELATIVE flows to the next cell, REMAINDER spans to
  * the row end), size weighted rows/columns as fr tracks, and apply each child's
  * fill/anchor (as justify/align-self) and insets (as margin). */
-function layoutGridBag(container: HTMLElement, pairs: { el: HTMLElement; node: SwingNode }[]): void {
+function layoutGridBag(
+  container: HTMLElement,
+  pairs: { el: HTMLElement; node: SwingNode }[],
+): void {
   interface Cell {
     el: HTMLElement;
     gbc: GbcSpec;
@@ -647,8 +653,10 @@ function layoutGridBag(container: HTMLElement, pairs: { el: HTMLElement; node: S
       rowWeighted[c.y] = true;
     }
   }
-  container.style.gridTemplateColumns = colWeighted.map((wt) => (wt ? '1fr' : 'auto')).join(' ') || 'auto';
-  container.style.gridTemplateRows = rowWeighted.map((wt) => (wt ? '1fr' : 'auto')).join(' ') || 'auto';
+  container.style.gridTemplateColumns =
+    colWeighted.map((wt) => (wt ? '1fr' : 'auto')).join(' ') || 'auto';
+  container.style.gridTemplateRows =
+    rowWeighted.map((wt) => (wt ? '1fr' : 'auto')).join(' ') || 'auto';
   for (const c of cells) {
     c.el.style.gridColumn = `${String(c.x + 1)} / span ${String(c.w)}`;
     c.el.style.gridRow = `${String(c.y + 1)} / span ${String(c.h)}`;
@@ -1813,9 +1821,9 @@ export class SwingViz {
     popup.addEventListener('keydown', (event) => {
       // Skip disabled items — a disabled <button> can't take focus, so it would
       // otherwise trap arrow navigation.
-      const items = [...popup.querySelectorAll<HTMLButtonElement>(':scope > [role="menuitem"]')].filter(
-        (item) => !item.disabled,
-      );
+      const items = [
+        ...popup.querySelectorAll<HTMLButtonElement>(':scope > [role="menuitem"]'),
+      ].filter((item) => !item.disabled);
       const index = items.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === 'ArrowDown') {
         event.preventDefault();
@@ -2830,7 +2838,10 @@ export class SwingViz {
       if (node.sortable === true && this.#onEvent !== null) {
         // A sortable header is a button, and announces its sort state.
         const sorted = c === node.sortColumn;
-        th.setAttribute('aria-sort', sorted ? (node.sortAsc === true ? 'ascending' : 'descending') : 'none');
+        th.setAttribute(
+          'aria-sort',
+          sorted ? (node.sortAsc === true ? 'ascending' : 'descending') : 'none',
+        );
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'swing-sort-header';
