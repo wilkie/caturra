@@ -2144,6 +2144,298 @@ impl<'run> Interpreter<'run> {
         self.string_value_of(item, depth + 1)
     }
 
+    /// The `java.util.Arrays` methods the VM answers rather than the bundled
+    /// Java: they need an array's element kind at run time, which only the
+    /// heap knows once the static type is gone. Returns whether it answered.
+    fn arrays_static_intrinsic(
+        &mut self,
+        frame: &mut Frame<'run>,
+        class_name: &str,
+        method_name: &str,
+        args: &[JValue],
+    ) -> Result<bool, VmError> {
+        if class_name != "Arrays" {
+            return Ok(false);
+        }
+        // These three recurse into element arrays, so an element array's kind
+        // decides how it renders and hashes, and the elements' own
+        // toString/equals/hashCode may be the user's.
+        match (method_name, args) {
+            ("deepToString", [value]) => {
+                let text = self.deep_to_string(*value, &mut Vec::new())?;
+                let reference = self.heap.alloc_string(&text);
+                frame.stack.push(JValue::Ref(Some(reference)));
+                return Ok(true);
+            }
+            ("deepEquals", [ours, theirs]) => {
+                let equal = self.deep_equals(*ours, *theirs, 0)?;
+                frame.stack.push(JValue::Int(i32::from(equal)));
+                return Ok(true);
+            }
+            ("deepHashCode", [value]) => {
+                let hash = self.deep_hash_code(*value, 0)?;
+                frame.stack.push(JValue::Int(hash));
+                return Ok(true);
+            }
+            _ => {}
+        }
+        // `copyOf`/`copyOfRange`/`fill`/`binarySearch` are one method each in
+        // the VM and nine in Java, because the heap already knows the array's
+        // element kind — which `copyOf` must reproduce, and against which a
+        // reference `binarySearch` compares with the element's `compareTo`.
+        if let Some(result) = self.arrays_array_intrinsic(method_name, args)? {
+            if let Some(value) = result {
+                frame.stack.push(value);
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// `Arrays.copyOf`/`copyOfRange`/`fill`/`binarySearch`. Returns `None`
+    /// when `method` is none of those, `Some(None)` for the void `fill`.
+    #[allow(clippy::option_option)] // "not mine" vs "no value"
+    fn arrays_array_intrinsic(
+        &mut self,
+        method: &str,
+        args: &[JValue],
+    ) -> Result<Option<Option<JValue>>, VmError> {
+        let source = |args: &[JValue]| -> Result<HeapRef, VmError> {
+            match args.first() {
+                Some(JValue::Ref(Some(reference))) => Ok(*reference),
+                _ => Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                ))),
+            }
+        };
+        let result = match (method, args) {
+            ("copyOf", [_, JValue::Int(new_length)]) => {
+                let source = source(args)?;
+                let Ok(new_length) = usize::try_from(*new_length) else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.NegativeArraySizeException: {new_length}"
+                    )));
+                };
+                Some(self.array_copy_of_range(source, 0, new_length)?)
+            }
+            ("copyOfRange", [_, JValue::Int(from), JValue::Int(to)]) => {
+                let source = source(args)?;
+                let length = self.array_length(source).unwrap_or(0);
+                if from > to {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IllegalArgumentException: {from} > {to}"
+                    )));
+                }
+                let Ok(start) = usize::try_from(*from) else {
+                    return Err(array_index_error(*from));
+                };
+                if start > length {
+                    return Err(array_index_error(*from));
+                }
+                let new_length = usize::try_from(to - from).unwrap_or(0);
+                Some(self.array_copy_of_range(source, start, new_length)?)
+            }
+            ("fill", [_, value]) => {
+                let target = source(args)?;
+                let length = self.array_length(target).unwrap_or(0);
+                self.array_fill(target, 0, length, *value)?;
+                None
+            }
+            ("fill", [_, JValue::Int(from), JValue::Int(to), value]) => {
+                let target = source(args)?;
+                let (from, to) = self.array_range(target, *from, *to)?;
+                self.array_fill(target, from, to, *value)?;
+                None
+            }
+            ("binarySearch", [_, key]) => {
+                let target = source(args)?;
+                let length = self.array_length(target).unwrap_or(0);
+                Some(JValue::Int(
+                    self.array_binary_search(target, 0, length, *key)?,
+                ))
+            }
+            ("binarySearch", [_, JValue::Int(from), JValue::Int(to), key]) => {
+                let target = source(args)?;
+                let (from, to) = self.array_range(target, *from, *to)?;
+                Some(JValue::Int(
+                    self.array_binary_search(target, from, to, *key)?,
+                ))
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(result))
+    }
+
+    /// Java's `rangeCheck`, shared by the ranged `fill` and `binarySearch`.
+    fn array_range(&self, target: HeapRef, from: i32, to: i32) -> Result<(usize, usize), VmError> {
+        if from > to {
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.IllegalArgumentException: fromIndex({from}) > toIndex({to})"
+            )));
+        }
+        let length = self.array_length(target).unwrap_or(0);
+        let start = usize::try_from(from).map_err(|_| array_index_error(from))?;
+        let end = usize::try_from(to).map_err(|_| array_index_error(to))?;
+        if end > length {
+            return Err(array_index_error(to));
+        }
+        Ok((start, end))
+    }
+
+    /// `Arrays.copyOfRange(source, from, from + length)`: a fresh array of the
+    /// same kind, padded with the element type's default wherever the range
+    /// runs past the end. `Arrays.copyOf` is this with `from = 0`.
+    fn array_copy_of_range(
+        &mut self,
+        source: HeapRef,
+        from: usize,
+        length: usize,
+    ) -> Result<JValue, VmError> {
+        use crate::value::HeapObject as Object;
+        fn taken<T: Copy>(values: &[T], from: usize, length: usize, default: T) -> Vec<T> {
+            let mut copy = vec![default; length];
+            let available = values.len().saturating_sub(from).min(length);
+            copy[..available].copy_from_slice(&values[from..from + available]);
+            copy
+        }
+        let object = match self.heap.get(source) {
+            Some(Object::IntArray(kind, values)) => {
+                Object::IntArray(*kind, taken(values, from, length, 0))
+            }
+            Some(Object::DoubleArray(values)) => {
+                Object::DoubleArray(taken(values, from, length, 0.0))
+            }
+            Some(Object::LongArray(values)) => Object::LongArray(taken(values, from, length, 0)),
+            Some(Object::FloatArray(values)) => {
+                Object::FloatArray(taken(values, from, length, 0.0))
+            }
+            Some(Object::ShortArray(values)) => Object::ShortArray(taken(values, from, length, 0)),
+            Some(Object::ByteArray(values)) => Object::ByteArray(taken(values, from, length, 0)),
+            Some(Object::RefArray(values)) => {
+                Object::RefArray(taken(values, from, length, JValue::NULL))
+            }
+            _ => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.ArrayStoreException: not an array",
+                )));
+            }
+        };
+        Ok(JValue::Ref(Some(self.heap.alloc(object))))
+    }
+
+    /// `Arrays.fill(target, from, to, value)`.
+    fn array_fill(
+        &mut self,
+        target: HeapRef,
+        from: usize,
+        to: usize,
+        value: JValue,
+    ) -> Result<(), VmError> {
+        use crate::value::HeapObject as Object;
+        match (self.heap.get_mut(target), value) {
+            (Some(Object::IntArray(_, values)), JValue::Int(value)) => {
+                values[from..to].fill(value);
+            }
+            (Some(Object::DoubleArray(values)), JValue::Double(value)) => {
+                values[from..to].fill(value);
+            }
+            (Some(Object::LongArray(values)), JValue::Long(value)) => {
+                values[from..to].fill(value);
+            }
+            (Some(Object::FloatArray(values)), JValue::Float(value)) => {
+                values[from..to].fill(value);
+            }
+            (Some(Object::ShortArray(values)), JValue::Int(value)) => {
+                values[from..to].fill(value as i16);
+            }
+            (Some(Object::ByteArray(values)), JValue::Int(value)) => {
+                values[from..to].fill(value as i8);
+            }
+            (Some(Object::RefArray(values)), value) => values[from..to].fill(value),
+            _ => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.ArrayStoreException: wrong element type",
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// `Arrays.binarySearch(target, from, to, key)` over a sorted range: the
+    /// index of `key`, or `-(insertion point) - 1` when it is absent.
+    fn array_binary_search(
+        &mut self,
+        target: HeapRef,
+        from: usize,
+        to: usize,
+        key: JValue,
+    ) -> Result<i32, VmError> {
+        let (mut low, mut high) = (from, to);
+        while low < high {
+            let mid = low + (high - low) / 2;
+            match self.array_compare_at(target, mid, key)?.cmp(&0) {
+                std::cmp::Ordering::Less => low = mid + 1,
+                std::cmp::Ordering::Greater => high = mid,
+                std::cmp::Ordering::Equal => return Ok(i32::try_from(mid).unwrap_or(i32::MAX)),
+            }
+        }
+        Ok(-(i32::try_from(low).unwrap_or(i32::MAX) + 1))
+    }
+
+    /// Compare `target[at]` with `key`, as the element type's natural order
+    /// does. A reference element compares by its own `compareTo`.
+    fn array_compare_at(
+        &mut self,
+        target: HeapRef,
+        at: usize,
+        key: JValue,
+    ) -> Result<i32, VmError> {
+        use crate::value::HeapObject as Object;
+        let order = match (self.heap.get(target), key) {
+            (Some(Object::IntArray(_, values)), JValue::Int(key)) => values[at].cmp(&key),
+            (Some(Object::ShortArray(values)), JValue::Int(key)) => i32::from(values[at]).cmp(&key),
+            (Some(Object::ByteArray(values)), JValue::Int(key)) => i32::from(values[at]).cmp(&key),
+            (Some(Object::LongArray(values)), JValue::Long(key)) => values[at].cmp(&key),
+            // `Double.compare`/`Float.compare` order -0.0 below 0.0 and NaN
+            // above everything, which is what binarySearch expects.
+            (Some(Object::DoubleArray(values)), JValue::Double(key)) => {
+                return Ok(java_double_compare(values[at], key));
+            }
+            (Some(Object::FloatArray(values)), JValue::Float(key)) => {
+                return Ok(java_float_compare(values[at], key));
+            }
+            (Some(Object::RefArray(values)), key) => {
+                let element = values[at];
+                return self.compare_for_sort(element, key);
+            }
+            _ => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.ArrayStoreException: wrong key type",
+                )));
+            }
+        };
+        Ok(match order {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        })
+    }
+
+    /// The length of any array on the heap.
+    fn array_length(&self, reference: HeapRef) -> Option<usize> {
+        use crate::value::HeapObject as Object;
+        Some(match self.heap.get(reference)? {
+            Object::IntArray(_, values) => values.len(),
+            Object::DoubleArray(values) => values.len(),
+            Object::LongArray(values) => values.len(),
+            Object::FloatArray(values) => values.len(),
+            Object::ShortArray(values) => values.len(),
+            Object::ByteArray(values) => values.len(),
+            Object::RefArray(values) => values.len(),
+            _ => return None,
+        })
+    }
+
     /// `Arrays.toString(primitiveArray)`, for an element array whose static
     /// type is gone. Returns `None` when the object is not a primitive array.
     fn primitive_array_text(&self, reference: HeapRef) -> Option<String> {
@@ -3219,30 +3511,8 @@ impl<'run> Interpreter<'run> {
             }
             return Ok(None);
         }
-        // `Arrays.deepToString/deepEquals/deepHashCode` recurse into element
-        // arrays. Only the VM knows an element array's kind once its static
-        // type is gone, and the elements' own toString/equals/hashCode may be
-        // the user's — so the bundled Java cannot express these three.
-        if class_name == "Arrays" {
-            match (method_name, args) {
-                ("deepToString", [value]) => {
-                    let text = self.deep_to_string(*value, &mut Vec::new())?;
-                    let reference = self.heap.alloc_string(&text);
-                    frame.stack.push(JValue::Ref(Some(reference)));
-                    return Ok(None);
-                }
-                ("deepEquals", [ours, theirs]) => {
-                    let equal = self.deep_equals(*ours, *theirs, 0)?;
-                    frame.stack.push(JValue::Int(i32::from(equal)));
-                    return Ok(None);
-                }
-                ("deepHashCode", [value]) => {
-                    let hash = self.deep_hash_code(*value, 0)?;
-                    frame.stack.push(JValue::Int(hash));
-                    return Ok(None);
-                }
-                _ => {}
-            }
+        if self.arrays_static_intrinsic(frame, class_name, method_name, args)? {
+            return Ok(None);
         }
         // `Class.forName(name)` — a reflection handle for a loaded class.
         // Needs the class table, which the intrinsic layer lacks.
@@ -3679,6 +3949,13 @@ impl<'run> Interpreter<'run> {
     /// Compare two list elements the way `Collections.sort` does: a user
     /// object by its own `compareTo`, everything else natively.
     fn compare_for_sort(&mut self, a: JValue, b: JValue) -> Result<i32, VmError> {
+        // A natural-ordering comparison calls `a.compareTo(b)`, so either one
+        // being null throws — as sorting a list holding a null does in Java.
+        if a == JValue::NULL || b == JValue::NULL {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
         if let JValue::Ref(Some(reference)) = a
             && let Some(crate::value::HeapObject::Instance { class_name, .. }) =
                 self.heap.get(reference)
@@ -4583,6 +4860,44 @@ fn int_element_text(kind: crate::value::IntKind, value: i32) -> String {
             .unwrap_or('\u{FFFD}')
             .to_string(),
     }
+}
+
+/// An `ArrayIndexOutOfBoundsException` naming the offending index.
+fn array_index_error(index: i32) -> VmError {
+    VmError::UncaughtException(format!("java.lang.ArrayIndexOutOfBoundsException: {index}"))
+}
+
+/// `Double.compare`: a total order where -0.0 sits below 0.0 and NaN above
+/// everything. `<` and `>` agree with neither.
+fn java_double_compare(a: f64, b: f64) -> i32 {
+    if a < b {
+        return -1;
+    }
+    if a > b {
+        return 1;
+    }
+    let bits = |value: f64| {
+        if value.is_nan() { f64::NAN } else { value }
+            .to_bits()
+            .cast_signed()
+    };
+    bits(a).cmp(&bits(b)) as i32
+}
+
+/// `Float.compare`, likewise.
+fn java_float_compare(a: f32, b: f32) -> i32 {
+    if a < b {
+        return -1;
+    }
+    if a > b {
+        return 1;
+    }
+    let bits = |value: f32| {
+        if value.is_nan() { f32::NAN } else { value }
+            .to_bits()
+            .cast_signed()
+    };
+    bits(a).cmp(&bits(b)) as i32
 }
 
 /// `Float.hashCode`, which collapses every NaN payload to one.

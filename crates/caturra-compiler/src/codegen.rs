@@ -2061,6 +2061,11 @@ fn arrays_deep_signature(method: &str) -> Option<(usize, &'static str, JType)> {
     }
 }
 
+/// The four `Arrays` methods the VM answers over any array kind.
+fn is_arrays_array_method(method: &str) -> bool {
+    matches!(method, "copyOf" | "copyOfRange" | "fill" | "binarySearch")
+}
+
 /// Whether a type is an `Object[]`: a multi-dimensional array (whose elements
 /// are arrays, and so references) or a one-dimensional array of references.
 fn is_reference_array(ty: JType) -> bool {
@@ -7935,6 +7940,13 @@ impl BodyGen<'_> {
         if class == "Arrays" && arrays_deep_signature(method).is_some() {
             return self.emit_arrays_deep_call(method, args, span);
         }
+        // `Arrays.copyOf/copyOfRange/fill/binarySearch` are one VM method each
+        // rather than nine bundled overloads: the heap knows the element kind,
+        // and `copyOf` must return an array of the source's own type, which a
+        // bundled `Object[] copyOf(Object[], int)` could not.
+        if class == "Arrays" && is_arrays_array_method(method) {
+            return self.emit_arrays_array_call(method, args, span);
+        }
         // `Collections.reverse/swap` are generic over the list element type;
         // emit the (uniform-at-runtime) list argument(s) and call the bundle,
         // bypassing invariant List<elem> parameter matching.
@@ -8141,6 +8153,137 @@ impl BodyGen<'_> {
         self.code
             .drop_stack(u16::try_from(arity).unwrap_or(u16::MAX));
         Some(Some(ret))
+    }
+
+    /// javac's wording when no `Arrays` overload matches the arguments.
+    fn no_suitable_arrays_method(&mut self, method: &str, args: &[Expr], span: SourceSpan) {
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+        if arg_types.contains(&JType::Error) {
+            return;
+        }
+        let described = describe_types(&arg_types, self.table);
+        self.error(
+            span,
+            format!("no suitable method found for {method}({described}) in class Arrays"),
+        );
+    }
+
+    /// `Arrays.copyOf(a, n)`, `copyOfRange(a, from, to)`, `fill(a[, from, to], v)`
+    /// and `binarySearch(a[, from, to], key)`. Arity alone tells the ranged
+    /// overloads apart, as it does in Java.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_arrays_array_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let ranged = args.len() == 4;
+        let arity_ok = match method {
+            "copyOf" => args.len() == 2,
+            "copyOfRange" => args.len() == 3,
+            "fill" | "binarySearch" => args.len() == 2 || ranged,
+            _ => false,
+        };
+        let source_ty = args.first().map_or(JType::Error, |a| self.type_of(a));
+        let JType::Array { elem, dims } = source_ty else {
+            self.no_suitable_arrays_method(method, args, span);
+            return None;
+        };
+        if !arity_ok {
+            self.no_suitable_arrays_method(method, args, span);
+            return None;
+        }
+        // A row of a multi-dimensional array is itself an array.
+        let element_ty = if dims > 1 {
+            JType::Array {
+                elem,
+                dims: dims - 1,
+            }
+        } else {
+            elem.base_type()
+        };
+        // Java has no `binarySearch(boolean[], boolean)`: booleans have no order.
+        if method == "binarySearch" && element_ty == JType::Boolean {
+            self.no_suitable_arrays_method(method, args, span);
+            return None;
+        }
+
+        let source_descriptor = source_ty.descriptor(self.table);
+        let element_descriptor = element_ty.descriptor(self.table);
+        self.expr(&args[0]);
+        let mut args_width = 1u16;
+
+        let emit_index = |out: &mut Self, index: &Expr| {
+            let actual = out.type_of(index);
+            if !widens(actual, JType::Int, out.table) && actual != JType::Error {
+                out.error(
+                    index.span(),
+                    format!(
+                        "incompatible types: {} cannot be converted to int",
+                        actual.describe(out.table)
+                    ),
+                );
+            }
+            let actual = out.expr(index);
+            out.numeric_conversion(actual, JType::Int);
+        };
+        // `convert_for_assignment` reports an incompatible value itself, in
+        // javac's wording.
+        let emit_value = |out: &mut Self, value: &Expr| {
+            let actual = out.expr(value);
+            out.convert_for_assignment(actual, element_ty, value.span());
+        };
+
+        let (descriptor, ret) = match method {
+            "copyOf" => {
+                emit_index(self, &args[1]);
+                args_width += 1;
+                (
+                    format!("({source_descriptor}I){source_descriptor}"),
+                    Some(source_ty),
+                )
+            }
+            "copyOfRange" => {
+                emit_index(self, &args[1]);
+                emit_index(self, &args[2]);
+                args_width += 2;
+                (
+                    format!("({source_descriptor}II){source_descriptor}"),
+                    Some(source_ty),
+                )
+            }
+            "fill" | "binarySearch" => {
+                let indices = if ranged {
+                    emit_index(self, &args[1]);
+                    emit_index(self, &args[2]);
+                    args_width += 2;
+                    "II"
+                } else {
+                    ""
+                };
+                emit_value(self, args.last().expect("arity checked"));
+                args_width += element_ty.width();
+                let ret = if method == "fill" {
+                    None
+                } else {
+                    Some(JType::Int)
+                };
+                let returns = if method == "fill" { "V" } else { "I" };
+                (
+                    format!("({source_descriptor}{indices}{element_descriptor}){returns}"),
+                    ret,
+                )
+            }
+            _ => unreachable!("caller checked the method name"),
+        };
+
+        let method_ref = intern_method_ref(self.pool, "Arrays", method, &descriptor);
+        let ret_width = ret.map_or(0, JType::width);
+        self.code
+            .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
+        self.code.drop_stack(args_width);
+        Some(ret)
     }
 
     /// `System.out.println(...)` and friends.
@@ -8500,11 +8643,21 @@ impl BodyGen<'_> {
                     },
                 };
                 let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
-                // The VM answers these three, so they are in no method table.
-                if class == "Arrays"
-                    && let Some((_, _, ret)) = arrays_deep_signature(method)
-                {
-                    return ret;
+                // The VM answers these, so they are in no method table.
+                if class == "Arrays" {
+                    if let Some((_, _, ret)) = arrays_deep_signature(method) {
+                        return ret;
+                    }
+                    match method.as_str() {
+                        // `copyOf`/`copyOfRange` return the source's own type.
+                        "copyOf" | "copyOfRange" => {
+                            return args.first().map_or(JType::Error, |a| self.type_of(a));
+                        }
+                        "binarySearch" => return JType::Int,
+                        // `fill` is void, which `type_of` spells `Error`.
+                        "fill" => return JType::Error,
+                        _ => {}
+                    }
                 }
                 let table = self.table;
                 match table.resolve(&class, method, &arg_types) {

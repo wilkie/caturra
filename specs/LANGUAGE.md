@@ -318,17 +318,38 @@ null` is the way to test for absence, and unboxing an absent value
     nine overloads each) ask each element's own `equals`/`hashCode`,
     null-safely, so two arrays of user objects compare by value; and
     `sort` of a reference array (2026-07-09) orders elements by their
-    `compareTo`, stably. `Arrays.equals(double[], double[])` compares
+    `compareTo`, stably; a `null` element throws, since the comparison
+    calls `compareTo` (so does `Collections.sort`).
+    `Arrays.equals(double[], double[])` compares
     raw bits, so `NaN` equals itself and `-0.0` does not equal `0.0` —
     `==` says the opposite of both. An element that is itself an array
     compares by identity, as Java's does. `Arrays.sort` of an array
     whose element type is not `Comparable` is rejected at compile time,
     where javac accepts it and throws `ClassCastException` at run time —
     stricter, so anything compiling here still compiles on a JDK.
-    `asList` returns an `ArrayList` (a documented deviation), and
-    `binarySearch`/`copyOf`/`fill` are absent. Pinned against a real
-    JDK by `diff_arrays_equals_and_hash_code` and
+    `asList` returns an `ArrayList` (a documented deviation). Pinned
+    against a real JDK by `diff_arrays_equals_and_hash_code` and
     `diff_arrays_sort_uses_compare_to`.
+  - `Arrays.copyOf`/`copyOfRange`/`fill`/`binarySearch` (2026-07-09),
+    every Java 11 overload except the `Comparator` and `Class` ones.
+    The VM answers these too — 50 Java overloads are one method each
+    here, because the heap already knows an array's element kind, which
+    `copyOf` must reproduce. Arity tells the ranged forms apart, as in
+    Java. `copyOf`/`copyOfRange` return an array of the source's own
+    type (so `String[] s = Arrays.copyOf(strings, 3)` type-checks) and
+    pad with the element default. `binarySearch` compares a reference
+    element with its own `compareTo`, so a class without one throws
+    `ClassCastException` and a `null` key throws
+    `NullPointerException`; `-0.0` sorts below `0.0` and `NaN` above
+    everything, as `Double.compare` orders them. There is no
+    `binarySearch(boolean[], boolean)` — booleans have no order — and
+    caturra rejects it as javac does. Java's bounds checks are exact:
+    `NegativeArraySizeException`, `IllegalArgumentException` for
+    `from > to`, `ArrayIndexOutOfBoundsException` past the end.
+    `Arrays.fill(String[], 5)` is rejected at compile time, where javac
+    accepts it (its erased `fill(Object[], Object)`) and throws
+    `ArrayStoreException` — stricter, the safe direction. Pinned by
+    `diff_arrays_copy_fill_and_binary_search` and `_errors`.
   - `Arrays.deepToString`/`deepEquals`/`deepHashCode` (2026-07-09),
     for 2D arrays. These three the VM answers rather than the bundled
     Java, because only it can see an element array's kind once the

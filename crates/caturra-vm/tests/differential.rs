@@ -4211,3 +4211,151 @@ public class DiffTwoDimPrimitives {
 }
 "#
 );
+
+differential_test!(
+    diff_arrays_copy_fill_and_binary_search,
+    "DiffArraysCopyFill",
+    r#"
+import java.util.Arrays;
+
+class Card implements Comparable<Card> {
+    int rank;
+    Card(int rank) { this.rank = rank; }
+    public int compareTo(Card other) { return rank - other.rank; }
+    public String toString() { return "C" + rank; }
+}
+
+public class DiffArraysCopyFill {
+    public static void main(String[] args) {
+        int[] sorted = {1, 3, 5, 7};
+        System.out.println(Arrays.binarySearch(sorted, 5) + " " + Arrays.binarySearch(sorted, 4)
+                + " " + Arrays.binarySearch(sorted, 0) + " " + Arrays.binarySearch(sorted, 9));
+        System.out.println(Arrays.binarySearch(sorted, 1, 3, 5) + " " + Arrays.binarySearch(sorted, 1, 3, 7));
+        System.out.println(Arrays.binarySearch(new String[] {"a", "c", "e"}, "c") + " "
+                + Arrays.binarySearch(new String[] {"a", "c", "e"}, "b"));
+        System.out.println(Arrays.binarySearch(new Card[] {new Card(1), new Card(3)}, new Card(3))
+                + " " + Arrays.binarySearch(new Card[] {new Card(1), new Card(3)}, new Card(2)));
+        // -0.0 sorts below 0.0 and NaN above everything, so binarySearch finds
+        // each of them where Double.compare puts it.
+        double[] doubles = {-0.0, 0.0, 1.5, Double.NaN};
+        System.out.println(Arrays.binarySearch(doubles, 0.0) + " " + Arrays.binarySearch(doubles, -0.0)
+                + " " + Arrays.binarySearch(doubles, Double.NaN));
+        System.out.println(Arrays.binarySearch(new char[] {'a', 'c'}, 'c') + " "
+                + Arrays.binarySearch(new char[] {'a', 'c'}, 'b'));
+        System.out.println(Arrays.binarySearch(new long[] {1L, 5L}, 5L) + " "
+                + Arrays.binarySearch(new int[0], 5));
+
+        // copyOf keeps the source's own type and pads with the element default.
+        System.out.println(Arrays.toString(Arrays.copyOf(sorted, 2)) + " "
+                + Arrays.toString(Arrays.copyOf(sorted, 6)));
+        String[] words = Arrays.copyOf(new String[] {"a"}, 3);
+        System.out.println(Arrays.toString(words) + " " + words.length);
+        System.out.println(Arrays.toString(Arrays.copyOf(new boolean[] {true}, 3)) + " "
+                + Arrays.toString(Arrays.copyOf(new char[] {'x'}, 2)).length());
+        int[][] grid = {{1}, {2}};
+        System.out.println(Arrays.deepToString(Arrays.copyOf(grid, 3)));
+
+        System.out.println(Arrays.toString(Arrays.copyOfRange(sorted, 1, 3)) + " "
+                + Arrays.toString(Arrays.copyOfRange(sorted, 2, 6)) + " "
+                + Arrays.toString(Arrays.copyOfRange(sorted, 4, 4)));
+
+        int[] filled = new int[4];
+        Arrays.fill(filled, 7);
+        System.out.println(Arrays.toString(filled));
+        Arrays.fill(filled, 1, 3, 9);
+        System.out.println(Arrays.toString(filled));
+        String[] strings = new String[3];
+        Arrays.fill(strings, "z");
+        System.out.println(Arrays.toString(strings));
+        double[] halves = new double[2];
+        Arrays.fill(halves, 1.5);
+        long[] longs = new long[2];
+        Arrays.fill(longs, 8L);
+        byte[] bytes = new byte[2];
+        Arrays.fill(bytes, (byte) 3);
+        boolean[] flags = new boolean[2];
+        Arrays.fill(flags, true);
+        char[] letters = new char[2];
+        Arrays.fill(letters, 'q');
+        System.out.println(Arrays.toString(halves) + " " + Arrays.toString(longs) + " "
+                + Arrays.toString(bytes) + " " + Arrays.toString(flags) + " " + Arrays.toString(letters));
+        // An int widens into an int[] element; a char does too.
+        Arrays.fill(filled, 'a');
+        System.out.println(filled[0]);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_arrays_copy_fill_errors,
+    "DiffArraysCopyFillErrors",
+    r#"
+import java.util.Arrays;
+
+class Plain {
+    int x;
+}
+
+public class DiffArraysCopyFillErrors {
+    public static void main(String[] args) {
+        int[] numbers = {1, 2, 3};
+        try { Arrays.copyOf(numbers, -1); } catch (NegativeArraySizeException e) { System.out.println("negative size"); }
+        try { Arrays.copyOfRange(numbers, 3, 1); } catch (IllegalArgumentException e) { System.out.println("copy from > to"); }
+        try { Arrays.copyOfRange(numbers, 9, 10); } catch (ArrayIndexOutOfBoundsException e) { System.out.println("copy past end"); }
+        try { Arrays.fill(numbers, 3, 1, 0); } catch (IllegalArgumentException e) { System.out.println("fill from > to"); }
+        try { Arrays.fill(numbers, -1, 2, 0); } catch (ArrayIndexOutOfBoundsException e) { System.out.println("fill negative"); }
+        try { Arrays.fill(numbers, 0, 9, 0); } catch (ArrayIndexOutOfBoundsException e) { System.out.println("fill past end"); }
+        try { Arrays.binarySearch(numbers, 3, 1, 0); } catch (IllegalArgumentException e) { System.out.println("search from > to"); }
+        try { Arrays.binarySearch(numbers, 0, 9, 0); } catch (ArrayIndexOutOfBoundsException e) { System.out.println("search past end"); }
+
+        // A reference binarySearch calls the element's compareTo, so a class
+        // that has none is not Comparable, and a null key throws.
+        Plain[] plains = {new Plain(), new Plain()};
+        try { System.out.println(Arrays.binarySearch(plains, new Plain())); }
+        catch (ClassCastException e) { System.out.println("not comparable"); }
+        try { System.out.println(Arrays.binarySearch(new String[] {"a", "c"}, null)); }
+        catch (NullPointerException e) { System.out.println("null key"); }
+
+        int[] none = null;
+        try { Arrays.copyOf(none, 2); } catch (NullPointerException e) { System.out.println("null array"); }
+
+        // Degenerate but legal.
+        System.out.println(Arrays.toString(Arrays.copyOf(new int[0], 2))
+                + " " + Arrays.toString(Arrays.copyOfRange(numbers, 3, 3))
+                + " " + Arrays.binarySearch(new int[0], 5));
+        System.out.println("done");
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_sorting_a_null_element_throws,
+    "DiffSortNull",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+
+public class DiffSortNull {
+    public static void main(String[] args) {
+        // Natural-ordering sort calls compareTo, so a null element throws —
+        // but a single element is never compared.
+        ArrayList<String> words = new ArrayList<String>();
+        words.add("b");
+        words.add(null);
+        words.add("a");
+        try {
+            Collections.sort(words);
+            System.out.println("sorted " + words);
+        } catch (NullPointerException e) {
+            System.out.println("sort throws");
+        }
+        ArrayList<String> lone = new ArrayList<String>();
+        lone.add(null);
+        Collections.sort(lone);
+        System.out.println(lone);
+    }
+}
+"#
+);

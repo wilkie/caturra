@@ -8857,3 +8857,152 @@ fn two_dimensional_arrays_of_every_primitive() {
     );
     assert_eq!(out, "5 1.5 3\n4 true x\n0 0.0 false\n2\n");
 }
+
+/// `Arrays.copyOf`/`copyOfRange`/`fill`/`binarySearch` over every array kind.
+/// The VM answers them, so `copyOf` returns an array of the source's own kind
+/// and a reference `binarySearch` compares with the element's `compareTo`.
+/// Cross-checked against a real JDK by `diff_arrays_copy_fill_and_binary_search`.
+#[test]
+fn arrays_copy_fill_and_binary_search() {
+    let out = run_stdout(
+        r#"
+        import java.util.Arrays;
+
+        class Card implements Comparable<Card> {
+            int rank;
+            Card(int rank) { this.rank = rank; }
+            public int compareTo(Card other) { return rank - other.rank; }
+            public String toString() { return "C" + rank; }
+        }
+
+        public class B {
+            public static void main(String[] args) {
+                int[] sorted = {1, 3, 5, 7};
+                System.out.println(Arrays.binarySearch(sorted, 5) + " " + Arrays.binarySearch(sorted, 4));
+                System.out.println(Arrays.binarySearch(sorted, 1, 3, 5));
+                System.out.println(Arrays.binarySearch(new Card[] {new Card(1), new Card(3)}, new Card(3)));
+                // -0.0 sorts below 0.0 and NaN above everything.
+                double[] doubles = {-0.0, 0.0, 1.5, Double.NaN};
+                System.out.println(Arrays.binarySearch(doubles, -0.0) + " "
+                        + Arrays.binarySearch(doubles, Double.NaN));
+
+                // copyOf keeps the source's own type and pads with the default.
+                System.out.println(Arrays.toString(Arrays.copyOf(sorted, 6)));
+                String[] words = Arrays.copyOf(new String[] {"a"}, 3);
+                System.out.println(Arrays.toString(words));
+                System.out.println(Arrays.toString(Arrays.copyOf(new boolean[] {true}, 2)));
+                System.out.println(Arrays.deepToString(Arrays.copyOf(new int[][] {{1}}, 2)));
+                System.out.println(Arrays.toString(Arrays.copyOfRange(sorted, 2, 6)));
+
+                int[] filled = new int[4];
+                Arrays.fill(filled, 7);
+                Arrays.fill(filled, 1, 3, 9);
+                System.out.println(Arrays.toString(filled));
+                char[] letters = new char[2];
+                Arrays.fill(letters, 'q');
+                System.out.println(new String(letters));
+
+                // Java's own bounds checks.
+                try { Arrays.copyOf(sorted, -1); }
+                catch (NegativeArraySizeException e) { System.out.println("negative"); }
+                try { Arrays.fill(filled, 3, 1, 0); }
+                catch (IllegalArgumentException e) { System.out.println("from > to"); }
+                try { Arrays.binarySearch(new String[] {"a"}, null); }
+                catch (NullPointerException e) { System.out.println("null key"); }
+            }
+        }
+        "#,
+        "B",
+    );
+    assert_eq!(
+        out,
+        "2 -3\n\
+         2\n\
+         1\n\
+         0 3\n\
+         [1, 3, 5, 7, 0, 0]\n\
+         [a, null, null]\n\
+         [true, false]\n\
+         [[1], null]\n\
+         [5, 7, 0, 0]\n\
+         [7, 9, 9, 7]\n\
+         qq\n\
+         negative\n\
+         from > to\n\
+         null key\n"
+    );
+}
+
+/// A natural-ordering sort calls `compareTo`, so a null element throws — but a
+/// lone element is never compared. `Collections.sort` used to treat every null
+/// as equal and quietly sort around it.
+#[test]
+fn sorting_a_null_element_throws() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Collections;
+        public class S {
+            public static void main(String[] args) {
+                ArrayList<String> words = new ArrayList<String>();
+                words.add("b");
+                words.add(null);
+                try {
+                    Collections.sort(words);
+                    System.out.println("sorted");
+                } catch (NullPointerException e) {
+                    System.out.println("throws");
+                }
+                ArrayList<String> lone = new ArrayList<String>();
+                lone.add(null);
+                Collections.sort(lone);
+                System.out.println(lone);
+            }
+        }
+        "#,
+        "S",
+    );
+    assert_eq!(out, "throws\n[null]\n");
+}
+
+/// The four VM-answered `Arrays` methods accept and reject exactly what javac
+/// does, with javac's wording. `boolean[]` has no `binarySearch` — booleans
+/// have no order — and `copyOf` of a `String[]` is a `String[]`.
+#[test]
+fn arrays_copy_fill_reject_like_javac() {
+    for (source, want) in [
+        (
+            "boolean[] b = {true}; int i = Arrays.binarySearch(b, true);",
+            "no suitable method found for binarySearch(boolean[],boolean) in class Arrays",
+        ),
+        (
+            "int[] x = {1}; int i = Arrays.binarySearch(x);",
+            "no suitable method found for binarySearch(int[]) in class Arrays",
+        ),
+        (
+            "int[] x = {1}; Arrays.fill(x, 0, 1);",
+            "no suitable method found for fill(int[],int,int) in class Arrays",
+        ),
+        (
+            "Arrays.fill(5, 1);",
+            "no suitable method found for fill(int,int) in class Arrays",
+        ),
+        (
+            "int[] x = {1}; Arrays.fill(x, \"s\");",
+            "incompatible types: String cannot be converted to int",
+        ),
+        (
+            "String[] s = {\"a\"}; int[] t = Arrays.copyOf(s, 2);",
+            "incompatible types: String[] cannot be converted to int[]",
+        ),
+    ] {
+        let text = format!("import java.util.Arrays; class M {{ static void r() {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}
