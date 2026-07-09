@@ -1221,6 +1221,58 @@ fn swing_text_area_text_operations() {
 }
 
 #[test]
+fn swing_combo_box_is_backed_by_a_default_combo_box_model() {
+    // JComboBox is model-backed: a DefaultComboBoxModel drives its items and
+    // selection, fires ListDataEvents, and moves the selection when the
+    // selected element is removed (like real Swing).
+    let (result, console) = compile_and_run(
+        r#"
+        import javax.swing.*;
+        import javax.swing.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                String[] fruits = {"Apple", "Banana"};
+                DefaultComboBoxModel model = new DefaultComboBoxModel(fruits);
+                JComboBox combo = new JComboBox(model);
+                model.addListDataListener(new ListDataListener() {
+                    public void intervalAdded(ListDataEvent e) {
+                        System.out.println("added [" + e.getIndex0() + "]");
+                    }
+                    public void intervalRemoved(ListDataEvent e) {
+                        System.out.println("removed [" + e.getIndex0() + "]");
+                    }
+                    public void contentsChanged(ListDataEvent e) {
+                        System.out.println("selection -> " + Main.name(e.getSource()));
+                    }
+                });
+                System.out.println("selected=" + combo.getSelectedItem()
+                    + " idx=" + combo.getSelectedIndex());
+                // addItem goes through the mutable model.
+                combo.addItem("Cherry");
+                System.out.println("count=" + combo.getItemCount() + " at2=" + combo.getItemAt(2));
+                // Removing the selected element (Apple) reselects a neighbour.
+                combo.removeItem("Apple");
+                System.out.println("after remove: " + combo.getSelectedItem()
+                    + " idx=" + combo.getSelectedIndex());
+                // The combo and the model agree on the selection.
+                combo.setSelectedIndex(1);
+                System.out.println("model says " + model.getSelectedItem());
+            }
+            static String name(Object source) {
+                return ((DefaultComboBoxModel) source).getSelectedItem() + "";
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "selected=Apple idx=0\nadded [2]\ncount=3 at2=Cherry\nremoved [0]\nafter remove: Banana idx=0\nselection -> Cherry\nmodel says Cherry\n"
+    );
+}
+
+#[test]
 fn swing_editable_combo_box_custom_values_and_item_management() {
     // An editable JComboBox: runtime addItem/removeItem, and getSelectedItem
     // returns the current text — a listed value (with its index) or a custom

@@ -909,6 +909,62 @@ public class Main {
 `,
   },
   {
+    name: 'Combo box model',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import javax.swing.event.*;
+
+public class Main {
+  static DefaultComboBoxModel model;
+  static JComboBox combo;
+  static JLabel status;
+  static int next = 1;
+
+  public static void main(String[] args) {
+    JFrame frame = new JFrame("Toppings");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new BorderLayout());
+
+    // The model holds the combo's items and its selection. Mutating it updates
+    // the JComboBox and fires ListDataEvents.
+    String[] toppings = {"Cheese", "Basil"};
+    model = new DefaultComboBoxModel(toppings);
+
+    status = new JLabel("2 toppings");
+    model.addListDataListener(new ListDataListener() {
+      public void intervalAdded(ListDataEvent e) {
+        Main.status.setText(Main.model.getSize() + " toppings");
+      }
+      public void intervalRemoved(ListDataEvent e) {
+        Main.status.setText(Main.model.getSize() + " toppings");
+      }
+      public void contentsChanged(ListDataEvent e) {}
+    });
+
+    combo = new JComboBox(model);
+    combo.addActionListener(e -> Main.status.setText("Chose " + Main.combo.getSelectedItem()));
+
+    JButton add = new JButton("Add topping");
+    add.addActionListener(e -> {
+      Main.model.addElement("Topping " + Main.next);
+      Main.next = Main.next + 1;
+    });
+
+    JLabel prompt = new JLabel("Topping:");
+    prompt.setLabelFor(combo);
+    JPanel top = new JPanel();
+    top.add(prompt);
+    top.add(combo);
+    top.add(add);
+
+    frame.add(top, BorderLayout.NORTH);
+    frame.add(status, BorderLayout.SOUTH);
+    frame.setVisible(true);
+  }
+}
+`,
+  },
+  {
     name: 'Editable combo',
     starter: `import javax.swing.*;
 import java.awt.*;

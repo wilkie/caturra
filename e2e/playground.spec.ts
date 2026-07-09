@@ -1810,6 +1810,26 @@ test.describe('swing (interactive)', () => {
     await expect(root).toContainText('Lines: 3');
   });
 
+  test('a DefaultComboBoxModel drives a JComboBox and fires on add', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'Combo box model' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    // Non-editable → a native <select> (implicit role combobox).
+    const combo = root.getByRole('combobox', { name: 'Topping:' });
+    await expect(combo.getByRole('option')).toHaveCount(2);
+    await expect(root).toContainText('2 toppings');
+
+    // Adding to the model re-renders the combo and fires intervalAdded.
+    await root.getByRole('button', { name: 'Add topping' }).click();
+    await expect(combo.getByRole('option')).toHaveCount(3);
+    await expect(root).toContainText('3 toppings');
+
+    // The selection lives in the model; the combo reads it back.
+    await combo.selectOption({ label: 'Basil' });
+    await expect(root).toContainText('Chose Basil');
+  });
+
   test('an editable JComboBox accepts a custom value and offers presets', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Editable combo' });

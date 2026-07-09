@@ -1210,59 +1210,56 @@ class ButtonGroup {
 }
 
 class JComboBox extends Component {
-  java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
-  int __selectedIndex = -1;
+  // Always model-backed, like real Swing: the items and the selection live in
+  // the ComboBoxModel, so any custom model works.
+  ComboBoxModel __model = new DefaultComboBoxModel();
   boolean __editable = false;
-  String __editText = ""; // the current text in editable mode (may be custom)
   ActionListener __actionListener = null;
   public JComboBox() {}
-  public JComboBox(String[] items) {
-    for (int i = 0; i < items.length; i++) __items.add(items[i]);
-    if (__items.size() > 0) { __selectedIndex = 0; __editText = __items.get(0); }
+  public JComboBox(String[] items) { __model = new DefaultComboBoxModel(items); }
+  public JComboBox(ComboBoxModel model) { __model = model; }
+  public void setModel(ComboBoxModel model) { __model = model; }
+  public ComboBoxModel getModel() { return __model; }
+  // Mutating the items needs a mutable model (real Swing throws otherwise).
+  MutableComboBoxModel __mutable() { return (MutableComboBoxModel) __model; }
+  public void addItem(String item) { __mutable().addElement(item); }
+  public void insertItemAt(String item, int index) { __mutable().insertElementAt(item, index); }
+  public void removeItem(String item) { __mutable().removeElement(item); }
+  public void removeItemAt(int index) { __mutable().removeElementAt(index); }
+  public void removeAllItems() {
+    MutableComboBoxModel model = __mutable();
+    for (int i = __model.getSize() - 1; i >= 0; i--) model.removeElementAt(i);
+    __model.setSelectedItem(null);
   }
-  public void addItem(String item) {
-    __items.add(item);
-    if (__selectedIndex < 0) { __selectedIndex = 0; __editText = item; }
+  public int getItemCount() { return __model.getSize(); }
+  public String getItemAt(int index) { return __str(__model.getElementAt(index)); }
+  static String __str(Object v) { return v == null ? null : "" + v; }
+  // The index of the selected item, or -1 when nothing matches (an editable
+  // combo may hold a custom value that isn't in the list).
+  public int getSelectedIndex() {
+    Object selected = __model.getSelectedItem();
+    if (selected == null) return -1;
+    String s = "" + selected;
+    for (int i = 0; i < __model.getSize(); i++) {
+      Object element = __model.getElementAt(i);
+      if (element != null && ("" + element).equals(s)) return i;
+    }
+    return -1;
   }
-  public void insertItemAt(String item, int index) { __items.add(index, item); }
-  public void removeItem(String item) {
-    int i = __items.indexOf(item);
-    if (i >= 0) removeItemAt(i);
-  }
-  public void removeItemAt(int index) {
-    __items.remove(index);
-    if (__selectedIndex >= __items.size()) __selectedIndex = __items.size() - 1;
-  }
-  public void removeAllItems() { __items.clear(); __selectedIndex = -1; __editText = ""; }
-  public int getItemCount() { return __items.size(); }
-  public String getItemAt(int index) { return __items.get(index); }
-  public int getSelectedIndex() { return __editable ? __items.indexOf(__editText) : __selectedIndex; }
   public void setSelectedIndex(int index) {
-    __selectedIndex = index;
-    if (index >= 0 && index < __items.size()) __editText = __items.get(index);
+    if (index >= 0 && index < __model.getSize()) __model.setSelectedItem(__model.getElementAt(index));
+    else __model.setSelectedItem(null);
   }
-  public Object getSelectedItem() {
-    if (__editable) return __editText.equals("") ? null : __editText;
-    if (__selectedIndex < 0 || __selectedIndex >= __items.size()) return null;
-    return __items.get(__selectedIndex);
-  }
+  public Object getSelectedItem() { return __model.getSelectedItem(); }
   // For an editable combo, accepts a value not in the list (a custom entry).
-  public void setSelectedItem(Object item) {
-    String s = item == null ? "" : "" + item;
-    __editText = s;
-    __selectedIndex = __items.indexOf(s);
-  }
+  public void setSelectedItem(Object item) { __model.setSelectedItem(item); }
   public void setEditable(boolean editable) { __editable = editable; }
   public boolean isEditable() { return __editable; }
   public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
   void __setFromHost(String value) {
-    if (__editable) {
-      __editText = value;
-      __selectedIndex = __items.indexOf(value);
-    } else {
-      __selectedIndex = Integer.parseInt(value);
-      if (__selectedIndex >= 0 && __selectedIndex < __items.size()) __editText = __items.get(__selectedIndex);
-    }
+    // Editable: the host sends the text (possibly custom). Otherwise: an index.
+    if (__editable) __model.setSelectedItem(value);
+    else setSelectedIndex(Integer.parseInt(value));
   }
   void __onEvent() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
@@ -1270,17 +1267,19 @@ class JComboBox extends Component {
   boolean __listens() { return __actionListener != null; }
   String __json() {
     StringBuilder opts = new StringBuilder("[");
-    for (int i = 0; i < __items.size(); i++) {
+    for (int i = 0; i < __model.getSize(); i++) {
       if (i > 0) opts.append(",");
-      opts.append("\"").append(Component.__esc(__items.get(i))).append("\"");
+      Object element = __model.getElementAt(i);
+      opts.append("\"").append(Component.__esc(element == null ? "" : "" + element)).append("\"");
     }
     opts.append("]");
-    // Editable: an <input list=…> with a datalist; the value is the text (which
-    // may be a custom entry). Non-editable: a <select> keyed by index.
+    // Editable: an <input> + listbox popup; the value is the text (which may be
+    // a custom entry). Non-editable: a <select> keyed by index.
+    Object selected = __model.getSelectedItem();
     String ed = __editable
-        ? ",\"editable\":true,\"text\":\"" + Component.__esc(__editText) + "\""
+        ? ",\"editable\":true,\"text\":\"" + Component.__esc(selected == null ? "" : "" + selected) + "\""
         : "";
-    return "{\"type\":\"combobox\",\"items\":" + opts.toString() + ",\"selectedIndex\":" + __selectedIndex
+    return "{\"type\":\"combobox\",\"items\":" + opts.toString() + ",\"selectedIndex\":" + getSelectedIndex()
         + ed + "," + __commonJson() + "}";
   }
 }
@@ -1381,6 +1380,73 @@ class DefaultListModel extends AbstractListModel {
   public int indexOf(String element) { return __elements.indexOf(element); }
   public String firstElement() { return __elements.get(0); }
   public String lastElement() { return __elements.get(__elements.size() - 1); }
+}
+
+// A ListModel that also tracks a selected item (which, for an editable combo,
+// need not be one of the elements).
+interface ComboBoxModel extends ListModel {
+  Object getSelectedItem();
+  void setSelectedItem(Object item);
+}
+
+// A ComboBoxModel whose elements can be changed; JComboBox.addItem and friends
+// require one (real Swing throws when the model isn't mutable).
+interface MutableComboBoxModel extends ComboBoxModel {
+  void addElement(String item);
+  void removeElement(String item);
+  void insertElementAt(String item, int index);
+  void removeElementAt(int index);
+}
+
+class DefaultComboBoxModel extends AbstractListModel implements MutableComboBoxModel {
+  java.util.ArrayList<String> __elements = new java.util.ArrayList<String>();
+  Object __selected = null;
+  public DefaultComboBoxModel() {}
+  public DefaultComboBoxModel(String[] items) {
+    for (int i = 0; i < items.length; i++) __elements.add(items[i]);
+    if (!__elements.isEmpty()) __selected = __elements.get(0);
+  }
+  public int getSize() { return __elements.size(); }
+  public Object getElementAt(int index) { return __elements.get(index); }
+  public Object getSelectedItem() { return __selected; }
+  // A selection change is reported as a contents change over (-1, -1).
+  public void setSelectedItem(Object item) {
+    __selected = item;
+    fireContentsChanged(this, -1, -1);
+  }
+  public int getIndexOf(Object item) {
+    if (item == null) return -1;
+    return __elements.indexOf("" + item);
+  }
+  public void addElement(String item) {
+    __elements.add(item);
+    fireIntervalAdded(this, __elements.size() - 1, __elements.size() - 1);
+    if (__elements.size() == 1 && __selected == null) __selected = item;
+  }
+  public void insertElementAt(String item, int index) {
+    __elements.add(index, item);
+    fireIntervalAdded(this, index, index);
+  }
+  // Removing the selected element moves the selection to a neighbour, as
+  // real Swing's DefaultComboBoxModel does.
+  public void removeElementAt(int index) {
+    if (getIndexOf(__selected) == index) {
+      if (index == 0) __selected = getSize() > 1 ? __elements.get(1) : null;
+      else __selected = __elements.get(index - 1);
+    }
+    __elements.remove(index);
+    fireIntervalRemoved(this, index, index);
+  }
+  public void removeElement(String item) {
+    int index = __elements.indexOf(item);
+    if (index >= 0) removeElementAt(index);
+  }
+  public void removeAllElements() {
+    int last = __elements.size() - 1;
+    __elements.clear();
+    __selected = null;
+    if (last >= 0) fireIntervalRemoved(this, 0, last);
+  }
 }
 
 class JList extends Component {
