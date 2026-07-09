@@ -72,7 +72,11 @@ slice.
   declarations and `new T[] {...}` (nested for 2D, ragged rows fine),
   `a[i]` reads/writes with compound assignment and `++`/`--` on elements,
   `a.length` / `m[i].length`, arrays as parameters and returns (rows are
-  references — aliasing behaves like Java), reference `==`, and
+  references — aliasing behaves like Java), the C-style declarator spelling
+  where the brackets follow the name — `String args[]`, `int grid[][]`,
+  fields, and locals — binding to that declarator alone, so `int a[], b;`
+  makes only `a` an array (JLS §10.2); the legacy method form `int m()[]`
+  is not accepted. Reference `==`, and
   `for (T x : array)` desugared to an indexed loop (element widening
   applies; `break`/`continue` work). Runtime exceptions use Java 11's
   wording: `ArrayIndexOutOfBoundsException: Index 5 out of bounds for

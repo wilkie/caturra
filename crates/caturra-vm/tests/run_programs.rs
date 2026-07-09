@@ -1440,6 +1440,38 @@ fn swing_table_model_fires_table_model_listener_events() {
     );
 }
 
+/// C-style declarators (`String args[]`), which javac accepts. The brackets
+/// bind to the NAME, so in `int a[], b;` only `a` is an array — the asymmetry
+/// this test exists to pin. Cross-checked against a real JDK by
+/// `diff_c_style_array_declarators`.
+#[test]
+fn c_style_array_declarators_bind_to_the_name() {
+    let out = run_stdout(
+        r#"
+        public class Main {
+            private int f[] = {1, 2};
+            static int g[], h;
+            static int sum(int a[], int b) { return a[0] + b; }
+            public static void main(String args[]) {
+                int x[] = {5, 6};
+                int y[], z;
+                y = new int[] {7};
+                z = 9;
+                g = new int[] {4};
+                h = 1;
+                int grid[][] = new int[2][3];
+                grid[1][2] = 8;
+                System.out.println(args.length + " " + x[1] + " " + y[0] + " " + z);
+                System.out.println(g[0] + " " + h + " " + sum(x, 3) + " " + new Main().f[1]);
+                System.out.println(grid[1][2] + " " + grid.length + " " + grid[0].length);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(out, "0 6 7 9\n4 1 8 2\n8 2 3\n");
+}
+
 /// Regression: `type_of` reported `int` for shifts and for `long`-typed
 /// `& | ^`, while the emitter produced a long — so `(x << 4) + y` emitted IADD
 /// over a long value and failed verification. Every expected value below comes

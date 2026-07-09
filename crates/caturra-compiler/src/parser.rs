@@ -777,6 +777,8 @@ impl Parser<'_> {
             let mut fields = Vec::new();
             let mut current = (name, name_span);
             loop {
+                // `private int f[];` — the brackets bind to this name only.
+                let dims = self.trailing_array_dims();
                 let init = if self.eat_symbol("=") {
                     if self.at_symbol("{") {
                         Some(self.array_literal()?)
@@ -788,7 +790,7 @@ impl Parser<'_> {
                 };
                 fields.push(FieldDecl {
                     name: current.0,
-                    ty: member_type.clone(),
+                    ty: crate::ast::array_of(member_type.clone(), dims),
                     is_static: modifiers.is_static,
                     is_private: modifiers.is_private,
                     is_final: modifiers.is_final,
@@ -826,6 +828,19 @@ impl Parser<'_> {
         }))
     }
 
+    /// C-style array brackets written *after* a declarator's name, as in
+    /// `String args[]` or `int a[][]`. Each pair adds a dimension to that one
+    /// declarator (JLS §10.2), which is why `int a[], b;` makes only `a` an
+    /// array. Returns how many pairs were consumed.
+    fn trailing_array_dims(&mut self) -> usize {
+        let mut dims = 0;
+        while self.at_symbol("[") && matches!(self.peek_at(1), Some(TokenKind::Symbol("]"))) {
+            self.pos += 2;
+            dims += 1;
+        }
+        dims
+    }
+
     /// Parameter list and body, shared by methods and constructors.
     /// With `allow_abstract`, a `;` instead of a body yields `None`.
     fn method_rest(
@@ -843,9 +858,14 @@ impl Parser<'_> {
                 if is_varargs {
                     ty = TypeRef::Array(Box::new(ty));
                 }
-                let (param_name, _) = self.expect_ident("for the parameter")?;
+                let (param_name, param_span) = self.expect_ident("for the parameter")?;
+                // `void m(String args[])` — the old C-style spelling of `String[]`.
+                let dims = self.trailing_array_dims();
+                if dims > 0 && is_varargs {
+                    self.error_at(param_span, "a varargs parameter cannot also carry '[]'");
+                }
                 params.push(Param {
-                    ty,
+                    ty: crate::ast::array_of(ty, dims),
                     name: param_name,
                     is_varargs,
                 });
@@ -1694,6 +1714,8 @@ impl Parser<'_> {
         let mut declarators = Vec::new();
         loop {
             let (name, name_span) = self.expect_ident("for the variable")?;
+            // `int a[] = {1, 2};` — the brackets belong to this declarator.
+            let extra_dims = self.trailing_array_dims();
             let init = if self.eat_symbol("=") {
                 // `int[] a = {1, 2, 3};` — the literal form is only
                 // legal directly in a declaration.
@@ -1709,6 +1731,7 @@ impl Parser<'_> {
                 name,
                 init,
                 span: name_span,
+                extra_dims,
             });
             if !self.eat_symbol(",") {
                 break;

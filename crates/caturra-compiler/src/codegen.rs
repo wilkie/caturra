@@ -5100,7 +5100,7 @@ impl BodyGen<'_> {
         declarators: &[LocalDeclarator],
         span: SourceSpan,
     ) {
-        let Some(var_ty) = self.table.resolve_type(ty) else {
+        let Some(base_ty) = self.table.resolve_type(ty) else {
             let what = match ty {
                 TypeRef::Named(name) if name.contains('.') => {
                     crate::imports::unknown_qualified_message(name)
@@ -5114,6 +5114,18 @@ impl BodyGen<'_> {
         };
 
         for declarator in declarators {
+            // C-style `int a[], b;` gives the extra dimension to `a` alone, so
+            // each declarator resolves its own type.
+            let var_ty = if declarator.extra_dims == 0 {
+                base_ty
+            } else {
+                let decl_ty = crate::ast::array_of(ty.clone(), declarator.extra_dims);
+                let Some(resolved) = self.table.resolve_type(&decl_ty) else {
+                    self.error(declarator.span, String::from("unsupported array type"));
+                    continue;
+                };
+                resolved
+            };
             if self.lookup(&declarator.name).is_some() {
                 self.error(
                     declarator.span,

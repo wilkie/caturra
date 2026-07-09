@@ -145,6 +145,16 @@ pub enum TypeRef {
     Array(Box<TypeRef>),
 }
 
+/// Wrap `ty` in `dims` array levels (`array_of(Int, 2)` is `int[][]`).
+#[must_use]
+pub fn array_of(ty: TypeRef, dims: usize) -> TypeRef {
+    let mut ty = ty;
+    for _ in 0..dims {
+        ty = TypeRef::Array(Box::new(ty));
+    }
+    ty
+}
+
 /// A statement.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
@@ -276,6 +286,9 @@ pub struct LocalDeclarator {
     pub name: String,
     pub init: Option<Expr>,
     pub span: SourceSpan,
+    /// Brackets written after this name, C-style: in `int a[], b;` the extra
+    /// dimension belongs to `a` alone, so it cannot live on the shared type.
+    pub extra_dims: usize,
 }
 
 /// A lambda parameter: a name, optionally with an explicit type.

@@ -2823,3 +2823,32 @@ public class DiffRandom {
 }
 "#
 );
+
+differential_test!(
+    diff_c_style_array_declarators,
+    "DiffCStyle",
+    r#"
+public class DiffCStyle {
+    private int f[] = {1, 2};
+    static int g[], h;                       // g is int[]; h is a plain int
+    static int sum(int a[], int b) { return a[0] + b; }
+    static String first(String s[]) { return s[0]; }
+    public static void main(String args[]) {
+        int x[] = {5, 6};
+        int y[], z;                          // again: only y is an array
+        y = new int[] {7};
+        z = 9;
+        g = new int[] {4};
+        h = 1;
+        int grid[][] = new int[2][3];
+        grid[1][2] = 8;
+        for (int e : x) System.out.print(e + " ");
+        System.out.println();
+        System.out.println(args.length + " " + x[1] + " " + y[0] + " " + z + " " + g[0] + " " + h);
+        System.out.println(sum(x, 3) + " " + new DiffCStyle().f[1] + " " + grid[1][2]
+            + " " + first(new String[] {"hi"}));
+        System.out.println(x.length + " " + grid.length + " " + grid[0].length);
+    }
+}
+"#
+);
