@@ -2514,6 +2514,8 @@ enum BParam {
     RefArray,
     /// `java.lang.Object` (`Field.get(Object)`, `Method.invoke(Object, ...)`).
     Object,
+    /// `java.lang.StringBuilder` (`StringBuilder.compareTo(StringBuilder)`).
+    Builder,
 }
 
 /// The return of an intrinsic method.
@@ -2930,6 +2932,9 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "codePoints", "streams are not supported by caturra"),
     ("String", "lines", "streams are not supported by caturra"),
     ("String", "join", "varargs are not supported by caturra"),
+    ("StringBuilder", "capacity", "caturra does not model a builder's capacity, only its contents"),
+    ("StringBuilder", "chars", "streams are not supported by caturra"),
+    ("StringBuilder", "codePoints", "streams are not supported by caturra"),
     ("Integer", "decode", "system properties are not supported by caturra"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
@@ -2952,6 +2957,19 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Scanner", "nextBigInteger", "BigInteger is not supported by caturra"),
     ("Scanner", "nextBigDecimal", "BigDecimal is not supported by caturra"),
 ];
+
+/// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
+/// has entries for. Empty for every other receiver, so that (say) a `File`
+/// method never matches a `String` entry of the same name.
+fn receiver_class_name(receiver: JType) -> &'static str {
+    match receiver {
+        JType::Str => "String",
+        JType::Scanner => "Scanner",
+        JType::List(_) => "ArrayList",
+        JType::StringBuilder => "StringBuilder",
+        _ => "",
+    }
+}
 
 /// The honest not-supported reason for a class member, if known.
 fn unsupported_member(class: &str, method: &str) -> Option<&'static str> {
@@ -3966,10 +3984,127 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "append",
+        &[BParam::CharArray],
+        BRet::Builder,
+        "([C)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "append",
         &[BParam::Object],
         BRet::Builder,
         "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
     ),
+    bm(
+        "appendCodePoint",
+        &[I],
+        BRet::Builder,
+        "(I)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, S],
+        BRet::Builder,
+        "(ILjava/lang/String;)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, C],
+        BRet::Builder,
+        "(IC)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, Z],
+        BRet::Builder,
+        "(IZ)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, I],
+        BRet::Builder,
+        "(II)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, L],
+        BRet::Builder,
+        "(IJ)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, F],
+        BRet::Builder,
+        "(IF)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, D],
+        BRet::Builder,
+        "(ID)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, BParam::CharArray],
+        BRet::Builder,
+        "(I[C)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, BParam::Object],
+        BRet::Builder,
+        "(ILjava/lang/Object;)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "delete",
+        &[I, I],
+        BRet::Builder,
+        "(II)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "deleteCharAt",
+        &[I],
+        BRet::Builder,
+        "(I)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "replace",
+        &[I, I, S],
+        BRet::Builder,
+        "(IILjava/lang/String;)Ljava/lang/StringBuilder;",
+    ),
+    bm("reverse", &[], BRet::Builder, "()Ljava/lang/StringBuilder;"),
+    bm("setCharAt", &[I, C], BRet::Void, "(IC)V"),
+    bm("setLength", &[I], BRet::Void, "(I)V"),
+    bm("ensureCapacity", &[I], BRet::Void, "(I)V"),
+    bm("trimToSize", &[], BRet::Void, "()V"),
+    bm("indexOf", &[S], BRet::Int, "(Ljava/lang/String;)I"),
+    bm("indexOf", &[S, I], BRet::Int, "(Ljava/lang/String;I)I"),
+    bm("lastIndexOf", &[S], BRet::Int, "(Ljava/lang/String;)I"),
+    bm("lastIndexOf", &[S, I], BRet::Int, "(Ljava/lang/String;I)I"),
+    bm("substring", &[I], BRet::Str, "(I)Ljava/lang/String;"),
+    bm("substring", &[I, I], BRet::Str, "(II)Ljava/lang/String;"),
+    bm(
+        "subSequence",
+        &[I, I],
+        BRet::Str,
+        "(II)Ljava/lang/CharSequence;",
+    ),
+    bm(
+        "compareTo",
+        &[BParam::Builder],
+        BRet::Int,
+        "(Ljava/lang/StringBuilder;)I",
+    ),
+    bm(
+        "getChars",
+        &[I, I, BParam::CharArray, I],
+        BRet::Void,
+        "(II[CI)V",
+    ),
+    bm("codePointAt", &[I], BRet::Int, "(I)I"),
+    bm("codePointBefore", &[I], BRet::Int, "(I)I"),
+    bm("codePointCount", &[I, I], BRet::Int, "(II)I"),
+    bm("offsetByCodePoints", &[I, I], BRet::Int, "(II)I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("length", &[], BRet::Int, "()I"),
     bm("charAt", &[I], BRet::Char, "(I)C"),
@@ -4097,6 +4232,7 @@ fn bparam_type(param: BParam, elem: Option<ElemType>) -> JType {
         BParam::Class => JType::Class,
         BParam::RefArray => JType::Error,
         BParam::Object => JType::Object(ClassId(0)),
+        BParam::Builder => JType::StringBuilder,
     }
 }
 
@@ -6015,20 +6151,23 @@ impl BodyGen<'_> {
         JType::Str
     }
 
-    /// `new StringBuilder()` or `new StringBuilder(String)`.
+    /// `new StringBuilder()`, `new StringBuilder(String)` or
+    /// `new StringBuilder(int)` (an initial-capacity hint caturra ignores —
+    /// it does not model capacity, and nothing observes it).
     fn new_string_builder(&mut self, args: &[Expr], span: SourceSpan) -> JType {
         let class_index = intern_class(self.pool, "java/lang/StringBuilder");
         self.code.push_op_u16(op::NEW, class_index, 1);
         self.code.push_op(op::DUP, 1);
         let descriptor = match args {
             [] => "()V",
-            [arg] => {
-                let ty = self.expr(arg);
-                if ty != JType::Str && ty != JType::Error {
-                    self.error(span, "new StringBuilder(...) takes a String");
+            [arg] => match self.expr(arg) {
+                JType::Str | JType::Error => "(Ljava/lang/String;)V",
+                ty if widens(ty, JType::Int, self.table) => "(I)V",
+                _ => {
+                    self.error(span, "new StringBuilder(...) takes a String or an int");
+                    "(Ljava/lang/String;)V"
                 }
-                "(Ljava/lang/String;)V"
-            }
+            },
             _ => {
                 self.error(span, "new StringBuilder(...) takes at most one argument");
                 "()V"
@@ -6471,22 +6610,12 @@ impl BodyGen<'_> {
                         receiver_ty.describe(self.table)
                     ),
                 );
-            } else if let Some(reason) = unsupported_member(
-                match receiver_ty {
-                    JType::Str => "String",
-                    JType::Scanner => "Scanner",
-                    JType::List(_) => "ArrayList",
-                    _ => "",
-                },
-                method,
-            ) {
+            } else if let Some(reason) =
+                unsupported_member(receiver_class_name(receiver_ty), method)
+            {
                 // A real Java method we cannot model: say so honestly
                 // instead of a misleading "cannot find symbol".
-                let class = match receiver_ty {
-                    JType::Scanner => "Scanner",
-                    JType::List(_) => "ArrayList",
-                    _ => "String",
-                };
+                let class = receiver_class_name(receiver_ty);
                 self.error(
                     span,
                     format!("{class}.{method} exists in Java, but {reason}"),

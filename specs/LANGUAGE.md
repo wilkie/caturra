@@ -146,6 +146,25 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     (`StringIndexOutOfBoundsException: String index out of range: 5`).
     `equals` accepts only strings/null (a documented narrowing of
     `equals(Object)`).
+  - The full Java 11 `StringBuilder` API (2026-07-09), over the same
+    UTF-16 code units `String` uses, so indices agree even across
+    supplementary characters: `append` (every primitive, `char[]`,
+    `String`, `Object`), `appendCodePoint`, `insert` (the same
+    overloads, at any offset), `delete`/`deleteCharAt`/`replace`
+    (whose `end` is clamped to the length, unlike `substring`'s),
+    `reverse` (which keeps a surrogate pair together, as Java's does),
+    `setCharAt`/`setLength` (which pads with the null
+    character, as Java does), `indexOf`/
+    `lastIndexOf` (both with and without a start), `substring`/
+    `subSequence`, `charAt`/`length`/`getChars`, `compareTo`, the
+    code-point family (`codePointAt`/`codePointBefore`/`codePointCount`/
+    `offsetByCodePoints`), and `toString`. Pinned against a real JDK by
+    `diff_string_builder_mutators`, `_search_and_extract` and
+    `_code_points_and_errors`. `new StringBuilder(int)` accepts the
+    capacity hint and ignores it: caturra models a builder's contents,
+    not its backing array, so `ensureCapacity`/`trimToSize` are the
+    no-ops they observably are, and `capacity()` — having no honest
+    answer — reports a reason rather than a cannot-find-symbol.
   - The full Java 11 `Math` API for int/double (2026-07-03): trig,
     hyperbolic, log/exp families, `cbrt`/`hypot`/`rint`/`signum`/
     `toDegrees`/`toRadians`/`copySign`/`ulp`/`nextUp`/`nextDown`/

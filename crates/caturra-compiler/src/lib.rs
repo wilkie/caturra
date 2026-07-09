@@ -560,7 +560,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// caturra targets the Java 11 subset, so an API added later must be
     /// rejected exactly as javac 11 rejects it. Accepting it would be worse than
     /// missing it: the student's code compiles here and fails on a real JDK.
@@ -588,6 +587,43 @@ mod tests {
             let message = &result.diagnostics[0].message;
             assert!(message.contains(want), "expected {want:?}, got: {message}");
         }
+    }
+
+    /// A real Java 11 member caturra cannot model says so, rather than
+    /// pretending it never existed.
+    #[test]
+    fn string_builder_capacity_explains_itself() {
+        let result = compile(&[SourceFile {
+            path: String::from("Main.java"),
+            text: String::from(
+                "class Main { static void run() { int c = new StringBuilder().capacity(); } }",
+            ),
+        }]);
+        assert!(!result.success());
+        assert_eq!(
+            result.diagnostics[0].message,
+            "StringBuilder.capacity exists in Java, but caturra does not model a builder's \
+             capacity, only its contents"
+        );
+    }
+
+    /// The honest-reason table is keyed by class: a `File` method must not
+    /// borrow the explanation written for the `String` method of that name.
+    #[test]
+    fn the_unsupported_reason_does_not_leak_across_classes() {
+        let result = compile(&[SourceFile {
+            path: String::from("Main.java"),
+            text: String::from(
+                "import java.io.File; \
+                 class Main { static void run() { new File(\"a\").matches(\"b\"); } }",
+            ),
+        }]);
+        assert!(!result.success());
+        let message = &result.diagnostics[0].message;
+        assert!(
+            message.contains("cannot find symbol") && !message.contains("String.matches"),
+            "got: {message}"
+        );
     }
 
     #[test]

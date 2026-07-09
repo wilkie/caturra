@@ -125,6 +125,11 @@ pub fn invoke_special(
         // no-arg case also covers `super()` into a library throwable
         // from a user exception class.
         ("<init>", "()V" | "(Ljava/io/InputStream;)V") => Ok(()),
+        // `new StringBuilder(capacity)`: a sizing hint with no observable
+        // effect — caturra models contents, not the backing array.
+        ("<init>", "(I)V") if matches!(heap.get(receiver), Some(HeapObject::StringBuilder(_))) => {
+            Ok(())
+        }
         ("<init>", "(Ljava/lang/String;)V") => {
             let text = string_arg(heap, &args[0])?;
             match heap.get_mut(receiver) {
@@ -316,33 +321,8 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
-        (HeapObject::StringBuilder(_), "append") => {
-            let appended = append_argument_text(heap, descriptor, args)?;
-            let Some(HeapObject::StringBuilder(units)) = heap.get_mut(receiver) else {
-                unreachable!("receiver kind checked above");
-            };
-            units.extend(appended.encode_utf16());
-            Ok(Some(JValue::Ref(Some(receiver))))
-        }
-        (HeapObject::StringBuilder(units), "toString") => {
-            let units = units.clone();
-            let text = heap.alloc(HeapObject::JavaString(units));
-            Ok(Some(JValue::Ref(Some(text))))
-        }
-        (HeapObject::StringBuilder(units), "length") => Ok(Some(JValue::Int(
-            i32::try_from(units.len()).unwrap_or(i32::MAX),
-        ))),
-        (HeapObject::StringBuilder(units), "charAt") => {
-            let index = match args.first() {
-                Some(JValue::Int(i)) => usize::try_from(*i).unwrap_or(usize::MAX),
-                _ => usize::MAX,
-            };
-            match units.get(index) {
-                Some(unit) => Ok(Some(JValue::Int(i32::from(*unit)))),
-                None => Err(VmError::UncaughtException(format!(
-                    "java.lang.StringIndexOutOfBoundsException: index {index}"
-                ))),
-            }
+        (HeapObject::StringBuilder(_), _) => {
+            builder_method(heap, receiver, method, descriptor, args)
         }
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
@@ -647,40 +627,7 @@ fn string_method(
                 JValue::Ref(Some(target)),
                 JValue::Int(at),
             ],
-        ) => {
-            let source = usize::try_from(*begin)
-                .ok()
-                .zip(usize::try_from(*end).ok())
-                .filter(|(b, e)| b <= e && *e <= units.len())
-                .map(|(b, e)| units[b..e].to_vec())
-                .ok_or_else(|| {
-                    throw(format!(
-                        "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {end}, \
-                         length {}",
-                        units.len()
-                    ))
-                })?;
-            let at = usize::try_from(*at).map_err(|_| {
-                throw(format!(
-                    "java.lang.ArrayIndexOutOfBoundsException: Index {at} out of bounds"
-                ))
-            })?;
-            let Some(HeapObject::IntArray(values)) = heap.get_mut(*target) else {
-                return Err(throw("java.lang.NullPointerException"));
-            };
-            if at + source.len() > values.len() {
-                let bad = at + source.len() - 1;
-                let len = values.len();
-                return Err(throw(format!(
-                    "java.lang.ArrayIndexOutOfBoundsException: Index {bad} out of bounds \
-                     for length {len}"
-                )));
-            }
-            for (index, unit) in source.iter().enumerate() {
-                values[at + index] = i32::from(*unit);
-            }
-            Ok(None)
-        }
+        ) => get_chars(heap, &units, *begin, *end, *target, *at),
         ("toString", []) => Ok(Some(JValue::Ref(Some(receiver)))),
         ("intern", []) => {
             let canonical = heap.find_string(&units).unwrap_or(receiver);
@@ -690,89 +637,400 @@ fn string_method(
             code_point_at(&units, *index).map(|cp| Some(JValue::Int(cp)))
         }
         ("codePointBefore", [JValue::Int(index)]) => {
-            let before = index - 1;
-            if before < 0 {
-                return Err(throw(format!(
-                    "java.lang.StringIndexOutOfBoundsException: index {index}"
-                )));
-            }
-            // A low surrogate preceded by a high one forms a pair.
-            let at = usize::try_from(before).unwrap_or(usize::MAX);
-            if at > 0
-                && units.get(at).is_some_and(|u| (0xDC00..0xE000).contains(u))
-                && units
-                    .get(at - 1)
-                    .is_some_and(|u| (0xD800..0xDC00).contains(u))
-            {
-                return code_point_at(&units, before - 1).map(|cp| Some(JValue::Int(cp)));
-            }
-            code_point_at(&units, before).map(|cp| Some(JValue::Int(cp)))
+            code_point_before(&units, *index).map(|cp| Some(JValue::Int(cp)))
         }
         ("codePointCount", [JValue::Int(begin), JValue::Int(end)]) => {
-            let range = usize::try_from(*begin)
-                .ok()
-                .zip(usize::try_from(*end).ok())
-                .filter(|(b, e)| b <= e && *e <= units.len())
-                .ok_or_else(|| {
-                    throw(format!(
-                        "java.lang.IndexOutOfBoundsException: begin {begin}, end {end}, \
-                         length {}",
-                        units.len()
-                    ))
-                })?;
-            let count = char::decode_utf16(units[range.0..range.1].iter().copied()).count();
-            Ok(Some(JValue::Int(i32::try_from(count).unwrap_or(i32::MAX))))
+            code_point_count(&units, *begin, *end).map(|n| Some(JValue::Int(n)))
         }
         ("offsetByCodePoints", [JValue::Int(index), JValue::Int(offset)]) => {
-            let mut at = usize::try_from(*index)
-                .map_err(|_| throw(format!("java.lang.IndexOutOfBoundsException: {index}")))?;
-            if at > units.len() {
-                return Err(throw(format!(
-                    "java.lang.IndexOutOfBoundsException: {index}"
-                )));
-            }
-            let mut remaining = *offset;
-            while remaining > 0 {
-                if at >= units.len() {
-                    return Err(throw(format!(
-                        "java.lang.IndexOutOfBoundsException: {offset}"
-                    )));
-                }
-                at += if units.get(at).is_some_and(|u| (0xD800..0xDC00).contains(u))
-                    && units
-                        .get(at + 1)
-                        .is_some_and(|u| (0xDC00..0xE000).contains(u))
-                {
-                    2
-                } else {
-                    1
-                };
-                remaining -= 1;
-            }
-            while remaining < 0 {
-                if at == 0 {
-                    return Err(throw(format!(
-                        "java.lang.IndexOutOfBoundsException: {offset}"
-                    )));
-                }
-                at -= if at >= 2
-                    && units
-                        .get(at - 1)
-                        .is_some_and(|u| (0xDC00..0xE000).contains(u))
-                    && units
-                        .get(at - 2)
-                        .is_some_and(|u| (0xD800..0xDC00).contains(u))
-                {
-                    2
-                } else {
-                    1
-                };
-                remaining += 1;
-            }
-            Ok(Some(JValue::Int(i32::try_from(at).unwrap_or(i32::MAX))))
+            offset_by_code_points(&units, *index, *offset).map(|at| Some(JValue::Int(at)))
         }
         _ => Err(VmError::UnknownIntrinsic(format!("String.{method}"))),
     }
+}
+
+/// `getChars(begin, end, dest, at)` — copy UTF-16 units into a `char[]`.
+/// Shared by `String` and `StringBuilder`.
+fn get_chars(
+    heap: &mut Heap,
+    units: &[u16],
+    begin: i32,
+    end: i32,
+    target: HeapRef,
+    at: i32,
+) -> Result<Option<JValue>, VmError> {
+    let source = usize::try_from(begin)
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .filter(|(b, e)| b <= e && *e <= units.len())
+        .map(|(b, e)| units[b..e].to_vec())
+        .ok_or_else(|| {
+            throw(format!(
+                "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {end}, \
+                 length {}",
+                units.len()
+            ))
+        })?;
+    let at = usize::try_from(at).map_err(|_| {
+        throw(format!(
+            "java.lang.ArrayIndexOutOfBoundsException: Index {at} out of bounds"
+        ))
+    })?;
+    let Some(HeapObject::IntArray(values)) = heap.get_mut(target) else {
+        return Err(throw("java.lang.NullPointerException"));
+    };
+    if at + source.len() > values.len() {
+        let bad = at + source.len() - 1;
+        let len = values.len();
+        return Err(throw(format!(
+            "java.lang.ArrayIndexOutOfBoundsException: Index {bad} out of bounds \
+             for length {len}"
+        )));
+    }
+    for (index, unit) in source.iter().enumerate() {
+        values[at + index] = i32::from(*unit);
+    }
+    Ok(None)
+}
+
+/// `codePointBefore(index)`: the code point ending just before `index`.
+fn code_point_before(units: &[u16], index: i32) -> Result<i32, VmError> {
+    let before = index - 1;
+    if before < 0 {
+        return Err(throw(format!(
+            "java.lang.StringIndexOutOfBoundsException: index {index}"
+        )));
+    }
+    // A low surrogate preceded by a high one forms a pair.
+    let at = usize::try_from(before).unwrap_or(usize::MAX);
+    if at > 0
+        && units.get(at).is_some_and(|u| is_low_surrogate(*u))
+        && units.get(at - 1).is_some_and(|u| is_high_surrogate(*u))
+    {
+        return code_point_at(units, before - 1);
+    }
+    code_point_at(units, before)
+}
+
+/// `codePointCount(begin, end)`: code points in the half-open range.
+fn code_point_count(units: &[u16], begin: i32, end: i32) -> Result<i32, VmError> {
+    let (begin, end) = usize::try_from(begin)
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .filter(|(b, e)| b <= e && *e <= units.len())
+        .ok_or_else(|| {
+            throw(format!(
+                "java.lang.IndexOutOfBoundsException: begin {begin}, end {end}, length {}",
+                units.len()
+            ))
+        })?;
+    let count = char::decode_utf16(units[begin..end].iter().copied()).count();
+    Ok(i32::try_from(count).unwrap_or(i32::MAX))
+}
+
+/// `offsetByCodePoints(index, offset)`: the unit index `offset` code
+/// points away from `index`.
+fn offset_by_code_points(units: &[u16], index: i32, offset: i32) -> Result<i32, VmError> {
+    let mut at = usize::try_from(index)
+        .ok()
+        .filter(|at| *at <= units.len())
+        .ok_or_else(|| throw(format!("java.lang.IndexOutOfBoundsException: {index}")))?;
+    let out_of_range = || throw(format!("java.lang.IndexOutOfBoundsException: {offset}"));
+    let mut remaining = offset;
+    while remaining > 0 {
+        if at >= units.len() {
+            return Err(out_of_range());
+        }
+        at += if units.get(at).is_some_and(|u| is_high_surrogate(*u))
+            && units.get(at + 1).is_some_and(|u| is_low_surrogate(*u))
+        {
+            2
+        } else {
+            1
+        };
+        remaining -= 1;
+    }
+    while remaining < 0 {
+        if at == 0 {
+            return Err(out_of_range());
+        }
+        at -= if at >= 2
+            && units.get(at - 1).is_some_and(|u| is_low_surrogate(*u))
+            && units.get(at - 2).is_some_and(|u| is_high_surrogate(*u))
+        {
+            2
+        } else {
+            1
+        };
+        remaining += 1;
+    }
+    Ok(i32::try_from(at).unwrap_or(i32::MAX))
+}
+
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..0xDC00).contains(&unit)
+}
+
+fn is_low_surrogate(unit: u16) -> bool {
+    (0xDC00..0xE000).contains(&unit)
+}
+
+/// `java.lang.StringBuilder` instance methods. The builder stores UTF-16
+/// code units, exactly as `String` does, so indices mean what Java says
+/// they mean even across supplementary characters.
+///
+/// `capacity` is deliberately absent — caturra models a builder's contents
+/// but not its backing array, so there is no honest number to return.
+/// `ensureCapacity`/`trimToSize` are therefore the no-ops they observably
+/// are without it.
+#[allow(clippy::too_many_lines)] // one method table
+fn builder_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let Some(HeapObject::StringBuilder(units)) = heap.get(receiver) else {
+        unreachable!("receiver kind checked by caller");
+    };
+    let units = units.clone();
+    let count = units.len();
+    let len = i32::try_from(count).unwrap_or(i32::MAX);
+    let params = descriptor_params(descriptor);
+
+    // Resolve a String argument's code units (null → NPE like Java).
+    let arg_units = |value: &JValue| -> Result<Vec<u16>, VmError> {
+        match value {
+            JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                Some(HeapObject::JavaString(other)) => Ok(other.clone()),
+                _ => Err(throw("java.lang.ClassCastException: not a String")),
+            },
+            JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+            _ => Err(throw("java.lang.VerifyError: expected a String argument")),
+        }
+    };
+
+    match (method, args) {
+        ("length", []) => Ok(Some(JValue::Int(len))),
+        ("charAt", [JValue::Int(index)]) => {
+            let at = check_index(*index, count)?;
+            Ok(Some(JValue::Int(i32::from(units[at]))))
+        }
+        ("toString", []) => {
+            let text = heap.alloc(HeapObject::JavaString(units));
+            Ok(Some(JValue::Ref(Some(text))))
+        }
+        ("append", [value]) => {
+            let mut appended = units;
+            appended.extend(builder_value_text(heap, params, value)?);
+            builder_store(heap, receiver, appended);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("appendCodePoint", [JValue::Int(code_point)]) => {
+            let mut appended = units;
+            appended.extend(code_point_units(*code_point)?);
+            builder_store(heap, receiver, appended);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("insert", [JValue::Int(offset), value]) => {
+            // The offset is the first parameter; the value's own descriptor
+            // is whatever follows it.
+            let value_units = builder_value_text(heap, &params["I".len()..], value)?;
+            let at = check_offset(*offset, count)?;
+            let mut inserted = units;
+            inserted.splice(at..at, value_units);
+            builder_store(heap, receiver, inserted);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("delete", [JValue::Int(start), JValue::Int(end)]) => {
+            let (start, end) = check_range(*start, *end, count)?;
+            let mut deleted = units;
+            deleted.drain(start..end);
+            builder_store(heap, receiver, deleted);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("deleteCharAt", [JValue::Int(index)]) => {
+            let at = check_index(*index, count)?;
+            let mut deleted = units;
+            deleted.remove(at);
+            builder_store(heap, receiver, deleted);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("replace", [JValue::Int(start), JValue::Int(end), value]) => {
+            let value_units = arg_units(value)?;
+            let (start, end) = check_range(*start, *end, count)?;
+            let mut replaced = units;
+            replaced.splice(start..end, value_units);
+            builder_store(heap, receiver, replaced);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("reverse", []) => {
+            builder_store(heap, receiver, reverse_units(&units));
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("setCharAt", [JValue::Int(index), JValue::Int(ch)]) => {
+            let at = check_index(*index, count)?;
+            let mut updated = units;
+            updated[at] = u16::try_from(*ch).unwrap_or(u16::MAX);
+            builder_store(heap, receiver, updated);
+            Ok(None)
+        }
+        ("setLength", [JValue::Int(new_length)]) => {
+            let new_length = usize::try_from(*new_length).map_err(|_| {
+                throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: newLength {new_length}"
+                ))
+            })?;
+            let mut resized = units;
+            // Growing pads with the null character, as Java does.
+            resized.resize(new_length, 0);
+            builder_store(heap, receiver, resized);
+            Ok(None)
+        }
+        // caturra does not model capacity, so there is nothing to reserve
+        // or release. See the doc comment above.
+        ("ensureCapacity", [JValue::Int(_)]) | ("trimToSize", []) => Ok(None),
+        ("indexOf", [needle]) => Ok(Some(JValue::Int(index_of(&units, &arg_units(needle)?)))),
+        ("indexOf", [needle, JValue::Int(from)]) => Ok(Some(JValue::Int(index_of_from(
+            &units,
+            &arg_units(needle)?,
+            *from,
+        )))),
+        ("lastIndexOf", [needle]) => Ok(Some(JValue::Int(last_index_of_from(
+            &units,
+            &arg_units(needle)?,
+            i32::MAX,
+        )))),
+        ("lastIndexOf", [needle, JValue::Int(from)]) => Ok(Some(JValue::Int(last_index_of_from(
+            &units,
+            &arg_units(needle)?,
+            *from,
+        )))),
+        ("substring", [JValue::Int(begin)]) => substring(heap, &units, *begin, len),
+        // subSequence is substring by another name (CharSequence view).
+        ("substring" | "subSequence", [JValue::Int(begin), JValue::Int(end)]) => {
+            substring_range(heap, &units, *begin, *end)
+        }
+        ("compareTo", [other]) => {
+            let other = match other {
+                JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                    Some(HeapObject::StringBuilder(other)) => other.clone(),
+                    _ => return Err(throw("java.lang.ClassCastException: not a StringBuilder")),
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            Ok(Some(JValue::Int(compare_utf16(&units, &other))))
+        }
+        (
+            "getChars",
+            [
+                JValue::Int(begin),
+                JValue::Int(end),
+                JValue::Ref(Some(target)),
+                JValue::Int(at),
+            ],
+        ) => get_chars(heap, &units, *begin, *end, *target, *at),
+        ("codePointAt", [JValue::Int(index)]) => {
+            code_point_at(&units, *index).map(|cp| Some(JValue::Int(cp)))
+        }
+        ("codePointBefore", [JValue::Int(index)]) => {
+            code_point_before(&units, *index).map(|cp| Some(JValue::Int(cp)))
+        }
+        ("codePointCount", [JValue::Int(begin), JValue::Int(end)]) => {
+            code_point_count(&units, *begin, *end).map(|n| Some(JValue::Int(n)))
+        }
+        ("offsetByCodePoints", [JValue::Int(index), JValue::Int(offset)]) => {
+            offset_by_code_points(&units, *index, *offset).map(|at| Some(JValue::Int(at)))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("StringBuilder.{method}"))),
+    }
+}
+
+/// Overwrite a builder's contents.
+fn builder_store(heap: &mut Heap, receiver: HeapRef, units: Vec<u16>) {
+    let Some(HeapObject::StringBuilder(slot)) = heap.get_mut(receiver) else {
+        unreachable!("receiver kind checked by caller");
+    };
+    *slot = units;
+}
+
+/// An index into existing contents (`0 <= index < count`).
+fn check_index(index: i32, count: usize) -> Result<usize, VmError> {
+    usize::try_from(index)
+        .ok()
+        .filter(|at| *at < count)
+        .ok_or_else(|| {
+            throw(format!(
+                "java.lang.StringIndexOutOfBoundsException: index {index}, length {count}"
+            ))
+        })
+}
+
+/// A position between characters (`0 <= offset <= count`), as `insert` takes.
+fn check_offset(offset: i32, count: usize) -> Result<usize, VmError> {
+    usize::try_from(offset)
+        .ok()
+        .filter(|at| *at <= count)
+        .ok_or_else(|| {
+            throw(format!(
+                "java.lang.StringIndexOutOfBoundsException: offset {offset}, length {count}"
+            ))
+        })
+}
+
+/// A `delete`/`replace` range: `start` must be a valid offset no greater
+/// than `end`, and `end` is clamped to the length (Java tolerates a large
+/// `end` here, unlike `substring`).
+fn check_range(start: i32, end: i32, count: usize) -> Result<(usize, usize), VmError> {
+    let bad = || {
+        throw(format!(
+            "java.lang.StringIndexOutOfBoundsException: start {start}, end {end}, length {count}"
+        ))
+    };
+    if start > end {
+        return Err(bad());
+    }
+    let start = usize::try_from(start).ok().filter(|s| *s <= count);
+    let start = start.ok_or_else(bad)?;
+    let end = usize::try_from(end).unwrap_or(usize::MAX).min(count);
+    Ok((start, end))
+}
+
+/// The UTF-16 units of a code point, for `appendCodePoint`.
+fn code_point_units(code_point: i32) -> Result<Vec<u16>, VmError> {
+    let valid = u32::try_from(code_point)
+        .ok()
+        .filter(|cp| *cp <= 0x0010_FFFF)
+        .ok_or_else(|| throw(format!("java.lang.IllegalArgumentException: {code_point}")))?;
+    // Surrogate code points have no scalar value but are still one `char`.
+    if (0xD800..0xE000).contains(&valid) {
+        return Ok(vec![u16::try_from(valid).unwrap_or(u16::MAX)]);
+    }
+    let Some(ch) = char::from_u32(valid) else {
+        return Err(throw(format!(
+            "java.lang.IllegalArgumentException: {code_point}"
+        )));
+    };
+    let mut buffer = [0u16; 2];
+    Ok(ch.encode_utf16(&mut buffer).to_vec())
+}
+
+/// `StringBuilder.reverse()`: reverse the code units, but keep the two
+/// halves of a valid surrogate pair in order — Java reverses by code point.
+fn reverse_units(units: &[u16]) -> Vec<u16> {
+    let mut reversed = Vec::with_capacity(units.len());
+    let mut at = units.len();
+    while at > 0 {
+        if at >= 2 && is_low_surrogate(units[at - 1]) && is_high_surrogate(units[at - 2]) {
+            reversed.extend_from_slice(&units[at - 2..at]);
+            at -= 2;
+        } else {
+            reversed.push(units[at - 1]);
+            at -= 1;
+        }
+    }
+    reversed
 }
 
 /// `String.codePointAt`: the code point at a UTF-16 index (pairs
@@ -2931,39 +3189,59 @@ fn object_display(heap: &Heap, value: JValue) -> String {
     }
 }
 
-fn append_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result<String, VmError> {
-    let text = match (descriptor, args) {
-        ("(I)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => v.to_string(),
-        ("(J)Ljava/lang/StringBuilder;", [JValue::Long(v)]) => v.to_string(),
-        ("(F)Ljava/lang/StringBuilder;", [JValue::Float(v)]) => java_float_to_string(*v),
-        ("(Z)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => {
-            if *v != 0 { "true" } else { "false" }.to_owned()
-        }
-        ("(C)Ljava/lang/StringBuilder;", [JValue::Int(v)]) => {
-            let unit = u32::try_from(*v).unwrap_or(u32::from(u16::MAX));
-            char::from_u32(unit).map_or_else(|| String::from('\u{FFFD}'), String::from)
-        }
-        ("(D)Ljava/lang/StringBuilder;", [JValue::Double(v)]) => java_double_to_string(*v),
-        ("(Ljava/lang/String;)Ljava/lang/StringBuilder;", [JValue::Ref(reference)]) => {
-            match reference {
-                None => String::from("null"),
-                Some(reference) => heap.string_text(*reference).ok_or_else(|| {
-                    VmError::UnknownIntrinsic(String::from(
-                        "append argument is not a string object",
-                    ))
-                })?,
-            }
-        }
-        // `append(Object)` — `String.valueOf(Object)` semantics (used when a
-        // reflection handle like a Class type argument is concatenated).
-        ("(Ljava/lang/Object;)Ljava/lang/StringBuilder;", [value]) => object_display(heap, *value),
+fn builder_value_text(heap: &Heap, param: &str, value: &JValue) -> Result<Vec<u16>, VmError> {
+    let text = match (param, value) {
+        ("I", JValue::Int(v)) => v.to_string(),
+        ("J", JValue::Long(v)) => v.to_string(),
+        ("F", JValue::Float(v)) => java_float_to_string(*v),
+        ("Z", JValue::Int(v)) => if *v != 0 { "true" } else { "false" }.to_owned(),
+        ("D", JValue::Double(v)) => java_double_to_string(*v),
+        // A `char` is one UTF-16 unit, even an unpaired surrogate — which
+        // `char::from_u32` would reject. Keep the raw unit.
+        ("C", JValue::Int(v)) => return Ok(vec![u16::try_from(*v).unwrap_or(u16::MAX)]),
+        ("[C", value) => return char_array_units(heap, value),
+        ("Ljava/lang/String;", JValue::Ref(reference)) => match reference {
+            None => String::from("null"),
+            Some(reference) => heap.string_text(*reference).ok_or_else(|| {
+                VmError::UnknownIntrinsic(String::from("argument is not a string object"))
+            })?,
+        },
+        // `append(Object)`/`insert(int, Object)` — `String.valueOf(Object)`
+        // semantics (used when a reflection handle like a Class type argument
+        // is concatenated).
+        ("Ljava/lang/Object;", value) => object_display(heap, *value),
         _ => {
             return Err(VmError::UnknownIntrinsic(format!(
-                "StringBuilder.append overload {descriptor}"
+                "StringBuilder overload with parameter {param}"
             )));
         }
     };
-    Ok(text)
+    Ok(text.encode_utf16().collect())
+}
+
+/// The UTF-16 units of a `char[]` argument (`char` values live in an
+/// `IntArray`, so an unpaired surrogate survives the round trip).
+fn char_array_units(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => match heap.get(*reference) {
+            Some(HeapObject::IntArray(values)) => Ok(values
+                .iter()
+                .map(|v| u16::try_from(*v).unwrap_or(u16::MAX))
+                .collect()),
+            _ => Err(throw("java.lang.ClassCastException: not a char[]")),
+        },
+        JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+        _ => Err(throw("java.lang.VerifyError: expected a char[] argument")),
+    }
+}
+
+/// The parameter descriptors of a method descriptor, i.e. what sits
+/// between the parentheses (`"(ILjava/lang/String;)V"` → `"ILjava/lang/String;"`).
+fn descriptor_params(descriptor: &str) -> &str {
+    descriptor
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map_or("", |(params, _)| params)
 }
 
 /// Render a print/println argument the way Java would.

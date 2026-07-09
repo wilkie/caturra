@@ -8183,3 +8183,73 @@ fn anonymous_class_forwards_super_args_and_captures_a_local() {
     );
     assert_eq!(out, "105\n");
 }
+
+/// The Java 11 `StringBuilder` surface beyond `append`/`toString`. Every line
+/// here is cross-checked against a real JDK by the `diff_string_builder_*`
+/// differential tests; this one keeps the coverage on a JDK-less CI box.
+#[test]
+fn string_builder_exposes_the_java_11_api() {
+    let out = run_stdout(
+        r#"
+        public class B {
+            public static void main(String[] args) {
+                StringBuilder b = new StringBuilder("abcdef");
+                System.out.println(b.reverse());
+                System.out.println(b.insert(0, "<").insert(b.length(), 42));
+                System.out.println(b.delete(1, 3).deleteCharAt(0).replace(0, 2, "XY"));
+                b.setCharAt(0, 'z');
+                b.setLength(3);
+                System.out.println(b + " " + b.length() + " " + b.charAt(2));
+
+                StringBuilder w = new StringBuilder("hello world, hello");
+                System.out.println(w.indexOf("hello") + " " + w.indexOf("hello", 1)
+                        + " " + w.lastIndexOf("hello") + " " + w.indexOf("zzz"));
+                System.out.println(w.substring(6) + "|" + w.substring(0, 5) + "|" + w.subSequence(2, 4));
+                System.out.println(new StringBuilder("abc").compareTo(new StringBuilder("abd")));
+
+                // An initial-capacity hint is accepted and ignored; capacity is
+                // not modelled, so ensureCapacity/trimToSize are no-ops.
+                StringBuilder c = new StringBuilder(64);
+                c.ensureCapacity(200);
+                c.append(new char[] {'x', 'y'});
+                c.trimToSize();
+                c.appendCodePoint(0x1F600);
+                System.out.println(c + " " + c.length() + " " + c.codePointCount(0, c.length()));
+
+                // reverse() keeps a surrogate pair together, so the pair lands
+                // at the front intact rather than as two swapped halves.
+                System.out.println(new StringBuilder(c.toString()).reverse().codePointAt(0));
+
+                char[] dest = new char[3];
+                w.getChars(0, 2, dest, 1);
+                System.out.println(dest[0] + " " + dest[1] + " " + dest[2]);
+
+                StringBuilder e = new StringBuilder();
+                try { e.deleteCharAt(0); } catch (StringIndexOutOfBoundsException x) { System.out.println("deleteCharAt"); }
+                try { e.insert(1, "x"); } catch (StringIndexOutOfBoundsException x) { System.out.println("insert"); }
+                try { e.appendCodePoint(-1); } catch (IllegalArgumentException x) { System.out.println("appendCodePoint"); }
+                // delete tolerates an end past the length.
+                System.out.println(new StringBuilder("hello").delete(2, 99));
+            }
+        }
+        "#,
+        "B",
+    );
+    assert_eq!(
+        out,
+        "fedcba\n\
+         <fedcba42\n\
+         XYba42\n\
+         zYb 3 b\n\
+         0 13 13 -1\n\
+         world, hello|hello|ll\n\
+         -1\n\
+         xy\u{1F600} 4 3\n\
+         128512\n\
+         \u{0} h e\n\
+         deleteCharAt\n\
+         insert\n\
+         appendCodePoint\n\
+         he\n"
+    );
+}

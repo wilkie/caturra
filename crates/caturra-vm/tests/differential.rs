@@ -3087,3 +3087,110 @@ public class DiffFieldAcc {
 }
 "#
 );
+
+differential_test!(
+    diff_string_builder_mutators,
+    "DiffBuilderMutate",
+    r#"
+public class DiffBuilderMutate {
+    public static void main(String[] args) {
+        StringBuilder b = new StringBuilder("Hello");
+        b.append(", ").append("world").append('!');
+        b.append(1).append(2L).append(3.5).append(0.5f).append(true);
+        b.append(new char[] {'[', ']'});
+        System.out.println(b);
+
+        StringBuilder c = new StringBuilder("abcdef");
+        System.out.println(c.reverse());
+        System.out.println(c.insert(0, "<").insert(c.length(), ">"));
+        System.out.println(c.insert(1, 42).insert(1, 'x').insert(1, true));
+        System.out.println(c.insert(0, 1.5).insert(0, 2L).insert(0, new char[] {'-'}));
+        System.out.println(c.delete(1, 3));
+        System.out.println(c.deleteCharAt(0));
+        System.out.println(c.replace(0, 2, "XY"));
+        System.out.println(c.replace(2, 1000, "!"));
+
+        c.setCharAt(0, 'z');
+        System.out.println(c);
+        c.setLength(2);
+        System.out.println(c + " " + c.length());
+        c.setLength(4);
+        System.out.println(c.length() + " " + (int) c.charAt(3));
+
+        StringBuilder d = new StringBuilder(64);
+        d.ensureCapacity(200);
+        d.append("hi");
+        d.trimToSize();
+        System.out.println(d + " " + d.length());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_string_builder_search_and_extract,
+    "DiffBuilderRead",
+    r#"
+public class DiffBuilderRead {
+    public static void main(String[] args) {
+        StringBuilder b = new StringBuilder("hello world, hello");
+        System.out.println(b.length() + " " + b.charAt(1));
+        System.out.println(b.indexOf("hello") + " " + b.indexOf("hello", 1));
+        System.out.println(b.lastIndexOf("hello") + " " + b.lastIndexOf("hello", 5));
+        System.out.println(b.indexOf("zzz") + " " + b.lastIndexOf("zzz"));
+        System.out.println(b.substring(6) + "|" + b.substring(0, 5) + "|" + b.subSequence(2, 4));
+
+        char[] dest = new char[7];
+        for (int i = 0; i < dest.length; i++) {
+            dest[i] = '.';
+        }
+        b.getChars(0, 5, dest, 1);
+        for (int i = 0; i < dest.length; i++) {
+            System.out.print(dest[i]);
+        }
+        System.out.println();
+
+        System.out.println(new StringBuilder("abc").compareTo(new StringBuilder("abd")));
+        System.out.println(new StringBuilder("abd").compareTo(new StringBuilder("abc")));
+        System.out.println(new StringBuilder("abc").compareTo(new StringBuilder("abc")));
+        System.out.println(new StringBuilder("abc").compareTo(new StringBuilder("ab")));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_string_builder_code_points_and_errors,
+    "DiffBuilderEdges",
+    r#"
+public class DiffBuilderEdges {
+    public static void main(String[] args) {
+        // A supplementary character is two code units but one code point,
+        // and reverse() must not split the surrogate pair.
+        StringBuilder b = new StringBuilder("a");
+        b.appendCodePoint(0x1F600);
+        b.append('z');
+        System.out.println(b.length() + " " + b.codePointCount(0, b.length()));
+        System.out.println(b.codePointAt(1) + " " + b.codePointBefore(3));
+        System.out.println(b.offsetByCodePoints(0, 2) + " " + b.offsetByCodePoints(4, -2));
+        StringBuilder reversed = new StringBuilder(b.toString()).reverse();
+        System.out.println(reversed.codePointAt(1) + " " + reversed.charAt(0));
+
+        StringBuilder e = new StringBuilder();
+        try { e.charAt(0); } catch (StringIndexOutOfBoundsException x) { System.out.println("charAt"); }
+        try { e.deleteCharAt(0); } catch (StringIndexOutOfBoundsException x) { System.out.println("deleteCharAt"); }
+        try { e.insert(1, "x"); } catch (StringIndexOutOfBoundsException x) { System.out.println("insert"); }
+        try { e.setLength(-1); } catch (StringIndexOutOfBoundsException x) { System.out.println("setLength"); }
+        try { e.setCharAt(0, 'a'); } catch (StringIndexOutOfBoundsException x) { System.out.println("setCharAt"); }
+        try { e.delete(1, 2); } catch (StringIndexOutOfBoundsException x) { System.out.println("delete"); }
+        try { e.replace(2, 1, "x"); } catch (StringIndexOutOfBoundsException x) { System.out.println("replace"); }
+        try { e.substring(1); } catch (StringIndexOutOfBoundsException x) { System.out.println("substring"); }
+        try { e.appendCodePoint(-1); } catch (IllegalArgumentException x) { System.out.println("appendCodePoint"); }
+
+        // delete/replace tolerate an end past the length; substring does not.
+        System.out.println(new StringBuilder("hello").delete(2, 99));
+        System.out.println(new StringBuilder("hello").replace(1, 99, "-"));
+    }
+}
+"#
+);
