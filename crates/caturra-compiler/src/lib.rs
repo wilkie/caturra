@@ -568,6 +568,10 @@ mod tests {
         }]);
         assert!(!result.success());
         assert!(result.classes.is_empty());
-        assert!(result.diagnostics[0].message.contains("not yet supported"));
+        assert!(
+            result.diagnostics[0]
+                .message
+                .contains("not supported by caturra")
+        );
     }
 }

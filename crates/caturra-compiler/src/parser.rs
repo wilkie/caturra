@@ -50,11 +50,45 @@ fn primitive_type_name(keyword: Keyword) -> Option<&'static str> {
     })
 }
 
-fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
+/// The error for a keyword that cannot begin a statement, or `None` when it can.
+///
+/// Two different failures hide here, and conflating them is harmful. `public`
+/// cannot start a statement in *any* Java compiler, so we answer with javac's
+/// wording and never mention caturra — the old catch-all told students (and our
+/// corpus tooling, which reads these strings) that broken source was our
+/// limitation. Only valid Java that caturra does not implement says
+/// "not supported by caturra".
+fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
     match keyword {
-        Keyword::Else => Some("'else' without a matching 'if'"),
+        // Valid Java that caturra does not implement. These must say so: the
+        // level generator keys off "caturra"/"not supported" to tell an engine
+        // gap apart from a student's mistake.
         Keyword::Var => Some("'var' is not supported by caturra; write the type explicitly"),
-        Keyword::New => Some("object creation with 'new' is not yet supported by caturra"),
+        Keyword::New => Some(
+            "a bare 'new' object creation is not supported by caturra as a statement; \
+             assign it to a variable",
+        ),
+        Keyword::Class => Some(
+            "a class declared inside a method (a local class) is not supported by caturra; \
+             declare it at the top level",
+        ),
+        Keyword::Assert => Some("'assert' is not supported by caturra"),
+        Keyword::Synchronized => {
+            Some("'synchronized' is not supported by caturra; programs run single-threaded")
+        }
+
+        // Invalid Java: javac's wording, with no mention of caturra.
+        Keyword::Else => Some("'else' without a matching 'if'"),
+        Keyword::Catch => Some("'catch' without 'try'"),
+        Keyword::Finally => Some("'finally' without 'try'"),
+        Keyword::Case => Some("orphaned case"),
+        Keyword::Default => Some("orphaned default"),
+        Keyword::Interface => Some("interface not allowed here"),
+        Keyword::Enum => Some("enum types must not be local"),
+        Keyword::Abstract | Keyword::Strictfp => Some("class, interface, or enum expected"),
+
+        // Types, `final` and `this` legitimately begin a declaration or an
+        // expression: let the normal parse continue.
         Keyword::Int
         | Keyword::Double
         | Keyword::Boolean
@@ -65,7 +99,10 @@ fn unsupported_statement_keyword(keyword: Keyword) -> Option<&'static str> {
         | Keyword::Float
         | Keyword::Byte
         | Keyword::Short => None,
-        _ => Some("this statement is not yet supported by caturra"),
+
+        // Everything else — modifiers, `import`, `extends`, `instanceof`, the
+        // reserved-but-unused `goto`/`const` — is javac's generic case.
+        _ => Some("illegal start of expression"),
     }
 }
 
@@ -1156,7 +1193,7 @@ impl Parser<'_> {
         let member_access = matches!(self.peek_at(1), Some(TokenKind::Symbol(".")));
         if let Some(TokenKind::Keyword(keyword)) = self.peek()
             && !((matches!(keyword, Keyword::Super | Keyword::This)) && member_access)
-            && let Some(message) = unsupported_statement_keyword(*keyword)
+            && let Some(message) = statement_start_error(*keyword)
         {
             self.error_here(message);
             return Err(Abort);
@@ -3383,6 +3420,59 @@ mod tests {
         errors
     }
 
+    /// A keyword that cannot start a statement must be diagnosed as javac does,
+    /// without blaming caturra — the level generator reads these strings to tell
+    /// an engine gap apart from a student's mistake, so mislabelling invalid
+    /// Java as "not supported by caturra" would silently drop the level.
+    #[test]
+    fn invalid_statement_keywords_use_javac_wording_and_never_blame_caturra() {
+        let in_main = |body: &str| {
+            format!("public class Main {{ public static void main(String[] a) {{ {body} }} }}")
+        };
+        // Wording checked against a real javac.
+        let invalid = [
+            ("public class Inner {}", "illegal start of expression"),
+            ("static int q = 1;", "illegal start of expression"),
+            ("private int q = 1;", "illegal start of expression"),
+            ("void q;", "illegal start of expression"),
+            ("import java.util.List;", "illegal start of expression"),
+            ("extends Object", "illegal start of expression"),
+            ("case 1:", "orphaned case"),
+            ("default:", "orphaned default"),
+            ("catch (Exception e) {}", "'catch' without 'try'"),
+            ("finally { }", "'finally' without 'try'"),
+            ("interface I {}", "interface not allowed here"),
+            ("enum E { A }", "enum types must not be local"),
+            ("abstract void q();", "class, interface, or enum expected"),
+        ];
+        for (body, want) in invalid {
+            let errors = parse_errors(&in_main(body));
+            let first = &errors.first().expect(body).message;
+            assert_eq!(first, want, "wrong message for `{body}`");
+            assert!(
+                !first.contains("caturra") && !first.contains("not supported"),
+                "invalid Java `{body}` must not be reported as a caturra limitation: {first}"
+            );
+        }
+
+        // Valid Java that caturra does not implement DOES say so, so the corpus
+        // tooling can recognise it as an engine gap.
+        for body in [
+            "var q = 1;",
+            "new Object();",
+            "class Inner {}",
+            "assert 1 > 0;",
+            "synchronized (a) { }",
+        ] {
+            let errors = parse_errors(&in_main(body));
+            let first = &errors.first().expect(body).message;
+            assert!(
+                first.contains("caturra"),
+                "`{body}` is valid Java we don't implement; say so: {first}"
+            );
+        }
+    }
+
     #[test]
     fn parses_hello_world() {
         let unit = parse_ok(
@@ -3464,7 +3554,13 @@ mod tests {
         );
         let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
         assert!(!messages.is_empty(), "{messages:?}");
-        assert!(messages[0].contains("not yet supported"), "{messages:?}");
+        // `synchronized` is valid Java that caturra does not implement, so the
+        // message names caturra — which is how the corpus tooling recognises an
+        // engine gap rather than a mistake in the student's source.
+        assert!(
+            messages[0].contains("not supported by caturra"),
+            "{messages:?}"
+        );
     }
 
     #[test]

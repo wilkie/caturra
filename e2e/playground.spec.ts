@@ -1209,7 +1209,28 @@ test.describe('playground', () => {
       ].join('\n'),
     );
     await page.getByTestId('run').click();
-    await expect(page.getByTestId('console')).toContainText('not yet supported by caturra');
+    // `synchronized` is valid Java caturra doesn't implement, so we say so.
+    await expect(page.getByTestId('console')).toContainText('not supported by caturra');
+  });
+
+  test('blames the source, not caturra, for invalid Java', async ({ page }) => {
+    await page.goto('/');
+    await setSource(
+      page,
+      [
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        public class Inner {}',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    const console_ = page.getByTestId('console');
+    // No compiler accepts this, so report it as javac does — telling a student
+    // it is a caturra limitation would send them looking for a workaround.
+    await expect(console_).toContainText('illegal start of expression');
+    await expect(console_).not.toContainText('not supported by caturra');
   });
 });
 
