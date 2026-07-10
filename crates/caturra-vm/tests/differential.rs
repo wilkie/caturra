@@ -5705,6 +5705,62 @@ public class DiffIfaceStatic {
 "#
 );
 
+// JLS §7.6: a public top-level type must be declared in a file named after
+// it. The differential harness writes each program to `<class>.java`, so a
+// public type of any other name is exactly the violation.
+differential_reject!(
+    reject_public_class_in_a_mismatched_file,
+    "RejectPublicClassName",
+    "public class NotTheFileName {}"
+);
+
+differential_reject!(
+    reject_public_interface_in_a_mismatched_file,
+    "RejectPublicInterfaceName",
+    "public interface NotTheFileName { void go(); }"
+);
+
+differential_reject!(
+    reject_public_enum_in_a_mismatched_file,
+    "RejectPublicEnumName",
+    "public enum NotTheFileName { A }"
+);
+
+differential_reject!(
+    reject_a_second_public_class_in_one_file,
+    "RejectSecondPublicClass",
+    "public class RejectSecondPublicClass { static void r() {} }\npublic class AlsoPublic {}"
+);
+
+differential_test!(
+    diff_package_private_classes_share_a_file,
+    "DiffSharedFile",
+    r#"
+// Only PUBLIC top-level types are bound to the file name. These are not.
+class Helper {
+    static int twice(int x) { return 2 * x; }
+}
+
+interface Named {
+    String name();
+}
+
+enum Colour {
+    RED,
+    GREEN
+}
+
+public class DiffSharedFile {
+    public static void main(String[] args) {
+        System.out.println(Helper.twice(21));
+        Named n = () -> "ada";
+        System.out.println(n.name());
+        System.out.println(Colour.GREEN);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
@@ -5909,6 +5965,27 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "cannot find symbol",
         "cannot find symbol: field 'n' in class Object",
         Wording::Prefix,
+    ),
+    (
+        "WordPublicClassName",
+        "public class NotTheFileName {}",
+        "class NotTheFileName is public, should be declared in a file named NotTheFileName.java",
+        "class NotTheFileName is public, should be declared in a file named NotTheFileName.java",
+        Wording::Same,
+    ),
+    (
+        "WordPublicInterfaceName",
+        "public interface NotTheFileName { void go(); }",
+        "interface NotTheFileName is public, should be declared in a file named NotTheFileName.java",
+        "interface NotTheFileName is public, should be declared in a file named NotTheFileName.java",
+        Wording::Same,
+    ),
+    (
+        "WordPublicEnumName",
+        "public enum NotTheFileName { A }",
+        "enum NotTheFileName is public, should be declared in a file named NotTheFileName.java",
+        "enum NotTheFileName is public, should be declared in a file named NotTheFileName.java",
+        Wording::Same,
     ),
     (
         "WordQualifiedClass",

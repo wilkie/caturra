@@ -22,6 +22,15 @@ slice.
 
 - Compilation unit: one or more top-level class declarations (no `package`,
   no `import` — parsed and reported as not-yet-supported, then skipped).
+  A **public top-level type must be declared in a file named after it**
+  (JLS §7.6), so at most one per file — `class Bar is public, should be
+declared in a file named Bar.java`, javac's wording exactly, for classes,
+  interfaces and enums (2026-07-09). Package-private types may share any
+  file, as may a `public` **nested** type, which is not top-level. caturra
+  ignored the rule until then, so a program that broke it compiled in the
+  playground and failed on a real JDK; 22 of 6682 corpus levels break it,
+  and javac rejects every one. Pinned by
+  `reject_public_class_in_a_mismatched_file` and the wording table.
 - Class declaration: modifiers, name, `{ ... }` body of method declarations.
 - Method declaration: modifiers (`public` / `static` etc.), `void` or named /
   primitive / array return type, parameter list, block body.

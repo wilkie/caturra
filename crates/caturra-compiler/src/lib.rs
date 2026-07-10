@@ -305,6 +305,38 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         compilation.diagnostics.append(&mut parse_errors);
 
         for class in &unit.classes {
+            // JLS §7.6: a public top-level type must be declared in a file
+            // named after it. javac enforces this, so a program that ignores
+            // it compiles here and fails on a real JDK. Only user files are
+            // checked — the bundled libraries declare no public types.
+            if class.is_public && !class.is_anonymous && !class.is_nested {
+                let base = source
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&source.path)
+                    .strip_suffix(".java");
+                if let Some(base) = base
+                    && base != class.name
+                {
+                    let kind = if class.is_interface {
+                        "interface"
+                    } else if class.is_enum {
+                        "enum"
+                    } else {
+                        "class"
+                    };
+                    compilation.diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        message: format!(
+                            "{kind} {} is public, should be declared in a file named {}.java",
+                            class.name, class.name
+                        ),
+                        path: source.path.clone(),
+                        span: Some(class.span),
+                    });
+                }
+            }
             if let Some(other_path) = seen.get(&class.name) {
                 compilation.diagnostics.push(Diagnostic {
                     severity: Severity::Error,

@@ -170,6 +170,7 @@ struct Modifiers {
 #[derive(Debug, Default, Clone, Copy)]
 struct ClassModifiers {
     is_abstract: bool,
+    is_public: bool,
 }
 
 /// One parsed class member.
@@ -515,32 +516,17 @@ impl Parser<'_> {
     fn class_decl(&mut self) -> Parsed<ClassDecl> {
         let start = self.here();
         let modifiers = self.class_modifiers();
-        self.type_after_modifiers(start, modifiers.is_abstract)
+        self.type_after_modifiers(start, modifiers.is_abstract, modifiers.is_public)
     }
 
-    /// Parse a class/interface/enum whose modifiers were already
-    /// consumed (shared by top-level and nested declarations).
-    fn type_after_modifiers(
-        &mut self,
-        start: SourceSpan,
-        is_abstract_modifier: bool,
-    ) -> Parsed<ClassDecl> {
-        if self.at_keyword(Keyword::Enum) {
-            return self.enum_decl(start);
-        }
-        let is_interface = self.eat_keyword(Keyword::Interface);
-        if !is_interface && !self.eat_keyword(Keyword::Class) {
-            self.error_here("expected a class declaration");
-            return Err(Abort);
-        }
-        let (name, name_span) = self.expect_ident("for the class")?;
-        let type_params = self.parse_type_params()?;
-
+    /// The `extends` / `implements` clauses: `(superclass, interfaces)`.
+    /// An interface's `extends` is a list of interfaces, and an interface
+    /// may not `implement`.
+    fn supertypes(&mut self, is_interface: bool) -> Parsed<(Option<String>, Vec<String>)> {
         let mut superclass = None;
         let mut interfaces = Vec::new();
         if self.eat_keyword(Keyword::Extends) {
             if is_interface {
-                // Interfaces extend other interfaces (a list).
                 loop {
                     let (parent, _) = self.expect_ident("after 'extends'")?;
                     self.skip_type_args();
@@ -569,6 +555,31 @@ impl Parser<'_> {
                 }
             }
         }
+        Ok((superclass, interfaces))
+    }
+
+    /// Parse a class/interface/enum whose modifiers were already
+    /// consumed (shared by top-level and nested declarations).
+    fn type_after_modifiers(
+        &mut self,
+        start: SourceSpan,
+        is_abstract_modifier: bool,
+        is_public: bool,
+    ) -> Parsed<ClassDecl> {
+        if self.at_keyword(Keyword::Enum) {
+            let mut decl = self.enum_decl(start)?;
+            decl.is_public = is_public;
+            return Ok(decl);
+        }
+        let is_interface = self.eat_keyword(Keyword::Interface);
+        if !is_interface && !self.eat_keyword(Keyword::Class) {
+            self.error_here("expected a class declaration");
+            return Err(Abort);
+        }
+        let (name, name_span) = self.expect_ident("for the class")?;
+        let type_params = self.parse_type_params()?;
+
+        let (superclass, interfaces) = self.supertypes(is_interface)?;
 
         self.expect_symbol("{", "to open the class body")?;
         let mut methods = Vec::new();
@@ -612,6 +623,8 @@ impl Parser<'_> {
 
         Ok(ClassDecl {
             name,
+            is_public,
+            is_nested: false,
             superclass,
             interfaces,
             is_abstract: is_abstract_modifier || is_interface,
@@ -731,7 +744,11 @@ impl Parser<'_> {
                     modifiers.is_abstract = true;
                     self.pos += 1;
                 }
-                Some(TokenKind::Keyword(Keyword::Public | Keyword::Final)) => {
+                Some(TokenKind::Keyword(Keyword::Public)) => {
+                    modifiers.is_public = true;
+                    self.pos += 1;
+                }
+                Some(TokenKind::Keyword(Keyword::Final)) => {
                     self.pos += 1;
                 }
                 Some(TokenKind::Symbol("@")) => self.skip_annotation(),
@@ -753,7 +770,10 @@ impl Parser<'_> {
                 Keyword::Class | Keyword::Interface | Keyword::Enum
             ))
         ) {
-            let nested = self.type_after_modifiers(start, modifiers.is_abstract)?;
+            // A nested type may be `public`; the file-name rule is top-level
+            // only (JLS §7.6), so this is recorded and never checked.
+            let nested =
+                self.type_after_modifiers(start, modifiers.is_abstract, modifiers.is_public)?;
             return Ok(Member::Nested(nested));
         }
 
@@ -2403,6 +2423,8 @@ impl Parser<'_> {
         };
         let mut anon = ClassDecl {
             name: name.clone(),
+            is_public: false,
+            is_nested: false,
             // The supertype is resolved to extends/implements by the
             // compiler (it knows which names are interfaces).
             superclass: Some(String::from(supertype)),
@@ -3094,6 +3116,8 @@ fn desugar_enum(
         is_abstract: false,
         is_interface: false,
         is_enum: true,
+        is_public: false,
+        is_nested: false,
         is_anonymous: false,
         type_params: Vec::new(),
         fields: synth_fields,
@@ -3111,7 +3135,11 @@ fn desugar_enum(
 fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
     let nested = std::mem::take(&mut class.nested);
     out.push(class);
-    for inner in nested {
+    for mut inner in nested {
+        // Hoisting loses the fact that it was nested; the file-name rule
+        // needs it, because only a TOP-LEVEL public type is bound to the
+        // file name.
+        inner.is_nested = true;
         flatten_nested(inner, out);
     }
 }

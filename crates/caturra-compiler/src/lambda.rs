@@ -694,6 +694,8 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
     // than the synthesized lambda class.
     ctx.new_classes.push(ClassDecl {
         name: name.clone(),
+        is_public: false,
+        is_nested: false,
         superclass: None,
         interfaces: vec![interface.to_owned()],
         is_abstract: false,

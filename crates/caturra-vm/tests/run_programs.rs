@@ -3978,7 +3978,7 @@ fn easymock_with_constructor_and_mocked_methods() {
         r#"
         import org.code.neighborhood.*;
         import static org.easymock.EasyMock.*;
-        public class Main {
+        class Main {
             public static void main(String[] args) {}
         }
         class Robot extends Painter {
@@ -4015,7 +4015,7 @@ fn easymock_partial_mock_record_replay_verify() {
         r#"
         import org.code.neighborhood.*;
         import static org.easymock.EasyMock.*;
-        public class Main {
+        class Main {
             public static void main(String[] args) {}
         }
         class Robot extends Painter {
@@ -4075,7 +4075,7 @@ fn system_out_test_runner_captures_printed_lines() {
         r#"
         import org.code.validation.*;
         import java.util.*;
-        public class Main {
+        class Main {
             public static void main(String[] a) {
                 System.out.println("first");
                 System.out.println("second");
@@ -4164,7 +4164,7 @@ fn validation_helper_lists_student_classes() {
         import org.code.neighborhood.*;
         import org.code.validation.*;
         import java.util.*;
-        public class Main {
+        class Main {
             public static void main(String[] a) {}
         }
         class Rabbit {}
@@ -4191,7 +4191,7 @@ fn neighborhood_validation_counts_painter_actions() {
         r#"
         import org.code.neighborhood.*;
         import org.code.validation.*;
-        public class Main {
+        class Main {
             public static void main(String[] args) {
                 Painter p = new Painter(0, 0, "east", 0);
                 while (p.isOnBucket()) {
@@ -7200,7 +7200,9 @@ fn eval_watch(
     );
     let compilation = caturra_compiler::compile(&[
         caturra_compiler::SourceFile {
-            path: "Program.java".into(),
+            // The wasm boundary passes the program's real source files, so a
+            // public class sits in a file of its own name (JLS §7.6).
+            path: format!("{}.java", frame.class_name),
             text: program.into(),
         },
         caturra_compiler::SourceFile {
@@ -10355,4 +10357,76 @@ fn an_interface_static_method_is_not_inherited_but_a_default_method_is() {
             compilation.diagnostics[0].message
         );
     }
+}
+
+/// JLS §7.6: a public top-level type must be declared in a file named after
+/// it, and javac enforces it. caturra ignored the rule until 2026-07-09, so a
+/// program that broke it compiled in the playground and failed on a real JDK.
+/// Only 29 of 6682 corpus levels violate it, and every one of those already
+/// fails on a JDK. Pinned against a real javac by
+/// `reject_public_class_in_a_mismatched_file` and the wording table.
+#[test]
+fn a_public_top_level_type_must_match_its_file_name() {
+    for (path, source, want) in [
+        (
+            "Foo.java",
+            "public class Bar {}",
+            "class Bar is public, should be declared in a file named Bar.java",
+        ),
+        (
+            "Foo.java",
+            "public interface Baz { void go(); }",
+            "interface Baz is public, should be declared in a file named Baz.java",
+        ),
+        (
+            "Foo.java",
+            "public enum Qux { A }",
+            "enum Qux is public, should be declared in a file named Qux.java",
+        ),
+        (
+            "Foo.java",
+            "public abstract class Zap {}",
+            "class Zap is public, should be declared in a file named Zap.java",
+        ),
+        // Only one public top-level type per file, and it must be the one
+        // the file is named for.
+        (
+            "Foo.java",
+            "public class Foo {} public class Other {}",
+            "class Other is public, should be declared in a file named Other.java",
+        ),
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from(path),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}
+
+/// The rule binds only *public* *top-level* types. Package-private classes,
+/// interfaces and enums may share any file — most caturra tests rely on it —
+/// and a `public` nested type is not top-level. Pinned by
+/// `diff_package_private_classes_share_a_file`.
+#[test]
+fn the_file_name_rule_spares_package_private_and_nested_types() {
+    let out = run_stdout(
+        r#"
+        class Helper { static int twice(int x) { return 2 * x; } }
+        interface Named { String name(); }
+        enum Colour { RED, GREEN }
+        public class M {
+            public static class Inner { static String hi() { return "inner"; } }
+            public static void main(String[] args) {
+                System.out.println(Helper.twice(21));
+                System.out.println(Colour.GREEN);
+                System.out.println(Inner.hi());
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "42\nGREEN\ninner\n");
 }

@@ -578,7 +578,9 @@ test.describe('playground', () => {
     await page.goto('/');
     await setSource(
       page,
-      'public class Counter { private int count = 0; ' +
+      // Package-private: a public class must sit in a file of its own name
+      // (JLS 7.6), and `setSource` writes the Main.java tab.
+      'class Counter { private int count = 0; ' +
         'public void increment() { count++; } ' +
         'public int getCount() { return count; } }',
     );

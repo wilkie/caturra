@@ -30,6 +30,13 @@ pub struct ImportDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassDecl {
     pub name: String,
+    /// Declared `public`. A public top-level type must live in a file of
+    /// its own name (JLS §7.6), which javac enforces and so do we.
+    pub is_public: bool,
+    /// Declared inside another type, then hoisted to the top level. The
+    /// file-name rule applies to top-level types only, so a `public static
+    /// class Inner` is exempt.
+    pub is_nested: bool,
     /// `extends` clause (classes only; single inheritance).
     pub superclass: Option<String>,
     /// `implements` clause (or `extends` list for interfaces).
