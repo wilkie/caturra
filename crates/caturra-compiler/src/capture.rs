@@ -24,9 +24,12 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{
     ClassDecl, CompilationUnit, Expr, FieldDecl, LambdaBody, MethodDecl, Param, Stmt, TypeRef,
 };
+use crate::diagnostics::SourceSpan;
 
 /// Resolve captures for all anonymous classes in the compilation.
-pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
+pub fn resolve_captures(
+    units: &mut [(String, CompilationUnit)],
+) -> Vec<crate::diagnostics::Diagnostic> {
     // Clone anonymous-class bodies for free-name analysis (read-only).
     let anon_bodies: HashMap<String, ClassDecl> = units
         .iter()
@@ -35,13 +38,14 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
         .map(|c| (c.name.clone(), c.clone()))
         .collect();
     if anon_bodies.is_empty() {
-        return;
+        return Vec::new();
     }
 
     // Phase 1: capture set per anonymous class (sorted for determinism), plus
     // the type of each super-constructor argument at its `new` site.
     let mut found = Found::default();
-    for (_, unit) in units.iter() {
+    let mut diagnostics: Vec<crate::diagnostics::Diagnostic> = Vec::new();
+    for (path, unit) in units.iter() {
         for class in &unit.classes {
             for method in &class.methods {
                 let mut scope: Vec<HashMap<String, TypeRef>> = vec![
@@ -51,25 +55,42 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
                         .map(|p| (p.name.clone(), p.ty.clone()))
                         .collect(),
                 ];
+                // A parameter arrives initialized, so any assignment to it
+                // costs it its effective finality.
+                let mut mutations = Mutations::default();
+                mutations
+                    .initialized
+                    .extend(method.params.iter().map(|p| p.name.clone()));
+                mutations_in_stmts(&method.body, &mut mutations);
                 find_in_stmts(
                     &method.body,
                     &mut scope,
                     &anon_bodies,
                     &mut found,
                     &class.name,
+                    &mutations,
                 );
             }
             for block in &class.init_blocks {
                 let mut scope: Vec<HashMap<String, TypeRef>> = vec![HashMap::new()];
+                let mut mutations = Mutations::default();
+                mutations_in_stmts(&block.body, &mut mutations);
                 find_in_stmts(
                     &block.body,
                     &mut scope,
                     &anon_bodies,
                     &mut found,
                     &class.name,
+                    &mutations,
                 );
             }
         }
+        diagnostics.extend(
+            found
+                .diagnostics
+                .drain(..)
+                .map(|(message, span)| crate::diagnostics::Diagnostic::error(path, message, span)),
+        );
     }
     let captures = found.captures;
     let super_args = found.super_args;
@@ -110,6 +131,7 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
             }
         }
     }
+    diagnostics
 }
 
 /// Add a field per capture and a constructor that forwards `supers` to
@@ -200,6 +222,9 @@ struct Found {
     /// static fields are in scope inside the body, but the hoisted class
     /// cannot see them by bare name.
     owner: HashMap<String, String>,
+    /// `local variables referenced from a lambda expression must be final or
+    /// effectively final`, one per offending `new Anon$N(...)` site.
+    diagnostics: Vec<(String, SourceSpan)>,
 }
 
 fn scope_lookup(scope: &Scope, name: &str) -> Option<TypeRef> {
@@ -245,30 +270,33 @@ fn find_in_stmts(
     anon: &HashMap<String, ClassDecl>,
     out: &mut Found,
     owner: &str,
+    mutations: &Mutations,
 ) {
     scope.push(HashMap::new());
     for stmt in stmts {
-        find_in_stmt(stmt, scope, anon, out, owner);
+        find_in_stmt(stmt, scope, anon, out, owner, mutations);
     }
     scope.pop();
 }
 
 #[allow(clippy::match_same_arms)]
+#[allow(clippy::too_many_lines)] // capture walk, one arm per statement kind
 fn find_in_stmt(
     stmt: &Stmt,
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
     out: &mut Found,
     owner: &str,
+    mutations: &Mutations,
 ) {
     match stmt {
-        Stmt::Block(body) => find_in_stmts(body, scope, anon, out, owner),
+        Stmt::Block(body) => find_in_stmts(body, scope, anon, out, owner, mutations),
         Stmt::LocalDecl {
             ty, declarators, ..
         } => {
             for d in declarators {
                 if let Some(init) = &d.init {
-                    find_in_expr(init, scope, anon, out, owner);
+                    find_in_expr(init, scope, anon, out, owner, mutations);
                 }
                 // The variable is in scope for later statements.
                 if let Some(frame) = scope.last_mut() {
@@ -276,22 +304,24 @@ fn find_in_stmt(
                 }
             }
         }
-        Stmt::Expr(e) | Stmt::Throw { value: e, .. } => find_in_expr(e, scope, anon, out, owner),
-        Stmt::Assign { value, .. } => find_in_expr(value, scope, anon, out, owner),
-        Stmt::Return { value: Some(e), .. } => find_in_expr(e, scope, anon, out, owner),
+        Stmt::Expr(e) | Stmt::Throw { value: e, .. } => {
+            find_in_expr(e, scope, anon, out, owner, mutations);
+        }
+        Stmt::Assign { value, .. } => find_in_expr(value, scope, anon, out, owner, mutations),
+        Stmt::Return { value: Some(e), .. } => find_in_expr(e, scope, anon, out, owner, mutations),
         Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
         Stmt::If {
             cond, then, els, ..
         } => {
-            find_in_expr(cond, scope, anon, out, owner);
-            find_in_stmt(then, scope, anon, out, owner);
+            find_in_expr(cond, scope, anon, out, owner, mutations);
+            find_in_stmt(then, scope, anon, out, owner, mutations);
             if let Some(e) = els {
-                find_in_stmt(e, scope, anon, out, owner);
+                find_in_stmt(e, scope, anon, out, owner, mutations);
             }
         }
         Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
-            find_in_expr(cond, scope, anon, out, owner);
-            find_in_stmt(body, scope, anon, out, owner);
+            find_in_expr(cond, scope, anon, out, owner, mutations);
+            find_in_stmt(body, scope, anon, out, owner, mutations);
         }
         Stmt::For {
             init,
@@ -302,15 +332,15 @@ fn find_in_stmt(
         } => {
             scope.push(HashMap::new());
             if let Some(s) = init {
-                find_in_stmt(s, scope, anon, out, owner);
+                find_in_stmt(s, scope, anon, out, owner, mutations);
             }
             if let Some(c) = cond {
-                find_in_expr(c, scope, anon, out, owner);
+                find_in_expr(c, scope, anon, out, owner, mutations);
             }
             for s in update {
-                find_in_stmt(s, scope, anon, out, owner);
+                find_in_stmt(s, scope, anon, out, owner, mutations);
             }
-            find_in_stmt(body, scope, anon, out, owner);
+            find_in_stmt(body, scope, anon, out, owner, mutations);
             scope.pop();
         }
         Stmt::ForEach {
@@ -320,19 +350,19 @@ fn find_in_stmt(
             body,
             ..
         } => {
-            find_in_expr(iterable, scope, anon, out, owner);
+            find_in_expr(iterable, scope, anon, out, owner, mutations);
             scope.push(HashMap::new());
             if let Some(frame) = scope.last_mut() {
                 frame.insert(name.clone(), ty.clone());
             }
-            find_in_stmt(body, scope, anon, out, owner);
+            find_in_stmt(body, scope, anon, out, owner, mutations);
             scope.pop();
         }
         Stmt::Switch { selector, arms, .. } => {
-            find_in_expr(selector, scope, anon, out, owner);
+            find_in_expr(selector, scope, anon, out, owner, mutations);
             for arm in arms {
                 for stmt in &arm.body {
-                    find_in_stmt(stmt, scope, anon, out, owner);
+                    find_in_stmt(stmt, scope, anon, out, owner, mutations);
                 }
             }
         }
@@ -342,44 +372,69 @@ fn find_in_stmt(
             finally_body,
             ..
         } => {
-            find_in_stmts(body, scope, anon, out, owner);
+            find_in_stmts(body, scope, anon, out, owner, mutations);
             for c in catches {
                 scope.push(HashMap::new());
                 if let Some(frame) = scope.last_mut() {
                     frame.insert(c.name.clone(), c.ty.clone());
                 }
-                find_in_stmts(&c.body, scope, anon, out, owner);
+                find_in_stmts(&c.body, scope, anon, out, owner, mutations);
                 scope.pop();
             }
             if let Some(fin) = finally_body {
-                find_in_stmts(fin, scope, anon, out, owner);
+                find_in_stmts(fin, scope, anon, out, owner, mutations);
             }
         }
-        Stmt::Labeled { body, .. } => find_in_stmt(body, scope, anon, out, owner),
+        Stmt::Labeled { body, .. } => find_in_stmt(body, scope, anon, out, owner, mutations),
         Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
             for a in args {
-                find_in_expr(a, scope, anon, out, owner);
+                find_in_expr(a, scope, anon, out, owner, mutations);
             }
         }
     }
 }
 
+#[allow(clippy::too_many_lines)] // capture walk, one arm per expression kind
 fn find_in_expr(
     expr: &Expr,
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
     out: &mut Found,
     owner: &str,
+    mutations: &Mutations,
 ) {
     match expr {
-        Expr::NewObject { class, args, .. } => {
+        Expr::NewObject {
+            class, args, span, ..
+        } => {
             for a in args {
-                find_in_expr(a, scope, anon, out, owner);
+                find_in_expr(a, scope, anon, out, owner, mutations);
             }
             if let Some(body) = anon.get(class)
                 && !out.captures.contains_key(class)
             {
                 let caps = captures_of(body, scope);
+                // JLS §4.12.4: a captured local must be final or effectively
+                // final. Copying it into a synthetic field hides a later
+                // write, so the program would quietly disagree with a JDK
+                // that refuses to compile it.
+                let written_inside = assigned_in_class(body);
+                for (name, _) in &caps {
+                    if !mutations.effectively_final(name) || written_inside.contains(name) {
+                        let what = if class.starts_with("Lambda$") {
+                            "a lambda expression"
+                        } else {
+                            "an inner class"
+                        };
+                        out.diagnostics.push((
+                            format!(
+                                "local variables referenced from {what} must be final or \
+                                 effectively final"
+                            ),
+                            *span,
+                        ));
+                    }
+                }
                 out.captures.insert(class.clone(), caps);
                 out.owner.insert(class.clone(), owner.to_owned());
                 // These args (the ones the parser recorded) are the super-args;
@@ -401,60 +456,64 @@ fn find_in_expr(
         }
         Expr::Call { receiver, args, .. } => {
             if let Some(r) = receiver {
-                find_in_expr(r, scope, anon, out, owner);
+                find_in_expr(r, scope, anon, out, owner, mutations);
             }
             for a in args {
-                find_in_expr(a, scope, anon, out, owner);
+                find_in_expr(a, scope, anon, out, owner, mutations);
             }
         }
         Expr::SuperMethodCall { args, .. } => {
             for a in args {
-                find_in_expr(a, scope, anon, out, owner);
+                find_in_expr(a, scope, anon, out, owner, mutations);
             }
         }
         Expr::Binary { lhs, rhs, .. } => {
-            find_in_expr(lhs, scope, anon, out, owner);
-            find_in_expr(rhs, scope, anon, out, owner);
+            find_in_expr(lhs, scope, anon, out, owner, mutations);
+            find_in_expr(rhs, scope, anon, out, owner, mutations);
         }
         Expr::Unary { operand, .. }
         | Expr::Cast { operand, .. }
         | Expr::Field {
             object: operand, ..
         }
-        | Expr::InstanceOf { value: operand, .. } => find_in_expr(operand, scope, anon, out, owner),
+        | Expr::InstanceOf { value: operand, .. } => {
+            find_in_expr(operand, scope, anon, out, owner, mutations);
+        }
         Expr::Index { array, index, .. } => {
-            find_in_expr(array, scope, anon, out, owner);
-            find_in_expr(index, scope, anon, out, owner);
+            find_in_expr(array, scope, anon, out, owner, mutations);
+            find_in_expr(index, scope, anon, out, owner, mutations);
         }
         Expr::Ternary {
             cond, then, els, ..
         } => {
-            find_in_expr(cond, scope, anon, out, owner);
-            find_in_expr(then, scope, anon, out, owner);
-            find_in_expr(els, scope, anon, out, owner);
+            find_in_expr(cond, scope, anon, out, owner, mutations);
+            find_in_expr(then, scope, anon, out, owner, mutations);
+            find_in_expr(els, scope, anon, out, owner, mutations);
         }
-        Expr::IncDec { target, .. } => find_in_expr(target, scope, anon, out, owner),
+        Expr::IncDec { target, .. } => find_in_expr(target, scope, anon, out, owner, mutations),
         Expr::NewArray { dims, init, .. } => {
             for d in dims.iter().flatten() {
-                find_in_expr(d, scope, anon, out, owner);
+                find_in_expr(d, scope, anon, out, owner, mutations);
             }
             if let Some(elems) = init {
                 for e in elems {
-                    find_in_expr(e, scope, anon, out, owner);
+                    find_in_expr(e, scope, anon, out, owner, mutations);
                 }
             }
         }
         Expr::ArrayLiteral { elements, .. } => {
             for e in elements {
-                find_in_expr(e, scope, anon, out, owner);
+                find_in_expr(e, scope, anon, out, owner, mutations);
             }
         }
-        Expr::MethodRef { qualifier, .. } => find_in_expr(qualifier, scope, anon, out, owner),
+        Expr::MethodRef { qualifier, .. } => {
+            find_in_expr(qualifier, scope, anon, out, owner, mutations);
+        }
         Expr::Lambda { body, .. } => match body {
-            LambdaBody::Expr(e) => find_in_expr(e, scope, anon, out, owner),
+            LambdaBody::Expr(e) => find_in_expr(e, scope, anon, out, owner, mutations),
             LambdaBody::Block(stmts) => {
                 for s in stmts {
-                    find_in_stmt(s, scope, anon, out, owner);
+                    find_in_stmt(s, scope, anon, out, owner, mutations);
                 }
             }
         },
@@ -883,4 +942,111 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
+}
+
+/// How a local is assigned in a method body, for the effectively-final rule.
+#[derive(Default)]
+struct Mutations {
+    /// Locals declared with an initializer, and parameters.
+    initialized: HashSet<String>,
+    /// How many times each name appears as an assignment target. Statement
+    /// `++`/`--` already lowered to `+= 1`, so they land here too.
+    assigns: HashMap<String, usize>,
+}
+
+impl Mutations {
+    /// JLS §4.12.4. A local with an initializer (or a parameter) is
+    /// effectively final only if never assigned again. A blank local may be
+    /// assigned once — javac allows one assignment per path, so a blank local
+    /// set on both arms of an `if` is effectively final; caturra counts
+    /// assignments instead of tracking definite assignment, so it refuses
+    /// that. Rejecting valid Java is the safe direction.
+    fn effectively_final(&self, name: &str) -> bool {
+        let assigns = self.assigns.get(name).copied().unwrap_or(0);
+        if self.initialized.contains(name) {
+            assigns == 0
+        } else {
+            assigns <= 1
+        }
+    }
+}
+
+/// Every assignment target and initialized declaration in `stmts`. Assignments
+/// are statements in caturra (value-position `++` is rejected by the parser),
+/// and lambda bodies are already hoisted into their own classes, so statement
+/// recursion sees everything without descending into expressions.
+fn mutations_in_stmts(stmts: &[Stmt], out: &mut Mutations) {
+    for stmt in stmts {
+        mutations_in_stmt(stmt, out);
+    }
+}
+
+#[allow(clippy::match_same_arms)]
+fn mutations_in_stmt(stmt: &Stmt, out: &mut Mutations) {
+    match stmt {
+        Stmt::Block(body) => mutations_in_stmts(body, out),
+        Stmt::LocalDecl { declarators, .. } => {
+            for d in declarators {
+                if d.init.is_some() {
+                    out.initialized.insert(d.name.clone());
+                }
+            }
+        }
+        Stmt::Assign {
+            target: crate::ast::AssignTarget::Var(name),
+            ..
+        } => {
+            *out.assigns.entry(name.clone()).or_default() += 1;
+        }
+        Stmt::If { then, els, .. } => {
+            mutations_in_stmt(then, out);
+            if let Some(e) = els {
+                mutations_in_stmt(e, out);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => mutations_in_stmt(body, out),
+        Stmt::For {
+            init, update, body, ..
+        } => {
+            if let Some(s) = init {
+                mutations_in_stmt(s, out);
+            }
+            for s in update {
+                mutations_in_stmt(s, out);
+            }
+            mutations_in_stmt(body, out);
+        }
+        Stmt::ForEach { body, .. } => mutations_in_stmt(body, out),
+        Stmt::Labeled { body, .. } => mutations_in_stmt(body, out),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            mutations_in_stmts(body, out);
+            for c in catches {
+                mutations_in_stmts(&c.body, out);
+            }
+            if let Some(f) = finally_body {
+                mutations_in_stmts(f, out);
+            }
+        }
+        Stmt::Switch { arms, .. } => {
+            for arm in arms {
+                mutations_in_stmts(&arm.body, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The locals a synthesized class's own body assigns. `() -> c++` writes the
+/// capture field, but javac reads it as writing `c`, and refuses.
+fn assigned_in_class(class: &ClassDecl) -> HashSet<String> {
+    let mut out = Mutations::default();
+    for method in &class.methods {
+        mutations_in_stmts(&method.body, &mut out);
+    }
+    out.assigns.into_keys().collect()
 }

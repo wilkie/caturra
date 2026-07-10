@@ -498,7 +498,9 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     }
 
     lambda::desugar_lambdas(&mut units);
-    capture::resolve_captures(&mut units);
+    compilation
+        .diagnostics
+        .extend(capture::resolve_captures(&mut units));
     let (classes, mut codegen_errors) = codegen::generate(&units);
     compilation.diagnostics.append(&mut codegen_errors);
 

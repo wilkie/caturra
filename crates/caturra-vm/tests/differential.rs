@@ -5853,6 +5853,71 @@ public class DiffLambdaStatic {
 "#
 );
 
+// JLS §4.12.4: a local referenced from a lambda or inner class must be final
+// or effectively final. Every case below is refused by both compilers.
+differential_reject!(
+    reject_lambda_captures_a_reassigned_local,
+    "RejectCaptureReassigned",
+    "interface RCFn { int go(); }\npublic class RejectCaptureReassigned { static RCFn r() { int c = 0; RCFn f = () -> c; c = 5; return f; } static void main2() {} }"
+);
+
+differential_reject!(
+    reject_lambda_captures_a_reassigned_parameter,
+    "RejectCaptureParam",
+    "interface RPFn { int go(); }\npublic class RejectCaptureParam { static RPFn r(int p) { p = 1; return () -> p; } static void main2() {} }"
+);
+
+differential_reject!(
+    reject_lambda_captures_a_for_loop_index,
+    "RejectCaptureLoopIndex",
+    "interface RLFn { int go(); }\npublic class RejectCaptureLoopIndex { static void r() { for (int i = 0; i < 2; i++) { RLFn f = () -> i; } } static void main2() {} }"
+);
+
+differential_reject!(
+    reject_anonymous_class_captures_a_reassigned_local,
+    "RejectAnonCapture",
+    "abstract class RAcA { abstract int go(); }\npublic class RejectAnonCapture { static RAcA r() { int c = 0; RAcA a = new RAcA() { int go() { return c; } }; c = 5; return a; } static void main2() {} }"
+);
+
+differential_test!(
+    diff_effectively_final_capture_is_accepted,
+    "DiffEffFinal",
+    r"
+interface IntFn { int go(); }
+
+public class DiffEffFinal {
+    public static void main(String[] args) {
+        // Never reassigned after its initializer: effectively final.
+        int base = 10;
+        IntFn a = () -> base + 1;
+        System.out.println(a.go());
+
+        // A blank local assigned exactly once is effectively final.
+        int once;
+        once = 7;
+        IntFn b = () -> once * 2;
+        System.out.println(b.go());
+
+        // A parameter that is never assigned is effectively final.
+        System.out.println(withParam(5).go());
+
+        // A fresh binding per loop iteration is captured independently.
+        int total = 0;
+        for (int i = 0; i < 3; i++) {
+            int snapshot = i;
+            IntFn each = () -> snapshot;
+            total += each.go();
+        }
+        System.out.println(total);
+    }
+
+    static IntFn withParam(int p) {
+        return () -> p * 10;
+    }
+}
+"
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

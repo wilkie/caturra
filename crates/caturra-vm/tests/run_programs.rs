@@ -10572,3 +10572,70 @@ fn map_for_each_rejects_what_it_cannot_target_type() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// JLS §4.12.4: a local variable referenced from a lambda or inner class must
+/// be final or effectively final. caturra copies a capture into a synthetic
+/// field, which would silently hide a later write — so it accepted a lambda
+/// javac rejects, the last place lambdas were more permissive than a JDK.
+/// Now refused, in javac's wording. Pinned against a real javac by
+/// `reject_lambda_captures_a_reassigned_local` and friends.
+#[test]
+fn a_lambda_may_not_capture_a_non_effectively_final_local() {
+    for (source, want) in [
+        (
+            "interface Fn { int go(); } class M { \
+             static Fn r() { int c = 0; Fn f = () -> c; c = 5; return f; } }",
+            "referenced from a lambda expression must be final or effectively final",
+        ),
+        (
+            "interface Fn { int go(); } class M { \
+             static Fn r(int p) { p = 1; return () -> p; } }",
+            "referenced from a lambda expression must be final or effectively final",
+        ),
+        (
+            "interface Fn { int go(); } class M { \
+             static void r() { for (int i = 0; i < 2; i++) { Fn f = () -> i; } } }",
+            "referenced from a lambda expression must be final or effectively final",
+        ),
+        (
+            "abstract class A { abstract int go(); } class M { \
+             static A r() { int c = 0; A a = new A() { int go() { return c; } }; c = 5; return a; } }",
+            "referenced from an inner class must be final or effectively final",
+        ),
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}
+
+/// An effectively-final capture still compiles and runs: an initializer never
+/// reassigned, a blank local assigned once, and an untouched parameter are all
+/// captured by value. Pinned by `diff_effectively_final_capture_is_accepted`.
+#[test]
+fn an_effectively_final_local_is_captured_normally() {
+    let out = run_stdout(
+        r"
+        interface IntFn { int go(); }
+        public class M {
+            static IntFn withParam(int p) { return () -> p * 10; }
+            public static void main(String[] args) {
+                int base = 10;
+                IntFn a = () -> base + 1;
+                System.out.println(a.go());
+                int once;
+                once = 7;
+                IntFn b = () -> once * 2;
+                System.out.println(b.go());
+                System.out.println(withParam(5).go());
+            }
+        }
+        ",
+        "M",
+    );
+    assert_eq!(out, "11\n14\n50\n");
+}

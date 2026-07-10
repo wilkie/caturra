@@ -749,7 +749,19 @@ x)`) with type-parameter erasure — every type variable is rewritten
   Captures of any type work (primitives, objects, arrays), each `new`
   in a loop captures the value at that iteration, and captures combine
   with the anonymous class's own fields and the overriding method's
-  parameters. (This is the machinery lambdas will reuse.)
+  parameters. (This is the machinery lambdas reuse.)
+  A captured local must be **final or effectively final** (JLS §4.12.4),
+  enforced since 2026-07-09 in javac's wording — `local variables
+referenced from a lambda expression must be final or effectively
+final`, or `from an inner class` for an anonymous class. Copying a
+  capture into a field hides a later write, so accepting one would run a
+  program a JDK refuses. A local with an initializer (or a parameter) is
+  effectively final only if never reassigned; a blank local may be
+  assigned once. caturra counts assignments rather than tracking definite
+  assignment, so a blank local assigned on both arms of an `if` is
+  refused where javac accepts it — stricter, the safe direction. Pinned
+  by `reject_lambda_captures_a_reassigned_local` and
+  `diff_effectively_final_capture_is_accepted`.
 
 - **Lambda expressions** (2026-07-04): `x -> expr`, `(a, b) -> expr`,
   `() -> { ... }`, and typed-parameter forms. A lambda is target-typed
@@ -774,9 +786,8 @@ x)`) with type-parameter erasure — every type variable is rewritten
   shared state, not captured by value. Enclosing **instance** fields and
   bare calls to enclosing methods are still out of reach, and capture of a
   `StringBuilder` fails; all three report an error rather than misbehaving.
-  caturra also does not enforce that a captured local be effectively final,
-  so it accepts a lambda javac rejects — the one place lambdas are more
-  permissive than a JDK.
+  A captured local must be effectively final, enforced as for anonymous
+  classes above.
 
 - **Method references** (2026-07-04): all four kinds — static
   (`Integer::parseInt`), unbound instance (`String::length`, where the
@@ -859,6 +870,10 @@ because it is bundled Java whose parameter is `Comparable[]`; only the
 native `Collections` had to be taught to ask. The bound reaches exactly
 the four methods that declare one — `reverse`, `shuffle`, `swap`,
 `frequency` and `nCopies` still take any element type, as javac's do.
+The last runtime-only permissiveness (`Scanner.close`) and the last
+compile-time one (a lambda capturing a non-effectively-final local) were
+both closed on 2026-07-09, so caturra has no known divergence from a real
+JDK 11 in either direction across the corpus.
 
 **Reject wording.** `reject_wording_tracks_javac` pins both javac's
 headline and caturra's message for 19 rejected programs, so the two are
