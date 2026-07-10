@@ -9683,3 +9683,111 @@ fn unresolvable_qualified_names_reject_like_javac() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// A real Java 11 class caturra does not model says so by name, wherever it
+/// is written. Until 2026-07-09 only `import` and `new` gave the honest
+/// reason: a declaration said "this type cannot be used for a variable", a
+/// field "unknown type for field 'items'", and `extends` "cannot find
+/// symbol" — all of which read as a typo for a class the student can see in
+/// the documentation. javac accepts every program below, so caturra is
+/// deliberately strict here (`strict_linked_list_is_refused_by_name`).
+#[test]
+fn unmodeled_library_classes_explain_themselves_in_every_position() {
+    let reason = "is not supported by caturra";
+    for (label, source) in [
+        (
+            "local",
+            "class M { static void r() { LinkedList<Integer> l; } }",
+        ),
+        ("raw local", "class M { static void r() { LinkedList l; } }"),
+        ("field", "class M { LinkedList<Integer> items; }"),
+        (
+            "parameter",
+            "class M { static void f(LinkedList<Integer> l) {} }",
+        ),
+        ("array", "class M { static void r() { LinkedList[] l; } }"),
+        (
+            "new",
+            "class M { static void r() { Object o = new LinkedList<Integer>(); } }",
+        ),
+        ("extends", "class D extends LinkedList {} class M {}"),
+        ("implements", "class D implements Iterator {} class M {}"),
+        (
+            "type argument",
+            "class M { static void r() { ArrayList<HashSet> l; } }",
+        ),
+        (
+            "qualified",
+            "class M { static void r() { java.util.TreeMap<String, Integer> m; } }",
+        ),
+    ] {
+        let text = format!("import java.util.*;\n{source}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {label}");
+        let found = compilation
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains(reason));
+        assert!(
+            found,
+            "{label}: expected an honest reason, got: {:?}",
+            compilation
+                .diagnostics
+                .iter()
+                .map(|d| &d.message)
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The honest reason must not swallow a genuine typo, and a user class of the
+/// same name still shadows the library one.
+#[test]
+fn the_honest_reason_does_not_hide_a_typo_or_shadow_a_user_class() {
+    for (source, want) in [
+        (
+            "class M { static void r() { Frobnicator f; } }",
+            "unknown type 'Frobnicator'",
+        ),
+        (
+            "class M { static void r() { Frobnicator<Integer> f; } }",
+            "unknown type 'Frobnicator'",
+        ),
+        // The base is modeled; the argument is the typo.
+        (
+            "class M { static void r() { ArrayList<Frobnicator> l; } }",
+            "unknown type 'Frobnicator'",
+        ),
+        (
+            "class D extends Nope {} class M {}",
+            "cannot find symbol: class Nope",
+        ),
+    ] {
+        let text = format!("import java.util.*;\n{source}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}
+
+/// A user class named `Stack` shadows the library one caturra does not model,
+/// so it compiles and runs — the honest reason is only sound once the name
+/// has failed to resolve.
+#[test]
+fn a_user_class_shadows_an_unmodeled_library_name() {
+    let out = run_stdout(
+        "import java.util.*;\n\
+         class Stack { int depth; }\n\
+         public class M { public static void main(String[] a) { \
+         Stack s = new Stack(); s.depth = 4; System.out.println(s.depth); } }",
+        "M",
+    );
+    assert_eq!(out, "4\n");
+}

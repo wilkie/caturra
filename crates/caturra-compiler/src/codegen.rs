@@ -113,7 +113,7 @@ fn emit_class(
         if ty == JType::Unsupported {
             diagnostics.push(Diagnostic::error(
                 path,
-                format!("unknown type for field '{}'", field.name),
+                unresolved_type_message(&field.ty, table),
                 field.span,
             ));
         }
@@ -676,7 +676,8 @@ impl MethodTable {
                         } else {
                             diagnostics.push(Diagnostic::error(
                                 path,
-                                format!("cannot find symbol: class {name}"),
+                                crate::imports::unsupported_class_reason(name)
+                                    .unwrap_or_else(|| format!("cannot find symbol: class {name}")),
                                 class.span,
                             ));
                         }
@@ -691,7 +692,8 @@ impl MethodTable {
                         if id.is_none() {
                             diagnostics.push(Diagnostic::error(
                                 path,
-                                format!("cannot find symbol: class {name}"),
+                                crate::imports::unsupported_class_reason(name)
+                                    .unwrap_or_else(|| format!("cannot find symbol: class {name}")),
                                 class.span,
                             ));
                         }
@@ -1517,6 +1519,75 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
 }
 
 /// The display name of a list element as its wrapper type.
+/// The name inside `ty` that explains why it does not resolve: a real Java
+/// class caturra does not model, or a qualified name that names nothing.
+/// Searched base first, then the type arguments, so
+/// `ArrayList<LinkedList<Integer>>` blames the `LinkedList`.
+fn unsupported_name_in(ty: &TypeRef) -> Option<String> {
+    let (name, args): (&str, &[TypeRef]) = match ty {
+        TypeRef::Named(name) => (name.as_str(), &[]),
+        TypeRef::Generic { base, args } => (base.as_str(), args.as_slice()),
+        TypeRef::Array(inner) => return unsupported_name_in(inner),
+        _ => return None,
+    };
+    if name.contains('.') {
+        if crate::imports::canonical_library_class(name).is_none() {
+            return Some(crate::imports::unknown_qualified_message(name));
+        }
+        // The class is modeled. With type arguments, one of them is at
+        // fault; without, the class itself is unusable here — a raw
+        // `java.util.HashMap` — and `unknown_qualified_message` says so.
+        return args.iter().find_map(unsupported_name_in).or_else(|| {
+            args.is_empty()
+                .then(|| crate::imports::unknown_qualified_message(name))
+        });
+    }
+    if let Some(reason) = crate::imports::unsupported_class_reason(name) {
+        return Some(reason);
+    }
+    args.iter().find_map(unsupported_name_in)
+}
+
+/// The first name in `ty` the table cannot resolve at all — a typo, most
+/// likely. Type arguments are searched before the base, so
+/// `ArrayList<Frobnicator>` blames the `Frobnicator`.
+fn unknown_name_in(ty: &TypeRef, table: &MethodTable) -> Option<String> {
+    match ty {
+        TypeRef::Named(name) => table.resolve_type(ty).is_none().then(|| name.clone()),
+        TypeRef::Generic { base, args } => args
+            .iter()
+            .find_map(|arg| unknown_name_in(arg, table))
+            .or_else(|| {
+                table
+                    .resolve_type(&TypeRef::Named(base.clone()))
+                    .is_none()
+                    .then(|| base.clone())
+            }),
+        TypeRef::Array(inner) => unknown_name_in(inner, table),
+        _ => None,
+    }
+}
+
+/// Why a declared type does not resolve. A real Java 11 class caturra does
+/// not model says so by name — `LinkedList<Integer> l;` reads to a student
+/// exactly as its import and its `new` do, rather than as a typo or as the
+/// unhelpful "this type cannot be used for a variable".
+fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
+    if let Some(reason) = unsupported_name_in(ty) {
+        return reason;
+    }
+    if let Some(name) = unknown_name_in(ty, table) {
+        return format!("unknown type '{name}'");
+    }
+    match ty {
+        TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => {
+            format!("unknown type '{name}'")
+        }
+        TypeRef::Array(_) => String::from("arrays are not yet supported by caturra"),
+        _ => String::from("this type cannot be used for a variable"),
+    }
+}
+
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
         ElemType::Int => String::from("Integer"),
@@ -2465,11 +2536,10 @@ fn method_descriptor(
                 } else if !table.has_class(base) && simple == "Field" {
                     out.push_str("Ljava/lang/reflect/Field;");
                 } else {
-                    diagnostics.push(Diagnostic::error(
-                        path,
-                        format!("unknown generic type '{base}'"),
-                        span,
-                    ));
+                    let message = crate::imports::unsupported_class_reason(base)
+                        .filter(|_| !table.has_class(base))
+                        .unwrap_or_else(|| format!("unknown generic type '{base}'"));
+                    diagnostics.push(Diagnostic::error(path, message, span));
                     out.push_str("Ljava/lang/Object;");
                 }
             }
@@ -5655,15 +5725,7 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) {
         let Some(base_ty) = self.table.resolve_type(ty) else {
-            let what = match ty {
-                TypeRef::Named(name) if name.contains('.') => {
-                    crate::imports::unknown_qualified_message(name)
-                }
-                TypeRef::Named(name) => format!("unknown type '{name}'"),
-                TypeRef::Array(_) => String::from("arrays are not yet supported by caturra"),
-                _ => String::from("this type cannot be used for a variable"),
-            };
-            self.error(span, what);
+            self.error(span, unresolved_type_message(ty, self.table));
             return;
         };
 
@@ -6429,6 +6491,15 @@ impl BodyGen<'_> {
                     }
                 }
             }
+        }
+        // A real Java class caturra does not model: say so, rather than
+        // "is not a generic type" or "cannot find symbol". A user class of
+        // the same name shadows it and has a `class_id`.
+        if self.table.class_id(class_name).is_none()
+            && let Some(reason) = crate::imports::unsupported_class_reason(class_name)
+        {
+            self.error(span, reason);
+            return JType::Error;
         }
         if !type_args.is_empty() {
             self.error(span, format!("{class_name} is not a generic type"));

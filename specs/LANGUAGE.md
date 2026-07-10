@@ -434,6 +434,21 @@ null` is the way to test for absence, and unboxing an absent value
     a `NullPointerException`. `lineSeparator()` is always `"\n"`: the
     JVM's is system-dependent, and caturra runs where a line ends with a
     newline. Pinned by `diff_system_arraycopy_and_line_separator`.
+  - A real Java 11 class caturra does not model (`LinkedList`, `HashSet`,
+    `TreeMap`, `TreeSet`, `Iterator`, `Optional`, `BufferedReader`, ...)
+    reports an honest "java.util.LinkedList is not supported by caturra"
+    **wherever it is written** (2026-07-09): a local or field declaration,
+    a parameter, an array element, a type argument, `new`, `extends` and
+    `implements`, qualified or not. Until then only `import` and `new`
+    said so, and a declaration said "this type cannot be used for a
+    variable" — which reads as a typo for a class the student can see in
+    the documentation. The reason is only consulted once the name has
+    failed to resolve, so a user class named `Stack` still shadows the
+    library one, and a genuine typo still gets `unknown type 'Frobnicator'`
+    (blaming the type argument, not the `ArrayList` around it). javac
+    accepts all of these, so this is deliberate strictness, pinned by
+    `strict_linked_list_is_refused_by_name` and
+    `unmodeled_library_classes_explain_themselves_in_every_position`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
@@ -743,6 +758,9 @@ program, which would mean it is a shared rule rather than a strictness:
 - `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`.
 - `Collections.addAll(List<Integer>, new Integer[] {1})` — caturra reads a
   lone array as the varargs array only for a reference element type.
+- `LinkedList<Integer> l;`, `HashSet`, `TreeMap`, `TreeSet` and the rest of
+  the unmodeled library — a scope limit, reported by name wherever written
+  rather than as a missing symbol.
 
 **More permissive than javac** (caturra accepts; javac rejects). **This
 list is empty**, and the `looser_than_javac!` macro exists to keep it

@@ -5265,6 +5265,18 @@ differential_reject!(
     "public class RejectQualifiedPackage { static void r() { java.zzz.Nope.f(); } }"
 );
 
+stricter_than_javac!(
+    strict_linked_list_is_refused_by_name,
+    "StrictLinkedList",
+    "import java.util.*;\npublic class StrictLinkedList { static void r() { LinkedList<Integer> l; } }"
+);
+
+stricter_than_javac!(
+    strict_hash_set_is_refused_by_name,
+    "StrictHashSet",
+    "import java.util.*;\npublic class StrictHashSet { static void r() { HashSet<Integer> s; } }"
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

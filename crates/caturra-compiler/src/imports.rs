@@ -160,6 +160,19 @@ pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     known.iter().find(|name| **name == class).copied()
 }
 
+/// The honest reason a real Java 11 class caturra does not model cannot
+/// be used, from its simple name: `LinkedList` → "java.util.LinkedList is
+/// not supported by caturra ...". `None` when the name is not one of them.
+///
+/// Only sound once the name has failed to resolve — a user class called
+/// `Stack` shadows the library one, and would have resolved.
+pub(crate) fn unsupported_class_reason(simple: &str) -> Option<String> {
+    KNOWN_UNSUPPORTED
+        .iter()
+        .find(|(_, names)| names.contains(&simple))
+        .map(|(package, _)| not_supported(&format!("{package}.{simple}")))
+}
+
 /// javac-style message for a fully qualified name the library doesn't
 /// model (honest "not supported" for real Java classes and packages).
 pub(crate) fn unknown_qualified_message(dotted: &str) -> String {
