@@ -3,8 +3,11 @@
 //! identical stdout. This pins our semantics to the reference
 //! implementation rather than to our own expectations.
 //!
-//! Skips (with a note) when no JDK is installed, so CI without Java
-//! still passes; locally, `apt install openjdk-11-jdk` enables it.
+//! Skips (with a note) when no JDK is installed, so a checkout without Java
+//! still builds; `apt install openjdk-11-jdk` enables it. A skipped test
+//! reports `ok`, which is indistinguishable from a passing one — so CI sets
+//! `CATURRA_REQUIRE_JDK=1`, and then a missing JDK is a failure rather than
+//! ninety silent no-ops.
 
 use std::io::Write;
 use std::process::Command;
@@ -12,14 +15,61 @@ use std::process::Command;
 use caturra_vm::{BufferedConsole, VirtualFileSystem, Vm, VmOptions};
 
 fn jdk_available() -> bool {
-    Command::new("javac")
+    let present = Command::new("javac")
         .arg("--version")
         .output()
         .is_ok_and(|out| out.status.success())
         && Command::new("java")
             .arg("--version")
             .output()
-            .is_ok_and(|out| out.status.success())
+            .is_ok_and(|out| out.status.success());
+    assert!(
+        present || std::env::var_os("CATURRA_REQUIRE_JDK").is_none(),
+        "CATURRA_REQUIRE_JDK is set but no JDK is on PATH — the differential \
+         suite would have reported `ok` without comparing anything"
+    );
+    present
+}
+
+/// Whether javac refuses to compile `source`.
+fn javac_rejects(class_name: &str, source: &str) -> bool {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(source, &mut hasher);
+    let fingerprint = std::hash::Hasher::finish(&hasher);
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("reject-{class_name}-{fingerprint:x}"));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let java_file = dir.join(format!("{class_name}.java"));
+    std::fs::write(&java_file, source).expect("write source");
+    let compile = Command::new("javac")
+        .arg(java_file.file_name().expect("file name"))
+        .current_dir(&dir)
+        .output()
+        .expect("javac runs");
+    !compile.status.success()
+}
+
+/// Both javac and caturra must refuse `source`.
+///
+/// A `differential_test!` can only run a program javac accepts, so the suite
+/// cannot catch caturra growing *more permissive* than javac — which is the
+/// direction that hurts, because such a program compiles in the playground and
+/// fails on a real JDK. This checks that direction directly.
+fn assert_both_reject(class_name: &str, source: &str) {
+    assert!(
+        javac_rejects(class_name, source),
+        "javac ACCEPTS {class_name}, so caturra rejecting it is a deliberate \
+         strictness rather than a shared rule — do not assert it here"
+    );
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{class_name}.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        !compilation.success(),
+        "caturra ACCEPTS {class_name}, which javac rejects: it would compile \
+         in the playground and fail on a real JDK"
+    );
 }
 
 /// Run `source` through javac+java, returning stdout.
@@ -135,6 +185,20 @@ macro_rules! differential_test {
                 return;
             }
             assert_same_output($class, $source);
+        }
+    };
+}
+
+/// A program neither javac nor caturra may accept.
+macro_rules! differential_reject {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            assert_both_reject($class, $source);
         }
     };
 }
@@ -4841,6 +4905,207 @@ public class DiffNextBytes {
             }
         }
         System.out.println(hash);
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
+// Programs javac rejects. caturra must reject them too, or they would compile
+// in the playground and fail on a real JDK. A `differential_test!` cannot
+// catch this: it only ever runs programs javac accepts.
+// ---------------------------------------------------------------------------
+
+differential_reject!(
+    reject_post_java_11_math_abs_exact,
+    "RejectAbsExact",
+    r"
+public class RejectAbsExact {
+    public static void main(String[] args) {
+        System.out.println(Math.absExact(-5));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_post_java_11_random_next_int_range,
+    "RejectNextIntRange",
+    r"
+import java.util.Random;
+
+public class RejectNextIntRange {
+    public static void main(String[] args) {
+        System.out.println(new Random(1).nextInt(2, 5));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_shuffle_without_a_random,
+    "RejectShuffle",
+    r"
+import java.util.ArrayList;
+import java.util.Collections;
+
+public class RejectShuffle {
+    public static void main(String[] args) {
+        Collections.shuffle(new ArrayList<Integer>(), 5);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_add_all_of_a_primitive_array,
+    "RejectAddAll",
+    r"
+import java.util.ArrayList;
+import java.util.Collections;
+
+public class RejectAddAll {
+    public static void main(String[] args) {
+        ArrayList<Integer> numbers = new ArrayList<Integer>();
+        int[] values = {1, 2};
+        Collections.addAll(numbers, values);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_binary_search_of_a_boolean_array,
+    "RejectBooleanSearch",
+    r"
+import java.util.Arrays;
+
+public class RejectBooleanSearch {
+    public static void main(String[] args) {
+        System.out.println(Arrays.binarySearch(new boolean[] {true}, true));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_deep_to_string_of_a_one_dimensional_primitive_array,
+    "RejectDeepToString",
+    r"
+import java.util.Arrays;
+
+public class RejectDeepToString {
+    public static void main(String[] args) {
+        System.out.println(Arrays.deepToString(new int[] {1}));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_array_copy_with_too_few_arguments,
+    "RejectArrayCopy",
+    r"
+public class RejectArrayCopy {
+    public static void main(String[] args) {
+        int[] cells = new int[2];
+        System.arraycopy(cells, 0, cells, 0);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_multiply_full_of_longs,
+    "RejectMultiplyFull",
+    r"
+public class RejectMultiplyFull {
+    public static void main(String[] args) {
+        System.out.println(Math.multiplyFull(1L, 2L));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_scalb_with_a_double_scale,
+    "RejectScalb",
+    r"
+public class RejectScalb {
+    public static void main(String[] args) {
+        System.out.println(Math.scalb(1.5, 3.0));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_next_bytes_of_an_int_array,
+    "RejectNextBytes",
+    r"
+import java.util.Random;
+
+public class RejectNextBytes {
+    public static void main(String[] args) {
+        new Random(1).nextBytes(new int[2]);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_collections_max_of_a_non_collection,
+    "RejectMax",
+    r"
+import java.util.Collections;
+
+public class RejectMax {
+    public static void main(String[] args) {
+        System.out.println(Collections.max(5));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_an_omitted_array_initializer_element,
+    "RejectOmittedElement",
+    r"
+public class RejectOmittedElement {
+    public static void main(String[] args) {
+        int[] cells = {1,,2};
+        System.out.println(cells.length);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_copy_of_into_the_wrong_array_type,
+    "RejectCopyOf",
+    r#"
+import java.util.Arrays;
+
+public class RejectCopyOf {
+    public static void main(String[] args) {
+        String[] words = {"a"};
+        int[] wrong = Arrays.copyOf(words, 2);
+        System.out.println(wrong.length);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_fill_with_an_incompatible_value,
+    "RejectFill",
+    r#"
+import java.util.Arrays;
+
+public class RejectFill {
+    public static void main(String[] args) {
+        int[] cells = new int[2];
+        Arrays.fill(cells, "s");
     }
 }
 "#

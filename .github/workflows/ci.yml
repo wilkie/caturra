@@ -33,15 +33,27 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
+      # differential.rs runs each test through this JDK and through caturra,
+      # and demands identical output. Without it those tests report `ok`
+      # having compared nothing, so CATURRA_REQUIRE_JDK below makes a missing
+      # JDK a failure rather than ninety silent no-ops.
+      - name: Install JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
       - name: Format
         run: cargo fmt --check
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets
 
-      # differential.rs runs only when a JDK is present, so it skips here.
       - name: Test
         run: cargo test --workspace
+        env:
+          CATURRA_REQUIRE_JDK: '1'
+
 
   web:
     name: Web (lint, types, unit, e2e)
