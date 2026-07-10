@@ -92,9 +92,11 @@ pub fn resolve_captures(
                 .map(|(message, span)| crate::diagnostics::Diagnostic::error(path, message, span)),
         );
     }
-    let captures = found.captures;
+    let mut captures = found.captures;
     let super_args = found.super_args;
     let owners = found.owner;
+
+    inject_outer_captures(units, &anon_bodies, &owners, &mut captures);
 
     // Phase 2a: synthesize the fields and constructor on each anon class that
     // captures locals or forwards args to super.
@@ -132,6 +134,59 @@ pub fn resolve_captures(
         }
     }
     diagnostics
+}
+
+/// A lambda that reads or writes an enclosing INSTANCE member captures the
+/// enclosing `this`, as Java does (its `this$0`). Prepend a synthetic
+/// `__caturraOuter` capture to each such lambda. Scoped to lambdas: they have
+/// no members of their own, so a bare field, a bare method call, or `this`
+/// unambiguously means the enclosing instance. Anonymous classes, whose own
+/// members can shadow, keep their existing behaviour.
+fn inject_outer_captures(
+    units: &[(String, CompilationUnit)],
+    anon_bodies: &HashMap<String, ClassDecl>,
+    owners: &HashMap<String, String>,
+    captures: &mut HashMap<String, Vec<(String, TypeRef)>>,
+) {
+    let instance_members: HashMap<String, (HashSet<String>, HashSet<String>)> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .map(|c| {
+            let fields = c
+                .fields
+                .iter()
+                .filter(|f| !f.is_static)
+                .map(|f| f.name.clone())
+                .collect();
+            let methods = c
+                .methods
+                .iter()
+                .filter(|m| !m.is_static && !m.is_constructor)
+                .map(|m| m.name.clone())
+                .collect();
+            (c.name.clone(), (fields, methods))
+        })
+        .collect();
+    for (name, body) in anon_bodies {
+        if !name.starts_with("Lambda$") {
+            continue;
+        }
+        let Some(owner) = owners.get(name) else {
+            continue;
+        };
+        let Some((fields, methods)) = instance_members.get(owner) else {
+            continue;
+        };
+        if lambda_needs_outer(body, fields, methods) {
+            // The outer instance is captured first, so its constructor
+            // parameter precedes the local captures.
+            let caps = captures.entry(name.clone()).or_default();
+            caps.insert(
+                0,
+                (String::from(OUTER_FIELD), TypeRef::Named(owner.clone())),
+            );
+        }
+    }
 }
 
 /// Add a field per capture and a constructor that forwards `supers` to
@@ -869,10 +924,17 @@ fn rewrite_expr(expr: &mut Expr, captures: &HashMap<String, Vec<(String, TypeRef
             && !caps.is_empty()
         {
             let span = *span;
-            // Append captured locals after the super-args already at the site.
-            args.extend(caps.iter().map(|(name, _)| Expr::Name {
-                path: vec![name.clone()],
-                span,
+            // Append captured values after the super-args already at the
+            // site. `__caturraOuter` is the enclosing instance itself.
+            args.extend(caps.iter().map(|(name, _)| {
+                if name == OUTER_FIELD {
+                    Expr::This { span }
+                } else {
+                    Expr::Name {
+                        path: vec![name.clone()],
+                        span,
+                    }
+                }
             }));
         }
         return;
@@ -1049,4 +1111,105 @@ fn assigned_in_class(class: &ClassDecl) -> HashSet<String> {
         mutations_in_stmts(&method.body, &mut out);
     }
     out.assigns.into_keys().collect()
+}
+
+/// The synthetic field holding a lambda's captured enclosing instance.
+pub(crate) const OUTER_FIELD: &str = "__caturraOuter";
+
+/// Whether a lambda body references the enclosing instance: a free name that
+/// is an enclosing instance field, `this`, or a bare call to an enclosing
+/// instance method. `free_names` already discounts the lambda's own
+/// parameters and locals; `this` and a bare call need no such tracking (a
+/// lambda has no `this` of its own, and a bare call always names a method).
+fn lambda_needs_outer(
+    body: &ClassDecl,
+    inst_fields: &HashSet<String>,
+    inst_methods: &HashSet<String>,
+) -> bool {
+    if free_names(body).iter().any(|n| inst_fields.contains(n)) {
+        return true;
+    }
+    body.methods
+        .iter()
+        .any(|m| stmts_use_outer(&m.body, inst_methods))
+}
+
+fn stmts_use_outer(stmts: &[Stmt], methods: &HashSet<String>) -> bool {
+    stmts.iter().any(|s| stmt_uses_outer(s, methods))
+}
+
+fn stmt_uses_outer(stmt: &Stmt, methods: &HashSet<String>) -> bool {
+    let e = |x: &Expr| expr_uses_outer(x, methods);
+    let sub = |x: &Stmt| stmt_uses_outer(x, methods);
+    match stmt {
+        Stmt::Block(body) => stmts_use_outer(body, methods),
+        Stmt::Expr(x) | Stmt::Throw { value: x, .. } => e(x),
+        Stmt::LocalDecl { declarators, .. } => {
+            declarators.iter().filter_map(|d| d.init.as_ref()).any(e)
+        }
+        Stmt::Assign { target, value, .. } => {
+            let t = match target {
+                crate::ast::AssignTarget::Var(_) => false,
+                crate::ast::AssignTarget::Index { array, index } => e(array) || e(index),
+                crate::ast::AssignTarget::Field { object, .. } => e(object),
+            };
+            t || e(value)
+        }
+        Stmt::ForEach { iterable, body, .. } => e(iterable) || sub(body),
+        Stmt::If {
+            cond, then, els, ..
+        } => e(cond) || sub(then) || els.as_deref().is_some_and(sub),
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => e(cond) || sub(body),
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } => {
+            init.as_deref().is_some_and(sub)
+                || cond.as_ref().is_some_and(e)
+                || update.iter().any(sub)
+                || sub(body)
+        }
+        Stmt::Labeled { body, .. } => sub(body),
+        Stmt::Return { value, .. } => value.as_ref().is_some_and(e),
+        Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => args.iter().any(e),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            stmts_use_outer(body, methods)
+                || catches.iter().any(|c| stmts_use_outer(&c.body, methods))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|f| stmts_use_outer(f, methods))
+        }
+        Stmt::Switch { selector, arms, .. } => {
+            e(selector) || arms.iter().any(|a| stmts_use_outer(&a.body, methods))
+        }
+        Stmt::Break { .. } | Stmt::Continue { .. } => false,
+    }
+}
+
+fn expr_uses_outer(expr: &Expr, methods: &HashSet<String>) -> bool {
+    if matches!(expr, Expr::This { .. }) {
+        return true;
+    }
+    if let Expr::Call {
+        receiver: None,
+        method,
+        ..
+    } = expr
+        && methods.contains(method)
+    {
+        return true;
+    }
+    let mut hit = false;
+    walk_expr_children(&mut expr.clone(), &mut |e| {
+        hit = hit || expr_uses_outer(e, methods);
+    });
+    hit
 }

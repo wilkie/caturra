@@ -10666,3 +10666,68 @@ fn an_array_widens_to_object() {
     );
     assert_eq!(out, "true\nfalse\ntrue\n");
 }
+
+/// A lambda in an instance method may read, write, or call the enclosing
+/// instance's members — `() -> field`, `() -> this.m()`, `() -> field = x`,
+/// `() -> helper()`. Java captures the enclosing `this` (its `this$0`); caturra
+/// captures it as a synthetic `__caturraOuter` field and resolves those
+/// references through it, live on the real object. Until 2026-07-09 any such
+/// reference was "cannot find variable" — the safe direction, but the most
+/// common lambda shape in real OO Java. Pinned against a real JDK by
+/// `diff_lambda_captures_enclosing_instance`.
+#[test]
+fn a_lambda_reaches_the_enclosing_instance() {
+    let out = run_stdout(
+        r"
+        interface IntFn { int go(); }
+        interface Run { void go(); }
+        public class M {
+            int field = 100;
+            int twice() { return field * 2; }
+            IntFn read() { return () -> field; }
+            IntFn callMethod() { return () -> twice(); }
+            Run write() { return () -> { field = field + 10; }; }
+            int withLocal(int param) {
+                int local = 3;
+                IntFn a = () -> field + local + param;
+                return a.go();
+            }
+            public static void main(String[] args) {
+                M m = new M();
+                System.out.println(m.read().go());
+                System.out.println(m.callMethod().go());
+                m.write().go();
+                System.out.println(m.field);
+                System.out.println(m.withLocal(10));
+            }
+        }
+        ",
+        "M",
+    );
+    assert_eq!(out, "100\n200\n110\n123\n");
+}
+
+/// The capture is scoped to a lambda directly in an instance method. A nested
+/// lambda reaching an instance field two levels up needs transitive capture,
+/// which is unsupported — a compile error (javac accepts it, so the safe
+/// direction) rather than a wrong answer.
+#[test]
+fn a_nested_lambda_reaching_an_instance_field_is_a_clean_error() {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("M.java"),
+        text: String::from(
+            "interface Fn { int go(); } class M { int field = 1; \
+             int r() { Fn outer = () -> { Fn inner = () -> field; return inner.go(); }; \
+             return outer.go(); } }",
+        ),
+    }]);
+    assert!(!compilation.success(), "nested capture is not supported");
+    // A diagnostic, not a panic or bad bytecode.
+    assert!(
+        compilation
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d.severity, caturra_compiler::diagnostics::Severity::Error)),
+        "expected a compile error"
+    );
+}

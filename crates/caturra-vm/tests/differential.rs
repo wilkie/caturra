@@ -5945,6 +5945,68 @@ public class DiffArrayToObject {
 "#
 );
 
+differential_test!(
+    diff_lambda_captures_enclosing_instance,
+    "DiffLambdaInstance",
+    r#"
+interface IntFn { int go(); }
+interface Run { void go(); }
+
+public class DiffLambdaInstance {
+    int field = 100;
+    static int stat = 7;
+
+    int bump() { return field + 5; }
+
+    // Every way a lambda reaches the enclosing instance.
+    IntFn bareRead() { return () -> field; }
+    IntFn thisRead() { return () -> this.f2(); }
+    int f2() { return field * 2; }
+    IntFn callMethod() { return () -> bump(); }
+    Run write() { return () -> { field = field + 10; }; }
+    IntFn asValue() { return () -> { DiffLambdaInstance self = this; return self.field; }; }
+
+    // Mixed with a local, a parameter, and a static field.
+    int mixed(int param) {
+        int local = 3;
+        IntFn a = () -> field + local + param + stat;
+        return a.go();
+    }
+
+    // A parameter shadowing the field: the lambda means the parameter.
+    int shadowed(int field) {
+        IntFn a = () -> field;
+        return a.go();
+    }
+
+    public static void main(String[] args) {
+        DiffLambdaInstance it = new DiffLambdaInstance();
+        System.out.println(it.bareRead().go());
+        System.out.println(it.thisRead().go());
+        System.out.println(it.callMethod().go());
+        it.write().go();
+        System.out.println(it.field);
+        System.out.println(it.asValue().go());
+        it.write().go();
+        System.out.println(it.field);
+        System.out.println(it.mixed(10));
+        System.out.println(it.shadowed(42));
+
+        // Two objects: each lambda sees its own object's field, live.
+        DiffLambdaInstance a = new DiffLambdaInstance();
+        DiffLambdaInstance b = new DiffLambdaInstance();
+        a.field = 1;
+        b.field = 2;
+        Run ra = a.write();
+        Run rb = b.write();
+        ra.go();
+        rb.go();
+        System.out.println(a.field + " " + b.field);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

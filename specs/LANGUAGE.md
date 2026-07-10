@@ -780,14 +780,19 @@ final`, or `from an inner class` for an anonymous class. Copying a
   `accept(Object, Object)` opens with the two casts javac puts in a bridge
   method, so `(key, value)` have the map's declared types. Pinned by
   `diff_map_for_each_lambda`.
-  A lambda's body sees the **static fields** of the class that created it
-  (2026-07-09). Hoisting the body to a top-level class loses the bare name;
-  Java resolves it through the enclosing class, and so does caturra —
-  shared state, not captured by value. Enclosing **instance** fields and
-  bare calls to enclosing methods are still out of reach, and capture of a
-  `StringBuilder` fails; all three report an error rather than misbehaving.
-  A captured local must be effectively final, enforced as for anonymous
-  classes above.
+  A lambda's body sees the members of the class that created it
+  (2026-07-09): its **static fields** by the enclosing class, and its
+  **instance** members — a bare field, `this.field`, a bare method call,
+  `this` itself — through a captured enclosing `this`. Java captures the
+  enclosing instance as `this$0`; caturra captures it as a synthetic
+  `__caturraOuter` field and resolves instance references through it, live
+  on the real object, so a lambda mutating `field` writes the enclosing
+  object. Scoped to a lambda **directly** in an instance method: a nested
+  lambda reaching an instance field two levels up needs transitive capture
+  and is a compile error (javac accepts it — the safe direction), as is
+  capturing a `StringBuilder`. Pinned by
+  `diff_lambda_captures_enclosing_instance`. A captured local must be
+  effectively final, enforced as for anonymous classes above.
 
 - **Method references** (2026-07-04): all four kinds — static
   (`Integer::parseInt`), unbound instance (`String::length`, where the

@@ -4954,6 +4954,35 @@ impl BodyGen<'_> {
         field.is_static.then(|| (owner, field.clone()))
     }
 
+    /// The `__caturraOuter` field, if this is a lambda that captured its
+    /// enclosing instance, with the enclosing class id.
+    fn captured_outer(&self) -> Option<(FieldSig, ClassId)> {
+        let cls = self.table.class_name(self.current_class_id).to_owned();
+        let (_, outer) = self.table.field(&cls, crate::capture::OUTER_FIELD)?;
+        if let JType::Object(enclosing) = outer.ty {
+            Some((outer.clone(), enclosing))
+        } else {
+            None
+        }
+    }
+
+    /// An INSTANCE field of the enclosing class, reached through the captured
+    /// `__caturraOuter`. Reads/writes are live on the real enclosing object,
+    /// which is what a lambda accessing `this.f` does.
+    fn enclosing_instance_field(&self, name: &str) -> Option<(FieldSig, ClassId, FieldSig)> {
+        let (outer, enclosing) = self.captured_outer()?;
+        let enc_name = self.table.class_name(enclosing).to_owned();
+        let (field_owner_id, field) = self.table.field(&enc_name, name)?;
+        (!field.is_static).then(|| (outer, field_owner_id, field.clone()))
+    }
+
+    /// Push the captured enclosing instance (`this.__caturraOuter`) onto the
+    /// stack. The caller then reads or writes a field of it.
+    fn push_captured_outer(&mut self, outer: &FieldSig) {
+        self.code.push_op(op::ALOAD_0, 1);
+        self.emit_getfield(self.current_class_id, outer);
+    }
+
     /// The class `super` denotes: this class's superclass, or the implicit
     /// `Object` when it declares none. A field then resolves from there
     /// upward, which is what `super.n` means — the field the superclass
@@ -5862,6 +5891,20 @@ impl BodyGen<'_> {
             // captured by value.
             if let Some((owner, field)) = self.enclosing_static_field(name) {
                 self.assign_field(owner, &FieldReceiver::Static, &field, op, value, span);
+                return;
+            }
+            // An instance field of the enclosing class, written live through
+            // the captured `__caturraOuter` (which `this` now denotes).
+            if let Some((_, field_owner, field)) = self.enclosing_instance_field(name) {
+                let outer = Expr::This { span };
+                self.assign_field(
+                    field_owner,
+                    &FieldReceiver::Object(&outer),
+                    &field,
+                    op,
+                    value,
+                    span,
+                );
                 return;
             }
         }
@@ -8125,6 +8168,23 @@ impl BodyGen<'_> {
                 span,
             );
         }
+        // A bare call to an enclosing instance method, from inside a lambda:
+        // `() -> helper()` is `__caturraOuter.helper()`.
+        if !matches!(own, Resolution::Found(_))
+            && !self.in_constructor
+            && let Some((_, enclosing)) = self.captured_outer()
+        {
+            let enc_name = self.table.class_name(enclosing).to_owned();
+            let found_instance = matches!(
+                self.table.resolve(&enc_name, method, &arg_types),
+                Resolution::Found(sig) if !sig.is_static
+            );
+            if found_instance {
+                let outer = Expr::This { span };
+                self.expr(&outer); // pushes the enclosing instance
+                return self.emit_virtual_call_on_stacked_receiver(enclosing, method, args, span);
+            }
+        }
         self.static_call(self.current_class, method, args, span)
     }
 
@@ -8861,6 +8921,10 @@ impl BodyGen<'_> {
                     .field(self.current_class, &path[0])
                     .map(|(_, f)| f.ty)
                     .or_else(|| self.enclosing_static_field(&path[0]).map(|(_, f)| f.ty))
+                    .or_else(|| {
+                        self.enclosing_instance_field(&path[0])
+                            .map(|(_, _, f)| f.ty)
+                    })
                     .unwrap_or(JType::Error)
             }
             Expr::Name { path, .. }
@@ -9179,6 +9243,11 @@ impl BodyGen<'_> {
             Expr::This { .. } => {
                 if self.in_static {
                     JType::Error
+                } else if let Some((_, enclosing)) = (!self.in_constructor)
+                    .then(|| self.captured_outer())
+                    .flatten()
+                {
+                    JType::Object(enclosing)
                 } else {
                     JType::Object(self.current_class_id)
                 }
@@ -9305,6 +9374,15 @@ impl BodyGen<'_> {
                         "non-static variable this cannot be referenced from a static context",
                     );
                     return JType::Error;
+                }
+                // Inside a lambda, `this` is the ENCLOSING instance (JLS
+                // §15.27.2), captured as `__caturraOuter`. Not in the
+                // synthesized constructor, whose `this` is the lambda itself.
+                if !self.in_constructor
+                    && let Some((outer, enclosing)) = self.captured_outer()
+                {
+                    self.push_captured_outer(&outer);
+                    return JType::Object(enclosing);
                 }
                 self.code.push_op(op::ALOAD_0, 1);
                 JType::Object(self.current_class_id)
@@ -10042,6 +10120,12 @@ impl BodyGen<'_> {
             // from: hoisting lost the bare name, Java still resolves it.
             if let Some((owner, field)) = self.enclosing_static_field(name) {
                 return self.emit_getfield(owner, &field);
+            }
+            // An instance field of the enclosing class, through the captured
+            // `__caturraOuter`. Live on the real enclosing object.
+            if let Some((outer, field_owner, field)) = self.enclosing_instance_field(name) {
+                self.push_captured_outer(&outer);
+                return self.emit_getfield(field_owner, &field);
             }
         }
         let Some(var) = self.lookup(name) else {
