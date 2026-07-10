@@ -1102,10 +1102,14 @@ impl Parser<'_> {
                 self.error_here("expected '}' to close the block");
                 break;
             }
-            if let Ok(Some(stmt)) = self.statement() {
-                statements.push(stmt);
-            } else {
-                self.recover_to_statement_boundary();
+            match self.statement() {
+                Ok(Some(stmt)) => statements.push(stmt),
+                // An empty statement (`;`, JLS §14.6) parses to nothing. It
+                // is not a parse error, and must not reach the recovery
+                // below — that skips to the next `;`, which would silently
+                // swallow the statement after it.
+                Ok(None) => {}
+                Err(Abort) => self.recover_to_statement_boundary(),
             }
         }
         self.eat_symbol("}");

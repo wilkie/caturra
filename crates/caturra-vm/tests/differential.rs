@@ -5511,6 +5511,55 @@ differential_reject!(
     "class RSNb { int n = 1; int f() { return super.n; } }\npublic class RejectSuperNone { static void r() {} }"
 );
 
+differential_test!(
+    diff_empty_statement,
+    "DiffEmptyStatement",
+    r#"
+public class DiffEmptyStatement {
+    public static void main(String[] args) {
+        // A stray `;` is an empty statement (JLS 14.6), not an error, and it
+        // must not swallow the statement after it.
+        int total = 0;
+        for (int i = 0; i < 3; i++) {
+            int x = i + 1;;
+            total += x;
+        }
+        System.out.println(total);
+
+        int y = 5;;
+        System.out.println(y);
+
+        ;
+        System.out.println("after a lone semicolon");
+
+        ;;;
+        System.out.println("after three");
+
+        if (total > 0) {
+            ;
+            System.out.println("inside if");
+        }
+
+        // The already-correct positions: an embedded empty statement is an
+        // empty block, and a switch arm tolerates one too.
+        for (int i = 0; i < 0; i++);
+        switch (y) {
+            case 5:
+                ;
+                System.out.println("case 5");
+                break;
+            default:
+                break;
+        }
+
+        int count = 0;
+        do { count++;; } while (count < 2);
+        System.out.println(count);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

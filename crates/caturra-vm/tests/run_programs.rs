@@ -10081,3 +10081,76 @@ fn super_field_rejects_like_javac() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// An empty statement (`;`, JLS §14.6) parses to nothing and must not disturb
+/// the statements around it. Until 2026-07-09 `block_body` treated it exactly
+/// like a parse error and ran `recover_to_statement_boundary`, which skips to
+/// the next `;` — so a stray semicolon **silently deleted the statement after
+/// it**, with no diagnostic. `int x = 1;; total += x;` compiled, ran, and
+/// quietly dropped the `total += x`. Found by diffing 2254 corpus programs
+/// against a real JDK; it was the sole cause of every divergence. Pinned by
+/// `diff_empty_statement`.
+#[test]
+fn a_stray_semicolon_does_not_swallow_the_next_statement() {
+    let out = run_stdout(
+        r#"
+        public class M {
+            public static void main(String[] args) {
+                int total = 0;
+                for (int i = 0; i < 3; i++) {
+                    int x = i + 1;;
+                    total += x;
+                }
+                System.out.println(total);
+                int y = 5;;
+                System.out.println(y);
+                ;
+                System.out.println("lone");
+                ;;;
+                System.out.println("three");
+                if (total > 0) {
+                    ;
+                    System.out.println("in if");
+                }
+                int count = 0;
+                do { count++;; } while (count < 2);
+                System.out.println(count);
+                for (int i = 0; i < 0; i++);
+                System.out.println("end");
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "6\n5\nlone\nthree\nin if\n2\nend\n");
+}
+
+/// The recovery an empty statement must not trigger is still reached by a real
+/// parse error, and still resynchronises at the next statement boundary — so
+/// one bad statement yields one diagnostic, not a cascade.
+#[test]
+fn a_parse_error_still_recovers_at_the_statement_boundary() {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("M.java"),
+        text: String::from(
+            "public class M { public static void main(String[] a) { \
+             int x = ; int y = 2; System.out.println(y); } }",
+        ),
+    }]);
+    assert!(
+        !compilation.success(),
+        "a missing expression should not compile"
+    );
+    let errors: Vec<&String> = compilation
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, caturra_compiler::diagnostics::Severity::Error))
+        .map(|d| &d.message)
+        .collect();
+    assert_eq!(errors.len(), 1, "one error, not a cascade: {errors:?}");
+    assert!(
+        errors[0].contains("expected an expression"),
+        "got: {}",
+        errors[0]
+    );
+}
