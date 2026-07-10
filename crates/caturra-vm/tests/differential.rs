@@ -5560,6 +5560,64 @@ public class DiffEmptyStatement {
 "#
 );
 
+differential_test_stdin!(
+    diff_scanner_close_closes_standard_in,
+    "DiffScannerClose",
+    r#"
+import java.util.NoSuchElementException;
+import java.util.Scanner;
+
+public class DiffScannerClose {
+    public static void main(String[] args) {
+        Scanner first = new Scanner(System.in);
+        System.out.println("first=" + first.next());
+        first.close();
+
+        // The closed Scanner itself refuses every method but `close`.
+        try {
+            first.next();
+            System.out.println("closed.next: no throw");
+        } catch (IllegalStateException e) {
+            System.out.println("closed.next: IllegalStateException " + e.getMessage());
+        }
+        try {
+            first.hasNext();
+            System.out.println("closed.hasNext: no throw");
+        } catch (IllegalStateException e) {
+            System.out.println("closed.hasNext: IllegalStateException " + e.getMessage());
+        }
+        first.close();
+        System.out.println("double close: ok");
+
+        // `close()` closed System.in itself, so a NEW Scanner sees end of
+        // input — this is why a program that closes stdin and reads again
+        // dies on a real JVM.
+        Scanner second = new Scanner(System.in);
+        System.out.println("new hasNext=" + second.hasNext());
+        try {
+            second.next();
+            System.out.println("new.next: no throw");
+        } catch (NoSuchElementException e) {
+            System.out.println("new.next: NoSuchElementException");
+        }
+        try {
+            second.nextLine();
+            System.out.println("new.nextLine: no throw");
+        } catch (NoSuchElementException e) {
+            System.out.println("new.nextLine: NoSuchElementException " + e.getMessage());
+        }
+        try {
+            second.nextInt();
+            System.out.println("new.nextInt: no throw");
+        } catch (NoSuchElementException e) {
+            System.out.println("new.nextInt: NoSuchElementException");
+        }
+    }
+}
+"#,
+    "alpha beta\ngamma\n"
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

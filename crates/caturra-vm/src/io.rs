@@ -23,6 +23,12 @@ pub trait ConsoleIo {
     /// Returns `None` at end of input.
     fn read_line(&mut self) -> Option<String>;
 
+    /// `Scanner.close()` on a `System.in` scanner closes the underlying
+    /// stream, as the JDK's does: `read_line` then reports end of input
+    /// forever, so a later `new Scanner(System.in)` reads nothing. A host
+    /// with no closeable stdin may ignore this.
+    fn close_stdin(&mut self) {}
+
     /// Swing event pump (see the bundled `__SwingRuntime`): present the
     /// current component tree (`tree`, a JSON string), then block until
     /// the next UI event and return its payload — the clicked component's
@@ -72,6 +78,8 @@ pub struct BufferedConsole {
     stderr: Vec<u8>,
     input: Vec<String>,
     next_input: usize,
+    /// `Scanner.close()` closed standard in; reads report end of input.
+    stdin_closed: bool,
     /// When `Some`, standard out is redirected into these per-call messages
     /// (`System.setOut` semantics for `SystemOutTestRunner`).
     capture: Option<Vec<String>>,
@@ -133,9 +141,16 @@ impl ConsoleIo for BufferedConsole {
     }
 
     fn read_line(&mut self) -> Option<String> {
+        if self.stdin_closed {
+            return None;
+        }
         let line = self.input.get(self.next_input)?.clone();
         self.next_input += 1;
         Some(line)
+    }
+
+    fn close_stdin(&mut self) {
+        self.stdin_closed = true;
     }
 }
 

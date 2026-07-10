@@ -10154,3 +10154,96 @@ fn a_parse_error_still_recovers_at_the_statement_boundary() {
         errors[0]
     );
 }
+
+/// `Scanner.close()` on a `System.in` scanner closes the stream, exactly as
+/// the JDK's does: the closed Scanner refuses every method but `close`, and a
+/// *new* `Scanner(System.in)` then sees end of input. Until 2026-07-09
+/// caturra's `close()` was a no-op, so a program that closed stdin and read
+/// again worked in the playground and died with `NoSuchElementException` on a
+/// real JVM — the one place caturra was more permissive at run time. Found by
+/// diffing 2254 corpus solutions against a real JDK. Pinned by
+/// `diff_scanner_close_closes_standard_in`.
+#[test]
+fn closing_a_standard_in_scanner_closes_standard_in() {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("In.java"),
+        text: String::from(
+            r#"
+            import java.util.NoSuchElementException;
+            import java.util.Scanner;
+            public class In {
+                public static void main(String[] args) {
+                    Scanner first = new Scanner(System.in);
+                    System.out.println(first.next());
+                    first.close();
+                    try { first.next(); System.out.println("no throw"); }
+                    catch (IllegalStateException e) { System.out.println("ISE " + e.getMessage()); }
+                    first.close();
+                    Scanner second = new Scanner(System.in);
+                    System.out.println("hasNext=" + second.hasNext());
+                    try { second.next(); System.out.println("no throw"); }
+                    catch (NoSuchElementException e) { System.out.println("NSE"); }
+                }
+            }
+            "#,
+        ),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::with_input(["alpha beta", "gamma"]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("In", &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "alpha\nISE Scanner closed\nhasNext=false\nNSE\n"
+    );
+}
+
+/// Closing a *file* Scanner closes only that Scanner. Standard input is a
+/// different stream and must survive — the bundled libraries read files with
+/// a Scanner and close it, and would otherwise take stdin down with them.
+#[test]
+fn closing_a_file_scanner_leaves_standard_in_open() {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("In.java"),
+        text: String::from(
+            r#"
+            import java.io.File;
+            import java.io.FileNotFoundException;
+            import java.util.Scanner;
+            public class In {
+                public static void main(String[] args) throws FileNotFoundException {
+                    Scanner file = new Scanner(new File("d.txt"));
+                    System.out.println(file.next());
+                    file.close();
+                    try { file.next(); System.out.println("no throw"); }
+                    catch (IllegalStateException e) { System.out.println("ISE " + e.getMessage()); }
+                    Scanner again = new Scanner(new File("d.txt"));
+                    System.out.println(again.next());
+                    again.close();
+                    Scanner in = new Scanner(System.in);
+                    System.out.println(in.next());
+                }
+            }
+            "#,
+        ),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let mut vfs = VirtualFileSystem::new();
+    vfs.write_file("d.txt", b"inFile more".to_vec()).unwrap();
+    let mut console = BufferedConsole::with_input(["fromStdin"]);
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).unwrap();
+    }
+    let result = vm.run_main("In", &[]);
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(
+        console.stdout_text(),
+        "inFile\nISE Scanner closed\ninFile\nfromStdin\n"
+    );
+}

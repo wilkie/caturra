@@ -65,6 +65,9 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             buffer: String::new(),
             pos: 0,
             eof: false,
+            // Until a `File` claims it, a Scanner reads standard input.
+            stdin: true,
+            closed: false,
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
@@ -237,10 +240,19 @@ pub fn invoke_special(
                         })?
                         .to_vec();
                     let text = String::from_utf8_lossy(&content).into_owned();
-                    if let Some(HeapObject::Scanner { buffer, eof, pos }) = heap.get_mut(receiver) {
+                    if let Some(HeapObject::Scanner {
+                        buffer,
+                        eof,
+                        pos,
+                        stdin,
+                        ..
+                    }) = heap.get_mut(receiver)
+                    {
                         *buffer = text;
                         *pos = 0;
                         *eof = true;
+                        // A file scanner: closing it must not close stdin.
+                        *stdin = false;
                     }
                     Ok(())
                 }
@@ -1341,6 +1353,15 @@ fn scanner_method(
     receiver: HeapRef,
     method: &str,
 ) -> Result<Option<JValue>, VmError> {
+    // Every method but `close` refuses a closed Scanner, as the JDK's does.
+    // Closing twice is a no-op there, so `close` is exempt.
+    let (stdin, closed) = match heap.get(receiver) {
+        Some(HeapObject::Scanner { stdin, closed, .. }) => (*stdin, *closed),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    if closed && method != "close" {
+        return Err(throw("java.lang.IllegalStateException: Scanner closed"));
+    }
     match method {
         "nextLine" => {
             let line = scanner_next_line(heap, console, receiver)?
@@ -1415,8 +1436,19 @@ fn scanner_method(
                 .is_some_and(|t| t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("false"));
             Ok(Some(JValue::Int(i32::from(ok))))
         }
-        // Closing System.in is accepted and does nothing.
-        "close" => Ok(None),
+        // `close()` on a `System.in` scanner closes the stream itself, so a
+        // later `new Scanner(System.in)` reads nothing — the JDK does this,
+        // and a program that closes stdin and reads again dies on a real JVM.
+        // A file scanner closes only itself.
+        "close" => {
+            if let Some(HeapObject::Scanner { closed, .. }) = heap.get_mut(receiver) {
+                *closed = true;
+            }
+            if stdin {
+                console.close_stdin();
+            }
+            Ok(None)
+        }
         "next" => {
             let token = scanner_next_token(heap, console, receiver)?
                 .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
@@ -1470,7 +1502,9 @@ fn scanner_fill(heap: &mut Heap, console: &mut dyn ConsoleIo, receiver: HeapRef)
 
 fn scanner_state(heap: &Heap, receiver: HeapRef) -> (String, usize, bool) {
     match heap.get(receiver) {
-        Some(HeapObject::Scanner { buffer, pos, eof }) => (buffer.clone(), *pos, *eof),
+        Some(HeapObject::Scanner {
+            buffer, pos, eof, ..
+        }) => (buffer.clone(), *pos, *eof),
         _ => unreachable!("receiver kind checked by caller"),
     }
 }

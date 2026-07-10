@@ -101,6 +101,13 @@ pub enum HeapObject {
         /// Cursor into `buffer` (UTF-8 byte index).
         pos: usize,
         eof: bool,
+        /// Reads standard input rather than a file. `close()` on such a
+        /// scanner closes the underlying stream, as the JDK's does — every
+        /// later `Scanner(System.in)` then sees end of input.
+        stdin: bool,
+        /// `close()` was called. Every method but `close` then throws
+        /// `IllegalStateException: Scanner closed`.
+        closed: bool,
     },
     /// A `java.util.ArrayList` (element types erased; values are
     /// stored directly — boxing is a no-op in this VM).

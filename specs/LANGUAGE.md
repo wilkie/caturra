@@ -261,8 +261,17 @@ be referenced from a static context`, and `cannot find symbol` when the
     skips the offending word rather than the one after it. The float
     grammar is Java's, not Rust's: `[-+]?(NaN|Infinity)` exactly, so
     `nan`, `inf`, `infinity`, `1.5f` and `0x10` are not numbers to
-    `hasNextDouble`. Every `hasNextX` classification and the mismatch
-    behaviour are pinned against a real JDK by the differential suite.
+    `hasNextDouble`. **`close()` closes the underlying stream** (2026-07-09,
+    it used to be a no-op): the closed `Scanner` throws
+    `IllegalStateException: Scanner closed` from every method but `close`,
+    which is idempotent — and closing a `System.in` scanner closes standard
+    input, so a _later_ `new Scanner(System.in)` reads nothing and throws
+    `NoSuchElementException`. That is the JDK's behaviour and a classic
+    student trap; a no-op `close` let such a program work in the playground
+    and die on a real JVM. A `Scanner` over a file closes only itself.
+    Every `hasNextX` classification, the mismatch
+    behaviour and `close` are pinned against a real JDK by the differential
+    suite (`diff_scanner_close_closes_standard_in`).
     Pattern/regex members and streams report honest reasons.
   - `ArrayList<E>` with the CSA generics surface: wrapper/String/class
     element types, the diamond, and the full Java 11 method set

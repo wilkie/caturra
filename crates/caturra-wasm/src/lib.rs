@@ -330,6 +330,8 @@ struct JsConsole<'a> {
     stdout: &'a js_sys::Function,
     stderr: &'a js_sys::Function,
     stdin: Option<&'a js_sys::Function>,
+    /// `Scanner.close()` closed standard in; reads report end of input.
+    stdin_closed: bool,
     /// Swing event pump: called with the current component tree (JSON);
     /// renders it and blocks until the next UI event, returning that
     /// event's payload or `null`/`undefined` when the window is closed.
@@ -361,8 +363,15 @@ impl ConsoleIo for JsConsole<'_> {
     }
 
     fn read_line(&mut self) -> Option<String> {
+        if self.stdin_closed {
+            return None;
+        }
         let result = self.stdin?.call0(&JsValue::NULL).ok()?;
         result.as_string()
+    }
+
+    fn close_stdin(&mut self) {
+        self.stdin_closed = true;
     }
 
     fn ui_dialog(&mut self, kind: &str, message: &str) -> Option<String> {
@@ -512,6 +521,7 @@ impl JvmSession {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
+            stdin_closed: false,
             await_ui: await_ui.as_ref(),
             dialog_ui: dialog_ui.as_ref(),
             capture: None,
@@ -577,6 +587,7 @@ impl JvmSession {
             stdout,
             stderr,
             stdin: stdin.as_ref(),
+            stdin_closed: false,
             // An interactive Swing run drives its event loop here too, so a
             // breakpoint inside a listener pauses through the debug host
             // below (the two blocking channels are used at different times).
