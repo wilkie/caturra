@@ -5352,6 +5352,101 @@ public class DiffArrayToString {
 "#
 );
 
+differential_test!(
+    diff_field_hiding,
+    "DiffHiding",
+    r#"
+class HidingSuper {
+    private String tag = "super-private";
+    protected int n = 1;
+    public String read() { return tag + "/" + n; }
+    public int getN() { return n; }
+    public void bump() { n = n + 10; }
+}
+
+class HidingSub extends HidingSuper {
+    // Hides a private field (never inherited) with a DIFFERENT type, and a
+    // protected one with the same type. Both are distinct slots.
+    private int tag = 42;
+    protected int n = 2;
+    public String read2() { return tag + "/" + n; }
+    public int subN() { return n; }
+    public void bumpSub() { n = n + 100; }
+}
+
+public class DiffHiding {
+    public static void main(String[] args) {
+        HidingSub sub = new HidingSub();
+        HidingSuper up = sub;
+
+        // Each class's own methods see their own field.
+        System.out.println(sub.read());
+        System.out.println(sub.read2());
+        System.out.println(sub.subN());
+        System.out.println(sub.getN());
+
+        // The STATIC type of the reference decides which field an access
+        // means — hiding is not overriding.
+        System.out.println(up.n);
+        System.out.println(sub.n);
+        System.out.println(((HidingSuper) sub).n);
+
+        // The two slots mutate independently.
+        sub.bump();
+        sub.bumpSub();
+        System.out.println(sub.read());
+        System.out.println(sub.read2());
+        System.out.println(up.n + " " + sub.n);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_field_hiding_with_reflection,
+    "DiffHidingReflect",
+    r#"
+import java.util.ArrayList;
+import java.lang.reflect.Field;
+
+class HidingBase {
+    private ArrayList<String> data;
+    static int count = 1;
+    HidingBase() { data = new ArrayList<String>(); data.add("base"); }
+    public String show() { return data.toString(); }
+}
+
+class HidingDerived extends HidingBase {
+    private String data;
+    static int count = 2;
+    HidingDerived() { super(); data = "derived"; }
+    public String show2() { return data; }
+}
+
+public class DiffHidingReflect {
+    public static void main(String[] args) throws Exception {
+        HidingDerived derived = new HidingDerived();
+        System.out.println(derived.show());
+        System.out.println(derived.show2());
+        System.out.println(HidingBase.count + " " + HidingDerived.count);
+
+        // getDeclaredFields lists a class's OWN fields, not what it hides.
+        Field[] fields = HidingDerived.class.getDeclaredFields();
+        System.out.println(fields.length);
+        for (int i = 0; i < fields.length; i++) System.out.println(fields[i].getName());
+
+        // Each Field reads the slot of the class that declared it.
+        Field base = HidingBase.class.getDeclaredField("data");
+        base.setAccessible(true);
+        System.out.println(base.get(derived));
+        Field sub = HidingDerived.class.getDeclaredField("data");
+        sub.setAccessible(true);
+        System.out.println(sub.get(derived));
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

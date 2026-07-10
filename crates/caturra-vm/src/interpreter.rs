@@ -411,12 +411,29 @@ impl<'run> Interpreter<'run> {
                     }
                     // Sorted for stable display (fields live in a map);
                     // reserved names (the throwable message) hidden.
-                    let mut names: Vec<&String> =
-                        fields.keys().filter(|k| !k.starts_with("__")).collect();
-                    names.sort();
-                    let rendered: Vec<String> = names
+                    let mut keys: Vec<&String> = fields
+                        .keys()
+                        .filter(|k| !split_field_key(k).1.starts_with("__"))
+                        .collect();
+                    keys.sort();
+                    // A hidden field shares its simple name with the one it
+                    // hides, so name both by their declaring class; otherwise
+                    // the simple name reads as the student wrote it.
+                    let mut seen: HashMap<&str, usize> = HashMap::new();
+                    for key in &keys {
+                        *seen.entry(split_field_key(key).1).or_default() += 1;
+                    }
+                    let rendered: Vec<String> = keys
                         .into_iter()
-                        .map(|name| format!("{name}={}", self.render_shallow(fields[name])))
+                        .map(|key| {
+                            let (owner, simple) = split_field_key(key);
+                            let label = if seen[simple] > 1 {
+                                format!("{owner}.{simple}")
+                            } else {
+                                simple.to_owned()
+                            };
+                            format!("{label}={}", self.render_shallow(fields[key]))
+                        })
                         .collect();
                     format!("{class_name}@{reference:x}{{{}}}", rendered.join(", "))
                 }
@@ -1618,6 +1635,35 @@ impl<'run> Interpreter<'run> {
     }
 
     #[inline(never)]
+    /// The heap key for `owner.name`, as JVMS field resolution finds it:
+    /// the owner itself, then its superclasses. The compiler always names the
+    /// declaring class, so the first probe normally hits. A bare name is the
+    /// fallback for the VM's own instances (a throwable's `__message`).
+    fn resolve_field_key(&self, owner: &str, name: &str, reference: HeapRef) -> Option<String> {
+        let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get(reference)
+        else {
+            return None;
+        };
+        let mut current = Some(owner.to_owned());
+        let mut steps = 0usize;
+        while let Some(class_name) = current {
+            steps += 1;
+            if steps > self.classes.len() + 1 {
+                break; // cycle guard
+            }
+            let key = instance_field_key(&class_name, name);
+            if fields.contains_key(&key) {
+                return Some(key);
+            }
+            current = self
+                .classes
+                .get(&class_name)
+                .and_then(|class| class.constant_pool.get_class_name(class.super_class))
+                .map(str::to_owned);
+        }
+        fields.contains_key(name).then(|| name.to_owned())
+    }
+
     fn getfield_op(
         &mut self,
         class: &ClassFile,
@@ -1625,23 +1671,26 @@ impl<'run> Interpreter<'run> {
         index: u16,
         malformed: &impl Fn(String) -> VmError,
     ) -> Result<(), VmError> {
-        let (_, field_name, _) = class
+        let (owner, field_name, _) = class
             .constant_pool
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
-        let field_name = field_name.to_owned();
+        let (owner, field_name) = (owner.to_owned(), field_name.to_owned());
         let reference = frame.pop_ref()?.ok_or_else(|| {
             VmError::UncaughtException(format!(
                 "java.lang.NullPointerException: cannot read field \"{field_name}\" \
                  because the object is null"
             ))
         })?;
+        let key = self
+            .resolve_field_key(&owner, &field_name, reference)
+            .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
         let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get(reference)
         else {
             return Err(malformed(String::from("getfield on a non-object")));
         };
         let value = *fields
-            .get(&field_name)
+            .get(&key)
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
         frame.stack.push(value);
         Ok(())
@@ -1655,11 +1704,11 @@ impl<'run> Interpreter<'run> {
         index: u16,
         malformed: &impl Fn(String) -> VmError,
     ) -> Result<(), VmError> {
-        let (_, field_name, _) = class
+        let (owner, field_name, _) = class
             .constant_pool
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
-        let field_name = field_name.to_owned();
+        let (owner, field_name) = (owner.to_owned(), field_name.to_owned());
         let value = frame.pop()?;
         let reference = frame.pop_ref()?.ok_or_else(|| {
             VmError::UncaughtException(format!(
@@ -1667,11 +1716,14 @@ impl<'run> Interpreter<'run> {
                  because the object is null"
             ))
         })?;
+        let key = self
+            .resolve_field_key(&owner, &field_name, reference)
+            .unwrap_or_else(|| instance_field_key(&owner, &field_name));
         let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get_mut(reference)
         else {
             return Err(malformed(String::from("putfield on a non-object")));
         };
-        fields.insert(field_name, value);
+        fields.insert(key, value);
         Ok(())
     }
 
@@ -1855,9 +1907,11 @@ impl<'run> Interpreter<'run> {
                     .constant_pool
                     .get_utf8(field.descriptor_index)
                     .unwrap_or_default();
-                fields
-                    .entry(name)
-                    .or_insert_with(|| default_for_descriptor(descriptor));
+                // Keyed by the DECLARING class: a subclass may hide a
+                // superclass field of the same name, and the two are
+                // distinct slots. `or_insert` would have collapsed them.
+                let key = instance_field_key(class_name_of(class), &name);
+                fields.insert(key, default_for_descriptor(descriptor));
             }
             current = class
                 .constant_pool
@@ -4950,9 +5004,10 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException",
             )));
         };
+        let key = instance_field_key(declaring, name);
         match self.heap.get(*reference) {
             Some(crate::value::HeapObject::Instance { fields, .. }) => {
-                fields.get(name).copied().ok_or_else(|| {
+                fields.get(&key).copied().ok_or_else(|| {
                     VmError::UncaughtException(format!("java.lang.NoSuchFieldException: {name}"))
                 })
             }
@@ -5004,9 +5059,10 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException",
             )));
         };
+        let key = instance_field_key(declaring, name);
         match self.heap.get_mut(*reference) {
             Some(crate::value::HeapObject::Instance { fields, .. }) => {
-                fields.insert(name.to_owned(), value);
+                fields.insert(key, value);
                 Ok(())
             }
             _ => Err(VmError::UncaughtException(format!(
@@ -5648,6 +5704,29 @@ fn parse_parameterized(signature: &str) -> Option<(String, Vec<String>)> {
         }
     }
     Some((raw, args))
+}
+
+/// An instance field's key on the heap: its DECLARING class and its name.
+///
+/// A subclass may hide a superclass field of the same name (JLS 8.3). The two
+/// are distinct slots, and which one an access means is fixed by the static
+/// type at the access site — which the bytecode records as the field ref's
+/// owner. Keying by name alone silently merged them.
+fn instance_field_key(owner: &str, name: &str) -> String {
+    format!("{owner}.{name}")
+}
+
+/// The declaring class and simple name of a heap field key.
+fn split_field_key(key: &str) -> (&str, &str) {
+    key.rsplit_once('.').unwrap_or(("", key))
+}
+
+/// A class file's own name.
+fn class_name_of(class: &ClassFile) -> &str {
+    class
+        .constant_pool
+        .get_class_name(class.this_class)
+        .unwrap_or_default()
 }
 
 /// The JVM class descriptor of an array whose ELEMENT class is `element`,

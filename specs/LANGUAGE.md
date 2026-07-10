@@ -130,8 +130,22 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   cannot be cast to class B") — including a cast of a `null` literal,
   `(String) null`, which names an overload without turning `(x) - 1`
   into one — and superclass-first static initialization.
-  Field hiding is rejected by design; `protected` currently behaves like
-  public (no packages).
+  **Field hiding** (JLS §8.3, 2026-07-09): a subclass may declare a field
+  with the same name as one in a superclass, of any type. The two are
+  distinct slots, and which one an access means is fixed by the **static
+  type** at the access site — `((Sup) sub).n` and `sub.n` read different
+  fields, and each class's own methods see their own. Hiding is not
+  overriding. The heap keys an instance field by its declaring class,
+  because keying by name alone merged the two slots; that is why caturra
+  rejected hiding outright until the storage could tell them apart. The
+  bytecode already carried the owner — `getfield`/`putfield` resolve it
+  as the JVMS does, walking the owner's superclasses. Reflection reads the
+  slot of the class that declared the `Field`, and the debugger names a
+  field by its declaring class only when the name is actually hidden.
+  Pinned against a real JDK by `diff_field_hiding` and
+  `diff_field_hiding_with_reflection`. `super.field` is still unsupported
+  (call a method instead); `protected` currently behaves like public (no
+  packages).
 
 - **The class library** (stage 7, intrinsics per SCOPE.md):
   - The full Java 11 `String` API over UTF-16 (2026-07-03), because

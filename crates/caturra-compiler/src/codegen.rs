@@ -859,30 +859,6 @@ impl MethodTable {
                     }
                 }
 
-                // Field hiding (unsupported by design — see LANGUAGE.md).
-                for field in &class.fields {
-                    let mut ancestor = info.superclass;
-                    while let Some(id) = ancestor {
-                        let Some(parent) = self.info_by_id(id) else {
-                            break;
-                        };
-                        if parent.fields.iter().any(|f| f.name == field.name) {
-                            diagnostics.push(Diagnostic::error(
-                                path,
-                                format!(
-                                    "hiding the inherited field '{}' from {} is not supported \
-                                     by caturra",
-                                    field.name,
-                                    self.class_name(id)
-                                ),
-                                field.span,
-                            ));
-                            break;
-                        }
-                        ancestor = parent.superclass;
-                    }
-                }
-
                 // Concrete classes must implement all abstract methods.
                 if !class.is_abstract && !class.is_interface {
                     let unimplemented = self.missing_abstract_method(info.id);

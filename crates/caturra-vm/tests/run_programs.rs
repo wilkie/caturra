@@ -6194,10 +6194,6 @@ fn stage6_compile_errors_match_javac_wording() {
             "constructor A in class A cannot be applied to given types",
         ),
         (
-            "class A { int x; } class B extends A { int x; }",
-            "hiding the inherited field 'x' from A is not supported",
-        ),
-        (
             "class A { void f() { int x = 1; super(); } }",
             "call to super/this must be the first statement in a constructor",
         ),
@@ -9890,4 +9886,120 @@ fn an_object_method_on_an_array_types_as_the_emitter_emits_it() {
         "M",
     );
     assert_eq!(out, "true\n2\ntrue\ntrue\n");
+}
+
+/// A subclass may hide a superclass field of the same name (JLS §8.3). The two
+/// are DISTINCT slots, and which one an access means is decided by the static
+/// type at the access site, not by the object's runtime class — hiding is not
+/// overriding. caturra rejected this outright until 2026-07-09, and had to,
+/// because the heap keyed instance fields by name alone and the two slots
+/// silently merged. Cross-checked against a real JDK by `diff_field_hiding`.
+#[test]
+fn a_subclass_field_hides_rather_than_overrides() {
+    let out = run_stdout(
+        r#"
+        class Sup {
+            private String tag = "sup";
+            protected int n = 1;
+            public String read() { return tag + "/" + n; }
+            public int getN() { return n; }
+            public void bump() { n = n + 10; }
+        }
+        class Sub extends Sup {
+            private int tag = 42;
+            protected int n = 2;
+            public String read2() { return tag + "/" + n; }
+            public void bumpSub() { n = n + 100; }
+        }
+        public class M {
+            public static void main(String[] args) {
+                Sub sub = new Sub();
+                Sup up = sub;
+                System.out.println(sub.read());
+                System.out.println(sub.read2());
+                System.out.println(sub.getN());
+                System.out.println(up.n + " " + sub.n + " " + ((Sup) sub).n);
+                sub.bump();
+                sub.bumpSub();
+                System.out.println(sub.read() + " " + sub.read2());
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "sup/1\n42/2\n1\n1 2 1\nsup/11 42/102\n");
+}
+
+/// The corpus shape: a private field hidden by one of a DIFFERENT type. A
+/// private field is not inherited at all, so this is the easy half of hiding
+/// — but it still needs two slots. Reflection reads the slot of the class
+/// that declared the `Field`. Pinned by `diff_field_hiding_with_reflection`.
+#[test]
+fn a_hidden_private_field_of_another_type_keeps_its_own_slot() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        class Base {
+            private ArrayList<String> data;
+            Base() { data = new ArrayList<String>(); data.add("base"); }
+            public String show() { return data.toString(); }
+        }
+        class Derived extends Base {
+            private String data;
+            Derived() { super(); data = "derived"; }
+            public String show2() { return data; }
+        }
+        public class M {
+            public static void main(String[] args) {
+                Derived d = new Derived();
+                System.out.println(d.show());
+                System.out.println(d.show2());
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "[base]\nderived\n");
+}
+
+/// The debugger names a field by its declaring class only when it has to:
+/// a hidden name would otherwise appear twice with nothing to tell the two
+/// apart. Unhidden fields keep the plain name the student wrote.
+#[test]
+fn the_debugger_qualifies_a_hidden_field_and_only_a_hidden_field() {
+    let source = "class Sup {\n\
+        \x20   protected int n = 1;\n\
+        \x20   protected int only = 7;\n\
+        }\n\
+        class Sub extends Sup {\n\
+        \x20   protected int n = 2;\n\
+        }\n\
+        public class Dbg {\n\
+        \x20   public static void main(String[] args) {\n\
+        \x20       Sub sub = new Sub();\n\
+        \x20       System.out.println(sub.n);\n\
+        \x20   }\n\
+        }\n";
+    let (host, _stdout, result) = debug_run(
+        source,
+        "Dbg",
+        &[("Dbg.java", 11)],
+        vec![DebugCommand::Continue],
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    let top = &host.pauses[0].frames[0];
+    let sub = top
+        .locals
+        .iter()
+        .find(|l| l.name == "sub")
+        .map(|l| l.value.clone())
+        .expect("local sub");
+    assert!(
+        sub.contains("Sub.n=2") && sub.contains("Sup.n=1"),
+        "a hidden field is qualified by its declaring class: {sub}"
+    );
+    assert!(
+        sub.contains("only=7") && !sub.contains("Sup.only"),
+        "an unhidden field keeps its plain name: {sub}"
+    );
 }
