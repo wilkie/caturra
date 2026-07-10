@@ -1238,7 +1238,8 @@ impl MethodTable {
         // Walk the chain (and interfaces, for interface receivers),
         // nearest declaration first; an override shadows its ancestor.
         let mut named: Vec<&MethodSig> = Vec::new();
-        let mut stack = vec![self.classes.get(class).map(|i| i.id)];
+        let start = self.classes.get(class).map(|i| i.id);
+        let mut stack = vec![start];
         let mut steps = 0usize;
         while let Some(Some(id)) = stack.pop() {
             steps += 1;
@@ -1246,7 +1247,15 @@ impl MethodTable {
                 break;
             }
             if let Some(info) = self.info_by_id(id) {
+                // JLS §8.4.8: an interface's static method is NOT inherited.
+                // `C implements I` cannot call `C.hi()` or `c.hi()` for a
+                // static `I.hi()` — only `I.hi()`. javac says "cannot find
+                // symbol"; caturra used to compile it and die at run time.
+                let skip_static = info.is_interface && Some(id) != start;
                 for m in &info.methods {
+                    if skip_static && m.is_static {
+                        continue;
+                    }
                     if m.name == name
                         && !named
                             .iter()
@@ -7462,12 +7471,21 @@ impl BodyGen<'_> {
             );
             return None;
         }
+        // `obj.staticMethod(...)`: legal if discouraged (javac warns under
+        // `-Xlint:static`). The receiver expression is evaluated for its side
+        // effects and then discarded, so a `null` receiver does NOT throw —
+        // nothing is dereferenced. `obj.staticField` already behaved this way.
         if sig.is_static {
-            self.error(
-                span,
-                format!("static method {method}() should be called as {class_name}.{method}(...)"),
-            );
-            return None;
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+            let args_width = self.emit_call_args(args, &sig, span);
+            let descriptor = sig.descriptor(self.table);
+            let method_ref = intern_method_ref(self.pool, &class_name, method, &descriptor);
+            let ret_width = sig.ret.map_or(0, JType::width);
+            self.code
+                .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
+            self.code.drop_stack(args_width);
+            return Some(sig.ret);
         }
 
         let args_width = self.emit_call_args(args, &sig, span);

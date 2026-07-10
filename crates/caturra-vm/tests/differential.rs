@@ -5618,6 +5618,93 @@ public class DiffScannerClose {
     "alpha beta\ngamma\n"
 );
 
+differential_test!(
+    diff_static_method_through_an_instance,
+    "DiffStaticViaInstance",
+    r#"
+class StaticBase {
+    static int calls = 0;
+    static String who() { return "StaticBase"; }
+    static int twice(int x) { return 2 * x; }
+    static void hello() { System.out.println("hello"); }
+    static long wide(long x) { return x + 1L; }
+}
+
+class StaticDerived extends StaticBase {}
+
+public class DiffStaticViaInstance {
+    static StaticBase make() {
+        System.out.println("make() ran");
+        return new StaticBase();
+    }
+
+    public static void main(String[] args) {
+        StaticBase base = new StaticBase();
+
+        // `obj.staticMethod(...)` — legal if discouraged.
+        System.out.println(base.twice(4));
+        base.hello();
+        System.out.println(base.calls);
+        System.out.println(base.wide(41L));
+
+        // The receiver expression is evaluated for its side effects, then
+        // discarded: `make() ran` prints before the result.
+        System.out.println(make().twice(3));
+
+        // Nothing is dereferenced, so a null receiver does not throw.
+        StaticBase none = null;
+        System.out.println(none.twice(7));
+
+        // A static inherited from a superclass, reached both ways.
+        StaticDerived derived = new StaticDerived();
+        System.out.println(derived.who());
+        System.out.println(StaticDerived.who());
+    }
+}
+"#
+);
+
+// JLS §8.4.8: an interface's static method is not inherited by its
+// implementors. Only `I.hi()` names it; `C.hi()` and `c.hi()` do not.
+differential_reject!(
+    reject_static_interface_method_through_a_class,
+    "RejectIfaceStaticClass",
+    "interface RISa { static String hi() { return \"hi\"; } void go(); }\nclass RISb implements RISa { public void go() {} }\npublic class RejectIfaceStaticClass { static void r() { RISb.hi(); } }"
+);
+
+differential_reject!(
+    reject_static_interface_method_through_an_instance,
+    "RejectIfaceStaticInstance",
+    "interface RIIa { static String hi() { return \"hi\"; } void go(); }\nclass RIIb implements RIIa { public void go() {} }\npublic class RejectIfaceStaticInstance { static void r() { new RIIb().hi(); } }"
+);
+
+differential_test!(
+    diff_static_interface_method_through_the_interface,
+    "DiffIfaceStatic",
+    r#"
+interface Greeter {
+    static String hi() { return "hi"; }
+    // A default method IS inherited, static or not — the rule above must
+    // not reach it.
+    default String greet() { return hi() + " " + name(); }
+    String name();
+}
+
+class Person implements Greeter {
+    public String name() { return "ada"; }
+}
+
+public class DiffIfaceStatic {
+    public static void main(String[] args) {
+        System.out.println(Greeter.hi());
+        System.out.println(new Person().greet());
+        Greeter g = new Person();
+        System.out.println(g.greet());
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

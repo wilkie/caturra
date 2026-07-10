@@ -3881,12 +3881,14 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         };
         // The caller ran the initialization check before popping args.
-        let method = find_static_method(class, method_name, descriptor).ok_or_else(|| {
-            VmError::MalformedClass {
+        // JVMS 5.4.3.3: resolution searches the named class, then its
+        // superclasses. `Derived.who()` and `derived.who()` both name
+        // `Derived` while `who` is declared in `Base`.
+        let (class, method) = resolve_static_method(classes, class, method_name, descriptor)
+            .ok_or_else(|| VmError::MalformedClass {
                 name: class_name.to_owned(),
                 reason: format!("no static method {method_name}{descriptor}"),
-            }
-        })?;
+            })?;
 
         let mut locals = Vec::with_capacity(args.len());
         for (value, width) in args.iter().zip(widths) {
@@ -5945,6 +5947,33 @@ fn read_u16(
 }
 
 /// Find a class's static method by name and exact descriptor.
+/// JVMS 5.4.3.3 method resolution for `invokestatic`: the named class, then
+/// each superclass. Returns the DECLARING class file too, because the frame
+/// runs against that class's constant pool.
+fn resolve_static_method<'c>(
+    classes: &'c HashMap<String, ClassFile>,
+    class: &'c ClassFile,
+    name: &str,
+    descriptor: &str,
+) -> Option<(&'c ClassFile, &'c MethodInfo)> {
+    let mut current = Some(class);
+    let mut steps = 0usize;
+    while let Some(class) = current {
+        steps += 1;
+        if steps > classes.len() + 1 {
+            return None; // cycle guard (the compiler rejects these anyway)
+        }
+        if let Some(method) = find_static_method(class, name, descriptor) {
+            return Some((class, method));
+        }
+        current = class
+            .constant_pool
+            .get_class_name(class.super_class)
+            .and_then(|super_name| classes.get(super_name));
+    }
+    None
+}
+
 fn find_static_method<'c>(
     class: &'c ClassFile,
     name: &str,

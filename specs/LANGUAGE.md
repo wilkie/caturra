@@ -153,6 +153,21 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   matched: `n has private access in A`, `non-static variable super cannot
 be referenced from a static context`, and `cannot find symbol` when the
   class has no superclass. Pinned by `diff_super_field_access`.
+  **A static member reached through an instance** — `obj.staticField` and,
+  since 2026-07-09, `obj.staticMethod(...)` — is legal if discouraged, as
+  javac has it (it only warns under `-Xlint:static`). The receiver
+  expression is evaluated for its side effects and then discarded, so
+  `make().twice(3)` runs `make()`, and a `null` receiver does **not** throw:
+  nothing is dereferenced. A static method inherited from a superclass
+  resolves through it (JVMS §5.4.3.3), whether named by the subclass or
+  reached through a subclass instance — `Derived.who()` used to compile and
+  then die with `MalformedClass`. An **interface's static method is not
+  inherited** (JLS §8.4.8): only `I.hi()` names it, never `C.hi()` or
+  `c.hi()`, which caturra used to compile and crash on; `default` methods
+  are inherited as usual. Pinned by
+  `diff_static_method_through_an_instance`,
+  `diff_static_interface_method_through_the_interface` and
+  `reject_static_interface_method_through_a_class`.
   `protected` currently behaves like public (no packages).
 
 - **The class library** (stage 7, intrinsics per SCOPE.md):

@@ -10247,3 +10247,112 @@ fn closing_a_file_scanner_leaves_standard_in_open() {
         "inFile\nISE Scanner closed\ninFile\nfromStdin\n"
     );
 }
+
+/// `obj.staticMethod(...)` — legal if discouraged, and javac only warns under
+/// `-Xlint:static`. caturra rejected it outright until 2026-07-09, though it
+/// already allowed `obj.staticField`. The receiver expression is evaluated for
+/// its side effects and then discarded, so a `null` receiver does not throw:
+/// nothing is dereferenced. Pinned against a real JDK by
+/// `diff_static_method_through_an_instance`.
+#[test]
+fn a_static_method_can_be_called_through_an_instance() {
+    let out = run_stdout(
+        r#"
+        class H {
+            static int calls = 3;
+            static int twice(int x) { return 2 * x; }
+            static void hello() { System.out.println("hello"); }
+        }
+        public class M {
+            static H make() { System.out.println("make() ran"); return new H(); }
+            public static void main(String[] args) {
+                H h = new H();
+                System.out.println(h.twice(4));
+                h.hello();
+                System.out.println(h.calls);
+                System.out.println(make().twice(3));
+                H none = null;
+                System.out.println(none.twice(7));
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "8\nhello\n3\nmake() ran\n6\n14\n");
+}
+
+/// A static method inherited from a superclass resolves through it, whether
+/// named by the subclass or reached through a subclass instance (JVMS §5.4.3.3
+/// searches the named class, then its superclasses). `Derived.who()` used to
+/// compile and then die with `MalformedClass: no static method who()` —
+/// `invokestatic` demanded the method be declared in the class the ref named.
+#[test]
+fn an_inherited_static_method_resolves_through_the_superclass() {
+    let out = run_stdout(
+        r#"
+        class Base { static String who() { return "Base"; } }
+        class Derived extends Base {}
+        public class M {
+            public static void main(String[] args) {
+                System.out.println(Derived.who());
+                Derived d = new Derived();
+                System.out.println(d.who());
+                Base b = d;
+                System.out.println(b.who());
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "Base\nBase\nBase\n");
+}
+
+/// JLS §8.4.8: an interface's static method is **not** inherited by the
+/// classes that implement it. Only the interface names it. caturra used to
+/// compile `C.hi()` and crash at run time. Its default methods are inherited,
+/// so the rule must not reach them. Pinned by
+/// `reject_static_interface_method_through_a_class` and
+/// `diff_static_interface_method_through_the_interface`.
+#[test]
+fn an_interface_static_method_is_not_inherited_but_a_default_method_is() {
+    let out = run_stdout(
+        r#"
+        interface Greeter {
+            static String hi() { return "hi"; }
+            default String greet() { return hi() + " " + name(); }
+            String name();
+        }
+        class Person implements Greeter { public String name() { return "ada"; } }
+        public class M {
+            public static void main(String[] args) {
+                System.out.println(Greeter.hi());
+                System.out.println(new Person().greet());
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "hi\nhi ada\n");
+
+    for source in [
+        "interface I { static String hi() { return \"h\"; } void go(); } \
+         class C implements I { public void go() {} } \
+         class M { static void r() { C.hi(); } }",
+        "interface I { static String hi() { return \"h\"; } void go(); } \
+         class C implements I { public void go() {} } \
+         class M { static void r() { new C().hi(); } }",
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        assert!(
+            compilation.diagnostics[0]
+                .message
+                .contains("cannot find symbol"),
+            "got: {}",
+            compilation.diagnostics[0].message
+        );
+    }
+}
