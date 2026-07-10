@@ -8328,8 +8328,8 @@ fn hash_map_iterates_and_boxes_like_the_jdk() {
 fn unsupported_map_members_explain_themselves() {
     for (source, want) in [
         (
-            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().forEach(s -> System.out.println(s)); } }",
-            "ArrayList.forEach exists in Java, but lambdas are not supported by caturra",
+            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().replaceAll(s -> s); } }",
+            "ArrayList.replaceAll exists in Java, but lambdas are not supported by caturra",
         ),
         (
             "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().merge(null, null, null); } }",
@@ -10556,12 +10556,6 @@ fn map_for_each_rejects_what_it_cannot_target_type() {
              static void r() { get().forEach((k, v) -> System.out.println(k)); } }",
             "only allowed where a functional-interface type is expected",
         ),
-        // `ArrayList.forEach` still reports its honest reason.
-        (
-            "import java.util.*; class M { static void r() { \
-             new ArrayList<String>().forEach(s -> System.out.println(s)); } }",
-            "ArrayList.forEach exists in Java, but lambdas are not supported by caturra",
-        ),
     ] {
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
             path: String::from("M.java"),
@@ -10860,4 +10854,54 @@ fn a_bad_array_downcast_throws_class_cast_exception() {
         "wrongElem: CCE\nnonArray: CCE\nprimInvariant: CCE\n\
          refToObjectArr: ok\nprimToObjectArr: CCE\nnestedToObjectArr: ok\n"
     );
+}
+
+/// `list.forEach(x -> ...)` (a `Consumer<E>`) and `list.removeIf(x -> ...)` (a
+/// `Predicate<E>`) work (2026-07-09): the lambda's parameter is the receiver's
+/// element type, and the erased SAM is the bundled `__Consumer`/`__Predicate`.
+/// Until then both reported "lambdas are not supported". Pinned against a real
+/// JDK by `diff_list_for_each_and_remove_if`.
+#[test]
+fn a_list_for_each_and_remove_if_run_lambdas() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.List;
+        public class M {
+            public static void main(String[] args) {
+                List<Integer> nums = new ArrayList<Integer>();
+                for (int i = 1; i <= 5; i++) nums.add(i);
+                int[] total = {0};
+                nums.forEach(n -> { total[0] += n; });
+                System.out.println(total[0]);
+                boolean removed = nums.removeIf(n -> n % 2 == 0);
+                System.out.println(nums + " " + removed);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "15\n[1, 3, 5] true\n");
+}
+
+/// The list-lambda target-typing fires only where javac accepts it: a
+/// two-parameter lambda to `forEach`, a non-boolean `removeIf`, and a
+/// non-lambda argument all stay rejected, and `replaceAll` is still an honest
+/// "not supported".
+#[test]
+fn a_list_lambda_is_refused_where_javac_refuses_it() {
+    for source in [
+        "import java.util.*; class M { static void r() { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.forEach((x, y) -> x); } }",
+        "import java.util.*; class M { static void r() { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.removeIf(n -> n + 1); } }",
+        "import java.util.*; class M { static void r() { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.forEach(5); } }",
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+    }
 }

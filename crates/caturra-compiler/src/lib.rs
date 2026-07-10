@@ -444,7 +444,9 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<util>"), unit));
     }
-    if sources.iter().any(|s| s.text.contains(".forEach("))
+    if sources
+        .iter()
+        .any(|s| s.text.contains(".forEach(") || s.text.contains(".removeIf("))
         && !units
             .iter()
             .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))

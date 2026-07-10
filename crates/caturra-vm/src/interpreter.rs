@@ -3149,6 +3149,14 @@ impl<'run> Interpreter<'run> {
             return Ok(Answered::No);
         }
         let result = match (method_name, descriptor, args) {
+            ("forEach", _, [JValue::Ref(Some(consumer))]) => {
+                self.list_for_each(receiver, *consumer)?;
+                return Ok(Answered::Void);
+            }
+            ("removeIf", _, [JValue::Ref(Some(predicate))]) => {
+                let removed = self.list_remove_if(receiver, *predicate)?;
+                return Ok(Answered::Value(JValue::Int(i32::from(removed))));
+            }
             ("contains", _, [probe]) => {
                 JValue::Int(i32::from(self.list_index_of(receiver, *probe, false)? >= 0))
             }
@@ -4367,6 +4375,71 @@ impl<'run> Interpreter<'run> {
             }
         }
         Ok(())
+    }
+
+    /// `list.forEach(consumer)`: call `accept(element)` on each element in
+    /// order, running the synthesized lambda class through the nested-call
+    /// machinery. The elements are snapshotted first (a `forEach` that mutates
+    /// the list is a `ConcurrentModificationException` in Java; caturra walks
+    /// the snapshot, its existing deviation).
+    fn list_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
+        let items = self.list_items(receiver);
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        for element in items {
+            let dispatched = self.user_virtual_dispatch(
+                consumer,
+                &class_name,
+                "accept",
+                "(Ljava/lang/Object;)V",
+                &[element],
+            )?;
+            if let UserDispatch::Call(frame) = dispatched {
+                self.run_nested(frame)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `list.removeIf(predicate)`: keep only the elements the predicate
+    /// rejects, in order, and report whether any were removed.
+    fn list_remove_if(&mut self, receiver: HeapRef, predicate: HeapRef) -> Result<bool, VmError> {
+        let items = self.list_items(receiver);
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(predicate)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        let mut kept: Vec<JValue> = Vec::with_capacity(items.len());
+        for element in items {
+            let dispatched = self.user_virtual_dispatch(
+                predicate,
+                &class_name,
+                "test",
+                "(Ljava/lang/Object;)Z",
+                &[element],
+            )?;
+            let result = match dispatched {
+                UserDispatch::Call(frame) => self.run_nested(frame)?,
+                UserDispatch::Value(value) => value,
+            };
+            let drop = result != Some(JValue::Int(0)) && result.is_some();
+            if !drop {
+                kept.push(element);
+            }
+        }
+        let removed = kept.len() != self.list_items(receiver).len();
+        if let Some(crate::value::HeapObject::ArrayList(list)) = self.heap.get_mut(receiver) {
+            *list = kept;
+        }
+        Ok(removed)
     }
 
     /// `a.compareTo(b)` on a user object. The erased descriptor finds a

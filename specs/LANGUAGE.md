@@ -317,8 +317,12 @@ be referenced from a static context`, and `cannot find symbol` when the
     list's — and return whether the list changed. Their argument must be
     a list of the same element type, where javac takes any
     `Collection<?>`: stricter, so anything compiling here compiles on a
-    JDK. Iterators, lambdas, comparators,
-    streams, `toArray`, and `subList` report honest reasons. Autoboxing (a no-op in this VM — boxed-equality caching
+    JDK. **`forEach(x -> ...)`** (a `Consumer<E>`) and **`removeIf(x ->
+...)`** (a `Predicate<E>`) run their lambda over the elements
+    (2026-07-09), the element-typed single-parameter counterpart of
+    `Map.forEach`; `removeIf` reports whether any element went. Iterators,
+    comparators, `replaceAll`, `sort(Comparator)`, streams, `toArray`, and
+    `subList` still report honest reasons. Autoboxing (a no-op in this VM — boxed-equality caching
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
     Nested generics (`ArrayList<ArrayList<...>>`) are rejected kindly.
@@ -778,10 +782,12 @@ final`, or `from an inner class` for an anonymous class. Copying a
   The target type is read from a declaration or field type (`Fn f = x
 -> ...`), an assignment target (including array elements), a `return`
   statement, a method-call parameter (single-candidate resolution), or
-  the **element type of a collection** for `list.add(() -> ...)` and
-  `list.set(i, () -> ...)` — the element argument (last) is typed against
-  the receiver's `ArrayList`/`List`/`Set`/`Collection<E>` argument, the
-  same receiver-driven typing `Map.forEach` uses. Expression bodies
+  the **element type of a collection** for `list.add(() -> ...)`,
+  `list.set(i, () -> ...)`, `list.forEach(x -> ...)` and
+  `list.removeIf(x -> ...)` — the element argument is typed against the
+  receiver's `ArrayList`/`List`/`Set`/`Collection<E>` argument, the same
+  receiver-driven typing `Map.forEach` uses (`forEach`/`removeIf` bind the
+  erased `__Consumer`/`__Predicate`). Expression bodies
   become `return e;` (or `e;` for a void SAM); block bodies are used
   directly. A lambda in a position with no functional target type is
   reported. Pinned by `diff_lambda_as_a_list_element`.

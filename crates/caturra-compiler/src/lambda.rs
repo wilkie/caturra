@@ -468,6 +468,23 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 args[0] = build_bi_consumer_class(&mut args[0], &key, &value, ctx);
                 return;
             }
+            // `list.forEach(x -> ...)` / `list.removeIf(x -> ...)`: a single
+            // lambda whose parameter type is the receiver's element type. The
+            // erased SAM is `__Consumer` (void) or `__Predicate` (boolean).
+            if matches!(method.as_str(), "forEach" | "removeIf")
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
+                && let Some(r) = receiver.as_deref()
+                && let Some(elem) = list_elem_type(r, ctx)
+            {
+                let (iface, sam, ret) = if method == "forEach" {
+                    ("__Consumer", "accept", TypeRef::Void)
+                } else {
+                    ("__Predicate", "test", TypeRef::Boolean)
+                };
+                args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], ctx);
+                return;
+            }
             // `list.add(() -> ...)` / `list.set(i, () -> ...)`: the element
             // argument's target type is the receiver's declared element type,
             // not a user method signature. `add`/`set` take the element last.
@@ -732,6 +749,29 @@ fn build_bi_consumer_class(
     value: &TypeRef,
     ctx: &mut Ctx,
 ) -> Expr {
+    build_erased_lambda(
+        lambda,
+        "__BiConsumer",
+        "accept",
+        &TypeRef::Void,
+        &[key.clone(), value.clone()],
+        ctx,
+    )
+}
+
+/// Build the erased functional class for a collection lambda: `__Consumer`,
+/// `__Predicate`, or `__BiConsumer`. Its SAM takes `Object` parameters (erased
+/// generics) and opens with a cast of each back to the collection's declared
+/// element type, the way javac's bridge method does, binding the lambda's own
+/// parameter names. An expression body returns for a non-void SAM.
+fn build_erased_lambda(
+    lambda: &mut Expr,
+    interface: &str,
+    method: &str,
+    ret: &TypeRef,
+    elem_types: &[TypeRef],
+    ctx: &mut Ctx,
+) -> Expr {
     let Expr::Lambda { params, body, span } = lambda else {
         unreachable!("guarded by caller");
     };
@@ -740,17 +780,16 @@ fn build_bi_consumer_class(
     let name = format!("Lambda${}", ctx.counter);
 
     let object = || TypeRef::Named(String::from("Object"));
-    let erased: Vec<Param> = ["__caturraKey", "__caturraValue"]
-        .iter()
-        .map(|n| Param {
+    let erased: Vec<Param> = (0..elem_types.len())
+        .map(|i| Param {
             ty: object(),
-            name: (*n).to_owned(),
+            name: format!("__caturraArg{i}"),
             is_varargs: false,
         })
         .collect();
 
-    // `K k = (K) __caturraKey;` and the same for the value.
-    let unwrap = |declared: &TypeRef, from: &str, to: &str| Stmt::LocalDecl {
+    // `E e = (E) __caturraArg0;` for each parameter.
+    let unwrap = |declared: &TypeRef, from: String, to: &str| Stmt::LocalDecl {
         ty: declared.clone(),
         is_final: false,
         declarators: vec![crate::ast::LocalDeclarator {
@@ -758,7 +797,7 @@ fn build_bi_consumer_class(
             init: Some(Expr::Cast {
                 ty: declared.clone(),
                 operand: Box::new(Expr::Name {
-                    path: vec![from.to_owned()],
+                    path: vec![from],
                     span,
                 }),
                 span,
@@ -768,15 +807,24 @@ fn build_bi_consumer_class(
         }],
         span,
     };
-    let mut method_body = vec![
-        unwrap(key, "__caturraKey", &params[0].name),
-        unwrap(value, "__caturraValue", &params[1].name),
-    ];
+    let mut method_body: Vec<Stmt> = elem_types
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| unwrap(ty, format!("__caturraArg{i}"), &params[i].name))
+        .collect();
 
+    let is_void = matches!(ret, TypeRef::Void);
     match std::mem::replace(body, LambdaBody::Block(Vec::new())) {
         LambdaBody::Expr(mut e) => {
             desugar_expr(&mut e, None, ctx);
-            method_body.push(Stmt::Expr(*e));
+            if is_void {
+                method_body.push(Stmt::Expr(*e));
+            } else {
+                method_body.push(Stmt::Return {
+                    value: Some(*e),
+                    span,
+                });
+            }
         }
         LambdaBody::Block(mut stmts) => {
             for stmt in &mut stmts {
@@ -792,7 +840,7 @@ fn build_bi_consumer_class(
         is_nested: false,
         enclosing: None,
         superclass: None,
-        interfaces: vec![String::from("__BiConsumer")],
+        interfaces: vec![interface.to_owned()],
         is_abstract: false,
         is_interface: false,
         is_enum: false,
@@ -800,14 +848,14 @@ fn build_bi_consumer_class(
         type_params: Vec::new(),
         fields: Vec::new(),
         methods: vec![MethodDecl {
-            name: String::from("accept"),
+            name: method.to_owned(),
             is_static: false,
             is_public: true,
             is_private: false,
             is_constructor: false,
             is_abstract: false,
             type_params: Vec::new(),
-            return_type: TypeRef::Void,
+            return_type: ret.clone(),
             params: erased,
             body: method_body,
             annotations: Vec::new(),

@@ -2728,6 +2728,10 @@ enum BParam {
     /// implements the bundled `__BiConsumer`. Only the lambda desugaring
     /// synthesizes one, so `map.forEach(anythingElse)` is refused.
     BiConsumer,
+    /// `list.forEach`'s erased `__Consumer`, and `list.removeIf`'s
+    /// `__Predicate` — likewise only produced by lambda desugaring.
+    Consumer,
+    Predicate,
     /// `java.lang.StringBuilder` (`StringBuilder.compareTo(StringBuilder)`).
     Builder,
     /// A map's key type, boxed when primitive (`map.get(k)`).
@@ -3170,8 +3174,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("ArrayList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
-    ("ArrayList", "forEach", "lambdas are not supported by caturra"),
-    ("ArrayList", "removeIf", "lambdas are not supported by caturra"),
     ("ArrayList", "replaceAll", "lambdas are not supported by caturra"),
     ("ArrayList", "sort", "comparators are not supported by caturra"),
     ("ArrayList", "stream", "streams are not supported by caturra"),
@@ -3304,6 +3306,20 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Int,
         descriptor: "()I",
+    },
+    // `forEach(Consumer)` walks the list; `removeIf(Predicate)` walks it and
+    // drops elements the predicate accepts, returning whether any went.
+    BuiltinMethod {
+        name: "forEach",
+        params: &[BParam::Consumer],
+        ret: BRet::Void,
+        descriptor: "(Ljava/lang/Object;)V",
+    },
+    BuiltinMethod {
+        name: "removeIf",
+        params: &[BParam::Predicate],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/Object;)Z",
     },
     BuiltinMethod {
         name: "isEmpty",
@@ -4711,7 +4727,9 @@ fn bparam_type(param: BParam, args: TypeArgs) -> JType {
         BParam::RefArray => JType::Error,
         // `BiConsumer` never reaches here: `bparam_matches` answers it
         // directly, because only the method table knows the target class.
-        BParam::Object | BParam::BiConsumer => JType::Object(ClassId(0)),
+        BParam::Object | BParam::BiConsumer | BParam::Consumer | BParam::Predicate => {
+            JType::Object(ClassId(0))
+        }
         BParam::Builder => JType::StringBuilder,
         BParam::Key => boxed_if_primitive(args.first),
         BParam::Val => boxed_if_primitive(args.second),
@@ -4730,6 +4748,14 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         BParam::Object => widens(arg, JType::Object(table.object_id), table),
         BParam::BiConsumer => matches!(
             (arg, table.class_id("__BiConsumer")),
+            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+        ),
+        BParam::Consumer => matches!(
+            (arg, table.class_id("__Consumer")),
+            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+        ),
+        BParam::Predicate => matches!(
+            (arg, table.class_id("__Predicate")),
             (JType::Object(id), Some(target)) if table.is_subtype(id, target)
         ),
         other => widens(arg, bparam_type(other, args), table),

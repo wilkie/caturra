@@ -1,15 +1,20 @@
 /*
- * The erased target type of a `Map.forEach` lambda.
+ * Erased target types of collection lambdas. These stay internal (the `__`
+ * prefix a student cannot write) because `java.util.function.*` is outside
+ * the AP CS A subset and caturra models one type parameter per class.
  *
- * `java.util.function.BiConsumer<K,V>` is outside the AP CS A subset and
- * caturra models only one type parameter per class, so this stays internal:
- * the `__` prefix is the established convention (`__NbhdWorld`,
- * `System.__uiAwait`) for a name a student cannot write.
- *
- * The parameters are `Object` because generics are erased. The synthesized
- * lambda class casts them back to the map's declared key and value types in
- * its first two statements — exactly what javac's bridge method does.
+ * Parameters are `Object` because generics are erased. The synthesized lambda
+ * class casts them back to the collection's declared element types in its
+ * first statements — exactly what javac's bridge method does.
  */
 interface __BiConsumer {
   void accept(Object key, Object value);
+}
+
+interface __Consumer {
+  void accept(Object element);
+}
+
+interface __Predicate {
+  boolean test(Object element);
 }

@@ -6111,6 +6111,45 @@ public class DiffArrayDowncast {
 "#
 );
 
+differential_test!(
+    diff_list_for_each_and_remove_if,
+    "DiffListForEach",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class DiffListForEach {
+    public static void main(String[] args) {
+        ArrayList<String> words = new ArrayList<String>();
+        words.add("apple");
+        words.add("berry");
+        words.add("cherry");
+        words.forEach(s -> System.out.println(s.toUpperCase()));
+
+        List<Integer> nums = new ArrayList<Integer>();
+        for (int i = 1; i <= 5; i++) nums.add(i);
+
+        // A block body mutating a captured array.
+        int[] total = {0};
+        nums.forEach(n -> { total[0] += n; });
+        System.out.println("sum=" + total[0]);
+
+        // removeIf returns whether anything went, and mutates in place.
+        int limit = 3;
+        System.out.println(nums.removeIf(n -> n > limit));
+        System.out.println(nums);
+        System.out.println(nums.removeIf(n -> n > 100));
+        System.out.println(nums);
+
+        // Empty list: forEach calls nothing, removeIf removes nothing.
+        List<String> empty = new ArrayList<String>();
+        empty.forEach(s -> System.out.println("never"));
+        System.out.println(empty.removeIf(s -> true));
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
