@@ -144,31 +144,17 @@ const REQUIRES_IMPORT: &[&str] = &[
 /// Resolve a fully qualified library name (`java.util.Scanner`) to the
 /// simple name the compiler models. Fully qualified uses never need an
 /// import — that is their purpose in Java.
+///
+/// The modeled classes are exactly `package_classes`', for the three
+/// packages that hold them. This used to keep a second, hand-maintained
+/// list, which drifted: `java.util.Arrays.fill(...)` did not resolve
+/// though `java.lang.Math.abs(...)` did. Only `java.*` is collapsed —
+/// the bundled `org.code.*` classes resolve like user classes, so a
+/// qualified use of one is not a library name to shorten.
 pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     let (package, class) = dotted.rsplit_once('.')?;
-    let known: &[&str] = match package {
-        "java.util" => &[
-            "Scanner",
-            "ArrayList",
-            "HashMap",
-            "Map",
-            "Set",
-            "Collection",
-        ],
-        "java.io" => &["File", "PrintWriter"],
-        "java.lang" => &[
-            "String",
-            "Math",
-            "Integer",
-            "Double",
-            "Long",
-            "Float",
-            "Short",
-            "Byte",
-            "Boolean",
-            "Character",
-            "System",
-        ],
+    let known = match package {
+        "java.util" | "java.io" | "java.lang" => package_classes(package)?,
         _ => return None,
     };
     known.iter().find(|name| **name == class).copied()

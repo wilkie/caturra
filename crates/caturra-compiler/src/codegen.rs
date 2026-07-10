@@ -1075,8 +1075,11 @@ impl MethodTable {
                 {
                     return Some(JType::Boxed(elem));
                 }
-                // User classes shadow the intrinsic simple names.
-                if !name.contains('.')
+                // User classes shadow the intrinsic simple names. A
+                // qualified library name resolves here too, because the
+                // bundled classes (`Arrays`, `Random`, ...) live in the
+                // table under their simple name.
+                if (!name.contains('.') || crate::imports::canonical_library_class(name).is_some())
                     && let Some(id) = self.class_id(simple)
                 {
                     return Some(JType::Object(id));
@@ -2502,7 +2505,10 @@ fn method_descriptor(
                     out.push('L');
                     out.push_str(wrapper_internal(elem));
                     out.push(';');
-                } else if !name.contains('.') && table.has_class(simple) {
+                } else if (!name.contains('.')
+                    || crate::imports::canonical_library_class(name).is_some())
+                    && table.has_class(simple)
+                {
                     out.push('L');
                     out.push_str(simple);
                     out.push(';');
@@ -7927,6 +7933,19 @@ impl BodyGen<'_> {
                         self.error(*receiver_span, format!("cannot find symbol: '{single}'"));
                         None
                     }
+                }
+                // `java.util.Nope.f()`: a qualified library name that
+                // does not resolve. Say so as javac does, rather than
+                // letting the field-access chain below report a missing
+                // variable named `java`. Reached only when the prefix
+                // did not strip, so a real library name never lands here.
+                ["java", package, class, ..] if self.lookup("java").is_none() => {
+                    let dotted = format!("java.{package}.{class}");
+                    self.error(
+                        *receiver_span,
+                        crate::imports::unknown_qualified_message(&dotted),
+                    );
+                    None
                 }
                 // Dotted receivers (p.pos.move()) are general
                 // expressions; name() knows how to read them.

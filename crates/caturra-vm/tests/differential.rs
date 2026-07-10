@@ -5201,6 +5201,64 @@ public class RejectFill {
 "#
 );
 
+differential_test!(
+    diff_fully_qualified_names_in_expression_position,
+    "DiffFqn",
+    r#"
+public class DiffFqn {
+    public static void main(String[] args) {
+        int[] filled = new int[3];
+        java.util.Arrays.fill(filled, 7);
+        System.out.println(java.util.Arrays.toString(filled));
+
+        int[] unsorted = {3, 1, 2};
+        java.util.Arrays.sort(unsorted);
+        System.out.println(java.util.Arrays.toString(unsorted));
+        System.out.println(java.util.Arrays.binarySearch(unsorted, 2));
+
+        java.util.List<Integer> list = new java.util.ArrayList<Integer>();
+        list.add(5);
+        list.add(2);
+        java.util.Collections.sort(list);
+        System.out.println(list);
+        System.out.println(java.util.Collections.max(list));
+        System.out.println(java.util.Collections.frequency(list, 5));
+
+        java.util.Random random = new java.util.Random(42);
+        System.out.println(random.nextInt(100));
+
+        java.lang.StringBuilder builder = new java.lang.StringBuilder();
+        builder.append("ab").append(1);
+        System.out.println(builder.reverse());
+
+        System.out.println(java.lang.Math.abs(-5));
+        System.out.println(java.lang.Integer.MAX_VALUE);
+        java.lang.System.out.println("qualified");
+
+        java.util.Map<String, Integer> map = new java.util.HashMap<String, Integer>();
+        map.put("k", 1);
+        System.out.println(map.get("k"));
+
+        // JLS 6.4.2: a variable named `java` obscures the package.
+        int java = 3;
+        System.out.println(java);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unknown_class_in_a_known_package,
+    "RejectQualifiedClass",
+    "public class RejectQualifiedClass { static void r() { java.util.Nope.f(); } }"
+);
+
+differential_reject!(
+    reject_unknown_package_in_expression_position,
+    "RejectQualifiedPackage",
+    "public class RejectQualifiedPackage { static void r() { java.zzz.Nope.f(); } }"
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
@@ -5363,6 +5421,20 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
              reports the overload, because nextBytes is a bundled Java method \
              and goes through user-method resolution",
         ),
+    ),
+    (
+        "WordQualifiedClass",
+        "public class WordQualifiedClass { static void r() { java.util.Nope.f(); } }",
+        "cannot find symbol",
+        "cannot find symbol: class Nope in package java.util",
+        Wording::Prefix,
+    ),
+    (
+        "WordQualifiedPackage",
+        "public class WordQualifiedPackage { static void r() { java.zzz.Nope.f(); } }",
+        "package java.zzz does not exist",
+        "package java.zzz does not exist",
+        Wording::Same,
     ),
     (
         "WordOmittedElement",

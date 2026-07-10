@@ -9523,3 +9523,84 @@ fn math_and_random_additions_reject_like_javac() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// Fully qualified library names in *expression* position, without any
+/// import. `java.lang.Math.abs(...)` always worked, but `java.util` did
+/// not: `canonical_library_class` kept a second, hand-maintained class
+/// list that had drifted from the real one, so `java.util.Arrays.fill`
+/// resolved to nothing and the field-access chain blamed a missing
+/// variable named `java`. Cross-checked against a real JDK by
+/// `diff_fully_qualified_names_in_expression_position`.
+#[test]
+fn fully_qualified_library_names_resolve_in_expression_position() {
+    let out = run_stdout(
+        r#"
+        public class M {
+            public static void main(String[] args) {
+                int[] filled = new int[3];
+                java.util.Arrays.fill(filled, 7);
+                System.out.println(java.util.Arrays.toString(filled));
+
+                java.util.List<Integer> list = new java.util.ArrayList<Integer>();
+                list.add(5);
+                list.add(2);
+                java.util.Collections.sort(list);
+                System.out.println(list);
+                System.out.println(java.util.Collections.max(list));
+
+                java.util.Random random = new java.util.Random(42);
+                System.out.println(random.nextInt(100));
+
+                java.lang.StringBuilder builder = new java.lang.StringBuilder();
+                builder.append("ab").append(1);
+                System.out.println(builder.reverse());
+
+                System.out.println(java.lang.Math.abs(-5));
+                java.lang.System.out.println("qualified");
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(
+        out, "[7, 7, 7]\n[2, 5]\n5\n30\n1ba\n5\nqualified\n",
+        "qualified names should behave exactly as the imported ones do"
+    );
+}
+
+/// A variable named `java` obscures the package (JLS §6.4.2), so the
+/// qualified form must lose to it — otherwise the fix above would have
+/// silently changed what `java` means.
+#[test]
+fn a_variable_named_java_obscures_the_package() {
+    let out = run_stdout(
+        "public class M { public static void main(String[] a) { int java = 3; \
+         System.out.println(java); } }",
+        "M",
+    );
+    assert_eq!(out, "3\n");
+}
+
+/// A qualified name that does not resolve reports the class and package,
+/// as javac does — not the `java` prefix as a missing variable. Pinned
+/// against javac by `reject_unknown_class_in_a_known_package` and
+/// `reject_unknown_package_in_expression_position`.
+#[test]
+fn unresolvable_qualified_names_reject_like_javac() {
+    for (source, want) in [
+        (
+            "java.util.Nope.f();",
+            "cannot find symbol: class Nope in package java.util",
+        ),
+        ("java.zzz.Nope.f();", "package java.zzz does not exist"),
+    ] {
+        let text = format!("class M {{ static void r() {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}

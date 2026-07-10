@@ -449,8 +449,18 @@ null` is the way to test for absence, and unboxing an absent value
     positions (declarations, `new`, generics, `throws`) and
     `java.lang.Math.abs(...)` / `java.lang.System.out.println(...)` /
     `java.lang.Integer.MAX_VALUE` in expressions, with Java's obscuring
-    rule (a variable named `java` wins over the package). Unknown
-    qualified names get the same javac/honest wording as imports.
+    rule (a variable named `java` wins over the package). Every modeled
+    class of `java.util`, `java.io` and `java.lang` resolves qualified,
+    in both positions — until 2026-07-09 the resolver kept a second,
+    hand-maintained class list that had drifted from the real one, so
+    `java.util.Arrays.fill(...)` and `java.lang.StringBuilder` did not
+    resolve while `java.lang.Math.abs(...)` did, and `java.util.Random`
+    resolved only by falling through the `Outer.Inner` nested-class
+    path. Unknown qualified names get the same javac/honest wording as
+    imports, in expressions too: `java.util.Nope.f()` is "cannot find
+    symbol: class Nope in package java.util" rather than a complaint
+    about a missing variable named `java`. Pinned by
+    `diff_fully_qualified_names_in_expression_position`.
     `package` declarations remain unsupported.
   - User classes shadow intrinsic names (a class called `Scanner` wins).
 
@@ -767,12 +777,6 @@ given types` or reports converting the argument; caturra says
   generic inference; caturra names the two array types.
 - `int[] c = {1,,2}`: javac says `illegal start of expression`, caturra
   `expected an expression` — a parser message, not a library one.
-
-**Known gap, unfixed.** A fully qualified `java.util.Arrays.fill(...)` or
-`java.util.Collections.sort(...)` in _expression_ position does not
-resolve (`cannot find symbol: 'java.util'`), though `java.lang.Math.abs(...)`
-does and `java.util.Scanner` in a _type_ position does. caturra rejecting
-valid Java is the safe direction, so this is recorded rather than urgent.
 
 ## Codegen choices
 
