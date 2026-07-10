@@ -6007,6 +6007,56 @@ public class DiffLambdaInstance {
 "#
 );
 
+differential_test!(
+    diff_lambda_as_a_list_element,
+    "DiffLambdaListElement",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+interface IntFn { int go(); }
+
+public class DiffLambdaListElement {
+    static List<IntFn> makeList() {
+        List<IntFn> l = new ArrayList<IntFn>();
+        l.add(() -> 42);
+        return l;
+    }
+
+    public static void main(String[] args) {
+        ArrayList<IntFn> l = new ArrayList<IntFn>();
+        l.add(() -> 7);            // add(E)
+        l.add(() -> 8);
+        l.add(1, () -> 9);         // add(int, E)
+        l.set(0, () -> 5);         // set(int, E)
+        int sum = 0;
+        for (int i = 0; i < l.size(); i++) {
+            sum += l.get(i).go();
+        }
+        System.out.println(sum);
+
+        // A lambda element that captures a local.
+        int base = 100;
+        List<IntFn> m = new ArrayList<IntFn>();
+        m.add(() -> base + 1);
+        System.out.println(m.get(0).go());
+
+        // A method returning a List, whose body adds a lambda element.
+        System.out.println(makeList().get(0).go());
+
+        // A method reference as the element, too.
+        List<IntFn> refs = new ArrayList<IntFn>();
+        refs.add(DiffLambdaListElement::seven);
+        System.out.println(refs.get(0).go());
+    }
+
+    static int seven() {
+        return 7;
+    }
+}
+"
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

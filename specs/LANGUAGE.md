@@ -771,10 +771,14 @@ final`, or `from an inner class` for an anonymous class. Copying a
   capture effectively-final locals exactly as anonymous classes do.
   The target type is read from a declaration or field type (`Fn f = x
 -> ...`), an assignment target (including array elements), a `return`
-  statement, or a method-call parameter (single-candidate resolution).
-  Expression bodies become `return e;` (or `e;` for a void SAM); block
-  bodies are used directly. A lambda in a position with no functional
-  target type is reported.
+  statement, a method-call parameter (single-candidate resolution), or
+  the **element type of a collection** for `list.add(() -> ...)` and
+  `list.set(i, () -> ...)` — the element argument (last) is typed against
+  the receiver's `ArrayList`/`List`/`Set`/`Collection<E>` argument, the
+  same receiver-driven typing `Map.forEach` uses. Expression bodies
+  become `return e;` (or `e;` for a void SAM); block bodies are used
+  directly. A lambda in a position with no functional target type is
+  reported. Pinned by `diff_lambda_as_a_list_element`.
   `Map.forEach` is target-typed from its **receiver** (2026-07-09): the
   synthesized class implements the bundled erased `__BiConsumer`, whose
   `accept(Object, Object)` opens with the two casts javac puts in a bridge

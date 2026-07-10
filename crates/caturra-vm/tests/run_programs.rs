@@ -10731,3 +10731,62 @@ fn a_nested_lambda_reaching_an_instance_field_is_a_clean_error() {
         "expected a compile error"
     );
 }
+
+/// A lambda (or method reference) passed to `list.add(...)` / `list.set(...)`
+/// is target-typed against the receiver's element type, not a user method
+/// signature. `add`/`set` take the element last. Until 2026-07-09 caturra only
+/// target-typed a lambda against a single-candidate user method, so a lambda
+/// element was "only allowed where a functional-interface type is expected".
+/// Pinned against a real JDK by `diff_lambda_as_a_list_element`.
+#[test]
+fn a_lambda_is_target_typed_as_a_list_element() {
+    let out = run_stdout(
+        r"
+        import java.util.ArrayList;
+        import java.util.List;
+        interface IntFn { int go(); }
+        public class M {
+            public static void main(String[] args) {
+                ArrayList<IntFn> l = new ArrayList<IntFn>();
+                l.add(() -> 7);
+                l.add(() -> 8);
+                l.add(1, () -> 9);
+                l.set(0, () -> 5);
+                int sum = 0;
+                for (int i = 0; i < l.size(); i++) sum += l.get(i).go();
+                System.out.println(sum);
+                int base = 100;
+                List<IntFn> m = new ArrayList<IntFn>();
+                m.add(() -> base + 1);
+                System.out.println(m.get(0).go());
+            }
+        }
+        ",
+        "M",
+    );
+    assert_eq!(out, "22\n101\n");
+}
+
+/// The element target-typing fires only where javac would accept it. A
+/// non-functional element type, `contains` (which takes `Object`), and a
+/// parameter-arity mismatch all stay rejected — the safe direction.
+#[test]
+fn a_lambda_list_element_is_refused_where_javac_refuses_it() {
+    for source in [
+        // Element type is not a functional interface.
+        "import java.util.*; class M { static void r() { \
+         ArrayList<String> l = new ArrayList<String>(); l.add(() -> \"x\"); } }",
+        // `contains` takes Object, not the element type — no target typing.
+        "import java.util.*; interface Fn { int go(); } class M { static void r() { \
+         ArrayList<Fn> l = new ArrayList<Fn>(); l.contains(() -> 1); } }",
+        // The lambda's shape does not match the SAM.
+        "import java.util.*; interface Two { int go(int x); } class M { static void r() { \
+         ArrayList<Two> l = new ArrayList<Two>(); l.add(() -> 1); } }",
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+    }
+}

@@ -468,6 +468,26 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 args[0] = build_bi_consumer_class(&mut args[0], &key, &value, ctx);
                 return;
             }
+            // `list.add(() -> ...)` / `list.set(i, () -> ...)`: the element
+            // argument's target type is the receiver's declared element type,
+            // not a user method signature. `add`/`set` take the element last.
+            if matches!(method.as_str(), "add" | "set")
+                && !args.is_empty()
+                && matches!(
+                    args.last(),
+                    Some(Expr::Lambda { .. } | Expr::MethodRef { .. })
+                )
+                && let Some(r) = receiver.as_deref()
+                && let Some(elem) = list_elem_type(r, ctx)
+                && interface_name(&elem).is_some_and(|n| ctx.sams.contains_key(n))
+            {
+                let last = args.len() - 1;
+                for (index, arg) in args.iter_mut().enumerate() {
+                    let expected = (index == last).then(|| elem.clone());
+                    desugar_expr(arg, expected.as_ref(), ctx);
+                }
+                return;
+            }
             // Single-candidate method argument target typing.
             let param_types = ctx
                 .methods
@@ -676,6 +696,30 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
         return None;
     }
     Some((args[0].clone(), args[1].clone()))
+}
+
+/// The declared element type of a `List`/`ArrayList`/`Set`/`Collection`
+/// receiver, read syntactically from the local, parameter, or field it names
+/// — the same shape as `map_type_args`, for a single type argument.
+fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let ty = match receiver {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)?
+        }
+        Expr::NewObject {
+            class, type_args, ..
+        } if type_args.len() == 1 => TypeRef::Generic {
+            base: class.clone(),
+            args: type_args.clone(),
+        },
+        _ => return None,
+    };
+    let TypeRef::Generic { base, args } = ty else {
+        return None;
+    };
+    let is_collection = matches!(base.as_str(), "ArrayList" | "List" | "Set" | "Collection");
+    (is_collection && args.len() == 1).then(|| args[0].clone())
 }
 
 /// The lambda class for `map.forEach((k, v) -> ...)`. `__BiConsumer.accept`
