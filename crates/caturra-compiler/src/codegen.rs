@@ -8695,6 +8695,13 @@ impl BodyGen<'_> {
     fn print_descriptor(&mut self, ty: JType, span: SourceSpan) -> Option<String> {
         match ty {
             // Reached only if not already coerced; treat as Object.
+            // `println(char[])` is a real overload and prints the CHARACTERS.
+            // It must precede the `Object` arm below, which every other array
+            // takes to reach `Object.toString()` (`[I@1b6d3586`).
+            JType::Array {
+                elem: ElemType::Char,
+                dims: 1,
+            } => Some(String::from("([C)V")),
             JType::Generic { .. }
             | JType::StringBuilder
             | JType::TypeVar
@@ -8708,7 +8715,8 @@ impl BodyGen<'_> {
             | JType::Field
             | JType::Method
             | JType::Type
-            | JType::Constructor => Some(String::from("(Ljava/lang/Object;)V")),
+            | JType::Constructor
+            | JType::Array { .. } => Some(String::from("(Ljava/lang/Object;)V")),
             JType::Int | JType::Short | JType::Byte => Some(String::from("(I)V")),
             JType::Double => Some(String::from("(D)V")),
             JType::Long => Some(String::from("(J)V")),
@@ -8733,14 +8741,6 @@ impl BodyGen<'_> {
                 self.error(
                     span,
                     "println(null) is ambiguous in Java; pass a String or \"null\"",
-                );
-                None
-            }
-            JType::Array { .. } => {
-                self.error(
-                    span,
-                    "printing an array directly is not supported by caturra \
-                     (print its elements in a loop)",
                 );
                 None
             }
@@ -8971,6 +8971,18 @@ impl BodyGen<'_> {
                             return pick_builtin(methods, method, &arg_types, elem, self.table)
                                 .and_then(|m| bret_type(m.ret, elem, self.table))
                                 .unwrap_or(JType::Error);
+                        }
+                        // `Object` methods on an array receiver. Mirror
+                        // `array_object_call`, or `type_of` and the emitter
+                        // disagree and the bytecode fails to verify.
+                        JType::Array { .. } => {
+                            return match (method.as_str(), args.len()) {
+                                ("equals", 1) => JType::Boolean,
+                                ("hashCode", 0) => JType::Int,
+                                ("toString", 0) => JType::Str,
+                                ("getClass", 0) => JType::Class,
+                                _ => JType::Error,
+                            };
                         }
                         _ => return JType::Error,
                     },
@@ -10890,7 +10902,10 @@ impl BodyGen<'_> {
             | JType::Field
             | JType::Method
             | JType::Type
-            | JType::Constructor => "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
+            | JType::Constructor
+            // Concatenation is `String.valueOf(Object)` (JLS 5.1.11), so even
+            // a `char[]` renders as `[C@hash` here, unlike `println(char[])`.
+            | JType::Array { .. } => "(Ljava/lang/Object;)Ljava/lang/StringBuilder;",
             JType::Int | JType::Short | JType::Byte => "(I)Ljava/lang/StringBuilder;",
             JType::Long => "(J)Ljava/lang/StringBuilder;",
             JType::Float => "(F)Ljava/lang/StringBuilder;",
@@ -10910,14 +10925,6 @@ impl BodyGen<'_> {
                         "concatenating a {} is not supported",
                         ty.describe(self.table)
                     ),
-                );
-                return;
-            }
-            JType::Array { .. } => {
-                self.error(
-                    span,
-                    "concatenating an array directly is not supported by caturra \
-                     (append its elements in a loop)",
                 );
                 return;
             }

@@ -5277,6 +5277,81 @@ stricter_than_javac!(
     "import java.util.*;\npublic class StrictHashSet { static void r() { HashSet<Integer> s; } }"
 );
 
+differential_test!(
+    diff_array_default_to_string,
+    "DiffArrayToString",
+    r#"
+public class DiffArrayToString {
+    // The identity hash legitimately differs between JVMs, so keep the class
+    // name and assert only that what follows `@` is lowercase hex.
+    static String head(String s) {
+        int at = s.indexOf("@");
+        if (at < 0) return "NO-AT:" + s;
+        String hex = s.substring(at + 1);
+        boolean ok = hex.length() > 0;
+        for (int i = 0; i < hex.length(); i++) {
+            char c = hex.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) ok = false;
+        }
+        return s.substring(0, at) + "@" + (ok ? "<hex>" : "BAD:" + hex);
+    }
+
+    public static void main(String[] args) {
+        int[] ints = {1, 2, 3};
+        char[] chars = {'a', 'b'};
+        String[] strings = {"x"};
+        boolean[] booleans = {true};
+        double[] doubles = {1.5};
+        long[] longs = {1L};
+        byte[] bytes = {1};
+        short[] shorts = {1};
+        float[] floats = {1.0f};
+        int[][] grid = {{1}};
+        String[][] words = {{"a"}};
+        Object[] objects = {"e"};
+
+        System.out.println(head("" + ints));
+        System.out.println(head("" + strings));
+        System.out.println(head("" + booleans));
+        System.out.println(head("" + doubles));
+        System.out.println(head("" + longs));
+        System.out.println(head("" + bytes));
+        System.out.println(head("" + shorts));
+        System.out.println(head("" + floats));
+        System.out.println(head("" + grid));
+        System.out.println(head("" + grid[0]));
+        System.out.println(head("" + words));
+        System.out.println(head("" + words[0]));
+        System.out.println(head("" + objects));
+        System.out.println(head("" + new int[0]));
+        System.out.println(head("" + new String[2]));
+        System.out.println(head("" + new int[2][]));
+
+        // `println(char[])` is a real overload and prints the characters;
+        // concatenation is String.valueOf(Object) and does not.
+        System.out.println(chars);
+        System.out.print(chars);
+        System.out.println();
+        System.out.println(head("" + chars));
+
+        // toString() agrees with concatenation, and hashCode is the identity
+        // hash that toString prints.
+        System.out.println(head(ints.toString()).equals(head("" + ints)));
+        System.out.println(ints.hashCode() == ints.hashCode());
+        System.out.println(ints.hashCode() == strings.hashCode());
+        System.out.println(ints.equals(ints));
+        System.out.println(ints.equals(new int[] {1, 2, 3}));
+
+        // getClass().getName() is the same name toString() uses.
+        System.out.println(ints.getClass().getName());
+        System.out.println(strings.getClass().getName());
+        System.out.println(grid.getClass().getName());
+        System.out.println(words.getClass().getName());
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

@@ -83,8 +83,12 @@ pub enum HeapObject {
     /// [`HeapObject::IntArray`]: `bastore` truncates for bytes).
     ByteArray(Vec<i8>),
     /// A reference array (e.g. `String[] args`, or the rows of a 2D
-    /// array).
-    RefArray(Vec<JValue>),
+    /// array), with its JVM class descriptor: `[Ljava/lang/String;`,
+    /// `[[I`. Java's `toString()` and `getClass().getName()` name the
+    /// element type, and once the static type is gone the heap is the
+    /// only thing that still knows it. Primitive arrays derive theirs
+    /// from the variant instead.
+    RefArray(String, Vec<JValue>),
     /// An instance of a user-defined class.
     Instance {
         class_name: String,

@@ -512,7 +512,10 @@ fn string_method(
                 .into_iter()
                 .map(|part| JValue::Ref(Some(heap.alloc(HeapObject::JavaString(part)))))
                 .collect();
-            let reference = heap.alloc(HeapObject::RefArray(refs));
+            let reference = heap.alloc(HeapObject::RefArray(
+                String::from("[Ljava/lang/String;"),
+                refs,
+            ));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("replace", [JValue::Int(from), JValue::Int(to)]) => {
@@ -645,7 +648,10 @@ fn string_method(
                 .into_iter()
                 .map(|part| JValue::Ref(Some(heap.alloc(HeapObject::JavaString(part)))))
                 .collect();
-            let reference = heap.alloc(HeapObject::RefArray(refs));
+            let reference = heap.alloc(HeapObject::RefArray(
+                String::from("[Ljava/lang/String;"),
+                refs,
+            ));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("startsWith", [prefix, JValue::Int(offset)]) => {
@@ -1617,6 +1623,36 @@ enum ArrayChunk {
 }
 
 /// `System.arraycopy(src, srcPos, dest, destPos, length)`.
+/// The `count` elements of `source` starting at `from`, as a chunk that
+/// borrows nothing — `arraycopy` writes back into the same heap, and a
+/// self-copy must read the old values.
+fn take_chunk(heap: &Heap, source: HeapRef, from: usize, count: usize) -> Option<ArrayChunk> {
+    Some(match heap.get(source) {
+        Some(HeapObject::IntArray(_, values)) => {
+            ArrayChunk::Int(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::DoubleArray(values)) => {
+            ArrayChunk::Double(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::LongArray(values)) => {
+            ArrayChunk::Long(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::FloatArray(values)) => {
+            ArrayChunk::Float(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::ShortArray(values)) => {
+            ArrayChunk::Short(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::ByteArray(values)) => {
+            ArrayChunk::Byte(values[from..from + count].to_vec())
+        }
+        Some(HeapObject::RefArray(_, values)) => {
+            ArrayChunk::Ref(values[from..from + count].to_vec())
+        }
+        _ => return None,
+    })
+}
+
 fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, VmError> {
     let [
         JValue::Ref(source),
@@ -1648,7 +1684,7 @@ fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, 
         (HeapObject::FloatArray(a), HeapObject::FloatArray(b)) => (a.len(), b.len()),
         (HeapObject::ShortArray(a), HeapObject::ShortArray(b)) => (a.len(), b.len()),
         (HeapObject::ByteArray(a), HeapObject::ByteArray(b)) => (a.len(), b.len()),
-        (HeapObject::RefArray(a), HeapObject::RefArray(b)) => (a.len(), b.len()),
+        (HeapObject::RefArray(_, a), HeapObject::RefArray(_, b)) => (a.len(), b.len()),
         _ => return Err(store_error()),
     };
 
@@ -1678,28 +1714,7 @@ fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, 
         return Err(out_of_range(*destination_pos));
     }
 
-    let taken = match heap.get(source) {
-        Some(HeapObject::IntArray(_, values)) => {
-            ArrayChunk::Int(values[from..from + count].to_vec())
-        }
-        Some(HeapObject::DoubleArray(values)) => {
-            ArrayChunk::Double(values[from..from + count].to_vec())
-        }
-        Some(HeapObject::LongArray(values)) => {
-            ArrayChunk::Long(values[from..from + count].to_vec())
-        }
-        Some(HeapObject::FloatArray(values)) => {
-            ArrayChunk::Float(values[from..from + count].to_vec())
-        }
-        Some(HeapObject::ShortArray(values)) => {
-            ArrayChunk::Short(values[from..from + count].to_vec())
-        }
-        Some(HeapObject::ByteArray(values)) => {
-            ArrayChunk::Byte(values[from..from + count].to_vec())
-        }
-        Some(HeapObject::RefArray(values)) => ArrayChunk::Ref(values[from..from + count].to_vec()),
-        _ => return Err(store_error()),
-    };
+    let taken = take_chunk(heap, source, from, count).ok_or_else(store_error)?;
     match (heap.get_mut(destination), taken) {
         (Some(HeapObject::IntArray(_, values)), ArrayChunk::Int(taken)) => {
             values[to..to + count].copy_from_slice(&taken);
@@ -1719,7 +1734,7 @@ fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, 
         (Some(HeapObject::ByteArray(values)), ArrayChunk::Byte(taken)) => {
             values[to..to + count].copy_from_slice(&taken);
         }
-        (Some(HeapObject::RefArray(values)), ArrayChunk::Ref(taken)) => {
+        (Some(HeapObject::RefArray(_, values)), ArrayChunk::Ref(taken)) => {
             values[to..to + count].copy_from_slice(&taken);
         }
         _ => return Err(store_error()),
@@ -2326,9 +2341,10 @@ pub fn invoke_static(
                     .iter()
                     .map(|m| JValue::Ref(Some(heap.alloc_string(m))))
                     .collect();
-                Ok(Some(JValue::Ref(Some(
-                    heap.alloc(HeapObject::RefArray(refs)),
-                ))))
+                Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::RefArray(
+                    String::from("[Ljava/lang/String;"),
+                    refs,
+                ))))))
             }
             // Swing event pump: render the tree (arg 0), block for the next
             // event, return its payload String — or null to end the loop.
@@ -3309,6 +3325,42 @@ fn string_static(
 /// Render a `StringBuilder.append` argument the way Java would.
 /// Render an `Object`-typed value inline (`String.valueOf` semantics) for the
 /// reflection handles that flow through `append(Object)`/`print(Object)`.
+/// An object's identity hash: its heap reference, as a real JVM uses its
+/// address. `Object.toString()` prints this same value in hex, so the two
+/// agree exactly as they do on a JVM.
+pub(crate) fn identity_hash(reference: HeapRef) -> i32 {
+    i32::from_ne_bytes(reference.to_ne_bytes())
+}
+
+/// The JVM class descriptor of an array on the heap: `[I`, `[[I`,
+/// `[Ljava/lang/String;`. A primitive array carries it in its variant; a
+/// reference array remembers its own, because once the static type is gone
+/// the heap is the only thing that still knows the element type.
+pub(crate) fn array_class_name(heap: &Heap, reference: HeapRef) -> Option<String> {
+    Some(match heap.get(reference)? {
+        HeapObject::IntArray(IntKind::Int, _) => String::from("[I"),
+        HeapObject::IntArray(IntKind::Boolean, _) => String::from("[Z"),
+        HeapObject::IntArray(IntKind::Char, _) => String::from("[C"),
+        HeapObject::DoubleArray(_) => String::from("[D"),
+        HeapObject::LongArray(_) => String::from("[J"),
+        HeapObject::FloatArray(_) => String::from("[F"),
+        HeapObject::ShortArray(_) => String::from("[S"),
+        HeapObject::ByteArray(_) => String::from("[B"),
+        HeapObject::RefArray(class, _) => class.clone(),
+        _ => return None,
+    })
+}
+
+/// `Object.toString()` for an array, exactly as the JDK writes it:
+/// `getClass().getName() + "@" + Integer.toHexString(hashCode())`, where
+/// `getName()` spells a reference element with dots. An `int[]` is
+/// `[I@1b6d3586`; a `String[]` is `[Ljava.lang.String;@4554617c`. Useless
+/// to read, and precisely what a student sees on a real JVM.
+pub(crate) fn array_to_string(heap: &Heap, reference: HeapRef) -> Option<String> {
+    let name = array_class_name(heap, reference)?.replace('/', ".");
+    Some(format!("{name}@{:x}", identity_hash(reference)))
+}
+
 pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
     match value {
         JValue::Ref(None) => String::from("null"),
@@ -3319,6 +3371,11 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                 String::from_utf16_lossy(units)
             }
             Some(HeapObject::Class { name }) => format!("class {name}"),
+            // An array does not override `toString`, so it gets Object's:
+            // `[I@1b6d3586`. Not `Arrays.toString`'s `[1, 2, 3]`.
+            Some(_) if array_class_name(heap, reference).is_some() => {
+                array_to_string(heap, reference).unwrap_or_default()
+            }
             Some(HeapObject::Boxed { class_name, value }) => boxed_to_string(class_name, *value),
             Some(HeapObject::Field {
                 declaring,
@@ -3421,6 +3478,10 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
             char::from_u32(unit).map_or_else(|| String::from('\u{FFFD}'), String::from)
         }
         ("(D)V", [JValue::Double(v)]) => java_double_to_string(*v),
+        // `println(char[])` is a real overload: it prints the CHARACTERS.
+        // (`"" + chars` does not — that is `append(Object)` and prints
+        // `[C@hash`. A classic Java trap, faithfully reproduced.)
+        ("([C)V", [value]) => String::from_utf16_lossy(&char_array_units(heap, value)?),
         ("(Ljava/lang/String;)V", [JValue::Ref(reference)]) => match reference {
             None => String::from("null"),
             Some(reference) => heap.string_text(*reference).ok_or_else(|| {

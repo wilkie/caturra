@@ -9791,3 +9791,103 @@ fn a_user_class_shadows_an_unmodeled_library_name() {
     );
     assert_eq!(out, "4\n");
 }
+
+/// Printing or concatenating an array gives `Object.toString()`, exactly as a
+/// real JVM does: the class descriptor, `@`, and the identity hash in hex.
+/// Useless to read, and precisely what a student sees on a JDK — until
+/// 2026-07-09 caturra refused to compile it at all. The hash is the heap
+/// reference, so only its shape is asserted here; byte-for-byte agreement
+/// with a real JDK is pinned by `diff_array_default_to_string`.
+#[test]
+fn printing_an_array_gives_javas_default_to_string() {
+    let out = run_stdout(
+        r#"
+        public class M {
+            public static void main(String[] args) {
+                int[] ints = {1, 2, 3};
+                String[] strings = {"x"};
+                int[][] grid = {{1}};
+                System.out.println(head("" + ints));
+                System.out.println(head("" + strings));
+                System.out.println(head("" + grid));
+                System.out.println(head("" + grid[0]));
+                System.out.println(head("" + new boolean[1]));
+                System.out.println(head(ints.toString()));
+                System.out.println(ints.getClass().getName());
+                System.out.println(strings.getClass().getName());
+            }
+            static String head(String s) {
+                int at = s.indexOf("@");
+                if (at < 0) return "NO-AT:" + s;
+                String hex = s.substring(at + 1);
+                boolean ok = hex.length() > 0;
+                for (int i = 0; i < hex.length(); i++) {
+                    char c = hex.charAt(i);
+                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) ok = false;
+                }
+                return s.substring(0, at) + "@" + (ok ? "<hex>" : "BAD");
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(
+        out,
+        "[I@<hex>\n\
+         [Ljava.lang.String;@<hex>\n\
+         [[I@<hex>\n\
+         [I@<hex>\n\
+         [Z@<hex>\n\
+         [I@<hex>\n\
+         [I\n\
+         [Ljava.lang.String;\n"
+    );
+}
+
+/// `println(char[])` is a real overload that prints the CHARACTERS, while
+/// concatenation is `String.valueOf(Object)` and prints `[C@hash`. A classic
+/// Java trap, reproduced rather than smoothed over.
+#[test]
+fn println_of_a_char_array_prints_its_characters_but_concatenation_does_not() {
+    let out = run_stdout(
+        r#"
+        public class M {
+            public static void main(String[] args) {
+                char[] chars = {'h', 'i'};
+                System.out.println(chars);
+                System.out.print(chars);
+                System.out.println();
+                String concatenated = "" + chars;
+                System.out.println(concatenated.startsWith("[C@"));
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "hi\nhi\ntrue\n");
+}
+
+/// `type_of` used to answer `Error` for an `Object` method on an array, while
+/// the emitter happily emitted the call. A statement whose type is `Error` is
+/// dropped, so `len(ints.toString())` compiled to nothing and printed nothing
+/// — silently. The two must agree.
+#[test]
+fn an_object_method_on_an_array_types_as_the_emitter_emits_it() {
+    let out = run_stdout(
+        r"
+        public class M {
+            static int len(String s) { return s.length(); }
+            static boolean same(Object a) { return true; }
+            public static void main(String[] args) {
+                int[] ints = {1, 2};
+                System.out.println(len(ints.toString()) > 0);
+                System.out.println(len(ints.getClass().getName()));
+                System.out.println(ints.hashCode() == ints.hashCode());
+                System.out.println(ints.equals(ints));
+            }
+        }
+        ",
+        "M",
+    );
+    assert_eq!(out, "true\n2\ntrue\ntrue\n");
+}

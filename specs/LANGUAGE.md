@@ -88,8 +88,18 @@ slice.
   wording: `ArrayIndexOutOfBoundsException: Index 5 out of bounds for
 length 3`, `NegativeArraySizeException`, `NullPointerException`.
   `main`'s `String[] args` is now fully usable. Printing or
-  concatenating a whole array gets a friendly error instead of Java's
-  `[I@hash` (revisited when `Object` lands).
+  concatenating a whole array gives Java's `Object.toString()` — the class
+  descriptor, `@`, and the identity hash in hex: `[I@1b6d3586`,
+  `[Ljava.lang.String;@4554617c`, `[[I@7f31245a` (2026-07-09; caturra used
+  to refuse to compile it). Useless to read, and exactly what a student
+  sees on a JDK. `getClass().getName()` gives the same name, spelled with
+  dots. `println(char[])` is a real overload and prints the **characters**,
+  while `"" + chars` is `String.valueOf(Object)` and prints `[C@hash` —
+  the Java trap is reproduced rather than smoothed over. The heap carries
+  a reference array's class descriptor, because once the static type is
+  gone it is the only thing that still knows the element type. Pinned
+  against a real JDK by `diff_array_default_to_string`. `Arrays.toString`
+  remains the way to see the elements.
 
 - **Classes with state** (stage 5): instance and static fields (with
   initializers, `final`, and Java's default values), constructors with

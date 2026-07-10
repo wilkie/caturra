@@ -399,7 +399,7 @@ impl<'run> Interpreter<'run> {
                 Some(crate::value::HeapObject::DoubleArray(values)) => {
                     render_array(values.iter().map(|v| intrinsics::java_double_to_string(*v)))
                 }
-                Some(crate::value::HeapObject::RefArray(values)) => {
+                Some(crate::value::HeapObject::RefArray(_, values)) => {
                     render_array(values.iter().map(|v| self.render_shallow(*v)))
                 }
                 Some(crate::value::HeapObject::ArrayList(values)) => {
@@ -1215,13 +1215,20 @@ impl<'run> Interpreter<'run> {
                             frame.stack.push(JValue::Ref(Some(reference)));
                         }
                         op::ANEWARRAY => {
-                            let _class_index = read_u16(bytes, &mut pc, &malformed)?;
+                            let class_index = read_u16(bytes, &mut pc, &malformed)?;
+                            // The pool names the ELEMENT class (`java/lang/String`)
+                            // or, for a row of a higher-dimension array, its own
+                            // descriptor (`[I`). The array's class is one `[` deeper.
+                            let element =
+                                class.constant_pool.get_class_name(class_index).ok_or_else(
+                                    || malformed(format!("bad class ref at pool {class_index}")),
+                                )?;
+                            let array_class = array_class_of(element);
                             let length = check_array_size(frame.pop_int()?)?;
-                            let reference =
-                                self.heap.alloc(crate::value::HeapObject::RefArray(vec![
-                            JValue::NULL;
-                            length
-                        ]));
+                            let reference = self.heap.alloc(crate::value::HeapObject::RefArray(
+                                array_class,
+                                vec![JValue::NULL; length],
+                            ));
                             frame.stack.push(JValue::Ref(Some(reference)));
                         }
                         op::MULTIANEWARRAY => {
@@ -1248,7 +1255,7 @@ impl<'run> Interpreter<'run> {
                             let length = match self.heap.get(reference) {
                                 Some(crate::value::HeapObject::IntArray(_, v)) => v.len(),
                                 Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
-                                Some(crate::value::HeapObject::RefArray(v)) => v.len(),
+                                Some(crate::value::HeapObject::RefArray(_, v)) => v.len(),
                                 Some(crate::value::HeapObject::LongArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::FloatArray(v)) => v.len(),
                                 Some(crate::value::HeapObject::ShortArray(v)) => v.len(),
@@ -1321,7 +1328,7 @@ impl<'run> Interpreter<'run> {
                         }
                         op::AALOAD => {
                             let (reference, index) = frame.pop_array_access()?;
-                            let Some(crate::value::HeapObject::RefArray(values)) =
+                            let Some(crate::value::HeapObject::RefArray(_, values)) =
                                 self.heap.get(reference)
                             else {
                                 return Err(malformed(String::from(
@@ -1405,7 +1412,7 @@ impl<'run> Interpreter<'run> {
                         op::AASTORE => {
                             let value = frame.pop()?;
                             let (reference, index) = frame.pop_array_access()?;
-                            let Some(crate::value::HeapObject::RefArray(values)) =
+                            let Some(crate::value::HeapObject::RefArray(_, values)) =
                                 self.heap.get_mut(reference)
                             else {
                                 return Err(malformed(String::from(
@@ -2313,7 +2320,7 @@ impl<'run> Interpreter<'run> {
             Object::ByteArray(values) => {
                 values.iter().map(|v| JValue::Int(i32::from(*v))).collect()
             }
-            Object::RefArray(values) => values.clone(),
+            Object::RefArray(_, values) => values.clone(),
             _ => return None,
         })
     }
@@ -2495,8 +2502,9 @@ impl<'run> Interpreter<'run> {
             }
             Some(Object::ShortArray(values)) => Object::ShortArray(taken(values, from, length, 0)),
             Some(Object::ByteArray(values)) => Object::ByteArray(taken(values, from, length, 0)),
-            Some(Object::RefArray(values)) => {
-                Object::RefArray(taken(values, from, length, JValue::NULL))
+            Some(Object::RefArray(class, values)) => {
+                // `copyOf` returns an array of the SOURCE's own type.
+                Object::RefArray(class.clone(), taken(values, from, length, JValue::NULL))
             }
             _ => {
                 return Err(VmError::UncaughtException(String::from(
@@ -2535,7 +2543,7 @@ impl<'run> Interpreter<'run> {
             (Some(Object::ByteArray(values)), JValue::Int(value)) => {
                 values[from..to].fill(value as i8);
             }
-            (Some(Object::RefArray(values)), value) => values[from..to].fill(value),
+            (Some(Object::RefArray(_, values)), value) => values[from..to].fill(value),
             _ => {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.ArrayStoreException: wrong element type",
@@ -2588,7 +2596,7 @@ impl<'run> Interpreter<'run> {
             (Some(Object::FloatArray(values)), JValue::Float(key)) => {
                 return Ok(java_float_compare(values[at], key));
             }
-            (Some(Object::RefArray(values)), key) => {
+            (Some(Object::RefArray(_, values)), key) => {
                 let element = values[at];
                 return self.compare_for_sort(element, key);
             }
@@ -2615,7 +2623,7 @@ impl<'run> Interpreter<'run> {
             Object::FloatArray(values) => values.len(),
             Object::ShortArray(values) => values.len(),
             Object::ByteArray(values) => values.len(),
-            Object::RefArray(values) => values.len(),
+            Object::RefArray(_, values) => values.len(),
             _ => return None,
         })
     }
@@ -2736,7 +2744,7 @@ impl<'run> Interpreter<'run> {
         let JValue::Ref(Some(reference)) = value else {
             return Ok(String::from("null"));
         };
-        let Some(HeapObject::RefArray(items)) = self.heap.get(reference) else {
+        let Some(HeapObject::RefArray(_, items)) = self.heap.get(reference) else {
             return self.string_value_of(value, 0);
         };
         let items = items.clone();
@@ -2762,7 +2770,7 @@ impl<'run> Interpreter<'run> {
             if let Some(text) = self.primitive_array_text(reference) {
                 return Ok(text);
             }
-            if matches!(self.heap.get(reference), Some(HeapObject::RefArray(_))) {
+            if matches!(self.heap.get(reference), Some(HeapObject::RefArray(_, _))) {
                 if path.contains(&reference) {
                     return Ok(String::from("[...]"));
                 }
@@ -2788,7 +2796,7 @@ impl<'run> Interpreter<'run> {
         let (JValue::Ref(Some(left)), JValue::Ref(Some(right))) = (a, b) else {
             return Ok(false);
         };
-        let (Some(HeapObject::RefArray(ours)), Some(HeapObject::RefArray(theirs))) =
+        let (Some(HeapObject::RefArray(_, ours)), Some(HeapObject::RefArray(_, theirs))) =
             (self.heap.get(left), self.heap.get(right))
         else {
             return Ok(false);
@@ -2821,7 +2829,10 @@ impl<'run> Interpreter<'run> {
         if let (JValue::Ref(Some(left)), JValue::Ref(Some(right))) = (ours, theirs) {
             if matches!(
                 (self.heap.get(left), self.heap.get(right)),
-                (Some(HeapObject::RefArray(_)), Some(HeapObject::RefArray(_)))
+                (
+                    Some(HeapObject::RefArray(_, _)),
+                    Some(HeapObject::RefArray(_, _))
+                )
             ) {
                 return self.deep_equals(ours, theirs, depth + 1);
             }
@@ -2843,7 +2854,7 @@ impl<'run> Interpreter<'run> {
         let JValue::Ref(Some(reference)) = value else {
             return Ok(0);
         };
-        let Some(HeapObject::RefArray(items)) = self.heap.get(reference) else {
+        let Some(HeapObject::RefArray(_, items)) = self.heap.get(reference) else {
             return Ok(0);
         };
         let items = items.clone();
@@ -2861,7 +2872,7 @@ impl<'run> Interpreter<'run> {
             return Ok(0);
         }
         if let JValue::Ref(Some(reference)) = item {
-            if matches!(self.heap.get(reference), Some(HeapObject::RefArray(_))) {
+            if matches!(self.heap.get(reference), Some(HeapObject::RefArray(_, _))) {
                 return self.deep_hash_code(item, depth + 1);
             }
             if let Some(hash) = self.primitive_array_hash(reference) {
@@ -3720,7 +3731,10 @@ impl<'run> Interpreter<'run> {
                 "F" => HeapObject::FloatArray(vec![0.0; length]),
                 "S" => HeapObject::ShortArray(vec![0; length]),
                 "B" => HeapObject::ByteArray(vec![0; length]),
-                _ => HeapObject::RefArray(vec![JValue::NULL; length]),
+                _ => HeapObject::RefArray(
+                    format!("[{element_descriptor}"),
+                    vec![JValue::NULL; length],
+                ),
             };
             return Ok(self.heap.alloc(object));
         }
@@ -3730,7 +3744,10 @@ impl<'run> Interpreter<'run> {
             let row = self.alloc_multi_array(element_descriptor, rest_counts, malformed)?;
             rows.push(JValue::Ref(Some(row)));
         }
-        Ok(self.heap.alloc(crate::value::HeapObject::RefArray(rows)))
+        Ok(self.heap.alloc(crate::value::HeapObject::RefArray(
+            descriptor.to_owned(),
+            rows,
+        )))
     }
 
     /// `invokestatic`: a user-defined static method becomes a frame to
@@ -3936,11 +3953,12 @@ impl<'run> Interpreter<'run> {
                 "hashCode" => {
                     frame
                         .stack
-                        .push(JValue::Int(i32::from_ne_bytes(receiver.to_ne_bytes())));
+                        .push(JValue::Int(intrinsics::identity_hash(receiver)));
                     return Ok(None);
                 }
                 "toString" => {
-                    let text = format!("[array@{receiver:x}");
+                    let text =
+                        intrinsics::array_to_string(&self.heap, receiver).unwrap_or_default();
                     let reference = self.heap.alloc_string(&text);
                     frame.stack.push(JValue::Ref(Some(reference)));
                     return Ok(None);
@@ -4020,6 +4038,9 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
             Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
+            _ if is_array_object(self.heap.get(receiver)) => {
+                intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
+            }
             _ => String::from("java/lang/Object"),
         }
     }
@@ -4029,7 +4050,7 @@ impl<'run> Interpreter<'run> {
         let Some(JValue::Ref(Some(reference))) = arg else {
             return Vec::new();
         };
-        let Some(crate::value::HeapObject::RefArray(elems)) = self.heap.get(*reference) else {
+        let Some(crate::value::HeapObject::RefArray(_, elems)) = self.heap.get(*reference) else {
             return Vec::new();
         };
         elems
@@ -4067,7 +4088,7 @@ impl<'run> Interpreter<'run> {
         };
         let initargs: Vec<JValue> = match args.first() {
             Some(JValue::Ref(Some(r))) => match self.heap.get(*r) {
-                Some(HeapObject::RefArray(elems)) => elems.clone(),
+                Some(HeapObject::RefArray(_, elems)) => elems.clone(),
                 _ => Vec::new(),
             },
             _ => Vec::new(),
@@ -4127,7 +4148,7 @@ impl<'run> Interpreter<'run> {
         let is_static = access & 0x0008 != 0;
         let call_args: Vec<JValue> = match args.get(1) {
             Some(JValue::Ref(Some(r))) => match self.heap.get(*r) {
-                Some(HeapObject::RefArray(elems)) => elems.clone(),
+                Some(HeapObject::RefArray(_, elems)) => elems.clone(),
                 _ => Vec::new(),
             },
             _ => Vec::new(),
@@ -4350,7 +4371,17 @@ impl<'run> Interpreter<'run> {
                     // e.g. `java.util.ArrayList`; a user class in the default
                     // package is already just its simple name). `getSimpleName`
                     // always drops the package.
-                    "getName" => Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&name))))),
+                    // An array's binary name spells its element class with
+                    // dots (`[Ljava.lang.String;`), though the descriptor the
+                    // heap and the constant pool carry uses slashes.
+                    "getName" => {
+                        let binary = if name.starts_with('[') {
+                            name.replace('/', ".")
+                        } else {
+                            name.clone()
+                        };
+                        Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&binary)))))
+                    }
                     "getSimpleName" => {
                         let simple = simple_class_name(&name);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(simple)))))
@@ -4428,7 +4459,10 @@ impl<'run> Interpreter<'run> {
                                 })))
                             })
                             .collect();
-                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        let array = self.heap.alloc(HeapObject::RefArray(
+                            String::from("[Ljava/lang/reflect/Field;"),
+                            refs,
+                        ));
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getDeclaredMethods" | "getMethods" => {
@@ -4478,7 +4512,10 @@ impl<'run> Interpreter<'run> {
                                 })))
                             })
                             .collect();
-                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        let array = self.heap.alloc(HeapObject::RefArray(
+                            String::from("[Ljava/lang/reflect/Method;"),
+                            refs,
+                        ));
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getDeclaredConstructors" | "getConstructors" => {
@@ -4521,7 +4558,10 @@ impl<'run> Interpreter<'run> {
                                 })))
                             })
                             .collect();
-                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        let array = self.heap.alloc(HeapObject::RefArray(
+                            String::from("[Ljava/lang/reflect/Constructor;"),
+                            refs,
+                        ));
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getConstructor" | "getDeclaredConstructor" => {
@@ -4762,7 +4802,10 @@ impl<'run> Interpreter<'run> {
                                 ))
                             })
                             .collect();
-                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        let array = self.heap.alloc(HeapObject::RefArray(
+                            String::from("[Ljava/lang/Class;"),
+                            refs,
+                        ));
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getParameterCount" => {
@@ -4792,7 +4835,10 @@ impl<'run> Interpreter<'run> {
                                 })))
                             })
                             .collect();
-                        let array = self.heap.alloc(HeapObject::RefArray(refs));
+                        let array = self.heap.alloc(HeapObject::RefArray(
+                            String::from("[Ljava/lang/reflect/Type;"),
+                            refs,
+                        ));
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getRawType" => {
@@ -5604,13 +5650,25 @@ fn parse_parameterized(signature: &str) -> Option<(String, Vec<String>)> {
     Some((raw, args))
 }
 
+/// The JVM class descriptor of an array whose ELEMENT class is `element`,
+/// as `anewarray`'s constant pool spells it: a plain class name becomes
+/// `[Lname;`, and an already-array element (`[I`, a row of `int[][]`)
+/// just gains a dimension.
+fn array_class_of(element: &str) -> String {
+    if element.starts_with('[') {
+        format!("[{element}")
+    } else {
+        format!("[L{element};")
+    }
+}
+
 /// Whether a heap object is an array (all kinds), for `Object`-method dispatch.
 fn is_array_object(object: Option<&crate::value::HeapObject>) -> bool {
     use crate::value::HeapObject;
     matches!(
         object,
         Some(
-            HeapObject::RefArray(_)
+            HeapObject::RefArray(_, _)
                 | HeapObject::IntArray(..)
                 | HeapObject::DoubleArray(_)
                 | HeapObject::LongArray(_)

@@ -189,7 +189,10 @@ impl<'host> Vm<'host> {
             .iter()
             .map(|a| JValue::Ref(Some(interpreter.intern_string(a))))
             .collect();
-        let args_array = interpreter.heap.alloc(HeapObject::RefArray(arg_refs));
+        let args_array = interpreter.heap.alloc(HeapObject::RefArray(
+            String::from("[Ljava/lang/String;"),
+            arg_refs,
+        ));
         let locals = vec![JValue::Ref(Some(args_array))];
 
         match interpreter.execute(class, main, locals) {
