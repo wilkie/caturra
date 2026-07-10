@@ -323,13 +323,12 @@ null` is the way to test for absence, and unboxing an absent value
     user class sorts by its own `compareTo` (2026-07-09) — it reaches
     that through the same nested-call machinery `toString` uses. Before,
     it compared every pair of user objects as equal and so silently left
-    the list alone. A class that declares no `compareTo` throws
-    `ClassCastException`, which is what javac would have refused to
-    compile in the first place: caturra's `sort` accepts any list. So do
-    `max`/`min` and `binarySearch` — the three places `Collections` is
-    more permissive than javac, listed under
-    [Divergences from javac](#divergences-from-javac). Pinned by
-    `diff_collections_sort_uses_compare_to`.
+    the list alone. A list whose element type declares no `compareTo` is
+    rejected at compile time (2026-07-09), as javac rejects it: `sort`,
+    `max`, `min` and `binarySearch` are declared over
+    `T extends Comparable<? super T>`. Pinned by
+    `diff_collections_sort_uses_compare_to` and
+    `reject_sorting_a_list_of_non_comparables`.
   - `Collections.reverse`/`swap`/`shuffle`/`max`/`min`/`frequency`/
     `nCopies` (2026-07-09). `reverse`, `swap` and `shuffle` are bundled
     Java; `shuffle(list, random)` is Java's own Fisher-Yates over
@@ -745,18 +744,20 @@ program, which would mean it is a shared rule rather than a strictness:
 - `Collections.addAll(List<Integer>, new Integer[] {1})` — caturra reads a
   lone array as the varargs array only for a reference element type.
 
-**More permissive than javac** (caturra accepts; javac rejects). This is
-the dangerous direction, so the list is short and each entry throws
-`ClassCastException` at run time rather than passing silently. Each
-`looser_than_javac!` test fails if caturra ever starts rejecting the
-program — at which point delete the entry rather than leave it passing:
+**More permissive than javac** (caturra accepts; javac rejects). **This
+list is empty**, and the `looser_than_javac!` macro exists to keep it
+that way — a case asserted there is a case that cannot be forgotten.
 
-- `Collections.sort(new ArrayList<Plain>())`
-- `Collections.max(new ArrayList<Plain>())`
-- `Collections.binarySearch(new ArrayList<Plain>(), new Plain())`
-
-where `Plain` does not implement `Comparable`. caturra's `Collections`
-takes any list, because it has no bound to check against.
+Until 2026-07-09 it held three: `Collections.sort`, `max`/`min` and
+`binarySearch` over a list whose element type is not `Comparable`, which
+caturra accepted and failed on at run time with `ClassCastException`.
+Those four methods are declared over `T extends Comparable<? super T>`,
+so the bound is now checked at compile time, and `ArrayList<Object>` is
+refused with it. `Arrays.sort` always refused a non-`Comparable` element,
+because it is bundled Java whose parameter is `Comparable[]`; only the
+native `Collections` had to be taught to ask. The bound reaches exactly
+the four methods that declare one — `reverse`, `shuffle`, `swap`,
+`frequency` and `nCopies` still take any element type, as javac's do.
 
 **Reject wording.** `reject_wording_tracks_javac` pins both javac's
 headline and caturra's message for 19 rejected programs, so the two are

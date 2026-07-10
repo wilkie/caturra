@@ -1528,6 +1528,9 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Boolean => String::from("Boolean"),
         ElemType::Char => String::from("Character"),
         ElemType::Str => String::from("String"),
+        // The top type is stored under its internal name, which must not
+        // reach a diagnostic: javac writes `ArrayList<Object>`.
+        ElemType::Object(id) if id == table.object_id => String::from("Object"),
         ElemType::Object(id) => table.class_name(id).to_owned(),
         ElemType::Field => String::from("Field"),
         ElemType::Method => String::from("Method"),
@@ -8201,6 +8204,25 @@ impl BodyGen<'_> {
         };
         let element_ty = elem.base_type();
         let element_descriptor = element_ty.descriptor(self.table);
+
+        // `sort`/`max`/`min`/`binarySearch` are declared over
+        // `T extends Comparable<? super T>`, so a list of a class that does
+        // not implement `Comparable` is a compile error, not a runtime
+        // `ClassCastException`. `Arrays.sort` already refuses one, because
+        // its bundled parameter is `Comparable[]`; `Collections` is native
+        // and so has to ask. javac reports the unsatisfied bound as overload
+        // resolution failing, which is what `no_suitable_library_method`
+        // says. Only a class whose supertypes we can see is refused: the
+        // wrappers and `String` are all `Comparable`, and an erased type
+        // variable may well be one at the use site.
+        if matches!(method, "sort" | "max" | "min" | "binarySearch")
+            && let ElemType::Object(id) = elem
+            && let Some(comparable) = self.table.class_id("Comparable")
+            && !self.table.is_subtype(id, comparable)
+        {
+            self.no_suitable_library_method("Collections", method, args, span);
+            return None;
+        }
 
         self.expr(&args[0]);
         let mut width: u16 = 1;

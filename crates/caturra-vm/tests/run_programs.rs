@@ -8476,36 +8476,115 @@ fn collections_sort_calls_compare_to() {
     assert_eq!(out, "[C1b, C1d, C2c, C3a]\n");
 }
 
-/// javac rejects `Collections.sort` on a list whose element type is not
-/// `Comparable`. caturra's `sort` accepts any list, so it has to say at
-/// runtime what javac would have said at compile time.
+/// `Collections.sort`/`max`/`min`/`binarySearch` are declared over
+/// `T extends Comparable<? super T>`, so a list of a class that does not
+/// implement `Comparable` is a compile error — not, as it was until
+/// 2026-07-09, a `ClassCastException` at run time. That was the last place
+/// caturra accepted a program javac rejects. `Arrays.sort` already refused
+/// one, because its bundled parameter is `Comparable[]`. Pinned against
+/// javac by `reject_sorting_a_list_of_non_comparables` and friends.
 #[test]
-fn collections_sort_of_a_non_comparable_throws() {
-    let (result, console) = compile_and_run(
-        r#"
+fn collections_comparable_bound_rejects_like_javac() {
+    for (source, want) in [
+        (
+            "Collections.sort(new ArrayList<Plain>());",
+            "no suitable method found for sort(ArrayList<Plain>) in class Collections",
+        ),
+        (
+            "Plain p = Collections.max(new ArrayList<Plain>());",
+            "no suitable method found for max(ArrayList<Plain>) in class Collections",
+        ),
+        (
+            "Plain p = Collections.min(new ArrayList<Plain>());",
+            "no suitable method found for min(ArrayList<Plain>) in class Collections",
+        ),
+        (
+            "int i = Collections.binarySearch(new ArrayList<Plain>(), new Plain());",
+            "no suitable method found for binarySearch(ArrayList<Plain>,Plain) in class Collections",
+        ),
+        (
+            "Collections.sort(new ArrayList<Object>());",
+            "no suitable method found for sort(ArrayList<Object>) in class Collections",
+        ),
+    ] {
+        let text = format!(
+            "import java.util.*; class Plain {{ int x; }} \
+             class M {{ static void r() {{ {source} }} }}"
+        );
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}
+
+/// The bound applies to exactly the four methods that declare it. javac puts
+/// none on `reverse`/`shuffle`/`swap`/`frequency`/`nCopies`, so neither do we
+/// — a new strictness that over-reaches is as wrong as a missing one.
+#[test]
+fn the_comparable_bound_does_not_reach_the_unbounded_collections_methods() {
+    let out = run_stdout(
+        r"
         import java.util.ArrayList;
         import java.util.Collections;
 
         class Plain { int x; }
 
-        public class S {
+        public class M {
             public static void main(String[] args) {
                 ArrayList<Plain> items = new ArrayList<Plain>();
+                Plain one = new Plain();
+                items.add(one);
                 items.add(new Plain());
-                items.add(new Plain());
-                try {
-                    Collections.sort(items);
-                    System.out.println("sorted");
-                } catch (ClassCastException e) {
-                    System.out.println("not comparable");
-                }
+                Collections.reverse(items);
+                Collections.shuffle(items);
+                Collections.swap(items, 0, 1);
+                System.out.println(items.size());
+                System.out.println(Collections.frequency(items, one));
+            }
+        }
+        ",
+        "M",
+    );
+    assert_eq!(out, "2\n1\n");
+}
+
+/// A `Comparable` element still sorts, including one that inherits the
+/// interface from a superclass rather than declaring it.
+#[test]
+fn the_comparable_bound_accepts_an_inherited_comparable() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Collections;
+
+        class Base implements Comparable<Base> {
+            int rank;
+            Base(int rank) { this.rank = rank; }
+            public int compareTo(Base other) { return this.rank - other.rank; }
+            public String toString() { return "" + this.rank; }
+        }
+        class Sub extends Base {
+            Sub(int rank) { super(rank); }
+        }
+
+        public class M {
+            public static void main(String[] args) {
+                ArrayList<Sub> items = new ArrayList<Sub>();
+                items.add(new Sub(3));
+                items.add(new Sub(1));
+                Collections.sort(items);
+                System.out.println(items);
+                System.out.println(Collections.max(items));
             }
         }
         "#,
-        "S",
+        "M",
     );
-    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
-    assert_eq!(console.stdout_text(), "not comparable\n");
+    assert_eq!(out, "[1, 3]\n3\n");
 }
 
 /// A collection compares its elements with their own `equals`, and hashes its

@@ -268,8 +268,14 @@ macro_rules! stricter_than_javac {
 }
 
 /// A program javac refuses and caturra accepts. This is the direction that
-/// hurts: it compiles in the playground and fails on a real JDK. Every such
-/// case is listed here, so the list cannot grow unnoticed.
+/// hurts: it compiles in the playground and fails on a real JDK.
+///
+/// **There are currently no such programs**, which is why this macro has no
+/// callers. The last three — `Collections.sort`/`max`/`binarySearch` over a
+/// non-`Comparable` element — were closed on 2026-07-09 and became
+/// `differential_reject!` cases. Keep the macro: it is how the next one gets
+/// recorded, and a case asserted here is a case that cannot be forgotten.
+#[allow(unused_macros)]
 macro_rules! looser_than_javac {
     ($name:ident, $class:literal, $source:literal) => {
         #[test]
@@ -5423,6 +5429,27 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         ),
     ),
     (
+        "WordSortPlainList",
+        "import java.util.*;\nclass WordPlainA {}\npublic class WordSortPlainList { static void r() { Collections.sort(new ArrayList<WordPlainA>()); } }",
+        "no suitable method found for sort(ArrayList<WordPlainA>)",
+        "no suitable method found for sort(ArrayList<WordPlainA>) in class Collections",
+        Wording::Prefix,
+    ),
+    (
+        "WordSortObjectList",
+        "import java.util.*;\npublic class WordSortObjectList { static void r() { Collections.sort(new ArrayList<Object>()); } }",
+        "no suitable method found for sort(ArrayList<Object>)",
+        "no suitable method found for sort(ArrayList<Object>) in class Collections",
+        Wording::Prefix,
+    ),
+    (
+        "WordBsPlainList",
+        "import java.util.*;\nclass WordPlainB {}\npublic class WordBsPlainList { static int r() { return Collections.binarySearch(new ArrayList<WordPlainB>(), new WordPlainB()); } }",
+        "no suitable method found for binarySearch(ArrayList<WordPlainB>,WordPlainB)",
+        "no suitable method found for binarySearch(ArrayList<WordPlainB>,WordPlainB) in class Collections",
+        Wording::Prefix,
+    ),
+    (
         "WordQualifiedClass",
         "public class WordQualifiedClass { static void r() { java.util.Nope.f(); } }",
         "cannot find symbol",
@@ -5538,20 +5565,36 @@ stricter_than_javac!(
     "import java.util.*;\npublic class StrictAddAllBoxedArr { static void r() { Collections.addAll(new ArrayList<Integer>(), new Integer[] {1}); } }"
 );
 
-looser_than_javac!(
-    loose_sorting_a_list_of_non_comparables_throws_at_runtime,
-    "LooseSortPlainList",
-    "import java.util.*;\nclass LoosePlainA {}\npublic class LooseSortPlainList { static void r() { Collections.sort(new ArrayList<LoosePlainA>()); } }"
+// `Collections.sort`/`max`/`min`/`binarySearch` over a non-`Comparable`
+// element used to be the only place caturra accepted code javac rejects.
+// They were `looser_than_javac!` cases until 2026-07-09; now both compilers
+// refuse them, so they are asserted as the shared rule they became.
+differential_reject!(
+    reject_sorting_a_list_of_non_comparables,
+    "RejectSortPlainList",
+    "import java.util.*;\nclass RejPlainA {}\npublic class RejectSortPlainList { static void r() { Collections.sort(new ArrayList<RejPlainA>()); } }"
 );
 
-looser_than_javac!(
-    loose_max_of_a_list_of_non_comparables_throws_at_runtime,
-    "LooseMaxPlainList",
-    "import java.util.*;\nclass LoosePlainB {}\npublic class LooseMaxPlainList { static void r() { Collections.max(new ArrayList<LoosePlainB>()); } }"
+differential_reject!(
+    reject_max_of_a_list_of_non_comparables,
+    "RejectMaxPlainList",
+    "import java.util.*;\nclass RejPlainB {}\npublic class RejectMaxPlainList { static void r() { Collections.max(new ArrayList<RejPlainB>()); } }"
 );
 
-looser_than_javac!(
-    loose_binary_search_of_a_list_of_non_comparables_throws_at_runtime,
-    "LooseBsPlainList",
-    "import java.util.*;\nclass LoosePlainC {}\npublic class LooseBsPlainList { static void r() { Collections.binarySearch(new ArrayList<LoosePlainC>(), new LoosePlainC()); } }"
+differential_reject!(
+    reject_min_of_a_list_of_non_comparables,
+    "RejectMinPlainList",
+    "import java.util.*;\nclass RejPlainD {}\npublic class RejectMinPlainList { static void r() { Collections.min(new ArrayList<RejPlainD>()); } }"
+);
+
+differential_reject!(
+    reject_binary_search_of_a_list_of_non_comparables,
+    "RejectBsPlainList",
+    "import java.util.*;\nclass RejPlainC {}\npublic class RejectBsPlainList { static void r() { Collections.binarySearch(new ArrayList<RejPlainC>(), new RejPlainC()); } }"
+);
+
+differential_reject!(
+    reject_sorting_a_list_of_object,
+    "RejectSortObjectList",
+    "import java.util.*;\npublic class RejectSortObjectList { static void r() { Collections.sort(new ArrayList<Object>()); } }"
 );
