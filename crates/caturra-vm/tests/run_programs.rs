@@ -10790,3 +10790,74 @@ fn a_lambda_list_element_is_refused_where_javac_refuses_it() {
         assert!(!compilation.success(), "should not compile: {source}");
     }
 }
+
+/// `(int[]) obj` and `(String[]) obj` — an array downcast. The primitive-array
+/// form (`(int[])`, `(int[][])`) did not even parse until 2026-07-09
+/// ("expected '.class' after a primitive type"), and reference-array casts
+/// parsed but were rejected in codegen. Both now emit a runtime `checkcast`.
+/// Pinned against a real JDK by `diff_array_downcast`.
+#[test]
+fn an_object_downcasts_to_an_array_type() {
+    let out = run_stdout(
+        r#"
+        public class M {
+            public static void main(String[] args) {
+                Object oi = new int[] {1, 2, 3};
+                System.out.println(((int[]) oi)[2]);
+                Object os = new String[] {"x", "y"};
+                System.out.println(((String[]) os)[1]);
+                Object og = new int[2][3];
+                int[][] g = (int[][]) og;
+                System.out.println(g.length + " " + g[0].length);
+                Object on = null;
+                System.out.println(((int[]) on) == null);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "3\ny\n2 3\ntrue\n");
+}
+
+/// The array checkcast throws `ClassCastException` exactly where the JVM does:
+/// a wrong element type, a non-array object, a primitive-array mismatch, and a
+/// primitive array cast to `Object[]`. A reference array (and a nested array)
+/// casts to `Object[]` and succeeds. Pinned against a real JDK by
+/// `diff_array_downcast`.
+#[test]
+fn a_bad_array_downcast_throws_class_cast_exception() {
+    let out = run_stdout(
+        r#"
+        public class M {
+            public static void main(String[] args) {
+                Object anInt = new int[] {1};
+                Object aStr = new String[] {"a"};
+                Object nested = new int[2][2];
+                Object plain = "hello";
+                report("wrongElem", anInt, 0);
+                report("nonArray", plain, 0);
+                report("primInvariant", anInt, 1);
+                report("refToObjectArr", aStr, 2);
+                report("primToObjectArr", anInt, 2);
+                report("nestedToObjectArr", nested, 2);
+            }
+            static void report(String label, Object o, int kind) {
+                try {
+                    if (kind == 0) { String[] x = (String[]) o; }
+                    else if (kind == 1) { long[] x = (long[]) o; }
+                    else { Object[] x = (Object[]) o; }
+                    System.out.println(label + ": ok");
+                } catch (ClassCastException e) {
+                    System.out.println(label + ": CCE");
+                }
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(
+        out,
+        "wrongElem: CCE\nnonArray: CCE\nprimInvariant: CCE\n\
+         refToObjectArr: ok\nprimToObjectArr: CCE\nnestedToObjectArr: ok\n"
+    );
+}

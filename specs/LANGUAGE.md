@@ -91,7 +91,13 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   where the brackets follow the name — `String args[]`, `int grid[][]`,
   fields, and locals — binding to that declarator alone, so `int a[], b;`
   makes only `a` an array (JLS §10.2); the legacy method form `int m()[]`
-  is not accepted. Reference `==`, and
+  is not accepted. Reference `==`, an array widened to `Object` (`(Object)
+arr`, or passed to an `Object` parameter) and cast back down (`(int[])
+obj`, `(String[]) obj`, `(int[][]) obj` — 2026-07-09; the primitive-array
+  forms did not parse before, the reference forms were rejected in codegen)
+  with a runtime `checkcast` that throws `ClassCastException` exactly as
+  the JVM does (a primitive array is invariant and is not `Object[]`; a
+  reference or nested array is), and
   `for (T x : array)` desugared to an indexed loop (element widening
   applies; `break`/`continue` work). Runtime exceptions use Java 11's
   wording: `ArrayIndexOutOfBoundsException: Index 5 out of bounds for

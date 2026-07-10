@@ -2043,6 +2043,20 @@ impl Parser<'_> {
     fn scan_cast_type(&self) -> Option<usize> {
         // self.pos is at `(`.
         let mut i = 1;
+        // A leading primitive keyword is an array-cast target here — a bare
+        // `(int) x` is handled by the dedicated primitive-cast arm, so this
+        // path exists for `(int[]) x`, `(double[][]) x`, and so on.
+        if matches!(self.peek_at(i), Some(TokenKind::Keyword(k)) if primitive_type_name(*k).is_some())
+        {
+            i += 1;
+            while matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == "[")
+                && matches!(self.peek_at(i + 1), Some(TokenKind::Symbol(s)) if *s == "]")
+            {
+                i += 2;
+            }
+            return matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == ")")
+                .then_some(i + 1);
+        }
         // A dotted name: Ident ('.' Ident)*.
         if !matches!(self.peek_at(i), Some(TokenKind::Identifier(_))) {
             return None;

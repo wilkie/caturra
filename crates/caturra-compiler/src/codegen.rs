@@ -10462,6 +10462,17 @@ impl BodyGen<'_> {
                 JType::Char
             }
             (JType::Char | JType::Byte | JType::Short, JType::Int) => JType::Int,
+            // Cast a reference down to an array type: `(int[]) obj`,
+            // `(String[]) obj`, `(int[][]) obj`. A runtime `checkcast` to the
+            // array's class descriptor (`[I`, `[Ljava/lang/String;`, `[[I`),
+            // which is the array's own name in the constant pool.
+            (JType::Null, JType::Array { .. }) => target,
+            (src, JType::Array { .. }) if src.is_reference() => {
+                let descriptor = target.descriptor(self.table);
+                let class_index = intern_class(self.pool, &descriptor);
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+                target
+            }
             (source, target) => {
                 self.error(
                     span,

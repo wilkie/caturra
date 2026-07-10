@@ -994,6 +994,13 @@ impl<'run> Interpreter<'run> {
                                 None => false,
                                 // Everything is an Object.
                                 Some(_) if target == "java/lang/Object" => true,
+                                // An array target (`[I`, `[Ljava/lang/String;`,
+                                // `[[I`): the reference must be an array whose
+                                // class is assignable to it.
+                                Some(reference) if target.starts_with('[') => {
+                                    intrinsics::array_class_name(&self.heap, reference)
+                                        .is_some_and(|actual| array_cast_ok(&actual, &target))
+                                }
                                 Some(reference) => match self.heap.get(reference) {
                                     Some(crate::value::HeapObject::Instance {
                                         class_name, ..
@@ -1026,16 +1033,22 @@ impl<'run> Interpreter<'run> {
                             } else {
                                 // checkcast: null always passes; a mismatch throws.
                                 if reference.is_some() && !matches_type {
-                                    let actual = match reference.and_then(|r| self.heap.get(r)) {
-                                        Some(crate::value::HeapObject::Instance {
-                                            class_name,
-                                            ..
-                                        }) => class_name.clone(),
-                                        Some(crate::value::HeapObject::JavaString(_)) => {
-                                            String::from("java/lang/String")
-                                        }
-                                        _ => String::from("<object>"),
-                                    };
+                                    let actual = reference
+                                        .and_then(|r| {
+                                            intrinsics::array_class_name(&self.heap, r).or_else(
+                                                || match self.heap.get(r) {
+                                                    Some(crate::value::HeapObject::Instance {
+                                                        class_name,
+                                                        ..
+                                                    }) => Some(class_name.clone()),
+                                                    Some(crate::value::HeapObject::JavaString(
+                                                        _,
+                                                    )) => Some(String::from("java/lang/String")),
+                                                    _ => None,
+                                                },
+                                            )
+                                        })
+                                        .unwrap_or_else(|| String::from("<object>"));
                                     return Err(VmError::UncaughtException(format!(
                                         "java.lang.ClassCastException: class {actual} cannot be cast \
                                  to class {target}"
@@ -5769,6 +5782,17 @@ fn class_name_of(class: &ClassFile) -> &str {
         .constant_pool
         .get_class_name(class.this_class)
         .unwrap_or_default()
+}
+
+/// Whether a value whose array class is `actual` casts to the array target
+/// `target` (JVMS checkcast on arrays). Exact match always; and any reference
+/// array — a reference-element `[L…;` or a nested `[[…` — is-a `Object[]`, but
+/// a primitive-element array (`[I`) is not.
+fn array_cast_ok(actual: &str, target: &str) -> bool {
+    if actual == target {
+        return true;
+    }
+    target == "[Ljava/lang/Object;" && (actual.starts_with("[L") || actual.starts_with("[["))
 }
 
 /// The JVM class descriptor of an array whose ELEMENT class is `element`,

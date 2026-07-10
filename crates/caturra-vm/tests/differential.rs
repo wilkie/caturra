@@ -6057,6 +6057,60 @@ public class DiffLambdaListElement {
 "
 );
 
+differential_test!(
+    diff_array_downcast,
+    "DiffArrayDowncast",
+    r#"
+public class DiffArrayDowncast {
+    public static void main(String[] args) {
+        // `(T[]) obj` parses and casts back to the exact array type.
+        Object oi = new int[] {1, 2, 3};
+        int[] i = (int[]) oi;
+        System.out.println(i[2]);
+
+        Object os = new String[] {"x", "y"};
+        String[] s = (String[]) os;
+        System.out.println(s[1]);
+
+        Object og = new int[2][3];
+        int[][] g = (int[][]) og;
+        System.out.println(g.length + " " + g[0].length);
+
+        Object od = new double[] {1.5};
+        System.out.println(((double[]) od)[0]);
+
+        // `(int[]) null` is null.
+        Object on = null;
+        int[] n = (int[]) on;
+        System.out.println(n == null);
+
+        // Covariance and its limits, all at run time.
+        Object anInt = new int[] {1};
+        Object aStr = new String[] {"a"};
+        Object nested = new int[2][2];
+        Object plain = "hello";
+        report("wrongElem", () -> { String[] x = (String[]) anInt; });
+        report("nonArray", () -> { int[] x = (int[]) plain; });
+        report("primInvariant", () -> { long[] x = (long[]) anInt; });
+        report("refToObjectArr", () -> { Object[] o = (Object[]) aStr; });
+        report("primToObjectArr", () -> { Object[] o = (Object[]) anInt; });
+        report("nestedToObjectArr", () -> { Object[] o = (Object[]) nested; });
+    }
+
+    interface Attempt { void run(); }
+
+    static void report(String label, Attempt a) {
+        try {
+            a.run();
+            System.out.println(label + ": ok");
+        } catch (ClassCastException e) {
+            System.out.println(label + ": CCE");
+        }
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
