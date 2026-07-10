@@ -325,8 +325,10 @@ null` is the way to test for absence, and unboxing an absent value
     it compared every pair of user objects as equal and so silently left
     the list alone. A class that declares no `compareTo` throws
     `ClassCastException`, which is what javac would have refused to
-    compile in the first place: caturra's `sort` accepts any list, the
-    one place it is more permissive than javac here. Pinned by
+    compile in the first place: caturra's `sort` accepts any list. So do
+    `max`/`min` and `binarySearch` — the three places `Collections` is
+    more permissive than javac, listed under
+    [Divergences from javac](#divergences-from-javac). Pinned by
     `diff_collections_sort_uses_compare_to`.
   - `Collections.reverse`/`swap`/`shuffle`/`max`/`min`/`frequency`/
     `nCopies` (2026-07-09). `reverse`, `swap` and `shuffle` are bundled
@@ -704,6 +706,73 @@ Everything else parses into a not-yet-supported diagnostic with recovery, so a
 file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
+
+## Divergences from javac
+
+The one-directional rule: **anything that compiles in caturra must also
+compile on a real JDK 11.** Being stricter is safe — a student sees the
+error here instead of later. Being more permissive is not: that code runs
+in the playground and fails on a JDK. Every known case in both directions
+is enumerated below, and each is pinned by a test in
+`crates/caturra-vm/tests/differential.rs` that runs a live `javac` — so a
+case cannot silently change direction, and neither list can grow unnoticed.
+
+**Stricter than javac** (caturra rejects; javac accepts). Each
+`stricter_than_javac!` test fails if javac ever starts rejecting the
+program, which would mean it is a shared rule rather than a strictness:
+
+- `System.arraycopy("a", 0, intArray, 0, 1)` — javac's parameters are
+  `Object`; caturra's are arrays.
+- `new StringBuilder().capacity()` — capacity is an implementation detail
+  of a growable buffer caturra does not model.
+- `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`
+  and throws `ArrayStoreException` at run time.
+- `Arrays.sort(new Plain[2])` where `Plain` is not `Comparable` — javac
+  throws `ClassCastException` at run time.
+- `Collections.frequency(list, wrongType)` — javac's parameter is `Object`
+  and it answers 0.
+- `list.containsAll(otherOfADifferentElementType)` — likewise `Collection<?>`.
+- `Collections.addAll(List<Integer>, new Integer[] {1})` — caturra reads a
+  lone array as the varargs array only for a reference element type.
+
+**More permissive than javac** (caturra accepts; javac rejects). This is
+the dangerous direction, so the list is short and each entry throws
+`ClassCastException` at run time rather than passing silently. Each
+`looser_than_javac!` test fails if caturra ever starts rejecting the
+program — at which point delete the entry rather than leave it passing:
+
+- `Collections.sort(new ArrayList<Plain>())`
+- `Collections.max(new ArrayList<Plain>())`
+- `Collections.binarySearch(new ArrayList<Plain>(), new Plain())`
+
+where `Plain` does not implement `Comparable`. caturra's `Collections`
+takes any list, because it has no bound to check against.
+
+**Reject wording.** `reject_wording_tracks_javac` pins both javac's
+headline and caturra's message for 19 rejected programs, so the two are
+compared rather than remembered. Most of caturra's messages are javac's
+headline plus the detail javac prints on its `symbol:`/`location:`
+continuation lines. The deliberate exceptions, each recorded with its
+reason in the table:
+
+- Where javac has a **single** candidate it says `cannot be applied to
+given types` or reports converting the argument; caturra says
+  `no suitable method found` uniformly (`Math.multiplyFull`,
+  `System.arraycopy` arity, `Collections.unmodifiableList`).
+- Where javac reports **overload resolution** failing across many
+  overloads, caturra names the offending argument, which is what a
+  student needs (`Arrays.fill(int[], String)`, `Collections.addAll`,
+  `Collections.binarySearch(List<Integer>, String)`).
+- `Arrays.copyOf(String[], 2)` assigned to `int[]`: javac explains its
+  generic inference; caturra names the two array types.
+- `int[] c = {1,,2}`: javac says `illegal start of expression`, caturra
+  `expected an expression` — a parser message, not a library one.
+
+**Known gap, unfixed.** A fully qualified `java.util.Arrays.fill(...)` or
+`java.util.Collections.sort(...)` in _expression_ position does not
+resolve (`cannot find symbol: 'java.util'`), though `java.lang.Math.abs(...)`
+does and `java.util.Scanner` in a _type_ position does. caturra rejecting
+valid Java is the safe direction, so this is recorded rather than urgent.
 
 ## Codegen choices
 

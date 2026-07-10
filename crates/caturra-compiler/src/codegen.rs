@@ -7282,6 +7282,17 @@ impl BodyGen<'_> {
                     span,
                     format!("{class}.{method} exists in Java, but {reason}"),
                 );
+            } else if methods.iter().any(|m| m.name == method) {
+                // The name exists, so the symbol is found; no overload takes
+                // these arguments. javac says the same, and the instance-call
+                // path already did.
+                self.error(
+                    span,
+                    format!(
+                        "no suitable method found for {method}({}) in class {class}",
+                        describe_types(&arg_types, self.table)
+                    ),
+                );
             } else {
                 self.error(
                     span,
@@ -8099,7 +8110,7 @@ impl BodyGen<'_> {
         // to any list.
         if method == "emptyList" {
             if !args.is_empty() {
-                self.error(span, "Collections.emptyList takes 0 arguments");
+                self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             }
             let method_ref = intern_method_ref(
@@ -8115,7 +8126,7 @@ impl BodyGen<'_> {
         // not a list; its element type comes from the value.
         if method == "nCopies" {
             let [count, value] = args else {
-                self.error(span, "Collections.nCopies takes 2 arguments");
+                self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
             let count_ty = self.expr(count);
@@ -8159,23 +8170,14 @@ impl BodyGen<'_> {
             _ => unreachable!("caller checked method"),
         };
         if args.len() != want {
-            self.error(
-                span,
-                format!("Collections.{method} takes {want} argument(s)"),
-            );
+            self.no_suitable_library_method("Collections", method, args, span);
             return None;
         }
         let list_ty = self.type_of(&args[0]);
         let JType::List(elem) = list_ty else {
-            if list_ty != JType::Error {
-                self.error(
-                    args[0].span(),
-                    format!(
-                        "incompatible types: {} cannot be converted to List",
-                        list_ty.describe(self.table)
-                    ),
-                );
-            }
+            // javac reports this as overload resolution failing, not as one
+            // argument's type: `no suitable method found for max(int)`.
+            self.no_suitable_library_method("Collections", method, args, span);
             return None;
         };
         let element_ty = elem.base_type();
@@ -8362,8 +8364,15 @@ impl BodyGen<'_> {
         Some(Some(ret))
     }
 
-    /// javac's wording when no `Arrays` overload matches the arguments.
-    fn no_suitable_arrays_method(&mut self, method: &str, args: &[Expr], span: SourceSpan) {
+    /// javac's wording when no overload of a bundled `java.util` helper takes
+    /// these arguments.
+    fn no_suitable_library_method(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) {
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             return;
@@ -8371,8 +8380,13 @@ impl BodyGen<'_> {
         let described = describe_types(&arg_types, self.table);
         self.error(
             span,
-            format!("no suitable method found for {method}({described}) in class Arrays"),
+            format!("no suitable method found for {method}({described}) in class {class}"),
         );
+    }
+
+    /// javac's wording when no `Arrays` overload matches the arguments.
+    fn no_suitable_arrays_method(&mut self, method: &str, args: &[Expr], span: SourceSpan) {
+        self.no_suitable_library_method("Arrays", method, args, span);
     }
 
     /// `Arrays.copyOf(a, n)`, `copyOfRange(a, from, to)`, `fill(a[, from, to], v)`

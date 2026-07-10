@@ -9099,7 +9099,7 @@ fn collections_helpers_reject_like_javac() {
     for (source, want) in [
         (
             "Collections.max(5);",
-            "incompatible types: int cannot be converted to List",
+            "no suitable method found for max(int) in class Collections",
         ),
         (
             "ArrayList<Integer> l = new ArrayList<Integer>(); Collections.shuffle(l, 5);",
@@ -9107,7 +9107,7 @@ fn collections_helpers_reject_like_javac() {
         ),
         (
             "ArrayList<Integer> l = new ArrayList<Integer>(); Collections.max(l, l);",
-            "Collections.max takes 1 argument(s)",
+            "no suitable method found for max(ArrayList<Integer>,ArrayList<Integer>) in class Collections",
         ),
     ] {
         let text = format!("import java.util.*; class M {{ static void r() {{ {source} }} }}");
@@ -9227,7 +9227,7 @@ fn collections_search_and_view_reject_like_javac() {
         ),
         (
             "Collections.unmodifiableList(5);",
-            "incompatible types: int cannot be converted to List",
+            "no suitable method found for unmodifiableList(int) in class Collections",
         ),
     ] {
         let text = format!("import java.util.*; class M {{ static void r() {{ {source} }} }}");
@@ -9419,11 +9419,11 @@ fn system_arraycopy_rejects_a_non_array() {
     for (source, want) in [
         (
             "int[] d = new int[2]; System.arraycopy(\"a\", 0, d, 0, 1);",
-            "cannot find symbol: method arraycopy(String,int,int[],int,int) in class System",
+            "no suitable method found for arraycopy(String,int,int[],int,int) in class System",
         ),
         (
             "int[] d = new int[2]; System.arraycopy(d, 0, d, 0);",
-            "cannot find symbol: method arraycopy(int[],int,int[],int) in class System",
+            "no suitable method found for arraycopy(int[],int,int[],int) in class System",
         ),
     ] {
         let text = format!("class M {{ static void r() {{ {source} }} }}");
@@ -9502,11 +9502,11 @@ fn math_and_random_additions_reject_like_javac() {
     for (source, want) in [
         (
             "long x = Math.multiplyFull(1L, 2L);",
-            "cannot find symbol: method multiplyFull(long,long) in class Math",
+            "no suitable method found for multiplyFull(long,long) in class Math",
         ),
         (
             "double x = Math.scalb(1.5, 3.0);",
-            "cannot find symbol: method scalb(double,double) in class Math",
+            "no suitable method found for scalb(double,double) in class Math",
         ),
         (
             "int[] b = new int[2]; new java.util.Random(1).nextBytes(b);",

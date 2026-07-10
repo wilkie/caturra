@@ -49,6 +49,42 @@ fn javac_rejects(class_name: &str, source: &str) -> bool {
     !compile.status.success()
 }
 
+/// javac's headline for the first error: what follows `error:` on its first
+/// line. `None` when javac accepts the program.
+fn javac_first_error(class_name: &str, source: &str) -> Option<String> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(source, &mut hasher);
+    let fingerprint = std::hash::Hasher::finish(&hasher);
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("wording-{class_name}-{fingerprint:x}"));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let java_file = dir.join(format!("{class_name}.java"));
+    std::fs::write(&java_file, source).expect("write source");
+    let compile = Command::new("javac")
+        .arg(java_file.file_name().expect("file name"))
+        .current_dir(&dir)
+        .output()
+        .expect("javac runs");
+    if compile.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&compile.stderr)
+        .lines()
+        .find_map(|line| line.split_once("error: ").map(|(_, rest)| rest.to_owned()))
+}
+
+/// caturra's first diagnostic. `None` when caturra accepts the program.
+fn caturra_first_error(class_name: &str, source: &str) -> Option<String> {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: format!("{class_name}.java"),
+        text: source.to_owned(),
+    }]);
+    compilation
+        .diagnostics
+        .first()
+        .map(|diagnostic| diagnostic.message.clone())
+}
+
 /// Both javac and caturra must refuse `source`.
 ///
 /// A `differential_test!` can only run a program javac accepts, so the suite
@@ -199,6 +235,60 @@ macro_rules! differential_reject {
                 return;
             }
             assert_both_reject($class, $source);
+        }
+    };
+}
+
+/// A program javac accepts and caturra refuses. caturra is deliberately
+/// stricter in a handful of places — always where javac's parameter is
+/// `Object` or an erased `Collection`, and the mismatch would only surface as
+/// a runtime `ClassCastException` or `ArrayStoreException`. Being stricter is
+/// safe (nothing that compiles here fails on a JDK), but it is a divergence,
+/// and this pins it so it cannot be widened or lost by accident.
+macro_rules! stricter_than_javac {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            assert!(
+                javac_first_error($class, $source).is_none(),
+                "javac rejects {}, so this is a shared rule, not a strictness",
+                $class
+            );
+            assert!(
+                caturra_first_error($class, $source).is_some(),
+                "caturra now accepts {} — the documented strictness is gone",
+                $class
+            );
+        }
+    };
+}
+
+/// A program javac refuses and caturra accepts. This is the direction that
+/// hurts: it compiles in the playground and fails on a real JDK. Every such
+/// case is listed here, so the list cannot grow unnoticed.
+macro_rules! looser_than_javac {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            assert!(
+                javac_first_error($class, $source).is_some(),
+                "javac accepts {}, so caturra accepting it is no divergence",
+                $class
+            );
+            assert!(
+                caturra_first_error($class, $source).is_none(),
+                "caturra now rejects {} — good; delete this test and the note \
+                 in LANGUAGE.md",
+                $class
+            );
         }
     };
 }
@@ -5109,4 +5199,287 @@ public class RejectFill {
     }
 }
 "#
+);
+
+// ---------------------------------------------------------------------------
+// Reject wording, checked against javac rather than against our own memory of
+// it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
+// caturra's drifts, the table says so.
+// ---------------------------------------------------------------------------
+
+/// How caturra's diagnostic relates to javac's headline for the same program.
+enum Wording {
+    /// Word for word.
+    Same,
+    /// javac's headline, plus the detail javac prints on its `symbol:` and
+    /// `location:` continuation lines.
+    Prefix,
+    /// Deliberately different, and why. Promoting one of these to `Prefix`
+    /// when caturra starts agreeing is the point of asserting it.
+    Differs(&'static str),
+}
+
+/// `(class, source, javac's headline, caturra's message, relation)`.
+const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
+    (
+        "WordAbsExact",
+        "public class WordAbsExact { static int r() { return Math.absExact(-5); } }",
+        "cannot find symbol",
+        "cannot find symbol: method absExact(int) in class Math",
+        Wording::Prefix,
+    ),
+    (
+        "WordNextIntRange",
+        "import java.util.Random;\npublic class WordNextIntRange { static int r() { return new Random(1).nextInt(2, 5); } }",
+        "no suitable method found for nextInt(int,int)",
+        "no suitable method found for nextInt(int,int) in class Random",
+        Wording::Prefix,
+    ),
+    (
+        "WordScalb",
+        "public class WordScalb { static double r() { return Math.scalb(1.5, 3.0); } }",
+        "no suitable method found for scalb(double,double)",
+        "no suitable method found for scalb(double,double) in class Math",
+        Wording::Prefix,
+    ),
+    (
+        "WordBooleanSearch",
+        "import java.util.Arrays;\npublic class WordBooleanSearch { static int r() { return Arrays.binarySearch(new boolean[] {true}, true); } }",
+        "no suitable method found for binarySearch(boolean[],boolean)",
+        "no suitable method found for binarySearch(boolean[],boolean) in class Arrays",
+        Wording::Prefix,
+    ),
+    (
+        "WordSearchArity",
+        "import java.util.Arrays;\npublic class WordSearchArity { static int r() { return Arrays.binarySearch(new int[2]); } }",
+        "no suitable method found for binarySearch(int[])",
+        "no suitable method found for binarySearch(int[]) in class Arrays",
+        Wording::Prefix,
+    ),
+    (
+        "WordFillArity",
+        "import java.util.Arrays;\npublic class WordFillArity { static void r() { Arrays.fill(new int[2], 0, 1); } }",
+        "no suitable method found for fill(int[],int,int)",
+        "no suitable method found for fill(int[],int,int) in class Arrays",
+        Wording::Prefix,
+    ),
+    (
+        "WordMax",
+        "import java.util.Collections;\npublic class WordMax { static void r() { Collections.max(5); } }",
+        "no suitable method found for max(int)",
+        "no suitable method found for max(int) in class Collections",
+        Wording::Prefix,
+    ),
+    (
+        "WordMaxArity",
+        "import java.util.*;\npublic class WordMaxArity { static void r() { ArrayList<Integer> l = new ArrayList<Integer>(); Collections.max(l, l); } }",
+        "no suitable method found for max(ArrayList<Integer>,ArrayList<Integer>)",
+        "no suitable method found for max(ArrayList<Integer>,ArrayList<Integer>) in class Collections",
+        Wording::Prefix,
+    ),
+    (
+        "WordDeepToString",
+        "import java.util.Arrays;\npublic class WordDeepToString { static String r() { return Arrays.deepToString(new int[] {1}); } }",
+        "incompatible types: int[] cannot be converted to Object[]",
+        "incompatible types: int[] cannot be converted to Object[]",
+        Wording::Same,
+    ),
+    (
+        "WordShuffle",
+        "import java.util.*;\npublic class WordShuffle { static void r() { Collections.shuffle(new ArrayList<Integer>(), 5); } }",
+        "incompatible types: int cannot be converted to Random",
+        "incompatible types: int cannot be converted to Random",
+        Wording::Same,
+    ),
+    (
+        "WordMultiplyFull",
+        "public class WordMultiplyFull { static long r() { return Math.multiplyFull(1L, 2L); } }",
+        "incompatible types: possible lossy conversion from long to int",
+        "no suitable method found for multiplyFull(long,long) in class Math",
+        Wording::Differs(
+            "javac has a single multiplyFull(int,int), so it reports converting \
+             the argument rather than resolving the overload",
+        ),
+    ),
+    (
+        "WordArrayCopyArity",
+        "public class WordArrayCopyArity { static void r() { int[] c = new int[2]; System.arraycopy(c, 0, c, 0); } }",
+        "method arraycopy in class System cannot be applied to given types;",
+        "no suitable method found for arraycopy(int[],int,int[],int) in class System",
+        Wording::Differs(
+            "javac has a single arraycopy, and words a lone mismatched candidate \
+             as `cannot be applied to given types`",
+        ),
+    ),
+    (
+        "WordUnmodifiable",
+        "import java.util.Collections;\npublic class WordUnmodifiable { static void r() { Collections.unmodifiableList(5); } }",
+        "method unmodifiableList in class Collections cannot be applied to given types;",
+        "no suitable method found for unmodifiableList(int) in class Collections",
+        Wording::Differs("as above: javac has a single candidate"),
+    ),
+    (
+        "WordFill",
+        "import java.util.Arrays;\npublic class WordFill { static void r() { Arrays.fill(new int[2], \"s\"); } }",
+        "no suitable method found for fill(int[],String)",
+        "incompatible types: String cannot be converted to int",
+        Wording::Differs(
+            "caturra names the offending argument, which is what the student \
+             needs; javac reports overload resolution failing across eighteen \
+             overloads",
+        ),
+    ),
+    (
+        "WordAddAll",
+        "import java.util.*;\npublic class WordAddAll { static void r() { ArrayList<Integer> l = new ArrayList<Integer>(); int[] v = {1}; Collections.addAll(l, v); } }",
+        "method addAll in class Collections cannot be applied to given types;",
+        "incompatible types: int[] cannot be converted to int",
+        Wording::Differs("as above: caturra names the argument"),
+    ),
+    (
+        "WordListSearch",
+        "import java.util.*;\npublic class WordListSearch { static int r() { ArrayList<Integer> l = new ArrayList<Integer>(); return Collections.binarySearch(l, \"x\"); } }",
+        "no suitable method found for binarySearch(ArrayList<Integer>,String)",
+        "incompatible types: String cannot be converted to int",
+        Wording::Differs("as above: caturra names the argument"),
+    ),
+    (
+        "WordCopyOf",
+        "import java.util.Arrays;\npublic class WordCopyOf { static void r() { String[] w = {\"a\"}; int[] x = Arrays.copyOf(w, 2); } }",
+        "incompatible types: inference variable T has incompatible bounds",
+        "incompatible types: String[] cannot be converted to int[]",
+        Wording::Differs(
+            "javac explains its generic inference; caturra names the two array \
+             types, which is the same fact without the machinery",
+        ),
+    ),
+    (
+        "WordNextBytes",
+        "import java.util.Random;\npublic class WordNextBytes { static void r() { new Random(1).nextBytes(new int[2]); } }",
+        "incompatible types: int[] cannot be converted to byte[]",
+        "no suitable method found for nextBytes(int[]) in class Random",
+        Wording::Differs(
+            "the mirror of `WordFill`: here javac names the argument and caturra \
+             reports the overload, because nextBytes is a bundled Java method \
+             and goes through user-method resolution",
+        ),
+    ),
+    (
+        "WordOmittedElement",
+        "public class WordOmittedElement { static void r() { int[] c = {1,,2}; } }",
+        "illegal start of expression",
+        "expected an expression",
+        Wording::Differs(
+            "a generic parser message, not a library one; changing it would touch \
+             every expression position",
+        ),
+    ),
+];
+
+/// caturra's reject wording, checked against javac's rather than against our
+/// own memory of it — the tests that assert these strings in isolation cannot
+/// tell you whether javac still says the same thing.
+#[test]
+fn reject_wording_tracks_javac() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    for (class_name, source, javac_headline, caturra_message, wording) in REJECT_WORDING {
+        let javac = javac_first_error(class_name, source);
+        assert_eq!(
+            javac.as_deref(),
+            Some(*javac_headline),
+            "javac's wording for {class_name} changed"
+        );
+        let caturra = caturra_first_error(class_name, source);
+        assert_eq!(
+            caturra.as_deref(),
+            Some(*caturra_message),
+            "caturra's wording for {class_name} changed"
+        );
+        match wording {
+            Wording::Same => assert_eq!(
+                caturra_message, javac_headline,
+                "{class_name} is recorded as Same"
+            ),
+            Wording::Prefix => assert!(
+                caturra_message.starts_with(javac_headline) && caturra_message != javac_headline,
+                "{class_name} is recorded as Prefix, but caturra's message does not \
+                 extend javac's headline"
+            ),
+            Wording::Differs(reason) => assert!(
+                !caturra_message.starts_with(javac_headline),
+                "{class_name} is recorded as Differs, but caturra now follows javac — \
+                 promote it to Prefix or Same. The recorded reason to differ was: {reason}"
+            ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where caturra and javac deliberately disagree. Both directions are asserted
+// against a live javac, so neither list can drift: a `stricter` case that
+// javac starts rejecting is no longer a strictness, and a `looser` case that
+// caturra starts rejecting should be deleted from the list, not left passing.
+// ---------------------------------------------------------------------------
+
+stricter_than_javac!(
+    strict_arraycopy_rejects_a_non_array_source,
+    "StrictArrayCopy",
+    "public class StrictArrayCopy { static void r() { int[] c = new int[2]; System.arraycopy(\"a\", 0, c, 0, 1); } }"
+);
+
+stricter_than_javac!(
+    strict_string_builder_has_no_capacity,
+    "StrictSbCapacity",
+    "public class StrictSbCapacity { static int r() { return new StringBuilder().capacity(); } }"
+);
+
+stricter_than_javac!(
+    strict_fill_checks_the_element_type_of_a_reference_array,
+    "StrictFillObjArr",
+    "import java.util.Arrays;\npublic class StrictFillObjArr { static void r() { Arrays.fill(new String[1], 5); } }"
+);
+
+stricter_than_javac!(
+    strict_array_sort_demands_a_comparable_element,
+    "StrictSortPlainArr",
+    "import java.util.Arrays;\nclass StrictPlainA {}\npublic class StrictSortPlainArr { static void r() { Arrays.sort(new StrictPlainA[2]); } }"
+);
+
+stricter_than_javac!(
+    strict_frequency_demands_the_lists_element_type,
+    "StrictFreqWrongType",
+    "import java.util.*;\npublic class StrictFreqWrongType { static int r() { return Collections.frequency(new ArrayList<Integer>(), \"x\"); } }"
+);
+
+stricter_than_javac!(
+    strict_contains_all_demands_the_lists_element_type,
+    "StrictContainsAllOther",
+    "import java.util.*;\npublic class StrictContainsAllOther { static boolean r() { return new ArrayList<Integer>().containsAll(new ArrayList<String>()); } }"
+);
+
+stricter_than_javac!(
+    strict_collections_add_all_takes_no_array,
+    "StrictAddAllBoxedArr",
+    "import java.util.*;\npublic class StrictAddAllBoxedArr { static void r() { Collections.addAll(new ArrayList<Integer>(), new Integer[] {1}); } }"
+);
+
+looser_than_javac!(
+    loose_sorting_a_list_of_non_comparables_throws_at_runtime,
+    "LooseSortPlainList",
+    "import java.util.*;\nclass LoosePlainA {}\npublic class LooseSortPlainList { static void r() { Collections.sort(new ArrayList<LoosePlainA>()); } }"
+);
+
+looser_than_javac!(
+    loose_max_of_a_list_of_non_comparables_throws_at_runtime,
+    "LooseMaxPlainList",
+    "import java.util.*;\nclass LoosePlainB {}\npublic class LooseMaxPlainList { static void r() { Collections.max(new ArrayList<LoosePlainB>()); } }"
+);
+
+looser_than_javac!(
+    loose_binary_search_of_a_list_of_non_comparables_throws_at_runtime,
+    "LooseBsPlainList",
+    "import java.util.*;\nclass LoosePlainC {}\npublic class LooseBsPlainList { static void r() { Collections.binarySearch(new ArrayList<LoosePlainC>(), new LoosePlainC()); } }"
 );

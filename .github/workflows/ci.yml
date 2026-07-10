@@ -54,7 +54,6 @@ jobs:
         env:
           CATURRA_REQUIRE_JDK: '1'
 
-
   web:
     name: Web (lint, types, unit, e2e)
     runs-on: ubuntu-latest
