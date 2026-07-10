@@ -1727,6 +1727,49 @@ fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, 
     Ok(None)
 }
 
+/// `2^n`, exactly, for `-1022 <= n <= 1023` — every such power is a normal
+/// `double`, so it is just an exponent field.
+fn power_of_two(exponent: i32) -> f64 {
+    f64::from_bits(u64::try_from(exponent + 1023).unwrap_or(0) << 52)
+}
+
+/// `Math.scalb(d, n)`: `d * 2^n`, rounded once. The JDK gets the single
+/// rounding by scaling in one small step and then in 512-sized ones, rather
+/// than by multiplying by `2^n` directly — which would round twice whenever
+/// the result underflows into the subnormals.
+fn java_scalb_double(value: f64, scale: i32) -> f64 {
+    // `Double.MAX_EXPONENT + -Double.MIN_EXPONENT + SIGNIFICAND_WIDTH + 1`:
+    // past this, the result is certainly zero or infinity.
+    const MAX_SCALE: i32 = 1023 + 1022 + 53 + 1;
+    let (mut scale, increment, delta) = if scale < 0 {
+        (scale.max(-MAX_SCALE), -512, power_of_two(-512))
+    } else {
+        (scale.min(MAX_SCALE), 512, power_of_two(512))
+    };
+    // The remainder of `scale` toward zero, in `[-511, 511]`.
+    let toward_zero = ((scale >> 8).cast_unsigned() >> 23).cast_signed();
+    let adjust = ((scale + toward_zero) & 511) - toward_zero;
+
+    let mut value = value * power_of_two(adjust);
+    scale -= adjust;
+    while scale != 0 {
+        value *= delta;
+        scale -= increment;
+    }
+    value
+}
+
+/// `Math.scalb(f, n)`. A `float` needs no staging: every scale that matters
+/// fits in one exact `double` multiply.
+fn java_scalb_float(value: f32, scale: i32) -> f32 {
+    // `Float.MAX_EXPONENT + -Float.MIN_EXPONENT + SIGNIFICAND_WIDTH + 1`.
+    const MAX_SCALE: i32 = 127 + 126 + 24 + 1;
+    let scale = scale.clamp(-MAX_SCALE, MAX_SCALE);
+    #[allow(clippy::cast_possible_truncation)]
+    let scaled = (f64::from(value) * power_of_two(scale)) as f32;
+    scaled
+}
+
 /// The wrapper class and the primitive behind a value, when it is boxed.
 fn unboxed(heap: &Heap, value: JValue) -> (Option<&str>, JValue) {
     if let JValue::Ref(Some(reference)) = value
@@ -2504,6 +2547,16 @@ fn math_static(
             let product = i128::from(*a) * i128::from(*b);
             #[allow(clippy::cast_possible_truncation)]
             Ok(Some(JValue::Long((product >> 64) as i64)))
+        }
+        // The exact 64-bit product of two ints, which `int * int` would wrap.
+        ("multiplyFull", [JValue::Int(a), JValue::Int(b)]) => {
+            Ok(Some(JValue::Long(i64::from(*a) * i64::from(*b))))
+        }
+        ("scalb", [JValue::Double(value), JValue::Int(scale)]) => {
+            d(java_scalb_double(*value, *scale))
+        }
+        ("scalb", [JValue::Float(value), JValue::Int(scale)]) => {
+            Ok(Some(JValue::Float(java_scalb_float(*value, *scale))))
         }
         ("abs", [JValue::Double(v)]) => d(v.abs()),
         ("sqrt", [JValue::Double(v)]) => d(v.sqrt()),

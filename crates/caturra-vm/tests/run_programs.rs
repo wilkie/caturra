@@ -9436,3 +9436,90 @@ fn system_arraycopy_rejects_a_non_array() {
         assert!(message.contains(want), "expected {want:?}, got: {message}");
     }
 }
+
+/// `Math.multiplyFull`, `Math.scalb` (both overloads) and `Random.nextBytes`.
+/// `scalb` scales in stages, as the JDK does, so a result that underflows into
+/// the subnormals is rounded once rather than twice. Cross-checked against a
+/// real JDK by `diff_math_multiply_full_and_scalb` and `diff_random_next_bytes`,
+/// which sweep every scale and every seed.
+#[test]
+fn math_multiply_full_scalb_and_random_next_bytes() {
+    let out = run_stdout(
+        r#"
+        import java.util.Arrays;
+        import java.util.Random;
+        public class M {
+            public static void main(String[] args) {
+                System.out.println(Math.multiplyFull(3, 4) + " "
+                        + Math.multiplyFull(Integer.MAX_VALUE, Integer.MAX_VALUE) + " "
+                        + (Integer.MAX_VALUE * Integer.MAX_VALUE));
+
+                System.out.println(Math.scalb(1.5, 3) + " " + Math.scalb(1.5, -3));
+                // One rounding, not two, on the way into the subnormals.
+                System.out.println(Math.scalb(1.5, -1074) + " " + Math.scalb(1.0, -1075)
+                        + " " + Math.scalb(4.9E-324, 1));
+                System.out.println(Math.scalb(1.0, 2000) + " " + Math.scalb(1.0, -2000)
+                        + " " + Math.scalb(-0.0, 5) + " " + Math.scalb(Double.NaN, 5));
+                System.out.println(Math.scalb(1.5f, 3) + " " + Math.scalb(1.5f, -150)
+                        + " " + Math.scalb(1.0f, 300));
+                // An int argument picks the more specific float overload.
+                System.out.println(Math.scalb(1, 3) == 8.0f);
+
+                byte[] five = new byte[5];
+                new Random(42).nextBytes(five);
+                System.out.println(Arrays.toString(five));
+                // Four bytes per draw, so the generator lands where Java's does.
+                Random shared = new Random(99);
+                byte[] three = new byte[3];
+                shared.nextBytes(three);
+                System.out.println(Arrays.toString(three) + " " + shared.nextInt(100));
+                byte[] none = new byte[0];
+                new Random(1).nextBytes(none);
+                System.out.println(Arrays.toString(none));
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(
+        out,
+        "12 4611686014132420609 1\n\
+         12.0 0.1875\n\
+         1.0E-323 0.0 1.0E-323\n\
+         Infinity 0.0 -0.0 NaN\n\
+         12.0 1.4E-45 Infinity\n\
+         true\n\
+         [53, -99, 65, -70, -9]\n\
+         [118, -6, -14] 58\n\
+         []\n"
+    );
+}
+
+/// These three reject what javac rejects: `multiplyFull` is int-only, `scalb`
+/// takes an `int` scale, and `nextBytes` takes a `byte[]`.
+#[test]
+fn math_and_random_additions_reject_like_javac() {
+    for (source, want) in [
+        (
+            "long x = Math.multiplyFull(1L, 2L);",
+            "cannot find symbol: method multiplyFull(long,long) in class Math",
+        ),
+        (
+            "double x = Math.scalb(1.5, 3.0);",
+            "cannot find symbol: method scalb(double,double) in class Math",
+        ),
+        (
+            "int[] b = new int[2]; new java.util.Random(1).nextBytes(b);",
+            "no suitable method found for nextBytes(int[]) in class Random",
+        ),
+    ] {
+        let text = format!("class M {{ static void r() {{ {source} }} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}

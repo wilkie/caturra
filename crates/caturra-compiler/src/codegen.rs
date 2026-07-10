@@ -3623,6 +3623,11 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("min", &[L, L], BRet::Long, "(JJ)J"),
     bm("toIntExact", &[L], BRet::Int, "(J)I"),
     bm("multiplyHigh", &[L, L], BRet::Long, "(JJ)J"),
+    bm("multiplyFull", &[I, I], BRet::Long, "(II)J"),
+    // The float overload comes first: for an `int` argument both apply, and
+    // javac picks the more specific `float`.
+    bm("scalb", &[F, I], BRet::Float, "(FI)F"),
+    bm("scalb", &[D, I], BRet::Double, "(DI)D"),
 ];
 
 const INTEGER_METHODS: &[BuiltinMethod] = &[

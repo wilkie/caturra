@@ -58,6 +58,23 @@ class Random {
 
   // The polar (Marsaglia) method, which is what java.util.Random uses: it makes
   // two values at a time, so the second is cached.
+  // Fills the array with random bytes, four per next(32) draw, low byte first
+  // — so a seeded Random replays the JDK's exact bytes.
+  public void nextBytes(byte[] bytes) {
+    int i = 0;
+    int len = bytes.length;
+    while (i < len) {
+      int rnd = nextInt();
+      int n = Math.min(len - i, 4);
+      while (n > 0) {
+        bytes[i] = (byte) rnd;
+        i++;
+        rnd >>= 8;
+        n--;
+      }
+    }
+  }
+
   public double nextGaussian() {
     if (__haveNextGaussian) {
       __haveNextGaussian = false;

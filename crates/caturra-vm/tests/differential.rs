@@ -4750,3 +4750,98 @@ public class DiffArrayCopy {
 }
 "#
 );
+
+differential_test!(
+    diff_math_multiply_full_and_scalb,
+    "DiffScalb",
+    r#"
+public class DiffScalb {
+    public static void main(String[] args) {
+        // multiplyFull keeps the whole 64-bit product that `int * int` wraps.
+        System.out.println(Math.multiplyFull(3, 4) + " " + Math.multiplyFull(-3, 4));
+        System.out.println(Math.multiplyFull(Integer.MAX_VALUE, Integer.MAX_VALUE)
+                + " " + (Integer.MAX_VALUE * Integer.MAX_VALUE));
+        System.out.println(Math.multiplyFull(Integer.MIN_VALUE, Integer.MIN_VALUE));
+
+        System.out.println(Math.scalb(1.5, 3) + " " + Math.scalb(1.5, -3) + " " + Math.scalb(1.5, 0));
+        // Underflow into the subnormals must round exactly once.
+        System.out.println(Math.scalb(1.5, -1074) + " " + Math.scalb(1.0, -1074)
+                + " " + Math.scalb(1.0, -1075) + " " + Math.scalb(4.9E-324, 1));
+        System.out.println(Math.scalb(1.0, 2000) + " " + Math.scalb(1.0, -2000)
+                + " " + Math.scalb(-1.0, 2000));
+        System.out.println(Math.scalb(1.0, 1023) + " " + Math.scalb(1.0, 1024)
+                + " " + Math.scalb(Double.MAX_VALUE, 1));
+        System.out.println(Math.scalb(0.0, 5) + " " + Math.scalb(-0.0, 5)
+                + " " + Math.scalb(Double.NaN, 5) + " " + Math.scalb(Double.POSITIVE_INFINITY, -5));
+        System.out.println(Math.scalb(1.5f, 3) + " " + Math.scalb(1.5f, -150)
+                + " " + Math.scalb(1.0f, 300) + " " + Math.scalb(1.4E-45f, 1)
+                + " " + Math.scalb(1.0f, -300));
+        // An `int` argument: both overloads apply, and the more specific
+        // `float` one wins, in caturra as in javac.
+        System.out.println(Math.scalb(1, 3) + " " + (Math.scalb(1, 3) == 8.0f));
+
+        // Every scale, over values spanning normals, subnormals and overflow.
+        long hash = 1469598103934665603L;
+        double[] values = {1.0, 1.5, 0.1, 3.7e-300, 1.7e300, 4.9E-324, 2.2250738585072014E-308, -7.25, 1e-310};
+        for (int v = 0; v < values.length; v++) {
+            for (int n = -1100; n <= 1100; n++) {
+                hash = (hash ^ Double.doubleToLongBits(Math.scalb(values[v], n))) * 1099511628211L;
+            }
+        }
+        float[] floats = {1.0f, 1.5f, 0.1f, 3.7e-38f, 1.7e38f, 1.4E-45f, -7.25f};
+        for (int v = 0; v < floats.length; v++) {
+            for (int n = -300; n <= 300; n++) {
+                hash = (hash ^ Float.floatToIntBits(Math.scalb(floats[v], n))) * 1099511628211L;
+            }
+        }
+        System.out.println(hash);
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_random_next_bytes,
+    "DiffNextBytes",
+    r#"
+import java.util.Arrays;
+import java.util.Random;
+
+public class DiffNextBytes {
+    public static void main(String[] args) {
+        byte[] five = new byte[5];
+        new Random(42).nextBytes(five);
+        System.out.println(Arrays.toString(five));
+        byte[] eight = new byte[8];
+        new Random(7).nextBytes(eight);
+        System.out.println(Arrays.toString(eight));
+        byte[] none = new byte[0];
+        new Random(1).nextBytes(none);
+        byte[] one = new byte[1];
+        new Random(1).nextBytes(one);
+        System.out.println(Arrays.toString(none) + " " + Arrays.toString(one));
+
+        // The draws advance the same generator, four bytes per next(32).
+        Random shared = new Random(99);
+        byte[] three = new byte[3];
+        shared.nextBytes(three);
+        System.out.println(Arrays.toString(three) + " " + shared.nextInt(100));
+
+        // Every seed and length, bytes and the generator's resulting state.
+        long hash = 1469598103934665603L;
+        for (int seed = 0; seed < 40; seed++) {
+            for (int length = 0; length <= 17; length++) {
+                byte[] bytes = new byte[length];
+                Random random = new Random(seed);
+                random.nextBytes(bytes);
+                for (int i = 0; i < length; i++) {
+                    hash = (hash ^ bytes[i]) * 1099511628211L;
+                }
+                hash = (hash ^ random.nextInt()) * 1099511628211L;
+            }
+        }
+        System.out.println(hash);
+    }
+}
+"#
+);

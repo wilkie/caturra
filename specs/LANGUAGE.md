@@ -176,7 +176,12 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     `nextAfter`/`fma`/`IEEEremainder`/`getExponent`, `floorDiv`/
     `floorMod` with Java's negative semantics, the `xxxExact` family
     throwing `ArithmeticException: integer overflow` (`absExact` is Java
-    15 and so is absent), plus `PI`/`E`
+    15 and so is absent), `multiplyHigh`/`multiplyFull` (2026-07-09,
+    the whole 64-bit product `int * int` would wrap), `scalb` for both
+    `double` and `float` (2026-07-09 — scaled in stages, as the JDK
+    does, so a result that underflows into the subnormals is rounded
+    once rather than twice; an `int` argument picks the more specific
+    `float` overload, in caturra as in javac), plus `PI`/`E`
     (`round` returns int, not long — the classroom idiom is
     `(int) Math.round(x)` anyway; transcendentals may differ from a
     given JVM by 1 ulp on irrational results, as JVMs differ among
@@ -187,9 +192,12 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
     JVM's sequence: `new Random(42).nextInt()` is `-1170105035` here as
     it is there, and two `Random`s with the same seed agree. `setSeed`,
     `nextInt`/`nextInt(bound)` (both the power-of-two and rejection
-    branches), `nextLong`, `nextDouble`, `nextFloat`, `nextBoolean` and
-    `nextGaussian` (the polar method, caching its second value) all
-    match, pinned by `diff_random_seeded_sequences` against a real JDK.
+    branches), `nextLong`, `nextDouble`, `nextFloat`, `nextBoolean`,
+    `nextBytes` (2026-07-09 — four bytes per draw, low byte first, so
+    the generator lands where Java's does) and `nextGaussian` (the
+    polar method, caching its second value) all match, pinned by
+    `diff_random_seeded_sequences` and `diff_random_next_bytes` against
+    a real JDK.
     `nextGaussian` may differ in the last ulp because it goes through
     `Math.log` (above). An unseeded `new Random()` draws its seed from
     `Math.random()`, so it is reproducible in tests and entropic in the
