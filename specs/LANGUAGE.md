@@ -143,9 +143,17 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   slot of the class that declared the `Field`, and the debugger names a
   field by its declaring class only when the name is actually hidden.
   Pinned against a real JDK by `diff_field_hiding` and
-  `diff_field_hiding_with_reflection`. `super.field` is still unsupported
-  (call a method instead); `protected` currently behaves like public (no
-  packages).
+  `diff_field_hiding_with_reflection`.
+  **`super.field`** (2026-07-09) reads and writes the slot the superclass
+  sees, including `super.n = v`, `super.n += 3` and `super.n++`. Fields do
+  not dispatch, so that is all it means: the receiver is `this` and only
+  the lookup moves up — from the superclass, walking further only if it
+  must, so in `C extends B extends A` where both `A` and `B` declare `n`,
+  `super.n` in `C` is `B`'s. javac's wording for the three refusals is
+  matched: `n has private access in A`, `non-static variable super cannot
+be referenced from a static context`, and `cannot find symbol` when the
+  class has no superclass. Pinned by `diff_super_field_access`.
+  `protected` currently behaves like public (no packages).
 
 - **The class library** (stage 7, intrinsics per SCOPE.md):
   - The full Java 11 `String` API over UTF-16 (2026-07-03), because

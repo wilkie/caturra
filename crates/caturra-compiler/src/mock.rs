@@ -614,6 +614,6 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 f(e);
             }
         }
-        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
+        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }

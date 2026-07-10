@@ -2717,11 +2717,17 @@ impl Parser<'_> {
                 }
                 let (method, method_span) = self.expect_ident("after 'super.'")?;
                 if !self.at_symbol("(") {
-                    self.error_at(
-                        method_span,
-                        "super field access is not supported by caturra (call a method instead)",
-                    );
-                    return Err(Abort);
+                    // `super.field` — a field access whose receiver is `this`
+                    // but whose lookup starts at the superclass.
+                    let span = SourceSpan {
+                        start: start.start,
+                        end: method_span.end,
+                    };
+                    return Ok(Expr::Field {
+                        object: Box::new(Expr::Super { span: start }),
+                        name: method,
+                        span,
+                    });
                 }
                 let args = self.arguments()?;
                 Ok(Expr::SuperMethodCall {
@@ -3377,7 +3383,7 @@ fn erase_in_expr(
                 }
             }
         }
-        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
+        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
 

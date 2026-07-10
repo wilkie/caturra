@@ -520,7 +520,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         | Expr::MethodRef { .. }
         | Expr::Literal { .. }
         | Expr::Name { .. }
-        | Expr::This { .. } => {}
+        | Expr::This { .. }
+        | Expr::Super { .. } => {}
     }
 }
 

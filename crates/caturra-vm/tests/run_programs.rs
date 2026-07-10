@@ -10003,3 +10003,81 @@ fn the_debugger_qualifies_a_hidden_field_and_only_a_hidden_field() {
         "an unhidden field keeps its plain name: {sub}"
     );
 }
+
+/// `super.field` reads and writes the field the SUPERCLASS sees. Fields are
+/// not virtual, so that is all it means: the receiver is `this`, and only the
+/// lookup moves up. Supported since 2026-07-09 — the parser used to refuse it
+/// outright, and could not have done otherwise while the heap merged a hidden
+/// field with the one it hid. Pinned against a real JDK by
+/// `diff_super_field_access`.
+#[test]
+fn super_field_reads_and_writes_the_superclasss_slot() {
+    let out = run_stdout(
+        r#"
+        class A { protected int n = 1; protected String s = "a"; }
+        class B extends A {
+            int n = 2;
+            int viaSuper() { return super.n; }
+            void setSuper(int v) { super.n = v; }
+            void bumpSuper() { super.n += 5; super.n++; }
+            String cat() { return super.s + super.n; }
+            int all() { return super.n + this.n + n; }
+            int lenOfSuperField() { return super.s.length(); }
+        }
+        class C extends B { int n = 3; int cSuper() { return super.n; } }
+        public class M {
+            public static void main(String[] args) {
+                B b = new B();
+                System.out.println(b.viaSuper() + " " + b.n);
+                b.setSuper(9);
+                System.out.println(b.viaSuper() + " " + b.n);
+                b.bumpSuper();
+                System.out.println(b.viaSuper());
+                System.out.println(b.cat());
+                System.out.println(b.all());
+                System.out.println(b.lenOfSuperField());
+                C c = new C();
+                System.out.println(c.cSuper() + " " + c.n + " " + ((A) c).n);
+            }
+        }
+        "#,
+        "M",
+    );
+    // `super.n` in C is B's `n` (2), not A's (1): the lookup starts at the
+    // superclass and walks up only if it must.
+    assert_eq!(out, "1 2\n9 2\n15\na15\n19\n1\n2 3 1\n");
+}
+
+/// The three ways `super.field` is refused, in javac's wording. Pinned against
+/// a real javac by `reject_super_field_*` and `reject_wording_tracks_javac`.
+#[test]
+fn super_field_rejects_like_javac() {
+    for (source, want) in [
+        (
+            "class A { private int n = 1; } class B extends A { int f() { return super.n; } }",
+            "n has private access in A",
+        ),
+        (
+            "class A { protected int n = 1; } \
+             class B extends A { static int f() { return super.n; } }",
+            "non-static variable super cannot be referenced from a static context",
+        ),
+        (
+            "class B { int n = 1; int f() { return super.n; } }",
+            "cannot find symbol: field 'n' in class Object",
+        ),
+        (
+            "class A { int q = 1; } class B extends A { int f() { return super.zz; } }",
+            "cannot find symbol: field 'zz' in class A",
+        ),
+    ] {
+        let text = format!("{source} class M {{ static void r() {{}} }}");
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text,
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
+}

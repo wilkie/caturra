@@ -5447,6 +5447,70 @@ public class DiffHidingReflect {
 "#
 );
 
+differential_test!(
+    diff_super_field_access,
+    "DiffSuperField",
+    r#"
+class SupA {
+    protected int n = 1;
+    protected String s = "a";
+}
+
+class SupB extends SupA {
+    // Hides `n`. `super.n` is SupA's field; `n` and `this.n` are SupB's.
+    int n = 2;
+    int viaSuper() { return super.n; }
+    void setSuper(int v) { super.n = v; }
+    void bumpSuper() { super.n += 5; super.n++; }
+    String cat() { return super.s + super.n; }
+    int all() { return super.n + this.n + n; }
+    int lenOfSuperField() { return super.s.length(); }
+}
+
+// `super.n` resolves from the SUPERCLASS upward: SupC's super is SupB,
+// which declares its own `n`, so it is SupB's — not SupA's.
+class SupC extends SupB {
+    int n = 3;
+    int cSuper() { return super.n; }
+}
+
+public class DiffSuperField {
+    public static void main(String[] args) {
+        SupB b = new SupB();
+        System.out.println(b.viaSuper() + " " + b.n);
+        b.setSuper(9);
+        System.out.println(b.viaSuper() + " " + b.n);
+        b.bumpSuper();
+        System.out.println(b.viaSuper());
+        System.out.println(b.cat());
+        System.out.println(b.all());
+        System.out.println(b.lenOfSuperField());
+
+        SupC c = new SupC();
+        System.out.println(c.cSuper() + " " + c.n + " " + ((SupB) c).n + " " + ((SupA) c).n);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_super_field_that_is_private,
+    "RejectSuperPrivate",
+    "class RSPa { private int n = 1; }\nclass RSPb extends RSPa { int f() { return super.n; } }\npublic class RejectSuperPrivate { static void r() {} }"
+);
+
+differential_reject!(
+    reject_super_field_in_a_static_context,
+    "RejectSuperStatic",
+    "class RSSa { protected int n = 1; }\nclass RSSb extends RSSa { static int f() { return super.n; } }\npublic class RejectSuperStatic { static void r() {} }"
+);
+
+differential_reject!(
+    reject_super_field_without_a_superclass,
+    "RejectSuperNone",
+    "class RSNb { int n = 1; int f() { return super.n; } }\npublic class RejectSuperNone { static void r() {} }"
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
@@ -5629,6 +5693,27 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "import java.util.*;\nclass WordPlainB {}\npublic class WordBsPlainList { static int r() { return Collections.binarySearch(new ArrayList<WordPlainB>(), new WordPlainB()); } }",
         "no suitable method found for binarySearch(ArrayList<WordPlainB>,WordPlainB)",
         "no suitable method found for binarySearch(ArrayList<WordPlainB>,WordPlainB) in class Collections",
+        Wording::Prefix,
+    ),
+    (
+        "WordSuperStatic",
+        "class WSSa { protected int n = 1; }\nclass WSSb extends WSSa { static int f() { return super.n; } }\npublic class WordSuperStatic { static void r() {} }",
+        "non-static variable super cannot be referenced from a static context",
+        "non-static variable super cannot be referenced from a static context",
+        Wording::Same,
+    ),
+    (
+        "WordSuperPrivate",
+        "class WSPa { private int n = 1; }\nclass WSPb extends WSPa { int f() { return super.n; } }\npublic class WordSuperPrivate { static void r() {} }",
+        "n has private access in WSPa",
+        "n has private access in WSPa",
+        Wording::Same,
+    ),
+    (
+        "WordSuperNoSuperclass",
+        "class WSNb { int n = 1; int f() { return super.n; } }\npublic class WordSuperNoSuperclass { static void r() {} }",
+        "cannot find symbol",
+        "cannot find symbol: field 'n' in class Object",
         Wording::Prefix,
     ),
     (

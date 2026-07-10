@@ -4907,6 +4907,17 @@ impl BodyGen<'_> {
         Some(short)
     }
 
+    /// The class `super` denotes: this class's superclass, or the implicit
+    /// `Object` when it declares none. A field then resolves from there
+    /// upward, which is what `super.n` means — the field the superclass
+    /// sees, not this class's field of the same name.
+    fn superclass_id(&self) -> ClassId {
+        self.table
+            .info_by_id(self.current_class_id)
+            .and_then(|info| info.superclass)
+            .unwrap_or(self.table.object_id)
+    }
+
     fn lookup(&mut self, name: &str) -> Option<&mut LocalVar> {
         self.scopes
             .iter_mut()
@@ -6300,9 +6311,12 @@ impl BodyGen<'_> {
     ) -> Option<(ClassId, FieldSig)> {
         let class_name = self.table.class_name(class_id).to_owned();
         let Some((owner, field)) = self.table.field(&class_name, name) else {
+            // `describe`, not the raw name: the top type is stored under its
+            // internal `java/lang/Object`, which must not reach a diagnostic.
+            let described = JType::Object(class_id).describe(self.table);
             self.error(
                 span,
-                format!("cannot find symbol: field '{name}' in class {class_name}"),
+                format!("cannot find symbol: field '{name}' in class {described}"),
             );
             return None;
         };
@@ -9084,6 +9098,13 @@ impl BodyGen<'_> {
                 }
                 _ => JType::Boolean,
             },
+            Expr::Super { .. } => {
+                if self.in_static {
+                    JType::Error
+                } else {
+                    JType::Object(self.superclass_id())
+                }
+            }
             Expr::This { .. } => {
                 if self.in_static {
                     JType::Error
@@ -9216,6 +9237,21 @@ impl BodyGen<'_> {
                 }
                 self.code.push_op(op::ALOAD_0, 1);
                 JType::Object(self.current_class_id)
+            }
+            // `super` as a field receiver: the object is `this`, but the
+            // lookup starts at the superclass. Fields are not virtual, so
+            // this is all `super.n` means. Never reached for
+            // `super.method(...)` — that is `Expr::SuperMethodCall`.
+            Expr::Super { span } => {
+                if self.in_static {
+                    self.error(
+                        *span,
+                        "non-static variable super cannot be referenced from a static context",
+                    );
+                    return JType::Error;
+                }
+                self.code.push_op(op::ALOAD_0, 1);
+                JType::Object(self.superclass_id())
             }
             Expr::NewObject {
                 class,

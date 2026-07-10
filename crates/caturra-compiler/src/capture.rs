@@ -425,7 +425,7 @@ fn find_in_expr(
                 }
             }
         },
-        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
+        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
 
@@ -672,7 +672,7 @@ fn free_in_expr(expr: &Expr, bound: &mut HashSet<String>, free: &mut HashSet<Str
                 }
             }
         },
-        Expr::Literal { .. } | Expr::This { .. } => {}
+        Expr::Literal { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
 
@@ -848,6 +848,6 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 f(e);
             }
         }
-        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
+        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }

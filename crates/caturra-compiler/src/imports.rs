@@ -685,7 +685,7 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
 
     fn expr(&mut self, expr: &Expr) {
         match expr {
-            Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } => {}
+            Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
             Expr::Call { receiver, args, .. } => {
                 if let Some(receiver) = receiver {
                     self.expr(receiver);

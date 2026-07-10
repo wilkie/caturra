@@ -429,6 +429,14 @@ pub enum Expr {
     This {
         span: SourceSpan,
     },
+    /// The receiver of `super.field` — never a value on its own. Typed as
+    /// the superclass, so a field resolves from there upward: with hiding,
+    /// `super.n` is the field the superclass sees, not this class's.
+    /// (`super.method(...)` is [`Expr::SuperMethodCall`]: methods dispatch,
+    /// fields do not.)
+    Super {
+        span: SourceSpan,
+    },
     /// `new ClassName(args)` / `new ArrayList<Integer>()`.
     NewObject {
         class: String,
@@ -503,6 +511,7 @@ impl Expr {
             | Expr::NewObject { span, .. }
             | Expr::InstanceOf { span, .. }
             | Expr::SuperMethodCall { span, .. }
+            | Expr::Super { span }
             | Expr::Ternary { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::MethodRef { span, .. }
