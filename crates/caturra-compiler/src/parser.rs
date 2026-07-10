@@ -625,6 +625,7 @@ impl Parser<'_> {
             name,
             is_public,
             is_nested: false,
+            enclosing: None,
             superclass,
             interfaces,
             is_abstract: is_abstract_modifier || is_interface,
@@ -2425,6 +2426,7 @@ impl Parser<'_> {
             name: name.clone(),
             is_public: false,
             is_nested: false,
+            enclosing: None,
             // The supertype is resolved to extends/implements by the
             // compiler (it knows which names are interfaces).
             superclass: Some(String::from(supertype)),
@@ -3118,6 +3120,7 @@ fn desugar_enum(
         is_enum: true,
         is_public: false,
         is_nested: false,
+        enclosing: None,
         is_anonymous: false,
         type_params: Vec::new(),
         fields: synth_fields,

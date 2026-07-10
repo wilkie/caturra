@@ -93,6 +93,10 @@ const REFLECT_LIB: &str = include_str!("stdlib/reflect.java");
 /// source references `Random`/`Collections`.
 const UTIL_LIB: &str = include_str!("stdlib/util.java");
 
+/// The erased `__BiConsumer` target type of a `Map.forEach` lambda,
+/// injected when a source calls `forEach`.
+const FUNCTION_LIB: &str = include_str!("stdlib/function.java");
+
 /// Bundled `org.code.validation` (test harness helpers), injected when a
 /// source imports it: `SystemOutTestRunner`, `ValidationHelper`, and the
 /// neighborhood log types.
@@ -439,6 +443,16 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         let (unit, mut errs) = parser::parse("<util>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<util>"), unit));
+    }
+    if sources.iter().any(|s| s.text.contains(".forEach("))
+        && !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))
+    {
+        let (tokens, _) = lexer::lex("<function>", FUNCTION_LIB);
+        let (unit, mut errs) = parser::parse("<function>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        units.push((String::from("<function>"), unit));
     }
     if imports_prefix(&units, &["org", "junit"]) {
         let (tokens, _) = lexer::lex("<junit>", JUNIT_LIB);

@@ -360,9 +360,13 @@ null` is the way to test for absence, and unboxing an absent value
     throws `NullPointerException` exactly where Java does. `get`,
     `containsKey` and `remove` are typed to `K` rather than Java's
     `Object`, which only rejects programs a JDK would accept (never the
-    reverse). Lambda members (`forEach`, `merge`, `compute*`,
-    `replaceAll`), `Map.of`, and mutation through a view report honest
-    reasons. `keySet`/`values`/`entrySet` and the core methods are
+    reverse). **`forEach((k, v) -> ...)`** works (2026-07-09): the lambda's
+    parameter types come from the receiver's declared type arguments — no
+    other target type in caturra is instantiated from its receiver — and
+    the VM walks the entries in the map's own iteration order. A receiver
+    with no declaration to read (`getMap().forEach(...)`) is refused, as
+    is `merge`/`compute*`/`replaceAll`, `Map.of`, and mutation through a
+    view; all report honest reasons. `keySet`/`values`/`entrySet` and the core methods are
     pinned against a real JDK by `diff_hash_map_iteration_order`,
     `_core_methods`, `_null_and_unboxing` and `_views`.
   - **`toString` is honoured wherever a value becomes text** (2026-07-09).
@@ -759,6 +763,20 @@ x)`) with type-parameter erasure — every type variable is rewritten
   Expression bodies become `return e;` (or `e;` for a void SAM); block
   bodies are used directly. A lambda in a position with no functional
   target type is reported.
+  `Map.forEach` is target-typed from its **receiver** (2026-07-09): the
+  synthesized class implements the bundled erased `__BiConsumer`, whose
+  `accept(Object, Object)` opens with the two casts javac puts in a bridge
+  method, so `(key, value)` have the map's declared types. Pinned by
+  `diff_map_for_each_lambda`.
+  A lambda's body sees the **static fields** of the class that created it
+  (2026-07-09). Hoisting the body to a top-level class loses the bare name;
+  Java resolves it through the enclosing class, and so does caturra —
+  shared state, not captured by value. Enclosing **instance** fields and
+  bare calls to enclosing methods are still out of reach, and capture of a
+  `StringBuilder` fails; all three report an error rather than misbehaving.
+  caturra also does not enforce that a captured local be effectively final,
+  so it accepts a lambda javac rejects — the one place lambdas are more
+  permissive than a JDK.
 
 - **Method references** (2026-07-04): all four kinds — static
   (`Integer::parseInt`), unbound instance (`String::length`, where the

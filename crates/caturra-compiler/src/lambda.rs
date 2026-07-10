@@ -51,6 +51,14 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                     other => Some(other.clone()),
                 })
                 .collect();
+            // The enclosing class's fields are in scope for target typing:
+            // `vocab.forEach(...)` needs `vocab`'s declared type args, and
+            // `vocab` is usually a field.
+            let fields: HashMap<String, TypeRef> = class
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.ty.clone()))
+                .collect();
             for (method, ret) in class.methods.iter_mut().zip(return_types) {
                 let params: HashMap<String, TypeRef> = method
                     .params
@@ -66,7 +74,7 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                     ret: ret.as_ref(),
                     new_classes: &mut new_classes,
                     counter: &mut counter,
-                    scope: vec![params],
+                    scope: vec![fields.clone(), params],
                 };
                 for stmt in &mut method.body {
                     desugar_stmt(stmt, &mut ctx);
@@ -446,6 +454,20 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if let Some(r) = receiver {
                 desugar_expr(r, None, ctx);
             }
+            // `map.forEach((k, v) -> ...)`: the SAM is the erased
+            // `__BiConsumer`, and the lambda's parameter types come from the
+            // RECEIVER's declared type arguments. No other target type in
+            // caturra is instantiated from its receiver, so this is its own
+            // rule rather than a case of the one below.
+            if method == "forEach"
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 2)
+                && let Some(r) = receiver.as_deref()
+                && let Some((key, value)) = map_type_args(r, ctx)
+            {
+                args[0] = build_bi_consumer_class(&mut args[0], &key, &value, ctx);
+                return;
+            }
             // Single-candidate method argument target typing.
             let param_types = ctx
                 .methods
@@ -626,6 +648,140 @@ fn interface_name(ty: &TypeRef) -> Option<&str> {
     }
 }
 
+/// The declared key and value types of a `Map`/`HashMap` receiver, read
+/// syntactically from the local, parameter or field it names. `getMap()
+/// .forEach(...)` has no declaration to read, so its lambda is left in place
+/// and codegen reports the honest "lambdas are not supported" it always did.
+fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
+    let ty = match receiver {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
+        // `this.vocab`
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)?
+        }
+        // `new HashMap<String, Integer>().forEach(...)` — the arguments are
+        // written right there.
+        Expr::NewObject {
+            class, type_args, ..
+        } if type_args.len() == 2 => TypeRef::Generic {
+            base: class.clone(),
+            args: type_args.clone(),
+        },
+        _ => return None,
+    };
+    let TypeRef::Generic { base, args } = ty else {
+        return None;
+    };
+    if (base != "Map" && base != "HashMap") || args.len() != 2 {
+        return None;
+    }
+    Some((args[0].clone(), args[1].clone()))
+}
+
+/// The lambda class for `map.forEach((k, v) -> ...)`. `__BiConsumer.accept`
+/// is erased to `(Object, Object)`, so the body opens with the two casts
+/// javac would put in a bridge method: `Double k = (Double) __k;`. The
+/// lambda's own parameter names then have the map's declared types.
+fn build_bi_consumer_class(
+    lambda: &mut Expr,
+    key: &TypeRef,
+    value: &TypeRef,
+    ctx: &mut Ctx,
+) -> Expr {
+    let Expr::Lambda { params, body, span } = lambda else {
+        unreachable!("guarded by caller");
+    };
+    let span = *span;
+    *ctx.counter += 1;
+    let name = format!("Lambda${}", ctx.counter);
+
+    let object = || TypeRef::Named(String::from("Object"));
+    let erased: Vec<Param> = ["__caturraKey", "__caturraValue"]
+        .iter()
+        .map(|n| Param {
+            ty: object(),
+            name: (*n).to_owned(),
+            is_varargs: false,
+        })
+        .collect();
+
+    // `K k = (K) __caturraKey;` and the same for the value.
+    let unwrap = |declared: &TypeRef, from: &str, to: &str| Stmt::LocalDecl {
+        ty: declared.clone(),
+        is_final: false,
+        declarators: vec![crate::ast::LocalDeclarator {
+            name: to.to_owned(),
+            init: Some(Expr::Cast {
+                ty: declared.clone(),
+                operand: Box::new(Expr::Name {
+                    path: vec![from.to_owned()],
+                    span,
+                }),
+                span,
+            }),
+            span,
+            extra_dims: 0,
+        }],
+        span,
+    };
+    let mut method_body = vec![
+        unwrap(key, "__caturraKey", &params[0].name),
+        unwrap(value, "__caturraValue", &params[1].name),
+    ];
+
+    match std::mem::replace(body, LambdaBody::Block(Vec::new())) {
+        LambdaBody::Expr(mut e) => {
+            desugar_expr(&mut e, None, ctx);
+            method_body.push(Stmt::Expr(*e));
+        }
+        LambdaBody::Block(mut stmts) => {
+            for stmt in &mut stmts {
+                desugar_stmt(stmt, ctx);
+            }
+            method_body.extend(stmts);
+        }
+    }
+
+    ctx.new_classes.push(ClassDecl {
+        name: name.clone(),
+        is_public: false,
+        is_nested: false,
+        enclosing: None,
+        superclass: None,
+        interfaces: vec![String::from("__BiConsumer")],
+        is_abstract: false,
+        is_interface: false,
+        is_enum: false,
+        is_anonymous: true,
+        type_params: Vec::new(),
+        fields: Vec::new(),
+        methods: vec![MethodDecl {
+            name: String::from("accept"),
+            is_static: false,
+            is_public: true,
+            is_private: false,
+            is_constructor: false,
+            is_abstract: false,
+            type_params: Vec::new(),
+            return_type: TypeRef::Void,
+            params: erased,
+            body: method_body,
+            annotations: Vec::new(),
+            span,
+        }],
+        init_blocks: Vec::new(),
+        nested: Vec::new(),
+        span,
+    });
+
+    Expr::NewObject {
+        class: name,
+        type_args: Vec::new(),
+        args: Vec::new(),
+        span,
+    }
+}
+
 /// Build the anonymous class for a lambda and the `new` expression that
 /// replaces it. Also recurses into the lambda body first so nested
 /// lambdas are handled.
@@ -696,6 +852,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         name: name.clone(),
         is_public: false,
         is_nested: false,
+        enclosing: None,
         superclass: None,
         interfaces: vec![interface.to_owned()],
         is_abstract: false,

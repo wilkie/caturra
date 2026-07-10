@@ -8328,10 +8328,6 @@ fn hash_map_iterates_and_boxes_like_the_jdk() {
 fn unsupported_map_members_explain_themselves() {
     for (source, want) in [
         (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().forEach((k, v) -> System.out.println(k)); } }",
-            "HashMap.forEach exists in Java, but lambdas are not supported by caturra",
-        ),
-        (
             "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().forEach(s -> System.out.println(s)); } }",
             "ArrayList.forEach exists in Java, but lambdas are not supported by caturra",
         ),
@@ -10429,4 +10425,150 @@ fn the_file_name_rule_spares_package_private_and_nested_types() {
         "M",
     );
     assert_eq!(out, "42\nGREEN\ninner\n");
+}
+
+/// `map.forEach((k, v) -> ...)` (2026-07-09), the last construct the Code.org
+/// corpus needed. The lambda's parameter types come from the RECEIVER's
+/// declared type arguments — no other target type in caturra is instantiated
+/// that way — and the synthesized class implements the bundled erased
+/// `__BiConsumer`, opening with the two casts javac would put in a bridge
+/// method. The VM walks the entries in the map's iteration order and calls
+/// `accept` through the same nested-call machinery `compareTo` uses. Pinned
+/// against a real JDK by `diff_map_for_each_lambda`.
+#[test]
+fn map_for_each_runs_a_lambda_over_every_entry() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.HashMap;
+        import java.util.Map;
+        public class M {
+            private HashMap<Double, String> vocab = new HashMap<Double, String>();
+            ArrayList<String> between(double low, double high) {
+                ArrayList<String> found = new ArrayList<String>();
+                vocab.forEach((key, value) -> {
+                    if (key > low && key < high) { found.add(value); }
+                });
+                return found;
+            }
+            public static void main(String[] args) {
+                M it = new M();
+                it.vocab.put(1.1, "alpha");
+                it.vocab.put(2.2, "beta");
+                it.vocab.put(3.3, "gamma");
+                System.out.println(it.between(1.0, 3.0));
+
+                Map<String, Integer> counts = new HashMap<String, Integer>();
+                counts.put("a", 1);
+                ArrayList<String> out = new ArrayList<String>();
+                counts.forEach((k, n) -> out.add(k + "=" + (n + 1)));
+                System.out.println(out);
+
+                new HashMap<String, String>().forEach((k, v) -> System.out.println("never"));
+                System.out.println("done");
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "[alpha, beta]\n[a=2]\ndone\n");
+}
+
+/// A lambda is hoisted to a top-level class, which loses sight of the
+/// enclosing class's STATIC fields. Java resolves them through the enclosing
+/// class, so caturra does too — and they are shared state, not captured by
+/// value: a later write is visible inside, and the lambda's writes are visible
+/// outside. Until 2026-07-09 this was `cannot find variable`. Pinned by
+/// `diff_lambda_reads_enclosing_static_field`.
+#[test]
+fn a_lambda_shares_the_enclosing_classs_static_fields() {
+    let out = run_stdout(
+        r#"
+        interface Action { void go(); }
+        public class M {
+            static int hits = 0;
+            public static void main(String[] args) {
+                Action read = () -> System.out.println("saw " + hits);
+                read.go();
+                hits = 7;
+                read.go();
+                Action write = () -> { hits = hits + 10; };
+                write.go();
+                System.out.println(hits);
+                write.go();
+                System.out.println(hits);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "saw 0\nsaw 7\n17\n27\n");
+}
+
+/// The enclosing-static fallback had to be added to `type_of` as well as to
+/// the emitter. With only the emitter taught, `hits = hits + 10` typed its
+/// right-hand side as `Error`, which silently dropped the read: the lambda
+/// stored `10` every time instead of accumulating. `type_of` and the emitter
+/// must agree — the fourth time that has bitten this codebase.
+#[test]
+fn type_of_agrees_with_the_emitter_on_an_enclosing_static_field() {
+    let out = run_stdout(
+        r#"
+        interface Action { void go(); }
+        public class M {
+            static int total = 5;
+            static String tag = "t";
+            public static void main(String[] args) {
+                Action a = () -> { total = total * 2; tag = tag + "!"; };
+                a.go();
+                a.go();
+                System.out.println(total + tag);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "20t!!\n");
+}
+
+/// `forEach` is refused where javac refuses it, and where caturra cannot read
+/// the receiver's type arguments it says so rather than guessing.
+#[test]
+fn map_for_each_rejects_what_it_cannot_target_type() {
+    for (source, want) in [
+        // javac: `int cannot be converted to BiConsumer`.
+        (
+            "import java.util.*; class M { static void r() { \
+             Map<String, Integer> m = new HashMap<String, Integer>(); m.forEach(5); } }",
+            "no suitable method found for forEach",
+        ),
+        // javac: `incompatible parameter types in lambda expression`.
+        (
+            "import java.util.*; class M { static void r() { \
+             Map<String, Integer> m = new HashMap<String, Integer>(); \
+             m.forEach(k -> System.out.println(k)); } }",
+            "only allowed where a functional-interface type is expected",
+        ),
+        // A receiver with no declaration to read: javac accepts, caturra does
+        // not — the safe direction, and it says which construct is missing.
+        (
+            "import java.util.*; class M { static Map<String, Integer> get() { return null; } \
+             static void r() { get().forEach((k, v) -> System.out.println(k)); } }",
+            "only allowed where a functional-interface type is expected",
+        ),
+        // `ArrayList.forEach` still reports its honest reason.
+        (
+            "import java.util.*; class M { static void r() { \
+             new ArrayList<String>().forEach(s -> System.out.println(s)); } }",
+            "ArrayList.forEach exists in Java, but lambdas are not supported by caturra",
+        ),
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        let message = &compilation.diagnostics[0].message;
+        assert!(message.contains(want), "expected {want:?}, got: {message}");
+    }
 }

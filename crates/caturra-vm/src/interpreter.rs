@@ -3340,6 +3340,10 @@ impl<'run> Interpreter<'run> {
                 }
                 return Ok(Answered::Void);
             }
+            ("forEach", [JValue::Ref(Some(consumer))]) => {
+                self.map_for_each(receiver, *consumer)?;
+                return Ok(Answered::Void);
+            }
             ("containsKey", [key]) => {
                 JValue::Int(i32::from(self.map_find(receiver, *key)?.is_some()))
             }
@@ -4314,6 +4318,42 @@ impl<'run> Interpreter<'run> {
             std::cmp::Ordering::Equal => 0,
             std::cmp::Ordering::Greater => 1,
         })
+    }
+
+    /// `map.forEach(consumer)`: call `accept(key, value)` on every entry, in
+    /// the map's iteration order. The consumer is a synthesized lambda class,
+    /// so this runs user Java from native code — the machinery `toString` and
+    /// `compareTo` already use.
+    ///
+    /// The entries are snapshotted first: a lambda that mutates the map would
+    /// otherwise invalidate the positions mid-walk. Java throws
+    /// `ConcurrentModificationException` there; caturra walks the snapshot,
+    /// the same deviation its for-each over a map already has.
+    fn map_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
+        let entries = match self.heap.get(receiver) {
+            Some(crate::value::HeapObject::HashMap(map)) => map.entries_in_order(),
+            _ => return Ok(()),
+        };
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        for (key, value) in entries {
+            let dispatched = self.user_virtual_dispatch(
+                consumer,
+                &class_name,
+                "accept",
+                "(Ljava/lang/Object;Ljava/lang/Object;)V",
+                &[key, value],
+            )?;
+            if let UserDispatch::Call(frame) = dispatched {
+                self.run_nested(frame)?;
+            }
+        }
+        Ok(())
     }
 
     /// `a.compareTo(b)` on a user object. The erased descriptor finds a

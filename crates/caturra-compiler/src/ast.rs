@@ -37,6 +37,10 @@ pub struct ClassDecl {
     /// file-name rule applies to top-level types only, so a `public static
     /// class Inner` is exempt.
     pub is_nested: bool,
+    /// For a synthesized anonymous/lambda class: the class whose method
+    /// created it. Hoisting to the top level loses sight of that class's
+    /// static fields, so name resolution falls back to them.
+    pub enclosing: Option<String>,
     /// `extends` clause (classes only; single inheritance).
     pub superclass: Option<String>,
     /// `implements` clause (or `extends` list for interfaces).

@@ -5761,6 +5761,98 @@ public class DiffSharedFile {
 "#
 );
 
+differential_test!(
+    diff_map_for_each_lambda,
+    "DiffMapForEach",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+
+public class DiffMapForEach {
+    private HashMap<Double, String> vocab = new HashMap<Double, String>();
+    private static int seen = 0;
+
+    // Captures two parameters and a local; the key arrives boxed and unboxes
+    // for the comparison, as it does under javac's bridge method.
+    ArrayList<String> between(double low, double high) {
+        ArrayList<String> found = new ArrayList<String>();
+        vocab.forEach((key, value) -> {
+            if (key > low && key < high) {
+                found.add(value);
+                seen = seen + 1;
+            }
+        });
+        return found;
+    }
+
+    public static void main(String[] args) {
+        DiffMapForEach it = new DiffMapForEach();
+        it.vocab.put(1.1, "alpha");
+        it.vocab.put(2.2, "beta");
+        it.vocab.put(3.3, "gamma");
+        System.out.println(it.between(1.0, 3.0));
+        System.out.println(seen);
+
+        // A local receiver and an expression lambda.
+        Map<String, Integer> counts = new HashMap<String, Integer>();
+        counts.put("a", 1);
+        counts.put("b", 2);
+        ArrayList<String> out = new ArrayList<String>();
+        counts.forEach((k, n) -> out.add(k + "=" + (n + 1)));
+        System.out.println(out);
+
+        // A `new` receiver carries its own type arguments.
+        new HashMap<String, String>().forEach((k, v) -> System.out.println("never"));
+
+        // The walk is in the map's own iteration order, not insertion order.
+        Map<Integer, String> order = new HashMap<Integer, String>();
+        for (int i = 0; i < 8; i++) order.put(i * 7, "v" + i);
+        order.forEach((k, v) -> System.out.print(k + ":" + v + " "));
+        System.out.println();
+
+        // An empty map calls nothing.
+        Map<String, String> empty = new HashMap<String, String>();
+        empty.forEach((k, v) -> System.out.println("never"));
+        System.out.println("done");
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_lambda_reads_enclosing_static_field,
+    "DiffLambdaStatic",
+    r#"
+interface Action {
+    void go();
+}
+
+public class DiffLambdaStatic {
+    static int hits = 0;
+    static String label = "n";
+
+    public static void main(String[] args) {
+        // A static field is shared, not captured by value: the lambda sees a
+        // later write, and its own writes are visible outside.
+        Action read = () -> System.out.println("saw " + hits + label);
+        read.go();
+        hits = 7;
+        label = "!";
+        read.go();
+
+        Action write = () -> {
+            hits = hits + 10;
+        };
+        write.go();
+        System.out.println(hits);
+        write.go();
+        System.out.println(hits);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

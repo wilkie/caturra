@@ -51,16 +51,29 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
                         .map(|p| (p.name.clone(), p.ty.clone()))
                         .collect(),
                 ];
-                find_in_stmts(&method.body, &mut scope, &anon_bodies, &mut found);
+                find_in_stmts(
+                    &method.body,
+                    &mut scope,
+                    &anon_bodies,
+                    &mut found,
+                    &class.name,
+                );
             }
             for block in &class.init_blocks {
                 let mut scope: Vec<HashMap<String, TypeRef>> = vec![HashMap::new()];
-                find_in_stmts(&block.body, &mut scope, &anon_bodies, &mut found);
+                find_in_stmts(
+                    &block.body,
+                    &mut scope,
+                    &anon_bodies,
+                    &mut found,
+                    &class.name,
+                );
             }
         }
     }
     let captures = found.captures;
     let super_args = found.super_args;
+    let owners = found.owner;
 
     // Phase 2a: synthesize the fields and constructor on each anon class that
     // captures locals or forwards args to super.
@@ -70,6 +83,18 @@ pub fn resolve_captures(units: &mut [(String, CompilationUnit)]) {
             let supers = super_args.get(&class.name).cloned().unwrap_or_default();
             if !caps.is_empty() || !supers.is_empty() {
                 add_capture_members(class, &caps, &supers);
+            }
+        }
+    }
+
+    // An anonymous class is hoisted to the top level, so a bare name that
+    // meant the ENCLOSING class's static field no longer resolves. Record the
+    // enclosing class; codegen falls back to its statics when a name is
+    // neither a local, a parameter, nor a member of the class itself.
+    for (_, unit) in units.iter_mut() {
+        for class in &mut unit.classes {
+            if let Some(owner) = owners.get(&class.name) {
+                class.enclosing = Some(owner.clone());
             }
         }
     }
@@ -171,6 +196,10 @@ type Scope = Vec<HashMap<String, TypeRef>>;
 struct Found {
     captures: HashMap<String, Vec<(String, TypeRef)>>,
     super_args: HashMap<String, Vec<TypeRef>>,
+    /// Anonymous class name -> the class whose method instantiates it. Its
+    /// static fields are in scope inside the body, but the hoisted class
+    /// cannot see them by bare name.
+    owner: HashMap<String, String>,
 }
 
 fn scope_lookup(scope: &Scope, name: &str) -> Option<TypeRef> {
@@ -215,10 +244,11 @@ fn find_in_stmts(
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
     out: &mut Found,
+    owner: &str,
 ) {
     scope.push(HashMap::new());
     for stmt in stmts {
-        find_in_stmt(stmt, scope, anon, out);
+        find_in_stmt(stmt, scope, anon, out, owner);
     }
     scope.pop();
 }
@@ -229,15 +259,16 @@ fn find_in_stmt(
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
     out: &mut Found,
+    owner: &str,
 ) {
     match stmt {
-        Stmt::Block(body) => find_in_stmts(body, scope, anon, out),
+        Stmt::Block(body) => find_in_stmts(body, scope, anon, out, owner),
         Stmt::LocalDecl {
             ty, declarators, ..
         } => {
             for d in declarators {
                 if let Some(init) = &d.init {
-                    find_in_expr(init, scope, anon, out);
+                    find_in_expr(init, scope, anon, out, owner);
                 }
                 // The variable is in scope for later statements.
                 if let Some(frame) = scope.last_mut() {
@@ -245,22 +276,22 @@ fn find_in_stmt(
                 }
             }
         }
-        Stmt::Expr(e) | Stmt::Throw { value: e, .. } => find_in_expr(e, scope, anon, out),
-        Stmt::Assign { value, .. } => find_in_expr(value, scope, anon, out),
-        Stmt::Return { value: Some(e), .. } => find_in_expr(e, scope, anon, out),
+        Stmt::Expr(e) | Stmt::Throw { value: e, .. } => find_in_expr(e, scope, anon, out, owner),
+        Stmt::Assign { value, .. } => find_in_expr(value, scope, anon, out, owner),
+        Stmt::Return { value: Some(e), .. } => find_in_expr(e, scope, anon, out, owner),
         Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
         Stmt::If {
             cond, then, els, ..
         } => {
-            find_in_expr(cond, scope, anon, out);
-            find_in_stmt(then, scope, anon, out);
+            find_in_expr(cond, scope, anon, out, owner);
+            find_in_stmt(then, scope, anon, out, owner);
             if let Some(e) = els {
-                find_in_stmt(e, scope, anon, out);
+                find_in_stmt(e, scope, anon, out, owner);
             }
         }
         Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
-            find_in_expr(cond, scope, anon, out);
-            find_in_stmt(body, scope, anon, out);
+            find_in_expr(cond, scope, anon, out, owner);
+            find_in_stmt(body, scope, anon, out, owner);
         }
         Stmt::For {
             init,
@@ -271,15 +302,15 @@ fn find_in_stmt(
         } => {
             scope.push(HashMap::new());
             if let Some(s) = init {
-                find_in_stmt(s, scope, anon, out);
+                find_in_stmt(s, scope, anon, out, owner);
             }
             if let Some(c) = cond {
-                find_in_expr(c, scope, anon, out);
+                find_in_expr(c, scope, anon, out, owner);
             }
             for s in update {
-                find_in_stmt(s, scope, anon, out);
+                find_in_stmt(s, scope, anon, out, owner);
             }
-            find_in_stmt(body, scope, anon, out);
+            find_in_stmt(body, scope, anon, out, owner);
             scope.pop();
         }
         Stmt::ForEach {
@@ -289,19 +320,19 @@ fn find_in_stmt(
             body,
             ..
         } => {
-            find_in_expr(iterable, scope, anon, out);
+            find_in_expr(iterable, scope, anon, out, owner);
             scope.push(HashMap::new());
             if let Some(frame) = scope.last_mut() {
                 frame.insert(name.clone(), ty.clone());
             }
-            find_in_stmt(body, scope, anon, out);
+            find_in_stmt(body, scope, anon, out, owner);
             scope.pop();
         }
         Stmt::Switch { selector, arms, .. } => {
-            find_in_expr(selector, scope, anon, out);
+            find_in_expr(selector, scope, anon, out, owner);
             for arm in arms {
                 for stmt in &arm.body {
-                    find_in_stmt(stmt, scope, anon, out);
+                    find_in_stmt(stmt, scope, anon, out, owner);
                 }
             }
         }
@@ -311,23 +342,23 @@ fn find_in_stmt(
             finally_body,
             ..
         } => {
-            find_in_stmts(body, scope, anon, out);
+            find_in_stmts(body, scope, anon, out, owner);
             for c in catches {
                 scope.push(HashMap::new());
                 if let Some(frame) = scope.last_mut() {
                     frame.insert(c.name.clone(), c.ty.clone());
                 }
-                find_in_stmts(&c.body, scope, anon, out);
+                find_in_stmts(&c.body, scope, anon, out, owner);
                 scope.pop();
             }
             if let Some(fin) = finally_body {
-                find_in_stmts(fin, scope, anon, out);
+                find_in_stmts(fin, scope, anon, out, owner);
             }
         }
-        Stmt::Labeled { body, .. } => find_in_stmt(body, scope, anon, out),
+        Stmt::Labeled { body, .. } => find_in_stmt(body, scope, anon, out, owner),
         Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
             for a in args {
-                find_in_expr(a, scope, anon, out);
+                find_in_expr(a, scope, anon, out, owner);
             }
         }
     }
@@ -338,17 +369,19 @@ fn find_in_expr(
     scope: &mut Scope,
     anon: &HashMap<String, ClassDecl>,
     out: &mut Found,
+    owner: &str,
 ) {
     match expr {
         Expr::NewObject { class, args, .. } => {
             for a in args {
-                find_in_expr(a, scope, anon, out);
+                find_in_expr(a, scope, anon, out, owner);
             }
             if let Some(body) = anon.get(class)
                 && !out.captures.contains_key(class)
             {
                 let caps = captures_of(body, scope);
                 out.captures.insert(class.clone(), caps);
+                out.owner.insert(class.clone(), owner.to_owned());
                 // These args (the ones the parser recorded) are the super-args;
                 // captured locals get appended later, in phase 2b.
                 if !args.is_empty() {
@@ -368,60 +401,60 @@ fn find_in_expr(
         }
         Expr::Call { receiver, args, .. } => {
             if let Some(r) = receiver {
-                find_in_expr(r, scope, anon, out);
+                find_in_expr(r, scope, anon, out, owner);
             }
             for a in args {
-                find_in_expr(a, scope, anon, out);
+                find_in_expr(a, scope, anon, out, owner);
             }
         }
         Expr::SuperMethodCall { args, .. } => {
             for a in args {
-                find_in_expr(a, scope, anon, out);
+                find_in_expr(a, scope, anon, out, owner);
             }
         }
         Expr::Binary { lhs, rhs, .. } => {
-            find_in_expr(lhs, scope, anon, out);
-            find_in_expr(rhs, scope, anon, out);
+            find_in_expr(lhs, scope, anon, out, owner);
+            find_in_expr(rhs, scope, anon, out, owner);
         }
         Expr::Unary { operand, .. }
         | Expr::Cast { operand, .. }
         | Expr::Field {
             object: operand, ..
         }
-        | Expr::InstanceOf { value: operand, .. } => find_in_expr(operand, scope, anon, out),
+        | Expr::InstanceOf { value: operand, .. } => find_in_expr(operand, scope, anon, out, owner),
         Expr::Index { array, index, .. } => {
-            find_in_expr(array, scope, anon, out);
-            find_in_expr(index, scope, anon, out);
+            find_in_expr(array, scope, anon, out, owner);
+            find_in_expr(index, scope, anon, out, owner);
         }
         Expr::Ternary {
             cond, then, els, ..
         } => {
-            find_in_expr(cond, scope, anon, out);
-            find_in_expr(then, scope, anon, out);
-            find_in_expr(els, scope, anon, out);
+            find_in_expr(cond, scope, anon, out, owner);
+            find_in_expr(then, scope, anon, out, owner);
+            find_in_expr(els, scope, anon, out, owner);
         }
-        Expr::IncDec { target, .. } => find_in_expr(target, scope, anon, out),
+        Expr::IncDec { target, .. } => find_in_expr(target, scope, anon, out, owner),
         Expr::NewArray { dims, init, .. } => {
             for d in dims.iter().flatten() {
-                find_in_expr(d, scope, anon, out);
+                find_in_expr(d, scope, anon, out, owner);
             }
             if let Some(elems) = init {
                 for e in elems {
-                    find_in_expr(e, scope, anon, out);
+                    find_in_expr(e, scope, anon, out, owner);
                 }
             }
         }
         Expr::ArrayLiteral { elements, .. } => {
             for e in elements {
-                find_in_expr(e, scope, anon, out);
+                find_in_expr(e, scope, anon, out, owner);
             }
         }
-        Expr::MethodRef { qualifier, .. } => find_in_expr(qualifier, scope, anon, out),
+        Expr::MethodRef { qualifier, .. } => find_in_expr(qualifier, scope, anon, out, owner),
         Expr::Lambda { body, .. } => match body {
-            LambdaBody::Expr(e) => find_in_expr(e, scope, anon, out),
+            LambdaBody::Expr(e) => find_in_expr(e, scope, anon, out, owner),
             LambdaBody::Block(stmts) => {
                 for s in stmts {
-                    find_in_stmt(s, scope, anon, out);
+                    find_in_stmt(s, scope, anon, out, owner);
                 }
             }
         },
