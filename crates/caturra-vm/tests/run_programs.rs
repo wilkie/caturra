@@ -10639,3 +10639,30 @@ fn an_effectively_final_local_is_captured_normally() {
     );
     assert_eq!(out, "11\n14\n50\n");
 }
+
+/// An array is a reference and widens to `Object` — `(Object) intArray` and
+/// passing an array to an `Object` parameter. A safe upcast, no runtime
+/// check. caturra rejected the explicit cast until 2026-07-09 ("int[] cannot
+/// be converted to Object"), the safe direction but valid Java. Pinned by
+/// `diff_array_widens_to_object`.
+#[test]
+fn an_array_widens_to_object() {
+    let out = run_stdout(
+        r#"
+        public class M {
+            static boolean isNull(Object o) { return o == null; }
+            public static void main(String[] args) {
+                int[] ints = {1, 2, 3};
+                Object o = (Object) ints;
+                System.out.println(o == ints);
+                System.out.println(isNull(ints));
+                String[] strings = {"a"};
+                Object o2 = (Object) strings;
+                System.out.println(o2 == strings);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "true\nfalse\ntrue\n");
+}

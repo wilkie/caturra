@@ -10225,6 +10225,12 @@ impl BodyGen<'_> {
                     );
                     return JType::Error;
                 }
+                // An array widens to `Object` — it is a reference, and every
+                // array is-a Object. A safe upcast, no runtime check, the
+                // value unchanged (the JVM leaves the reference on the stack).
+                JType::Array { .. } if target_id == self.table.object_id => {
+                    return target;
+                }
                 _ => {
                     self.error(
                         span,

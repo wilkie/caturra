@@ -5918,6 +5918,33 @@ public class DiffEffFinal {
 "
 );
 
+differential_test!(
+    diff_array_widens_to_object,
+    "DiffArrayToObject",
+    r#"
+public class DiffArrayToObject {
+    static String name(Object o) {
+        // Normalize the identity hash so the two JVMs agree.
+        String s = o.toString();
+        int at = s.indexOf("@");
+        return at < 0 ? s : s.substring(0, at);
+    }
+    public static void main(String[] args) {
+        int[] ints = {1, 2, 3};
+        Object o = (Object) ints;          // explicit widening
+        System.out.println(o == ints);
+        System.out.println(name(o));
+        String[] strings = {"a"};
+        System.out.println(name((Object) strings));
+        int[][] grid = {{1}};
+        System.out.println(name((Object) grid));
+        System.out.println(name(ints));    // implicit widening to an Object param
+        System.out.println(o.getClass().getName());
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
