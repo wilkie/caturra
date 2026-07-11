@@ -412,9 +412,26 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     behaviour — accepting it silently would be the dangerous direction) and
     writes through to its map on `remove`/`clear`, while a real `HashSet`
     performs them. `iterator`/`stream`/`removeIf` on a `Set` report honest
-    reasons. `TreeSet` stays unsupported (a sorted set is a different
-    structure). Pinned against a real JDK by `diff_hash_set_core`,
+    reasons. Pinned against a real JDK by `diff_hash_set_core`,
     `_integer_order`, `_bulk_ops` and `_keyset_bridge`.
+  - `TreeSet<E>` / `SortedSet<E>` / `NavigableSet<E>` (2026-07-10) — a **sorted**
+    set. Its elements are kept in an ordered vector, so iteration, `first`/
+    `last`, and the navigation methods read straight off it. Ordering is the
+    elements' **natural (`Comparable`) ordering**, a user `compareTo` included
+    — which also decides equality, so `compareTo == 0` deduplicates (two
+    people of the same age collapse to one, exactly as on a JVM). Methods:
+    `add`/`remove`/`contains`/`size`/`isEmpty`/`clear`/`addAll`/`containsAll`/
+    `forEach`, `first`/`last` (throw `NoSuchElementException` when empty),
+    `floor`(≤)/`ceiling`(≥)/`lower`(<)/`higher`(>) and `pollFirst`/`pollLast`
+    (all boxed, `null`/empty-safe), and for-each in sorted order. A `TreeSet`
+    widens to `Set`/`Collection`, and `new TreeSet<>(collection)` copies and
+    sorts. The `Comparator` constructor is modelled by the VM but not yet
+    reachable from source, because a user `java.util.Comparator` and an inline
+    comparator lambda in the constructor are not supported yet — a documented
+    limitation, the safe direction. `iterator`/`stream`/`removeIf` and the
+    range views (`headSet`/`tailSet`/`subSet`/`descendingSet`) report honest
+    reasons. Pinned against a real JDK by `diff_tree_set_core`,
+    `_strings_and_copy` and `_user_comparable`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a
@@ -570,9 +587,9 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     a `NullPointerException`. `lineSeparator()` is always `"\n"`: the
     JVM's is system-dependent, and caturra runs where a line ends with a
     newline. Pinned by `diff_system_arraycopy_and_line_separator`.
-  - A real Java 11 class caturra does not model (`TreeMap`, `TreeSet`,
-    `Stack`, `ArrayDeque`, `Iterator`, `Optional`, `BufferedReader`, ...)
-    reports an honest "java.util.TreeSet is not supported by caturra"
+  - A real Java 11 class caturra does not model (`TreeMap`, `Stack`,
+    `ArrayDeque`, `Iterator`, `Optional`, `BufferedReader`, ...)
+    reports an honest "java.util.Stack is not supported by caturra"
     **wherever it is written** (2026-07-09): a local or field declaration,
     a parameter, an array element, a type argument, `new`, `extends` and
     `implements`, qualified or not. Until then only `import` and `new`
@@ -583,14 +600,15 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     library one, and a genuine typo still gets `unknown type 'Frobnicator'`
     (blaming the type argument, not the `ArrayList` around it). javac
     accepts all of these, so this is deliberate strictness, pinned by
-    `strict_tree_set_is_refused_by_name` and
+    `strict_stack_is_refused_by_name` and
     `unmodeled_library_classes_explain_themselves_in_every_position`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
     an honest "not supported by caturra" instead), and using `Scanner`,
-    `ArrayList`, `HashMap`, `Map`, `Set`, `HashSet`, `LinkedList`, `Queue`,
-    `Deque`, `Collection`, `File`, or `PrintWriter` without the matching import
+    `ArrayList`, `HashMap`, `Map`, `Set`, `HashSet`, `TreeSet`, `LinkedList`,
+    `Queue`, `Deque`, `Collection`, `File`, or `PrintWriter` without the
+    matching import
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
     imports (`IOException`, ...) are accepted for `throws` clauses;

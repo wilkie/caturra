@@ -1753,6 +1753,7 @@ impl<'run> Interpreter<'run> {
     /// (returned as a frame to push) or intrinsic `<init>`s (handled
     /// inline, `None`).
     #[inline(never)]
+    #[allow(clippy::too_many_lines)] // user ctors + several intrinsic <init> forms
     fn invoke_special_op(
         &mut self,
         class: &ClassFile,
@@ -1815,6 +1816,45 @@ impl<'run> Interpreter<'run> {
                 *values = elements;
             }
             return Ok(None);
+        }
+        // `new TreeSet<>(comparator)` stores the comparator; `new TreeSet<>(c)`
+        // copies and sorts a collection. Both compare with user code, so they
+        // belong here.
+        if target_class == "java/util/TreeSet" {
+            use crate::value::HeapObject;
+            if descriptor == "(Ljava/util/Comparator;)V" {
+                let comparator = match args[0] {
+                    JValue::Ref(r) => r,
+                    _ => None,
+                };
+                if let Some(HeapObject::TreeSet {
+                    comparator: slot, ..
+                }) = self.heap.get_mut(receiver)
+                {
+                    *slot = comparator;
+                }
+                return Ok(None);
+            }
+            if descriptor == "(Ljava/util/Collection;)V" || descriptor == "(Ljava/util/SortedSet;)V"
+            {
+                let JValue::Ref(Some(source)) = args[0] else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                // A source TreeSet passes its comparator on; otherwise natural.
+                let comparator = self.tree_set_comparator(source);
+                if let Some(HeapObject::TreeSet {
+                    comparator: slot, ..
+                }) = self.heap.get_mut(receiver)
+                {
+                    *slot = comparator;
+                }
+                for element in self.collection_elements(source) {
+                    self.tree_set_add(receiver, element)?;
+                }
+                return Ok(None);
+            }
         }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         if classes.contains_key(&target_class) {
@@ -2195,6 +2235,8 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::HashSet(map)) => {
                 Renderable::View(map.entries_in_order(), MapViewKind::Keys)
             }
+            // A TreeSet prints its (already sorted) elements as `[a, b]`.
+            Some(HeapObject::TreeSet { values, .. }) => Renderable::List(values.clone()),
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
                 match self.heap.get(map) {
@@ -3029,6 +3071,7 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashMap(_)
                     | HeapObject::HashSet(_)
+                    | HeapObject::TreeSet { .. }
                     | HeapObject::MapView { .. }
                     | HeapObject::MapEntry { .. }
             )
@@ -3427,6 +3470,9 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::HashSet(_)) => {
                 return self.set_intrinsic(receiver, method_name, descriptor, args);
             }
+            Some(HeapObject::TreeSet { .. }) => {
+                return self.tree_set_intrinsic(receiver, method_name, descriptor, args);
+            }
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
                 return self.map_view_intrinsic(map, kind, method_name, descriptor, args);
@@ -3751,10 +3797,275 @@ impl<'run> Interpreter<'run> {
         Ok(())
     }
 
+    /// The comparator a `TreeSet` was built with (or `None` for natural
+    /// ordering), detached from the heap borrow.
+    fn tree_set_comparator(&self, set: HeapRef) -> Option<HeapRef> {
+        match self.heap.get(set) {
+            Some(crate::value::HeapObject::TreeSet { comparator, .. }) => *comparator,
+            _ => None,
+        }
+    }
+
+    /// The elements of a `TreeSet`, in sorted order (the vector is kept sorted).
+    fn tree_set_values(&self, set: HeapRef) -> Vec<JValue> {
+        match self.heap.get(set) {
+            Some(crate::value::HeapObject::TreeSet { values, .. }) => values.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `set.add(element)`: insert it in sorted position unless an equal element
+    /// (`compare == 0`) is already present. Reports whether the set changed.
+    fn tree_set_add(&mut self, set: HeapRef, element: JValue) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        let comparator = self.tree_set_comparator(set);
+        let values = self.tree_set_values(set);
+        let mut at = values.len();
+        for (index, existing) in values.iter().enumerate() {
+            let ordering = self.compare_with(element, *existing, comparator)?;
+            if ordering == 0 {
+                return Ok(false); // already present
+            }
+            if ordering < 0 {
+                at = index;
+                break;
+            }
+        }
+        if let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(set) {
+            values.insert(at, element);
+        }
+        Ok(true)
+    }
+
+    /// The index of the element equal to `probe` (`compare == 0`), if present.
+    fn tree_set_index_of(&mut self, set: HeapRef, probe: JValue) -> Result<Option<usize>, VmError> {
+        let comparator = self.tree_set_comparator(set);
+        for (index, existing) in self.tree_set_values(set).into_iter().enumerate() {
+            if self.compare_with(probe, existing, comparator)? == 0 {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `java.util.TreeSet`. The elements are kept sorted, so `first`/`last` and
+    /// the `floor`/`ceiling`/`lower`/`higher` navigation read straight off the
+    /// vector; membership and ordering compare with the set's `Comparator` or
+    /// the elements' natural ordering, both of which may run user code.
+    #[allow(clippy::too_many_lines)] // one method table
+    fn tree_set_intrinsic(
+        &mut self,
+        receiver: HeapRef,
+        method_name: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        use crate::value::HeapObject;
+        let len = self.tree_set_values(receiver).len();
+        let result = match (method_name, args) {
+            ("size", []) => JValue::Int(i32::try_from(len).unwrap_or(i32::MAX)),
+            ("isEmpty", []) => JValue::Int(i32::from(len == 0)),
+            ("clear", []) => {
+                if let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(receiver) {
+                    values.clear();
+                }
+                return Ok(Answered::Void);
+            }
+            ("add", [element]) => JValue::Int(i32::from(self.tree_set_add(receiver, *element)?)),
+            ("contains", [probe]) => JValue::Int(i32::from(
+                self.tree_set_index_of(receiver, *probe)?.is_some(),
+            )),
+            ("remove", [probe]) => {
+                let removed = match self.tree_set_index_of(receiver, *probe)? {
+                    Some(at) => {
+                        if let Some(HeapObject::TreeSet { values, .. }) =
+                            self.heap.get_mut(receiver)
+                        {
+                            values.remove(at);
+                        }
+                        true
+                    }
+                    None => false,
+                };
+                JValue::Int(i32::from(removed))
+            }
+            ("addAll", [JValue::Ref(Some(source))]) => {
+                let mut changed = false;
+                for element in self.collection_elements(*source) {
+                    changed |= self.tree_set_add(receiver, element)?;
+                }
+                JValue::Int(i32::from(changed))
+            }
+            ("containsAll", [JValue::Ref(Some(source))]) => {
+                let mut all = true;
+                for element in self.collection_elements(*source) {
+                    if self.tree_set_index_of(receiver, element)?.is_none() {
+                        all = false;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(all))
+            }
+            // The two ends. Empty throws `NoSuchElementException`.
+            ("first" | "last", []) => {
+                let values = self.tree_set_values(receiver);
+                let value = if method_name == "first" {
+                    values.first()
+                } else {
+                    values.last()
+                };
+                let Some(value) = value else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.util.NoSuchElementException",
+                    )));
+                };
+                *value
+            }
+            // Navigation: floor ≤ e, ceiling ≥ e, lower < e, higher > e; absent
+            // → null.
+            ("floor" | "ceiling" | "lower" | "higher", [probe]) => {
+                self.tree_set_navigate(receiver, method_name, *probe)?
+            }
+            ("pollFirst" | "pollLast", []) => {
+                let values = self.tree_set_values(receiver);
+                if values.is_empty() {
+                    JValue::NULL
+                } else {
+                    let at = if method_name == "pollFirst" {
+                        0
+                    } else {
+                        values.len() - 1
+                    };
+                    let value = values[at];
+                    if let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(receiver) {
+                        values.remove(at);
+                    }
+                    value
+                }
+            }
+            ("forEach", [JValue::Ref(Some(consumer))]) => {
+                self.tree_set_for_each(receiver, *consumer)?;
+                return Ok(Answered::Void);
+            }
+            // The enhanced-for accessor: the element at a sorted position.
+            ("__get", [JValue::Int(position)]) => {
+                let position = usize::try_from(*position).unwrap_or(usize::MAX);
+                let Some(value) = self.tree_set_values(receiver).get(position).copied() else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
+                    )));
+                };
+                value
+            }
+            ("equals", [JValue::Ref(other)]) => {
+                let Some(other) = *other else {
+                    return Ok(Answered::Value(JValue::Int(0)));
+                };
+                let ours = self.tree_set_values(receiver);
+                let mut equal = self.set_len(other) == ours.len();
+                if equal {
+                    for element in ours {
+                        if !self.set_contains_any(other, element)? {
+                            equal = false;
+                            break;
+                        }
+                    }
+                }
+                JValue::Int(i32::from(equal))
+            }
+            ("hashCode", []) => {
+                let mut sum = 0i32;
+                for element in self.tree_set_values(receiver) {
+                    sum = sum.wrapping_add(self.java_hash_code(element)?);
+                }
+                JValue::Int(sum)
+            }
+            _ => {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "TreeSet.{method_name}{descriptor}"
+                )));
+            }
+        };
+        Ok(Answered::Value(result))
+    }
+
+    /// `floor`/`ceiling`/`lower`/`higher` over the sorted vector.
+    fn tree_set_navigate(
+        &mut self,
+        set: HeapRef,
+        which: &str,
+        probe: JValue,
+    ) -> Result<JValue, VmError> {
+        let comparator = self.tree_set_comparator(set);
+        let mut best = JValue::NULL;
+        for candidate in self.tree_set_values(set) {
+            let ordering = self.compare_with(candidate, probe, comparator)?;
+            let matches = match which {
+                "floor" => ordering <= 0,
+                "lower" => ordering < 0,
+                "ceiling" => ordering >= 0,
+                "higher" => ordering > 0,
+                _ => false,
+            };
+            if matches {
+                // floor/lower want the greatest match (keep climbing); ceiling/
+                // higher want the least, so the first hit in sorted order wins.
+                if which == "ceiling" || which == "higher" {
+                    return Ok(candidate);
+                }
+                best = candidate;
+            }
+        }
+        Ok(best)
+    }
+
+    /// Whether a set (Tree or Hash) contains an element equal to `probe`.
+    fn set_contains_any(&mut self, set: HeapRef, probe: JValue) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        match self.heap.get(set) {
+            Some(HeapObject::TreeSet { .. }) => Ok(self.tree_set_index_of(set, probe)?.is_some()),
+            Some(HeapObject::HashSet(_)) => Ok(self.map_find(set, probe)?.is_some()),
+            _ => Ok(false),
+        }
+    }
+
+    /// The element count of a set (Tree or Hash).
+    fn set_len(&self, set: HeapRef) -> usize {
+        match self.heap.get(set) {
+            Some(crate::value::HeapObject::TreeSet { values, .. }) => values.len(),
+            _ => self.map_len(set),
+        }
+    }
+
+    /// `treeSet.forEach(consumer)`: call `accept` on each element in order.
+    fn tree_set_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
+        let elements = self.tree_set_values(receiver);
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        for element in elements {
+            let dispatched = self.user_virtual_dispatch(
+                consumer,
+                &class_name,
+                "accept",
+                "(Ljava/lang/Object;)V",
+                &[element],
+            )?;
+            if let UserDispatch::Call(frame) = dispatched {
+                self.run_nested(frame)?;
+            }
+        }
+        Ok(())
+    }
+
     /// The elements of any collection caturra can walk, in iteration order: an
-    /// `ArrayList` (or its unmodifiable view), a `HashSet`, or a map's
-    /// `keySet()`/`values()` view. Backs `addAll`/`removeAll`/`retainAll` and
-    /// the collection-copy constructor.
+    /// `ArrayList` (or its unmodifiable view), a `HashSet`, a `TreeSet`, or a
+    /// map's `keySet()`/`values()` view. Backs `addAll`/`removeAll`/`retainAll`
+    /// and the collection-copy constructors.
     fn collection_elements(&self, reference: HeapRef) -> Vec<JValue> {
         use crate::value::HeapObject;
         match self.heap.get(reference) {
@@ -3763,6 +4074,7 @@ impl<'run> Interpreter<'run> {
                 | HeapObject::LinkedList(_)
                 | HeapObject::UnmodifiableList(_),
             ) => self.list_items(reference),
+            Some(HeapObject::TreeSet { values, .. }) => values.clone(),
             Some(HeapObject::HashSet(entries)) => entries
                 .entries_in_order()
                 .into_iter()
@@ -4501,6 +4813,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
             Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
             Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
+            Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }

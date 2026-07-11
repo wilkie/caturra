@@ -73,6 +73,10 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/util/LinkedList" => Some(HeapObject::LinkedList(Vec::new())),
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
         "java/util/HashSet" => Some(HeapObject::HashSet(JavaHashMap::new())),
+        "java/util/TreeSet" => Some(HeapObject::TreeSet {
+            values: Vec::new(),
+            comparator: None,
+        }),
         "java/io/File" => Some(HeapObject::File(String::new())),
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),

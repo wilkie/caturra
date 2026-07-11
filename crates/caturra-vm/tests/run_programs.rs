@@ -8406,6 +8406,47 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// `java.util.TreeSet` keeps its elements sorted (natural / `Comparable`
+/// ordering), deduplicates by `compareTo == 0`, and answers the navigation
+/// methods off the sorted vector. Pinned JDK-free for CI; the byte-for-byte
+/// JDK match is in `differential.rs`.
+#[test]
+fn tree_set_keeps_elements_sorted() {
+    let out = run_stdout(
+        r#"
+        import java.util.TreeSet;
+        public class T {
+            public static void main(String[] args) {
+                TreeSet<Integer> t = new TreeSet<>();
+                t.add(5); t.add(1); t.add(3); t.add(1); t.add(9);
+                System.out.println(t);                              // [1, 3, 5, 9]
+                System.out.println(t.first() + " " + t.last());     // 1 9
+                System.out.println(t.floor(4) + " " + t.ceiling(4));// 3 5
+                System.out.println(t.lower(5) + " " + t.higher(5)); // 3 9
+                System.out.println(t.floor(0) + " " + t.ceiling(99));// null null
+                System.out.println(t.contains(3) + " " + t.remove(3));
+                System.out.println(t.pollFirst() + " " + t);        // 1 [5, 9]
+                int sum = 0;
+                for (int x : t) { sum += x; }
+                System.out.println(sum);                            // 14
+            }
+        }
+        "#,
+        "T",
+    );
+    assert_eq!(
+        out,
+        "[1, 3, 5, 9]\n\
+         1 9\n\
+         3 5\n\
+         3 9\n\
+         null null\n\
+         true true\n\
+         1 [5, 9]\n\
+         14\n"
+    );
+}
+
 /// `java.util.LinkedList` as a `Queue`/`Deque`/`List`: order matches a list's,
 /// the empty ends return `null` (poll/peek) or throw (remove), and the
 /// interface faces expose the right methods. Pinned JDK-free for CI; the
@@ -9824,26 +9865,23 @@ fn unresolvable_qualified_names_reject_like_javac() {
 fn unmodeled_library_classes_explain_themselves_in_every_position() {
     let reason = "is not supported by caturra";
     for (label, source) in [
-        (
-            "local",
-            "class M { static void r() { TreeSet<Integer> l; } }",
-        ),
-        ("raw local", "class M { static void r() { TreeSet l; } }"),
-        ("field", "class M { TreeSet<Integer> items; }"),
+        ("local", "class M { static void r() { Stack<Integer> l; } }"),
+        ("raw local", "class M { static void r() { Stack l; } }"),
+        ("field", "class M { Stack<Integer> items; }"),
         (
             "parameter",
-            "class M { static void f(TreeSet<Integer> l) {} }",
+            "class M { static void f(Stack<Integer> l) {} }",
         ),
-        ("array", "class M { static void r() { TreeSet[] l; } }"),
+        ("array", "class M { static void r() { Stack[] l; } }"),
         (
             "new",
-            "class M { static void r() { Object o = new TreeSet<Integer>(); } }",
+            "class M { static void r() { Object o = new Stack<Integer>(); } }",
         ),
-        ("extends", "class D extends TreeSet {} class M {}"),
+        ("extends", "class D extends Stack {} class M {}"),
         ("implements", "class D implements Iterator {} class M {}"),
         (
             "type argument",
-            "class M { static void r() { ArrayList<TreeSet> l; } }",
+            "class M { static void r() { ArrayList<Stack> l; } }",
         ),
         (
             "qualified",

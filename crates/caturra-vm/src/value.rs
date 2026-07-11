@@ -131,6 +131,15 @@ pub enum HeapObject {
     /// [`crate::map::JavaHashMap`] with each element stored as a key mapped to
     /// a placeholder value.
     HashSet(crate::map::JavaHashMap),
+    /// A `java.util.TreeSet` (element type erased): its elements kept in sorted
+    /// order, so iteration, `first`/`last` and the navigation methods read
+    /// straight off the vector. `comparator` is the `Comparator` instance the
+    /// set was built with, or `None` for natural (`Comparable`) ordering; both
+    /// may run user code, so all ordering lives in the interpreter.
+    TreeSet {
+        values: Vec<JValue>,
+        comparator: Option<HeapRef>,
+    },
     /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
     /// Java's are views too, so a later `put` shows through.
     MapView { map: HeapRef, kind: MapViewKind },

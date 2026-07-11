@@ -5266,9 +5266,9 @@ differential_reject!(
 );
 
 stricter_than_javac!(
-    strict_tree_set_is_refused_by_name,
-    "StrictTreeSet",
-    "import java.util.*;\npublic class StrictTreeSet { static void r() { TreeSet<Integer> s; } }"
+    strict_stack_is_refused_by_name,
+    "StrictStack",
+    "import java.util.*;\npublic class StrictStack { static void r() { Stack<Integer> s; } }"
 );
 
 differential_test!(
@@ -6526,6 +6526,112 @@ public class DiffHashSetKeys {
         keys.remove("b");
         System.out.println(m);
         System.out.println(m.containsKey("b"));
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
+// java.util.TreeSet — a sorted set. Iteration, first/last and the navigation
+// methods read off elements kept in sorted order (natural / Comparable).
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_tree_set_core,
+    "DiffTreeSetCore",
+    r#"
+import java.util.TreeSet;
+
+public class DiffTreeSetCore {
+    public static void main(String[] args) {
+        TreeSet<Integer> t = new TreeSet<>();
+        t.add(5); t.add(1); t.add(3); t.add(1); t.add(9); t.add(2);
+        System.out.println(t);                                 // [1, 2, 3, 5, 9]
+        System.out.println(t.size() + " " + t.isEmpty());
+        System.out.println(t.first() + " " + t.last());        // 1 9
+        System.out.println(t.floor(4) + " " + t.ceiling(4));   // 3 5
+        System.out.println(t.floor(3) + " " + t.ceiling(3));   // 3 3
+        System.out.println(t.lower(3) + " " + t.higher(3));    // 2 5
+        System.out.println(t.floor(0) + " " + t.ceiling(100)); // null null
+        System.out.println(t.lower(1) + " " + t.higher(9));    // null null
+        System.out.println(t.contains(3) + " " + t.contains(4));
+        System.out.println(t.remove(3) + " " + t.remove(4));
+        System.out.println(t);                                 // [1, 2, 5, 9]
+        System.out.println(t.pollFirst() + " " + t.pollLast());// 1 9
+        System.out.println(t);                                 // [2, 5]
+
+        int sum = 0;
+        for (int x : t) {
+            sum += x;
+        }
+        System.out.println(sum);                               // 7
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_tree_set_strings_and_copy,
+    "DiffTreeSetStr",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
+
+public class DiffTreeSetStr {
+    public static void main(String[] args) {
+        SortedSet<String> words = new TreeSet<>();
+        words.add("banana");
+        words.add("apple");
+        words.add("cherry");
+        words.add("apple");
+        System.out.println(words);              // [apple, banana, cherry]
+        System.out.println(words.first() + " " + words.last());
+
+        // Deduplicating sort of a list via the copy constructor.
+        List<Integer> raw = new ArrayList<>();
+        raw.add(4); raw.add(4); raw.add(2); raw.add(8); raw.add(2);
+        Set<Integer> sorted = new TreeSet<>(raw);
+        System.out.println(sorted + " " + sorted.size());  // [2, 4, 8] 3
+
+        // A TreeSet flows into a Set variable and is walked in sorted order.
+        Set<String> s = words;
+        StringBuilder sb = new StringBuilder();
+        for (String w : s) {
+            sb.append(w.charAt(0));
+        }
+        System.out.println(sb);                 // abc
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_tree_set_user_comparable,
+    "DiffTreeSetCmp",
+    r#"
+import java.util.TreeSet;
+
+public class DiffTreeSetCmp {
+    static class Person implements Comparable<Person> {
+        String name;
+        int age;
+        Person(String n, int a) { name = n; age = a; }
+        public int compareTo(Person o) { return Integer.compare(age, o.age); }
+        public String toString() { return name + "(" + age + ")"; }
+    }
+
+    public static void main(String[] args) {
+        TreeSet<Person> byAge = new TreeSet<>();
+        byAge.add(new Person("Carol", 30));
+        byAge.add(new Person("Alice", 25));
+        byAge.add(new Person("Bob", 35));
+        byAge.add(new Person("Dave", 25));      // equal age → dropped
+        System.out.println(byAge);              // [Alice(25), Carol(30), Bob(35)]
+        System.out.println(byAge.first() + " / " + byAge.last());
+        System.out.println(byAge.size());       // 3
     }
 }
 "#
