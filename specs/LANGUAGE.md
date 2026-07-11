@@ -787,7 +787,12 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
   `FileNotFoundException: path (No such file or directory)`,
   `new PrintWriter(path|file)` truncating on open and **writing
   through** (a kind deviation: output is durable even without
-  `close()`), and `throws` clauses parsed and ignored (checked
+  `close()`). A `PrintWriter` supports `print`/`println`/`printf`, and
+  (2026-07-11) `write(String)`/`write(int)` (the int is a single
+  character, not its decimal), `append(char)`/`append(CharSequence)`
+  and `format(...)` — `append` and `format` return the writer, so they
+  chain (`out.append('[').append(name).append(']')`). Also `throws`
+  clauses parsed and ignored (checked
   exceptions are not enforced). The host seeds and inspects files via
   the `JvmSession` VFS API, so JS ⇄ Java file exchange works.
 

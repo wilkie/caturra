@@ -2235,6 +2235,13 @@ fn file_method(
 
 /// `java.io.PrintWriter` methods: formatting matches `PrintStream`, but
 /// output appends to the writer's file in the virtual filesystem.
+/// The single character a `write(int)`/`append(char)` code denotes — its low 16
+/// bits, one UTF-16 code unit.
+fn char_from_code(code: i32) -> String {
+    let unit = u32::try_from(code & 0xFFFF).unwrap_or(0);
+    char::from_u32(unit).map(String::from).unwrap_or_default()
+}
+
 fn writer_method(
     heap: &mut Heap,
     vfs: &mut VirtualFileSystem,
@@ -2248,7 +2255,7 @@ fn writer_method(
         _ => unreachable!("receiver kind checked by caller"),
     };
     match method {
-        "printf" => {
+        "printf" | "format" => {
             let template = match args.first() {
                 Some(JValue::Ref(Some(reference))) => {
                     heap.string_text(*reference).unwrap_or_default()
@@ -2262,7 +2269,49 @@ fn writer_method(
             let text = crate::format::java_format(heap, &template, &format_args)?;
             vfs.append_file(&path, text.as_bytes())
                 .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            // `format` returns the writer for chaining; `printf` is void.
+            Ok((method == "format").then_some(JValue::Ref(Some(receiver))))
+        }
+        // `write(String)` writes the whole string; `write(int)` writes a single
+        // character (its low 16 bits).
+        "write" => {
+            let text = if descriptor.starts_with("(I)") {
+                match args.first() {
+                    Some(JValue::Int(code)) => char_from_code(*code),
+                    _ => String::new(),
+                }
+            } else {
+                match args.first() {
+                    Some(JValue::Ref(Some(reference))) => {
+                        heap.string_text(*reference).unwrap_or_default()
+                    }
+                    _ => String::new(),
+                }
+            };
+            vfs.append_file(&path, text.as_bytes())
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
             Ok(None)
+        }
+        // `append(char)` writes the character; `append(CharSequence)` the text
+        // (a null appends the four characters "null"). Returns the writer.
+        "append" => {
+            let text = if descriptor.starts_with("(C)") {
+                match args.first() {
+                    Some(JValue::Int(code)) => char_from_code(*code),
+                    _ => String::new(),
+                }
+            } else {
+                match args.first() {
+                    Some(JValue::Ref(Some(reference))) => {
+                        heap.string_text(*reference).unwrap_or_default()
+                    }
+                    Some(JValue::Ref(None)) => String::from("null"),
+                    _ => String::new(),
+                }
+            };
+            vfs.append_file(&path, text.as_bytes())
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(Some(JValue::Ref(Some(receiver))))
         }
         "print" | "println" => {
             let mut text = print_argument_text(heap, descriptor, args)?;

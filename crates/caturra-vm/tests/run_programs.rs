@@ -6568,6 +6568,40 @@ fn print_writer_writes_and_scanner_reads_back() {
     assert_eq!(out, "true scores.txt\n> Ada 95\n> Alan 88\n> 2\n");
 }
 
+/// `PrintWriter.write`/`append`/`format`: `write(String)` writes the text and
+/// `write(int)` a single character; `append` writes a char or text and returns
+/// the writer for chaining; `format` is `printf` that returns the writer.
+/// Pinned JDK-free; a live-JDK match is in `diff_print_writer_write_append`.
+#[test]
+fn print_writer_write_append_format() {
+    let out = run_stdout(
+        r#"
+        import java.io.File;
+        import java.io.PrintWriter;
+        import java.util.Scanner;
+        public class W {
+            public static void main(String[] args) throws Exception {
+                PrintWriter out = new PrintWriter("out.txt");
+                out.write("hello");
+                out.write(32);
+                out.write("world");
+                out.println();
+                out.append('A').append("BC").append('!');
+                out.println();
+                out.format("%d-%s", 42, "x").println();
+                out.printf("%.1f%n", 3.14);
+                out.close();
+
+                Scanner in = new Scanner(new File("out.txt"));
+                while (in.hasNextLine()) { System.out.println("> " + in.nextLine()); }
+            }
+        }
+        "#,
+        "W",
+    );
+    assert_eq!(out, "> hello world\n> ABC!\n> 42-x\n> 3.1\n");
+}
+
 #[test]
 fn scanner_file_tokenizing_and_file_ops() {
     let out = run_stdout(

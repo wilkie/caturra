@@ -3033,6 +3033,9 @@ enum BParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BRet {
     Void,
+    /// The `java.io.PrintWriter` itself — `append`/`format` return the writer
+    /// for chaining.
+    Writer,
     Int,
     Double,
     Long,
@@ -4566,6 +4569,35 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Char],
         ret: BRet::Void,
         descriptor: "(C)V",
+    },
+    // `write(String)` writes the whole string; `write(int)` writes a single
+    // character (its low 16 bits), NOT the decimal — the VM keys on the
+    // descriptor.
+    BuiltinMethod {
+        name: "write",
+        params: &[BParam::Str],
+        ret: BRet::Void,
+        descriptor: "(Ljava/lang/String;)V",
+    },
+    BuiltinMethod {
+        name: "write",
+        params: &[BParam::Int],
+        ret: BRet::Void,
+        descriptor: "(I)V",
+    },
+    // `append` returns the writer, for chaining. `append(char)` writes the
+    // character; `append(CharSequence)` writes the text.
+    BuiltinMethod {
+        name: "append",
+        params: &[BParam::Char],
+        ret: BRet::Writer,
+        descriptor: "(C)Ljava/io/PrintWriter;",
+    },
+    BuiltinMethod {
+        name: "append",
+        params: &[BParam::Str],
+        ret: BRet::Writer,
+        descriptor: "(Ljava/lang/String;)Ljava/io/PrintWriter;",
     },
     BuiltinMethod {
         name: "close",
@@ -6242,6 +6274,7 @@ fn pick_builtin<'m>(
 fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
+        BRet::Writer => Some(JType::Writer),
         BRet::Int => Some(JType::Int),
         BRet::Double => Some(JType::Double),
         BRet::Long => Some(JType::Long),
@@ -9391,14 +9424,21 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
-        if receiver_ty == JType::Writer && method == "printf" {
+        if receiver_ty == JType::Writer && matches!(method, "printf" | "format") {
             let (tags, width) = self.emit_format_varargs(args, span)?;
-            let descriptor = format!("(Ljava/lang/String;{tags})V");
+            // `printf` returns void; `format` returns the writer (for chaining).
+            let (ret_desc, ret_width, ret_ty) = if method == "format" {
+                ("Ljava/io/PrintWriter;", 1, Some(JType::Writer))
+            } else {
+                ("V", 0, None)
+            };
+            let descriptor = format!("(Ljava/lang/String;{tags}){ret_desc}");
             let method_ref =
-                intern_method_ref(self.pool, "java/io/PrintWriter", "printf", &descriptor);
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
+                intern_method_ref(self.pool, "java/io/PrintWriter", method, &descriptor);
+            self.code
+                .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
             self.code.drop_stack(1 + width);
-            return Some(None);
+            return Some(ret_ty);
         }
         // Method.invoke(Object receiver, Object... args): pack the trailing
         // varargs into an Object[] (autoboxing primitives).

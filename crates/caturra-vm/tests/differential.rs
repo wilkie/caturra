@@ -854,6 +854,38 @@ public class DiffScan {
     );
 }
 
+// PrintWriter.write / append / format — write(String) writes text, write(int)
+// a single character; append writes a char or text and returns the writer for
+// chaining; format is printf returning the writer.
+differential_test!(
+    diff_print_writer_write_append,
+    "DiffPrintWriter",
+    r#"
+import java.io.File;
+import java.io.PrintWriter;
+import java.util.Scanner;
+
+public class DiffPrintWriter {
+    public static void main(String[] args) throws Exception {
+        PrintWriter out = new PrintWriter("pw.txt");
+        out.write("hello");
+        out.write(32);              // a space character, not "32"
+        out.write("world");
+        out.write(33);              // '!'
+        out.println();
+        out.append('[').append("mid").append(']').println();
+        out.format("%d and %s", 7, "seven").println();
+        out.printf("pi=%.2f%n", 3.14159);
+        out.write("tail");
+        out.close();
+
+        Scanner in = new Scanner(new File("pw.txt"));
+        while (in.hasNextLine()) { System.out.println("> " + in.nextLine()); }
+    }
+}
+"#
+);
+
 differential_test!(
     diff_file_io,
     "DiffFiles",
