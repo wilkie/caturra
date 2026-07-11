@@ -405,6 +405,7 @@ impl<'run> Interpreter<'run> {
                 Some(
                     crate::value::HeapObject::ArrayList(values)
                     | crate::value::HeapObject::LinkedList(values)
+                    | crate::value::HeapObject::ArrayDeque(values)
                     | crate::value::HeapObject::Stack(values),
                 ) => render_array(values.iter().map(|v| self.render_shallow(*v))),
                 Some(crate::value::HeapObject::Instance { class_name, fields }) => {
@@ -1025,6 +1026,13 @@ impl<'run> Interpreter<'run> {
                                         target.as_str(),
                                         "java/util/LinkedList"
                                             | "java/util/List"
+                                            | "java/util/Queue"
+                                            | "java/util/Deque"
+                                            | "java/util/Collection"
+                                    ),
+                                    Some(crate::value::HeapObject::ArrayDeque(_)) => matches!(
+                                        target.as_str(),
+                                        "java/util/ArrayDeque"
                                             | "java/util/Queue"
                                             | "java/util/Deque"
                                             | "java/util/Collection"
@@ -1825,6 +1833,32 @@ impl<'run> Interpreter<'run> {
             }
             return Ok(None);
         }
+        // `new ArrayDeque<>(collection)` copies its elements in order, rejecting
+        // null (as every ArrayDeque insertion does); `new ArrayDeque<>(int)` is
+        // a capacity hint, leaving the empty deque `new_collection` built.
+        if target_class == "java/util/ArrayDeque" {
+            use crate::value::HeapObject;
+            if descriptor == "(I)V" {
+                return Ok(None);
+            }
+            if descriptor == "(Ljava/util/Collection;)V" {
+                let JValue::Ref(Some(source)) = args[0] else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                let elements = self.collection_elements(source);
+                if elements.iter().any(|v| matches!(v, JValue::Ref(None))) {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
+                if let Some(HeapObject::ArrayDeque(values)) = self.heap.get_mut(receiver) {
+                    *values = elements;
+                }
+                return Ok(None);
+            }
+        }
         // `new TreeSet<>(comparator)` stores the comparator; `new TreeSet<>(c)`
         // copies and sorts a collection. Both compare with user code, so they
         // belong here.
@@ -2329,6 +2363,7 @@ impl<'run> Interpreter<'run> {
             Some(
                 HeapObject::ArrayList(items)
                 | HeapObject::LinkedList(items)
+                | HeapObject::ArrayDeque(items)
                 | HeapObject::Stack(items),
             ) => Renderable::List(items.clone()),
             Some(HeapObject::UnmodifiableList(_)) => Renderable::List(self.list_items(reference)),
@@ -3268,6 +3303,7 @@ impl<'run> Interpreter<'run> {
             Some(
                 HeapObject::ArrayList(_)
                     | HeapObject::LinkedList(_)
+                    | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashMap(_)
@@ -4624,6 +4660,7 @@ impl<'run> Interpreter<'run> {
             Some(
                 HeapObject::ArrayList(_)
                     | HeapObject::LinkedList(_)
+                    | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashSet(_)
@@ -5043,6 +5080,7 @@ impl<'run> Interpreter<'run> {
             Some(
                 HeapObject::ArrayList(_)
                 | HeapObject::LinkedList(_)
+                | HeapObject::ArrayDeque(_)
                 | HeapObject::Stack(_)
                 | HeapObject::UnmodifiableList(_),
             ) => self.list_items(reference),
@@ -5885,6 +5923,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
             Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
             Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
+            Some(HeapObject::ArrayDeque(_)) => String::from("java/util/ArrayDeque"),
             Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
             Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
             Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),

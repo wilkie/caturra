@@ -557,10 +557,22 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     collection yields `null`, while `remove()`/`element()`/`getFirst()` throw
     `NoSuchElementException`. `new LinkedList<>(c)` copies any collection in
     order; a `LinkedList` widens to `List`/`Collection` (and a `Deque` to
-    `Queue`), and for-each walks it by index. `iterator`/`stream`/`removeIf`
-    report honest reasons; `TreeMap`/`TreeSet`/`ArrayDeque`/`Stack` stay
-    unsupported. Pinned against a real JDK by `diff_linked_list_queue`,
-    `_deque` and `_as_list`.
+    `Queue`), and for-each walks it by index. Pinned against a real JDK by
+    `diff_linked_list_queue`, `_deque` and `_as_list`.
+  - `ArrayDeque<E>` (2026-07-11) — the array-backed `Deque`/`Queue` (**not** a
+    `List`). It shares the `LinkedList` Deque semantics — head-based `push`/
+    `pop`/`peekFirst`/`pollFirst`, tail-based `offer`/`addLast`/`peekLast` — so
+    it is used interchangeably as a **LIFO stack** (`push`/`pop`) or a **FIFO
+    queue** (`offer`/`poll`), and `toString`/for-each read `[head, …, tail]`.
+    Two things keep it a distinct type from `LinkedList`: it **forbids null
+    elements** (every insertion throws `NullPointerException`, matching the JDK
+    and preserving the one-directional rule the null-tolerant `LinkedList`
+    could not), and `getClass()` reports `java.util.ArrayDeque`. Constructors:
+    `new ArrayDeque<>()`, `(int numElements)` (a capacity hint), and
+    `(Collection)` (copies in order, rejecting null). It widens to `Deque<E>`
+    and `Queue<E>` but is unrelated to the concrete `LinkedList` (neither
+    assigns to the other, exactly as javac enforces). Pinned against a real JDK
+    by `diff_array_deque`.
   - **`toString` is honoured wherever a value becomes text** (2026-07-09).
     A container renders its elements by calling their `toString()`, as
     `AbstractCollection` and `AbstractMap` do — `println(list)`,

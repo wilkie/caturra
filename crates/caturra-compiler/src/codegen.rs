@@ -1149,8 +1149,10 @@ impl MethodTable {
                     elem_from_type_arg(&args[0], self).map(JType::TreeSet)
                 } else if simple == "Optional" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Optional)
-                } else if matches!(simple, "LinkedList" | "Queue" | "Deque" | "PriorityQueue")
-                    && args.len() == 1
+                } else if matches!(
+                    simple,
+                    "LinkedList" | "ArrayDeque" | "Queue" | "Deque" | "PriorityQueue"
+                ) && args.len() == 1
                     && !self.has_class(simple)
                 {
                     let role = match simple {
@@ -1158,6 +1160,7 @@ impl MethodTable {
                         // runtime, but the same restricted method surface).
                         "Queue" | "PriorityQueue" => SeqRole::Queue,
                         "Deque" => SeqRole::Deque,
+                        "ArrayDeque" => SeqRole::ArrayDeque,
                         _ => SeqRole::Full,
                     };
                     elem_from_type_arg(&args[0], self).map(|elem| JType::LinkedList { elem, role })
@@ -2076,12 +2079,16 @@ enum JType {
     Error,
 }
 
-/// Which interface face of a `LinkedList` a receiver presents. `Full` is the
-/// concrete `LinkedList` (every method); `Queue` and `Deque` are the narrower
-/// interface views a `Queue<E>`/`Deque<E>` variable exposes.
+/// Which sequence class/face a `JType::LinkedList` receiver presents — the
+/// `Queue`/`Deque` interfaces are shared by several concrete classes, so they
+/// all flow through this one `JType`. `Full` is the concrete `LinkedList` (every
+/// `List`+`Deque` method); `ArrayDeque` is the concrete `java.util.ArrayDeque`
+/// (the full `Deque` surface, but NOT a `List`); `Queue`/`Deque` are the
+/// narrower interface views a `Queue<E>`/`Deque<E>` variable exposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SeqRole {
     Full,
+    ArrayDeque,
     Queue,
     Deque,
 }
@@ -2091,18 +2098,28 @@ impl SeqRole {
     fn internal(self) -> &'static str {
         match self {
             SeqRole::Full => "java/util/LinkedList",
+            SeqRole::ArrayDeque => "java/util/ArrayDeque",
             SeqRole::Queue => "java/util/Queue",
             SeqRole::Deque => "java/util/Deque",
         }
     }
 
-    /// Whether a receiver of this role is assignable to one of `other`'s role:
-    /// the concrete `Full` list is any of them, and a `Deque` is also a `Queue`
-    /// (`Deque extends Queue`), but a `Queue` is neither a `Deque` nor a list.
+    /// Whether a receiver of this role is assignable to `other`'s role. The
+    /// concrete `LinkedList` and `ArrayDeque` are each a `Queue` and a `Deque`
+    /// (their interfaces), and a `Deque` is also a `Queue` (`Deque extends
+    /// Queue`) — but the two concrete classes are unrelated (neither widens to
+    /// the other), and a `Queue` is neither a `Deque` nor a concrete class.
     fn widens_to(self, other: SeqRole) -> bool {
-        self == other
-            || self == SeqRole::Full
-            || (self == SeqRole::Deque && other == SeqRole::Queue)
+        if self == other {
+            return true;
+        }
+        matches!(
+            (self, other),
+            (
+                SeqRole::Full | SeqRole::ArrayDeque,
+                SeqRole::Queue | SeqRole::Deque
+            ) | (SeqRole::Deque, SeqRole::Queue)
+        )
     }
 }
 
@@ -2139,6 +2156,7 @@ impl JType {
             JType::LinkedList { elem, role } => {
                 let name = match role {
                     SeqRole::Full => "LinkedList",
+                    SeqRole::ArrayDeque => "ArrayDeque",
                     SeqRole::Queue => "Queue",
                     SeqRole::Deque => "Deque",
                 };
@@ -5802,6 +5820,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::OptionalDouble => Some(("java/util/OptionalDouble", OPTIONALDOUBLE_METHODS)),
         JType::LinkedList { role, .. } => Some(match role {
             SeqRole::Full => ("java/util/LinkedList", LINKEDLIST_METHODS),
+            SeqRole::ArrayDeque => ("java/util/ArrayDeque", DEQUE_METHODS),
             SeqRole::Queue => ("java/util/Queue", QUEUE_METHODS),
             SeqRole::Deque => ("java/util/Deque", DEQUE_METHODS),
         }),
@@ -7940,6 +7959,15 @@ impl BodyGen<'_> {
                 }),
                 _ => JType::Null,
             },
+            "ArrayDeque" => match type_args {
+                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
+                    JType::LinkedList {
+                        elem,
+                        role: SeqRole::ArrayDeque,
+                    }
+                }),
+                _ => JType::Null,
+            },
             "TreeSet" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::TreeSet),
                 _ => JType::Null,
@@ -8029,6 +8057,7 @@ impl BodyGen<'_> {
                 "TreeSet" => return self.new_tree_set(type_args, args, span),
                 "TreeMap" => return self.new_tree_map(type_args, args, span),
                 "LinkedList" => return self.new_linked_list(type_args, args, span),
+                "ArrayDeque" => return self.new_array_deque(type_args, args, span),
                 "PriorityQueue" => return self.new_priority_queue(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
@@ -8608,6 +8637,85 @@ impl BodyGen<'_> {
             Some(elem) => JType::LinkedList {
                 elem,
                 role: SeqRole::Full,
+            },
+            None => JType::Null,
+        }
+    }
+
+    /// `new ArrayDeque<>()`, `new ArrayDeque<>(numElements)` (a capacity hint),
+    /// or `new ArrayDeque<>(collection)`. Emits `new java.util.ArrayDeque`; the
+    /// concrete type exposes the full `Deque` surface (`SeqRole::ArrayDeque`)
+    /// but, unlike a `LinkedList`, is not a `List`.
+    fn new_array_deque(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        if args.len() > 1 {
+            self.error(span, "ArrayDeque takes at most one constructor argument");
+            return JType::Error;
+        }
+        let mut elem = match type_args {
+            [] => None,
+            [arg] => {
+                let Some(elem) = elem_from_type_arg(arg, self.table) else {
+                    self.error(
+                        span,
+                        "ArrayDeque element type must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some(elem)
+            }
+            _ => {
+                self.error(span, "ArrayDeque takes one type argument");
+                return JType::Error;
+            }
+        };
+        let deque_class = intern_class(self.pool, "java/util/ArrayDeque");
+        self.code.push_op_u16(op::NEW, deque_class, 1);
+        self.code.push_op(op::DUP, 1);
+        match args {
+            [] => {
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/ArrayDeque", "<init>", "()V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(1);
+            }
+            [source] => {
+                let source_ty = self.expr(source);
+                // `ArrayDeque(int numElements)` is a capacity hint (no elements);
+                // any collection form is the copy constructor.
+                let descriptor = if source_ty == JType::Int {
+                    "(I)V"
+                } else {
+                    match source_ty {
+                        JType::List(source_elem)
+                        | JType::Set(source_elem)
+                        | JType::Collection(source_elem)
+                        | JType::LinkedList {
+                            elem: source_elem, ..
+                        } => {
+                            if elem.is_none() {
+                                elem = Some(source_elem);
+                            }
+                        }
+                        JType::Null => {}
+                        _ => self.error(
+                            span,
+                            "new ArrayDeque(...) takes an int capacity or a Collection",
+                        ),
+                    }
+                    "(Ljava/util/Collection;)V"
+                };
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/ArrayDeque", "<init>", descriptor);
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+            }
+            _ => unreachable!("arg count checked above"),
+        }
+        match elem {
+            Some(elem) => JType::LinkedList {
+                elem,
+                role: SeqRole::ArrayDeque,
             },
             None => JType::Null,
         }

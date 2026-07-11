@@ -33,6 +33,7 @@ const JAVA_UTIL: &[&str] = &[
     "Queue",
     "Deque",
     "PriorityQueue",
+    "ArrayDeque",
     "Stack",
     "Collection",
     "Comparator",
@@ -102,7 +103,10 @@ const JAVA_LANG: &[&str] = &[
 /// implement — named so the message is honest instead of a misleading
 /// "cannot find symbol".
 const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
-    ("java.util", &["ArrayDeque", "Iterator", "Optional"]),
+    (
+        "java.util",
+        &["Iterator", "Optional", "Vector", "Hashtable"],
+    ),
     (
         "java.io",
         &[
@@ -153,6 +157,7 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Queue",
     "Deque",
     "PriorityQueue",
+    "ArrayDeque",
     "Stack",
     "Collection",
     "Comparator",

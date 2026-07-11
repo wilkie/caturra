@@ -170,6 +170,12 @@ pub enum HeapObject {
     /// offer its `Queue`/`Deque` methods. Reachable through a `List`, `Queue`,
     /// or `Deque` variable, each of which exposes a different method subset.
     LinkedList(Vec<JValue>),
+    /// A `java.util.ArrayDeque` — the same ordered-sequence storage as a
+    /// `LinkedList` used as a `Deque` (head-based `push`/`pop`), kept a distinct
+    /// kind for two honest reasons: it forbids null elements (every insertion
+    /// throws `NullPointerException`, unlike the null-tolerant `LinkedList`), and
+    /// `getClass()` reports `java.util.ArrayDeque`. It is not a `List`.
+    ArrayDeque(Vec<JValue>),
     /// A `java.util.Stack` — a `Vector`-backed LIFO. The same ordered-sequence
     /// storage as an `ArrayList` (it *is* a `List`, so every list method reads
     /// it), kept a distinct kind so `push`/`pop`/`peek` act on the top (the
@@ -338,6 +344,7 @@ impl Heap {
             Some(
                 HeapObject::ArrayList(values)
                 | HeapObject::LinkedList(values)
+                | HeapObject::ArrayDeque(values)
                 | HeapObject::Stack(values),
             ) => Some(values),
             _ => None,
@@ -351,6 +358,7 @@ impl Heap {
             Some(
                 HeapObject::ArrayList(values)
                 | HeapObject::LinkedList(values)
+                | HeapObject::ArrayDeque(values)
                 | HeapObject::Stack(values),
             ) => Some(values),
             _ => None,

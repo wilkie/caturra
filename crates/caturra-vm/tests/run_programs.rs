@@ -6218,8 +6218,8 @@ fn stage6_compile_errors_match_javac_wording() {
             "package foo.bar does not exist",
         ),
         (
-            "import java.util.ArrayDeque; class M { }",
-            "java.util.ArrayDeque is not supported by caturra (the class library covers the AP CS A subset)",
+            "import java.util.Vector; class M { }",
+            "java.util.Vector is not supported by caturra (the class library covers the AP CS A subset)",
         ),
         (
             // java.awt / javax.swing (and java.awt.event listeners) are
@@ -8636,6 +8636,81 @@ fn comparator_factories_build_and_chain_comparators() {
     );
 }
 
+/// `java.util.ArrayDeque` is a `Deque` and `Queue` (not a `List`): head-based
+/// `push`/`pop`/`peekFirst`, tail-based `offer`/`peekLast`, usable as a stack or
+/// a FIFO queue, with a copy constructor and for-each. Pinned JDK-free for CI;
+/// the byte-for-byte JDK match is in `diff_array_deque`.
+#[test]
+fn array_deque_is_a_deque_and_a_queue() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayDeque;
+        import java.util.Arrays;
+        import java.util.Deque;
+        import java.util.Queue;
+        public class D {
+            public static void main(String[] args) {
+                Deque<Integer> d = new ArrayDeque<>();
+                d.addFirst(1); d.addLast(2); d.push(0);
+                System.out.println(d + " " + d.peekFirst() + " " + d.peekLast());
+                System.out.println(d.pop() + " " + d.pollLast() + " " + d);
+
+                Queue<String> q = new ArrayDeque<>();
+                q.offer("a"); q.offer("b"); q.offer("c");
+                System.out.println(q.poll() + " " + q);
+
+                ArrayDeque<Integer> st = new ArrayDeque<>();
+                for (int i = 1; i <= 3; i++) { st.push(i); }
+                StringBuilder sb = new StringBuilder();
+                while (!st.isEmpty()) { sb.append(st.pop()); }
+                System.out.println(st + " " + sb);
+
+                ArrayDeque<Integer> c = new ArrayDeque<>(Arrays.asList(5, 6, 7));
+                int sum = 0;
+                for (int x : c) { sum += x; }
+                System.out.println(c + " " + sum + " " + c.contains(6) + " " + c.size());
+            }
+        }
+        "#,
+        "D",
+    );
+    assert_eq!(
+        out,
+        "[0, 1, 2] 0 2\n\
+         0 2 [1]\n\
+         a [b, c]\n\
+         [] 321\n\
+         [5, 6, 7] 18 true 3\n"
+    );
+}
+
+/// `java.util.ArrayDeque` forbids null elements: every insertion throws
+/// `NullPointerException`, unlike the null-tolerant `LinkedList`. Pinned
+/// JDK-free.
+#[test]
+fn array_deque_rejects_null_elements() {
+    let (result, console) = compile_and_run(
+        r#"
+        import java.util.ArrayDeque;
+        public class D {
+            public static void main(String[] args) {
+                ArrayDeque<String> d = new ArrayDeque<>();
+                d.add("ok");
+                try {
+                    d.push(null);
+                } catch (NullPointerException e) {
+                    System.out.println("rejected");
+                }
+                System.out.println(d);
+            }
+        }
+        "#,
+        "D",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "rejected\n[ok]\n");
+}
+
 /// `java.util.Stack` is a `Vector`-backed LIFO: `push`/`pop`/`peek` act on the
 /// top (the end), `empty`/`search` round out the stack face, and — because it
 /// is a `List` — every list method and for-each work too. Pinned JDK-free for
@@ -10214,27 +10289,30 @@ fn unresolvable_qualified_names_reject_like_javac() {
 fn unmodeled_library_classes_explain_themselves_in_every_position() {
     let reason = "is not supported by caturra";
     for (label, source) in [
-        ("local", "class M { static void r() { ArrayDeque<Integer> l; } }"),
-        ("raw local", "class M { static void r() { ArrayDeque l; } }"),
-        ("field", "class M { ArrayDeque<Integer> items; }"),
+        (
+            "local",
+            "class M { static void r() { Vector<Integer> l; } }",
+        ),
+        ("raw local", "class M { static void r() { Vector l; } }"),
+        ("field", "class M { Vector<Integer> items; }"),
         (
             "parameter",
-            "class M { static void f(ArrayDeque<Integer> l) {} }",
+            "class M { static void f(Vector<Integer> l) {} }",
         ),
-        ("array", "class M { static void r() { ArrayDeque[] l; } }"),
+        ("array", "class M { static void r() { Vector[] l; } }"),
         (
             "new",
-            "class M { static void r() { Object o = new ArrayDeque<Integer>(); } }",
+            "class M { static void r() { Object o = new Vector<Integer>(); } }",
         ),
-        ("extends", "class D extends ArrayDeque {} class M {}"),
+        ("extends", "class D extends Vector {} class M {}"),
         ("implements", "class D implements Iterator {} class M {}"),
         (
             "type argument",
-            "class M { static void r() { ArrayList<ArrayDeque> l; } }",
+            "class M { static void r() { ArrayList<Vector> l; } }",
         ),
         (
             "qualified",
-            "class M { static void r() { java.util.ArrayDeque<Integer> m; } }",
+            "class M { static void r() { java.util.Hashtable<Integer, Integer> m; } }",
         ),
     ] {
         let text = format!("import java.util.*;\n{source}");

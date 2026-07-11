@@ -5266,9 +5266,9 @@ differential_reject!(
 );
 
 stricter_than_javac!(
-    strict_array_deque_is_refused_by_name,
-    "StrictArrayDeque",
-    "import java.util.*;\npublic class StrictArrayDeque { static void r() { ArrayDeque<Integer> d; } }"
+    strict_vector_is_refused_by_name,
+    "StrictVector",
+    "import java.util.*;\npublic class StrictVector { static void r() { Vector<Integer> v; } }"
 );
 
 differential_test!(
@@ -6969,6 +6969,61 @@ public class DiffCmpFactory {
         // comparingInt over a method reference on the element itself.
         words.sort(Comparator.comparingInt(String::length).thenComparing(Comparator.naturalOrder()));
         System.out.println(words);                          // [apple, banana, cherry]
+    }
+}
+"#
+);
+
+// java.util.ArrayDeque — a Deque and Queue (not a List): head-based
+// push/pop/peekFirst, tail-based offer/peekLast, usable as a stack or FIFO;
+// a copy constructor; and it forbids null elements.
+differential_test!(
+    diff_array_deque,
+    "DiffArrayDeque",
+    r#"
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.Deque;
+import java.util.Queue;
+
+public class DiffArrayDeque {
+    public static void main(String[] args) {
+        Deque<Integer> d = new ArrayDeque<>();
+        d.addFirst(1); d.addLast(2); d.push(0);          // push == addFirst (head)
+        System.out.println(d + " " + d.peekFirst() + " " + d.peekLast());
+        System.out.println(d.getFirst() + " " + d.getLast());
+        System.out.println(d.pop() + " " + d.pollLast() + " " + d);
+
+        // FIFO queue face.
+        Queue<String> q = new ArrayDeque<>();
+        q.offer("a"); q.offer("b"); q.offer("c");
+        System.out.println(q.poll() + " " + q.peek() + " " + q);
+
+        // LIFO stack face.
+        ArrayDeque<Integer> st = new ArrayDeque<>();
+        for (int i = 1; i <= 4; i++) { st.push(i); }
+        System.out.println(st);                          // [4, 3, 2, 1]
+        StringBuilder sb = new StringBuilder();
+        while (!st.isEmpty()) { sb.append(st.pop()); }
+        System.out.println(sb);                          // 4321
+
+        // Copy constructor, for-each, contains/remove.
+        ArrayDeque<Integer> c = new ArrayDeque<>(Arrays.asList(5, 6, 7, 6));
+        int sum = 0;
+        for (int x : c) { sum += x; }
+        System.out.println(c + " " + sum + " " + c.contains(6));
+        c.remove(6);                                     // removes the first 6
+        System.out.println(c + " " + c.size());
+
+        // Null is rejected on every insertion (a String deque, so the null
+        // literal types cleanly).
+        Deque<String> s = new ArrayDeque<>();
+        s.add("keep");
+        try {
+            s.addFirst(null);
+        } catch (NullPointerException e) {
+            System.out.println("no nulls: " + s);
+        }
     }
 }
 "#

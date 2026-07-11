@@ -71,6 +71,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         "java/util/LinkedList" => Some(HeapObject::LinkedList(Vec::new())),
+        "java/util/ArrayDeque" => Some(HeapObject::ArrayDeque(Vec::new())),
         "java/util/Stack" => Some(HeapObject::Stack(Vec::new())),
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
         "java/util/HashSet" => Some(HeapObject::HashSet(JavaHashMap::new())),
@@ -398,6 +399,13 @@ pub fn invoke_virtual(
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_) | HeapObject::LinkedList(_), _) => {
+            list_method(heap, receiver, method, descriptor, args)
+        }
+        // An ArrayDeque shares the LinkedList `Deque` semantics (head-based
+        // push/pop through `list_method`) but forbids null elements, so guard
+        // every insertion before delegating.
+        (HeapObject::ArrayDeque(_), _) => {
+            array_deque_reject_null(heap, method, args)?;
             list_method(heap, receiver, method, descriptor, args)
         }
         // A `Stack` is a `List`, so it shares `list_method` for everything but
@@ -1943,6 +1951,30 @@ fn float_to_int_bits(value: f32) -> i32 {
 /// (`offer`) and a void one (`addLast`) without unbalancing the caller's stack.
 fn boolean_return_if(descriptor: &str) -> Option<JValue> {
     descriptor.ends_with(")Z").then_some(JValue::Int(1))
+}
+
+/// `java.util.ArrayDeque` forbids null elements: every insertion throws
+/// `NullPointerException` on a null, unlike the null-tolerant `LinkedList`
+/// backing it shares. Guards the single-element inserts and — best effort for
+/// the common list-backed source — `addAll`, before the shared `list_method`
+/// performs the insertion.
+fn array_deque_reject_null(heap: &Heap, method: &str, args: &[JValue]) -> Result<(), VmError> {
+    let inserts_single = matches!(
+        method,
+        "add" | "offer" | "addFirst" | "addLast" | "offerFirst" | "offerLast" | "push"
+    );
+    if inserts_single && matches!(args.first(), Some(JValue::Ref(None))) {
+        return Err(throw("java.lang.NullPointerException"));
+    }
+    if method == "addAll"
+        && let Some(JValue::Ref(Some(source))) = args.first()
+        && heap
+            .list_values(*source)
+            .is_some_and(|values| values.iter().any(|v| matches!(v, JValue::Ref(None))))
+    {
+        return Err(throw("java.lang.NullPointerException"));
+    }
+    Ok(())
 }
 
 /// The `java.util.Stack` LIFO operations, which differ from the like-named
