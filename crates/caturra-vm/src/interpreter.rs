@@ -2508,6 +2508,37 @@ impl<'run> Interpreter<'run> {
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
+            // `singletonList(e)` — an immutable one-element list.
+            ("singletonList", [value]) => {
+                let inner = self.heap.alloc(HeapObject::ArrayList(vec![*value]));
+                let view = self.heap.alloc(HeapObject::UnmodifiableList(inner));
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            // `reverseOrder()` reverses natural ordering; `reverseOrder(cmp)`
+            // reverses a given comparator — both a `ComparatorSpec::Reversed`,
+            // exactly as `Comparator.reverseOrder()`/`reversed()` build.
+            ("reverseOrder", []) => {
+                use crate::value::ComparatorSpec;
+                let natural = self
+                    .heap
+                    .alloc(HeapObject::Comparator(ComparatorSpec::Natural));
+                let reversed = self
+                    .heap
+                    .alloc(HeapObject::Comparator(ComparatorSpec::Reversed(natural)));
+                frame.stack.push(JValue::Ref(Some(reversed)));
+                return Ok(true);
+            }
+            ("reverseOrder", [JValue::Ref(Some(comparator))]) => {
+                use crate::value::ComparatorSpec;
+                let reversed = self
+                    .heap
+                    .alloc(HeapObject::Comparator(ComparatorSpec::Reversed(
+                        *comparator,
+                    )));
+                frame.stack.push(JValue::Ref(Some(reversed)));
+                return Ok(true);
+            }
             _ => {}
         }
 

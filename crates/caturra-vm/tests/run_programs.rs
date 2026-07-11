@@ -8671,6 +8671,53 @@ fn comparator_factories_build_and_chain_comparators() {
     );
 }
 
+/// `Collections.singletonList(e)` is an immutable one-element list;
+/// `Collections.reverseOrder()` / `reverseOrder(cmp)` are reversed comparators
+/// that order a sort or a `TreeSet`. Pinned JDK-free; the byte-for-byte JDK
+/// match is in `diff_collections_helpers`.
+#[test]
+fn collections_singleton_list_and_reverse_order() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class C {
+            public static void main(String[] args) {
+                List<Integer> one = Collections.singletonList(42);
+                System.out.println(one + " " + one.size() + " " + one.get(0));
+
+                List<Integer> xs = new ArrayList<>(Arrays.asList(3, 1, 4, 1, 5));
+                xs.sort(Collections.reverseOrder());
+                System.out.println(xs);
+
+                List<String> ws = new ArrayList<>(Arrays.asList("fig", "apple", "cherry"));
+                Comparator<String> byLen = (a, b) -> a.length() - b.length();
+                ws.sort(Collections.reverseOrder(byLen));
+                System.out.println(ws);
+
+                TreeSet<Integer> t = new TreeSet<>(Collections.reverseOrder());
+                t.add(3); t.add(1); t.add(2);
+                System.out.println(t);
+
+                try {
+                    one.add(9);
+                } catch (UnsupportedOperationException e) {
+                    System.out.println("immutable");
+                }
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(
+        out,
+        "[42] 1 42\n\
+         [5, 4, 3, 1, 1]\n\
+         [cherry, apple, fig]\n\
+         [3, 2, 1]\n\
+         immutable\n"
+    );
+}
+
 /// `Collection.removeIf(predicate)` drops the matching elements in place across
 /// every collection: `HashSet`/`TreeSet` (rebuilding their own storage),
 /// `LinkedList`/`ArrayDeque`/`Stack` (the shared vector), returning whether any

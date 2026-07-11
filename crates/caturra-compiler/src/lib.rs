@@ -452,8 +452,10 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // A stream pipeline's `filter`/`map`/… lambdas desugar to the
             // bundled functional interfaces.
             || s.text.contains(".stream(")
-            // A user `Comparator` aliases the bundled `__Comparator` interface.
+            // A user `Comparator` aliases the bundled `__Comparator` interface;
+            // `Collections.reverseOrder()` also yields one without naming it.
             || s.text.contains("Comparator")
+            || s.text.contains("reverseOrder")
             // A comparator lambda in a sorted collection's constructor
             // (`new PriorityQueue<>((a, b) -> ...)`) needs `__Comparator` too,
             // without ever naming it — trigger on the pair.

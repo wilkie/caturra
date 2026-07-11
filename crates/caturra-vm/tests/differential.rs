@@ -7010,6 +7010,46 @@ public class DiffCmpFactory {
 "#
 );
 
+// Collections.singletonList / reverseOrder — an immutable one-element list, and
+// reversed comparators (of natural ordering, or of a given comparator) that
+// order a sort or a TreeSet.
+differential_test!(
+    diff_collections_singleton_and_reverse_order,
+    "DiffCollHelpers",
+    r#"
+import java.util.*;
+
+public class DiffCollHelpers {
+    public static void main(String[] args) {
+        List<Integer> one = Collections.singletonList(42);
+        System.out.println(one + " " + one.size() + " " + one.get(0) + " " + one.contains(42));
+
+        List<String> s = Collections.singletonList("hi");
+        System.out.println(s + " " + s.indexOf("hi"));
+
+        List<Integer> xs = new ArrayList<>(Arrays.asList(3, 1, 4, 1, 5, 9, 2));
+        xs.sort(Collections.reverseOrder());
+        System.out.println(xs);
+
+        List<String> ws = new ArrayList<>(Arrays.asList("fig", "apple", "cherry", "kiwi"));
+        Comparator<String> byLen = (a, b) -> a.length() - b.length();
+        ws.sort(Collections.reverseOrder(byLen));
+        System.out.println(ws);
+
+        TreeSet<Integer> t = new TreeSet<>(Collections.reverseOrder());
+        t.add(3); t.add(1); t.add(2); t.add(5);
+        System.out.println(t + " first=" + t.first());
+
+        try {
+            one.add(9);
+        } catch (UnsupportedOperationException e) {
+            System.out.println("immutable");
+        }
+    }
+}
+"#
+);
+
 // Collection.removeIf(predicate) drops matching elements in place across every
 // collection kind — HashSet/TreeSet rebuild their storage; LinkedList/
 // ArrayDeque/Stack drop from the shared vector — and reports whether any went.

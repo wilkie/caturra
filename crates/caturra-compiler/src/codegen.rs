@@ -2390,6 +2390,8 @@ fn is_collections_method(method: &str) -> bool {
             | "addAll"
             | "unmodifiableList"
             | "emptyList"
+            | "singletonList"
+            | "reverseOrder"
     )
 }
 
@@ -10568,6 +10570,71 @@ impl BodyGen<'_> {
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             return Some(Some(JType::Null));
         }
+        // `reverseOrder()` / `reverseOrder(cmp)` build a `Comparator` (a reversed
+        // one), the same value `Comparator.reverseOrder()`/`reversed()` produce.
+        if method == "reverseOrder" {
+            match args {
+                [] => {}
+                [comparator] => {
+                    let ty = self.expr(comparator);
+                    if !self.is_comparator_type(ty) {
+                        self.error(
+                            comparator.span(),
+                            "Collections.reverseOrder(cmp) takes a Comparator",
+                        );
+                        self.code.discard();
+                        return None;
+                    }
+                }
+                _ => {
+                    self.no_suitable_library_method("Collections", method, args, span);
+                    return None;
+                }
+            }
+            let descriptor = if args.is_empty() {
+                "()Ljava/util/Comparator;"
+            } else {
+                "(Ljava/util/Comparator;)Ljava/util/Comparator;"
+            };
+            let method_ref =
+                intern_method_ref(self.pool, "Collections", "reverseOrder", descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(args.len() as u16);
+            return Some(Some(
+                self.table
+                    .class_id("__Comparator")
+                    .map_or(JType::Error, JType::Object),
+            ));
+        }
+        // `singletonList(e)` builds an immutable one-element `List` of the
+        // argument's type — the element passes through unboxed, like `nCopies`.
+        if method == "singletonList" {
+            let [value] = args else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let value_ty = self.expr(value);
+            let Some(elem) = elem_type_of(value_ty) else {
+                self.error(
+                    value.span(),
+                    format!(
+                        "Collections.singletonList cannot make a list of {}",
+                        value_ty.describe(self.table)
+                    ),
+                );
+                self.code.discard();
+                return None;
+            };
+            let descriptor = format!(
+                "({})Ljava/util/ArrayList;",
+                elem.base_type().descriptor(self.table)
+            );
+            let method_ref =
+                intern_method_ref(self.pool, "Collections", "singletonList", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(value_ty.width());
+            return Some(Some(JType::List(elem)));
+        }
         // `nCopies(n, value)` is the only other one whose first argument is
         // not a list; its element type comes from the value.
         if method == "nCopies" {
@@ -11431,6 +11498,16 @@ impl BodyGen<'_> {
                         "nCopies" => {
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
                             return elem_type_of(value).map_or(JType::Error, JType::List);
+                        }
+                        "singletonList" => {
+                            let value = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return elem_type_of(value).map_or(JType::Error, JType::List);
+                        }
+                        "reverseOrder" => {
+                            return self
+                                .table
+                                .class_id("__Comparator")
+                                .map_or(JType::Error, JType::Object);
                         }
                         _ => {}
                     }

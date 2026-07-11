@@ -642,6 +642,14 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     where javac infers `List<Object>`. Pinned by
     `diff_collections_binary_search_and_add_all` and
     `_unmodifiable_and_empty`.
+  - `Collections.singletonList`/`reverseOrder` (2026-07-11). `singletonList(e)`
+    is an immutable one-element list (an `UnmodifiableList` view, so `add`
+    throws `UnsupportedOperationException`) of the argument's type.
+    `reverseOrder()` reverses natural ordering and `reverseOrder(cmp)` reverses
+    a given comparator — the same reversed `__Comparator` value
+    `Comparator.reverseOrder()`/`reversed()` produce, so it orders a
+    `list.sort(...)` or a `new TreeSet<>(...)`. Pinned by
+    `diff_collections_singleton_and_reverse_order`.
   - `java.util.Arrays` is bundled Java rather than a native intrinsic,
     so every element operation dispatches. `toString` renders elements
     through their own `toString`; `equals` and `hashCode` (2026-07-09,
