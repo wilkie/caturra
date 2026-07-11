@@ -411,9 +411,10 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     `keySet()` view throws `UnsupportedOperationException` on `add` (Java's
     behaviour — accepting it silently would be the dangerous direction) and
     writes through to its map on `remove`/`clear`, while a real `HashSet`
-    performs them. `iterator`/`stream`/`removeIf` on a `Set` report honest
-    reasons. Pinned against a real JDK by `diff_hash_set_core`,
-    `_integer_order`, `_bulk_ops` and `_keyset_bridge`.
+    performs them. `removeIf(x -> ...)` drops the matching elements (2026-07-11);
+    `iterator`/`stream` on a `Set` report honest reasons. Pinned against a real
+    JDK by `diff_hash_set_core`, `_integer_order`, `_bulk_ops` and
+    `_keyset_bridge`.
   - `TreeSet<E>` / `SortedSet<E>` / `NavigableSet<E>` (2026-07-10) — a **sorted**
     set. Its elements are kept in an ordered vector, so iteration, `first`/
     `last`, and the navigation methods read straight off it. Ordering is the
@@ -426,11 +427,11 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     (all boxed, `null`/empty-safe), and for-each in sorted order. A `TreeSet`
     widens to `Set`/`Collection`, and `new TreeSet<>(collection)` copies and
     sorts. `new TreeSet<>(comparator)` orders by a `Comparator` (a class or a
-    lambda — see below) instead of the natural ordering.
-    `iterator`/`stream`/`removeIf` and the
-    range views (`headSet`/`tailSet`/`subSet`/`descendingSet`) report honest
-    reasons. Pinned against a real JDK by `diff_tree_set_core`,
-    `_strings_and_copy` and `_user_comparable`.
+    lambda — see below) instead of the natural ordering. `removeIf(x -> ...)`
+    drops the matching elements (2026-07-11); `iterator`/`stream` and the range
+    views (`headSet`/`tailSet`/`subSet`/`descendingSet`) report honest reasons.
+    Pinned against a real JDK by `diff_tree_set_core`, `_strings_and_copy` and
+    `_user_comparable`.
   - `TreeMap<K, V>` / `SortedMap<K, V>` / `NavigableMap<K, V>` (2026-07-10) — a
     **sorted map**, the map analogue of `TreeSet`. Entries are kept in an
     ordered vector by key, so iteration, the three views, and the key

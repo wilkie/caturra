@@ -6974,6 +6974,47 @@ public class DiffCmpFactory {
 "#
 );
 
+// Collection.removeIf(predicate) drops matching elements in place across every
+// collection kind — HashSet/TreeSet rebuild their storage; LinkedList/
+// ArrayDeque/Stack drop from the shared vector — and reports whether any went.
+differential_test!(
+    diff_remove_if,
+    "DiffRemoveIf",
+    r#"
+import java.util.*;
+
+public class DiffRemoveIf {
+    public static void main(String[] args) {
+        Set<Integer> hs = new HashSet<>(Arrays.asList(1, 2, 3, 4, 5, 6, 7, 8));
+        boolean a = hs.removeIf(x -> x % 3 == 0);
+        System.out.println(hs + " " + a);
+
+        TreeSet<Integer> ts = new TreeSet<>(Arrays.asList(5, 3, 8, 1, 4, 9, 2, 7));
+        ts.removeIf(x -> x > 4);
+        System.out.println(ts);
+
+        LinkedList<String> ll = new LinkedList<>(Arrays.asList("apple", "fig", "banana", "kiwi", "ox"));
+        ll.removeIf(s -> s.length() > 3);
+        System.out.println(ll);
+
+        Deque<Integer> dq = new ArrayDeque<>(Arrays.asList(1, 2, 3, 4, 5, 6));
+        dq.removeIf(x -> x % 2 == 1);
+        System.out.println(dq);
+
+        Stack<Integer> st = new Stack<>();
+        for (int i = 1; i <= 8; i++) { st.push(i); }
+        st.removeIf(x -> x > 5);
+        System.out.println(st);
+
+        // Return value: false when nothing matches, true when something goes.
+        TreeSet<Integer> s2 = new TreeSet<>(Arrays.asList(10, 20, 30));
+        System.out.println(s2.removeIf(x -> x > 100) + " " + s2);
+        System.out.println(s2.removeIf(x -> x == 20) + " " + s2);
+    }
+}
+"#
+);
+
 // java.util.ArrayDeque — a Deque and Queue (not a List): head-based
 // push/pop/peekFirst, tail-based offer/peekLast, usable as a stack or FIFO;
 // a copy constructor; and it forbids null elements.

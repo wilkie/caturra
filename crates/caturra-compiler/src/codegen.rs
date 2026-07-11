@@ -3958,6 +3958,12 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
     bm("push", &[BParam::Elem], BRet::Void, "(Ljava/lang/Object;)V"),
     bm("pop", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm(
+        "removeIf",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
         "addFirst",
         &[BParam::Elem],
         BRet::Void,
@@ -4111,6 +4117,12 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
     bm("element", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm("push", &[BParam::Elem], BRet::Void, "(Ljava/lang/Object;)V"),
     bm("pop", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm(
+        "removeIf",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm(
         "addFirst",
         &[BParam::Elem],
@@ -5685,6 +5697,12 @@ const SET_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)V",
     ),
     bm(
+        "removeIf",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
         "equals",
         &[BParam::Object],
         BRet::Boolean,
@@ -5766,6 +5784,12 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
     ),
     bm("pollFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm("pollLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm(
+        "removeIf",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm(
         "equals",
         &[BParam::Object],

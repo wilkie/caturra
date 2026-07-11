@@ -8636,6 +8636,58 @@ fn comparator_factories_build_and_chain_comparators() {
     );
 }
 
+/// `Collection.removeIf(predicate)` drops the matching elements in place across
+/// every collection: `HashSet`/`TreeSet` (rebuilding their own storage),
+/// `LinkedList`/`ArrayDeque`/`Stack` (the shared vector), returning whether any
+/// went. Pinned JDK-free; the byte-for-byte JDK match is in `diff_remove_if`.
+#[test]
+fn remove_if_drops_matching_across_collections() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class R {
+            public static void main(String[] args) {
+                Set<Integer> hs = new HashSet<>(Arrays.asList(1, 2, 3, 4, 5, 6));
+                hs.removeIf(x -> x % 2 == 0);
+                System.out.println(hs);
+
+                TreeSet<Integer> ts = new TreeSet<>(Arrays.asList(5, 3, 8, 1, 4, 9, 2));
+                ts.removeIf(x -> x > 4);
+                System.out.println(ts);
+
+                LinkedList<String> ll = new LinkedList<>(Arrays.asList("apple", "fig", "banana", "kiwi"));
+                ll.removeIf(s -> s.length() > 4);
+                System.out.println(ll);
+
+                Deque<Integer> dq = new ArrayDeque<>(Arrays.asList(1, 2, 3, 4, 5));
+                dq.removeIf(x -> x == 3);
+                System.out.println(dq);
+
+                Stack<Integer> st = new Stack<>();
+                for (int i = 1; i <= 6; i++) { st.push(i); }
+                st.removeIf(x -> x % 3 == 0);
+                System.out.println(st);
+
+                Set<Integer> s2 = new TreeSet<>(Arrays.asList(1, 2, 3));
+                System.out.println(s2.removeIf(x -> x > 10));
+                System.out.println(s2.removeIf(x -> x < 2) + " " + s2);
+            }
+        }
+        "#,
+        "R",
+    );
+    assert_eq!(
+        out,
+        "[1, 3, 5]\n\
+         [1, 2, 3, 4]\n\
+         [fig, kiwi]\n\
+         [1, 2, 4, 5]\n\
+         [1, 2, 4, 5]\n\
+         false\n\
+         true [2, 3]\n"
+    );
+}
+
 /// `java.util.ArrayDeque` is a `Deque` and `Queue` (not a `List`): head-based
 /// `push`/`pop`/`peekFirst`, tail-based `offer`/`peekLast`, usable as a stack or
 /// a FIFO queue, with a copy constructor and for-each. Pinned JDK-free for CI;

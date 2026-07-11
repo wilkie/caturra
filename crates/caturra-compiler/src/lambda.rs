@@ -1042,6 +1042,8 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             | "SortedSet"
             | "NavigableSet"
             | "LinkedList"
+            | "ArrayDeque"
+            | "Stack"
             | "Queue"
             | "Deque"
             | "PriorityQueue"

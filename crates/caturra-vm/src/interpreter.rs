@@ -4042,6 +4042,10 @@ impl<'run> Interpreter<'run> {
                 self.set_for_each(receiver, *consumer)?;
                 return Ok(Answered::Void);
             }
+            ("removeIf", [JValue::Ref(Some(predicate))]) => {
+                let removed = self.set_remove_if(receiver, *predicate)?;
+                return Ok(Answered::Value(JValue::Int(i32::from(removed))));
+            }
             // caturra's own indexed accessor, standing in for the iterator the
             // enhanced-for loop would otherwise need.
             ("__get", [JValue::Int(position)]) => {
@@ -4111,6 +4115,50 @@ impl<'run> Interpreter<'run> {
     /// `set.forEach(consumer)`: call `accept(element)` on each element in
     /// iteration order, running the synthesized lambda through the nested-call
     /// machinery (a user `accept` may itself touch the set).
+    /// `set.removeIf(predicate)` / `treeSet.removeIf(predicate)`: drop the
+    /// elements the predicate accepts, reporting whether any went. (The list
+    /// backings go through `list_remove_if`; a set rebuilds its own storage —
+    /// a `TreeSet`'s vector directly, a `HashSet` by re-removing each match.)
+    fn set_remove_if(&mut self, receiver: HeapRef, predicate: HeapRef) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        if !matches!(self.heap.get(predicate), Some(HeapObject::Instance { .. })) {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
+        let mut kept = Vec::new();
+        let mut removed = Vec::new();
+        for element in self.collection_elements(receiver) {
+            if self.call_test(predicate, element)? {
+                removed.push(element);
+            } else {
+                kept.push(element);
+            }
+        }
+        if removed.is_empty() {
+            return Ok(false);
+        }
+        match self.heap.get(receiver) {
+            // The kept elements are already in sorted order, so write them back.
+            Some(HeapObject::TreeSet { .. }) => {
+                if let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(receiver) {
+                    *values = kept;
+                }
+            }
+            // Re-find and remove each match (the map re-searches by key each
+            // time, so shifting positions are handled).
+            Some(HeapObject::HashSet(_)) => {
+                for element in removed {
+                    if let Some(at) = self.map_find(receiver, element)? {
+                        self.map_remove_at(receiver, at);
+                    }
+                }
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     fn set_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let elements = self.collection_elements(receiver);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
@@ -4284,6 +4332,10 @@ impl<'run> Interpreter<'run> {
             ("forEach", [JValue::Ref(Some(consumer))]) => {
                 self.tree_set_for_each(receiver, *consumer)?;
                 return Ok(Answered::Void);
+            }
+            ("removeIf", [JValue::Ref(Some(predicate))]) => {
+                let removed = self.set_remove_if(receiver, *predicate)?;
+                return Ok(Answered::Value(JValue::Int(i32::from(removed))));
             }
             // The enhanced-for accessor: the element at a sorted position.
             ("__get", [JValue::Int(position)]) => {
