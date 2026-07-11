@@ -1894,13 +1894,71 @@ impl Parser<'_> {
             self.pos += 1;
             LambdaBody::Block(self.block_body())
         } else {
-            LambdaBody::Expr(Box::new(self.expression()?))
+            self.lambda_expression_body()?
         };
         let span = SourceSpan {
             start: start.start,
             end: self.here().start,
         };
         Ok(Expr::Lambda { params, body, span })
+    }
+
+    /// A non-block lambda body. In Java this is any expression, and assignment
+    /// and `++`/`--` are expressions — but caturra models them as statements,
+    /// so `n -> total[0] += n` and `() -> count++` become a one-statement
+    /// block. A plain value expression (`x -> x + 1`) stays an expression body.
+    fn lambda_expression_body(&mut self) -> Parsed<LambdaBody> {
+        // Prefix `++x` / `--x`.
+        if self.at_symbol("++") || self.at_symbol("--") {
+            let start = self.here();
+            let increment = self.at_symbol("++");
+            self.pos += 1;
+            let operand = self.postfix_expression()?;
+            let Some(target) = assignment_target(&operand) else {
+                self.error_at(operand.span(), "++/-- can only be applied to a variable");
+                return Err(Abort);
+            };
+            let stmt = increment_statement(target, increment, start.start, operand.span().end);
+            return Ok(LambdaBody::Block(vec![stmt]));
+        }
+
+        let expr = self.expression()?;
+
+        // `x -> count++`: a postfix increment.
+        if let Expr::IncDec {
+            target,
+            increment,
+            span,
+            ..
+        } = &expr
+            && let Some(assign_target) = assignment_target(target)
+        {
+            let stmt = increment_statement(assign_target, *increment, span.start, span.end);
+            return Ok(LambdaBody::Block(vec![stmt]));
+        }
+
+        // `x -> total += x`: an assignment expression.
+        if let Some(op) = self.assignment_operator() {
+            let Some(target) = assignment_target(&expr) else {
+                self.error_at(
+                    expr.span(),
+                    "the left side of an assignment must be a variable or array element",
+                );
+                return Err(Abort);
+            };
+            let start = expr.span().start;
+            self.pos += 1;
+            let value = self.expression()?;
+            let end = value.span().end;
+            return Ok(LambdaBody::Block(vec![Stmt::Assign {
+                target,
+                op,
+                value,
+                span: SourceSpan { start, end },
+            }]));
+        }
+
+        Ok(LambdaBody::Expr(Box::new(expr)))
     }
 
     /// `cond ? then : else` (right-associative, lowest precedence

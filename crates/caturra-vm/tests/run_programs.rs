@@ -11023,3 +11023,37 @@ fn a_sort_comparator_is_refused_where_javac_refuses_it() {
     );
     assert_eq!(out, "[1, 2, 3]\n");
 }
+
+/// A lambda expression body may be a statement expression — an assignment or
+/// `++`/`--` — not only a value expression. `n -> sum[0] += n`, `() ->
+/// count++`, `() -> x = 5` all work (2026-07-09); they were parse errors
+/// before. A value body (`x -> x + 1`) is unaffected. Pinned against a real
+/// JDK by `diff_lambda_statement_expression_body`.
+#[test]
+fn a_lambda_body_may_be_a_statement_expression() {
+    let out = run_stdout(
+        r"
+        import java.util.ArrayList;
+        import java.util.List;
+        interface Run { void go(); }
+        public class M {
+            static int c = 0;
+            public static void main(String[] args) {
+                int[] sum = {0};
+                List<Integer> nums = new ArrayList<Integer>();
+                nums.add(1); nums.add(2); nums.add(3);
+                nums.forEach(n -> sum[0] += n);
+                System.out.println(sum[0]);
+                Run inc = () -> c++;
+                inc.go(); inc.go();
+                System.out.println(c);
+                Run set = () -> c = 50;
+                set.go();
+                System.out.println(c);
+            }
+        }
+        ",
+        "M",
+    );
+    assert_eq!(out, "6\n2\n50\n");
+}

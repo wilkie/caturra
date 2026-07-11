@@ -797,8 +797,12 @@ final`, or `from an inner class` for an anonymous class. Copying a
   type, and `replaceAll`'s result is checked against the element type
   (which the erased `Object` return would otherwise drop). Expression bodies
   become `return e;` (or `e;` for a void SAM); block bodies are used
-  directly. A lambda in a position with no functional target type is
-  reported. Pinned by `diff_lambda_as_a_list_element`.
+  directly. A lambda body may also be a **statement expression** — an
+  assignment or `++`/`--` (`n -> sum[0] += n`, `() -> count++`), which Java
+  treats as an expression and caturra lowers to a one-statement block
+  (2026-07-09). A lambda in a position with no functional target type is
+  reported. Pinned by `diff_lambda_as_a_list_element` and
+  `diff_lambda_statement_expression_body`.
   `Map.forEach` is target-typed from its **receiver** (2026-07-09): the
   synthesized class implements the bundled erased `__BiConsumer`, whose
   `accept(Object, Object)` opens with the two casts javac puts in a bridge

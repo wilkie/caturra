@@ -6265,6 +6265,55 @@ public class DiffSortComparator {
 "#
 );
 
+differential_test!(
+    diff_lambda_statement_expression_body,
+    "DiffLambdaStmtBody",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+interface Run {
+    void go();
+}
+
+public class DiffLambdaStmtBody {
+    static int counter = 0;
+
+    public static void main(String[] args) {
+        // Assignment to an array element as a lambda body (`forEach` idiom).
+        int[] sum = {0};
+        List<Integer> nums = new ArrayList<Integer>();
+        for (int i = 1; i <= 5; i++) nums.add(i);
+        nums.forEach(n -> sum[0] += n);
+        System.out.println(sum[0]);
+
+        // Postfix increment as a lambda body.
+        Run inc = () -> counter++;
+        inc.go();
+        inc.go();
+        System.out.println(counter);
+
+        // Prefix increment.
+        Run pre = () -> ++counter;
+        pre.go();
+        System.out.println(counter);
+
+        // Plain assignment.
+        Run set = () -> counter = 100;
+        set.go();
+        System.out.println(counter);
+
+        // A value expression body still works.
+        List<String> words = new ArrayList<String>();
+        words.add("a");
+        words.add("bb");
+        words.replaceAll(x -> x + x.length());
+        System.out.println(words);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
