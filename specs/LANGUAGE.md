@@ -650,6 +650,18 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     `Comparator.reverseOrder()`/`reversed()` produce, so it orders a
     `list.sort(...)` or a `new TreeSet<>(...)`. Pinned by
     `diff_collections_singleton_and_reverse_order`.
+  - `Collections.emptySet`/`emptyMap`/`singleton`/`singletonMap`/
+    `unmodifiableSet`/`unmodifiableMap` (2026-07-11) — the **immutable Set and
+    Map** family, mirroring the list ones. `emptySet()`/`emptyMap()` are empty
+    (typed like `null`, adopting context); `singleton(e)`/`singletonMap(k, v)`
+    hold one element/entry; `unmodifiableSet`/`unmodifiableMap` view an existing
+    collection. All are real views (`UnmodifiableSet`/`UnmodifiableMap` wrapping
+    a backing `HashSet`/`TreeSet`/`HashMap`/`TreeMap`): reads and iteration
+    delegate to the backing (so an `unmodifiableSet(treeSet)` still prints
+    sorted), and **every mutator throws `UnsupportedOperationException`** — as do
+    the `keySet()`/`values()`/`entrySet()` of an unmodifiable map, which are
+    themselves unmodifiable, so a `keySet().remove(k)` cannot write through.
+    Pinned by `diff_immutable_set_and_map`.
   - `java.util.Arrays` is bundled Java rather than a native intrinsic,
     so every element operation dispatches. `toString` renders elements
     through their own `toString`; `equals` and `hashCode` (2026-07-09,

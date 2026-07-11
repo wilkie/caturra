@@ -7010,6 +7010,54 @@ public class DiffCmpFactory {
 "#
 );
 
+// Collections immutable Set/Map — emptySet/emptyMap, singleton/singletonMap,
+// and unmodifiableSet/unmodifiableMap (whose keySet/values/entrySet views are
+// unmodifiable too). Every mutator throws UnsupportedOperationException.
+differential_test!(
+    diff_immutable_set_and_map,
+    "DiffImmutable",
+    r#"
+import java.util.*;
+
+public class DiffImmutable {
+    public static void main(String[] args) {
+        Set<String> es = Collections.emptySet();
+        System.out.println(es + " " + es.size() + " " + es.isEmpty() + " " + es.contains("z"));
+
+        Map<String, Integer> em = Collections.emptyMap();
+        System.out.println(em + " " + em.size() + " " + em.getOrDefault("k", -1));
+
+        Set<Integer> one = Collections.singleton(7);
+        System.out.println(one + " " + one.contains(7) + " " + one.contains(8) + " " + one.size());
+
+        Map<String, Integer> sm = Collections.singletonMap("a", 1);
+        System.out.println(sm + " " + sm.get("a") + " " + sm.containsKey("a") + " " + sm.containsValue(1));
+
+        Set<Integer> backing = new TreeSet<>(Arrays.asList(3, 1, 2));
+        Set<Integer> us = Collections.unmodifiableSet(backing);
+        System.out.println(us + " " + us.size() + " " + us.contains(2));
+        int total = 0;
+        for (int x : us) { total += x; }
+        System.out.println(total);
+
+        Map<String, Integer> bm = new TreeMap<>();
+        bm.put("y", 20); bm.put("x", 10);
+        Map<String, Integer> um = Collections.unmodifiableMap(bm);
+        System.out.println(um + " " + um.get("x") + " " + um.keySet());
+        int sum = 0;
+        for (int v : um.values()) { sum += v; }
+        System.out.println(sum);
+
+        try { one.add(9); } catch (UnsupportedOperationException e) { System.out.println("set"); }
+        try { sm.put("b", 2); } catch (UnsupportedOperationException e) { System.out.println("map"); }
+        try { us.remove(1); } catch (UnsupportedOperationException e) { System.out.println("view"); }
+        try { um.keySet().remove("x"); } catch (UnsupportedOperationException e) { System.out.println("keyset"); }
+        System.out.println(um + " " + backing);
+    }
+}
+"#
+);
+
 // Collections.singletonList / reverseOrder — an immutable one-element list, and
 // reversed comparators (of natural ordering, or of a given comparator) that
 // order a sort or a TreeSet.

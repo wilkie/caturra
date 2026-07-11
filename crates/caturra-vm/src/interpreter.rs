@@ -2354,6 +2354,12 @@ impl<'run> Interpreter<'run> {
             JValue::Ref(None) => return Ok(String::from("null")),
             JValue::Ref(Some(reference)) => reference,
         };
+        // An unmodifiable set/map view renders exactly as its backing, so
+        // unwrap to it first.
+        let reference = match self.heap.get(reference) {
+            Some(HeapObject::UnmodifiableSet(inner) | HeapObject::UnmodifiableMap(inner)) => *inner,
+            _ => reference,
+        };
         // Copy out what we need before calling back into Java, which may
         // allocate and so cannot hold a borrow of the heap.
         let renderable = match self.heap.get(reference) {
@@ -2539,6 +2545,41 @@ impl<'run> Interpreter<'run> {
                 frame.stack.push(JValue::Ref(Some(reversed)));
                 return Ok(true);
             }
+            // Immutable empty / single-element set and map views.
+            ("emptySet", []) => {
+                let inner = self
+                    .heap
+                    .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
+                let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            ("emptyMap", []) => {
+                let inner = self
+                    .heap
+                    .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+                let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            ("singleton", [element]) => {
+                let inner = self
+                    .heap
+                    .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
+                self.set_add(inner, *element)?;
+                let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
+            ("singletonMap", [key, value]) => {
+                let inner = self
+                    .heap
+                    .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+                self.map_put(inner, *key, *value)?;
+                let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
             _ => {}
         }
 
@@ -2547,6 +2588,16 @@ impl<'run> Interpreter<'run> {
         };
         if method_name == "unmodifiableList" {
             let view = self.heap.alloc(HeapObject::UnmodifiableList(list));
+            frame.stack.push(JValue::Ref(Some(view)));
+            return Ok(true);
+        }
+        if method_name == "unmodifiableSet" || method_name == "unmodifiableSortedSet" {
+            let view = self.heap.alloc(HeapObject::UnmodifiableSet(list));
+            frame.stack.push(JValue::Ref(Some(view)));
+            return Ok(true);
+        }
+        if method_name == "unmodifiableMap" || method_name == "unmodifiableSortedMap" {
+            let view = self.heap.alloc(HeapObject::UnmodifiableMap(list));
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
@@ -3337,6 +3388,8 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
                     | HeapObject::UnmodifiableList(_)
+                    | HeapObject::UnmodifiableSet(_)
+                    | HeapObject::UnmodifiableMap(_)
                     | HeapObject::HashMap(_)
                     | HeapObject::TreeMap { .. }
                     | HeapObject::HashSet(_)
@@ -3819,6 +3872,36 @@ impl<'run> Interpreter<'run> {
             }
             Some(HeapObject::TreeSet { .. }) => {
                 return self.tree_set_intrinsic(receiver, method_name, descriptor, args);
+            }
+            // Unmodifiable set/map views: a mutator throws; every read delegates
+            // to the backing collection (recursing with its own reference).
+            Some(HeapObject::UnmodifiableSet(inner)) => {
+                let inner = *inner;
+                if is_set_mutator(method_name) {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                return self.map_intrinsic(inner, method_name, descriptor, args);
+            }
+            Some(HeapObject::UnmodifiableMap(inner)) => {
+                let inner = *inner;
+                if is_map_mutator(method_name) {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                // `keySet`/`values`/`entrySet` of an unmodifiable map are
+                // themselves unmodifiable (else a `keySet().remove(k)` would
+                // write through), so wrap the delegated view.
+                let answered = self.map_intrinsic(inner, method_name, descriptor, args)?;
+                if matches!(method_name, "keySet" | "values" | "entrySet")
+                    && let Answered::Value(JValue::Ref(Some(view))) = answered
+                {
+                    let wrapped = self.heap.alloc(HeapObject::UnmodifiableSet(view));
+                    return Ok(Answered::Value(JValue::Ref(Some(wrapped))));
+                }
+                return Ok(answered);
             }
             Some(HeapObject::PriorityQueue { .. }) => {
                 return self.priority_queue_intrinsic(receiver, method_name, descriptor, args);
@@ -4746,6 +4829,7 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
                     | HeapObject::UnmodifiableList(_)
+                    | HeapObject::UnmodifiableSet(_)
                     | HeapObject::HashSet(_)
                     | HeapObject::TreeSet { .. }
                     | HeapObject::PriorityQueue { .. }
@@ -5184,6 +5268,8 @@ impl<'run> Interpreter<'run> {
                     })
                     .collect()
             }
+            // An unmodifiable set view walks its backing set.
+            Some(HeapObject::UnmodifiableSet(inner)) => self.collection_elements(*inner),
             _ => Vec::new(),
         }
     }
@@ -7424,6 +7510,41 @@ fn int_element_text(kind: crate::value::IntKind, value: i32) -> String {
 }
 
 /// An `ArrayIndexOutOfBoundsException` naming the offending index.
+/// Whether a `Set` method mutates it — so an unmodifiable set view must throw
+/// `UnsupportedOperationException` rather than delegate.
+fn is_set_mutator(method: &str) -> bool {
+    matches!(
+        method,
+        "add"
+            | "remove"
+            | "clear"
+            | "addAll"
+            | "removeAll"
+            | "retainAll"
+            | "removeIf"
+            | "pollFirst"
+            | "pollLast"
+    )
+}
+
+/// Whether a `Map` method mutates it (an unmodifiable map view throws on these).
+fn is_map_mutator(method: &str) -> bool {
+    matches!(
+        method,
+        "put"
+            | "remove"
+            | "clear"
+            | "putAll"
+            | "putIfAbsent"
+            | "replace"
+            | "replaceAll"
+            | "merge"
+            | "compute"
+            | "computeIfAbsent"
+            | "computeIfPresent"
+    )
+}
+
 fn array_index_error(index: i32) -> VmError {
     VmError::UncaughtException(format!("java.lang.ArrayIndexOutOfBoundsException: {index}"))
 }

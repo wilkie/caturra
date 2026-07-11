@@ -186,6 +186,14 @@ pub enum HeapObject {
     /// `Collections.emptyList`). Java's is a view too: a later `add` to the
     /// backing list shows through, and every mutator throws.
     UnmodifiableList(HeapRef),
+    /// An unmodifiable *view* of a set (`Collections.unmodifiableSet`,
+    /// `emptySet`, `singleton`). Reads delegate to the backing `HashSet`/
+    /// `TreeSet`; every mutator throws `UnsupportedOperationException`.
+    UnmodifiableSet(HeapRef),
+    /// An unmodifiable *view* of a map (`Collections.unmodifiableMap`,
+    /// `emptyMap`, `singletonMap`). Reads delegate to the backing `HashMap`/
+    /// `TreeMap`; every mutator throws `UnsupportedOperationException`.
+    UnmodifiableMap(HeapRef),
     /// A `java.util.HashMap` (key/value types erased), carrying the JDK's
     /// iteration order. See [`crate::map`].
     HashMap(crate::map::JavaHashMap),

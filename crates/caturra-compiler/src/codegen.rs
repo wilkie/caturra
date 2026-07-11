@@ -2392,6 +2392,12 @@ fn is_collections_method(method: &str) -> bool {
             | "emptyList"
             | "singletonList"
             | "reverseOrder"
+            | "emptySet"
+            | "emptyMap"
+            | "singleton"
+            | "singletonMap"
+            | "unmodifiableSet"
+            | "unmodifiableMap"
     )
 }
 
@@ -10635,6 +10641,119 @@ impl BodyGen<'_> {
             self.code.drop_stack(value_ty.width());
             return Some(Some(JType::List(elem)));
         }
+        // `emptySet()`/`emptyMap()` — immutable empty collections whose element
+        // type comes from the assignment context, so they type as `null`.
+        if method == "emptySet" || method == "emptyMap" {
+            if !args.is_empty() {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            }
+            let descriptor = if method == "emptySet" {
+                "()Ljava/util/Set;"
+            } else {
+                "()Ljava/util/Map;"
+            };
+            let method_ref = intern_method_ref(self.pool, "Collections", method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            return Some(Some(JType::Null));
+        }
+        // `singleton(e)` — an immutable one-element `Set` of the argument's type.
+        if method == "singleton" {
+            let [value] = args else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let value_ty = self.expr(value);
+            let Some(elem) = elem_type_of(value_ty) else {
+                self.error(
+                    value.span(),
+                    format!(
+                        "Collections.singleton cannot make a set of {}",
+                        value_ty.describe(self.table)
+                    ),
+                );
+                self.code.discard();
+                return None;
+            };
+            let descriptor = format!(
+                "({})Ljava/util/Set;",
+                elem.base_type().descriptor(self.table)
+            );
+            let method_ref = intern_method_ref(self.pool, "Collections", "singleton", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(value_ty.width());
+            return Some(Some(JType::Set(elem)));
+        }
+        // `singletonMap(k, v)` — an immutable one-entry `Map`.
+        if method == "singletonMap" {
+            let [key_arg, value_arg] = args else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let key_ty = self.expr(key_arg);
+            let Some(key) = elem_type_of(key_ty) else {
+                self.error(
+                    key_arg.span(),
+                    "Collections.singletonMap key has no element type",
+                );
+                self.code.discard();
+                return None;
+            };
+            let value_ty = self.expr(value_arg);
+            let Some(value) = elem_type_of(value_ty) else {
+                self.error(
+                    value_arg.span(),
+                    "Collections.singletonMap value has no element type",
+                );
+                self.code.discard();
+                return None;
+            };
+            let descriptor = format!(
+                "({}{})Ljava/util/Map;",
+                key.base_type().descriptor(self.table),
+                value.base_type().descriptor(self.table)
+            );
+            let method_ref =
+                intern_method_ref(self.pool, "Collections", "singletonMap", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(key_ty.width() + value_ty.width());
+            return Some(Some(JType::Map { key, value }));
+        }
+        // `unmodifiableSet(set)` / `unmodifiableMap(map)` — an immutable view of
+        // the argument, keeping its own set/map type.
+        if method == "unmodifiableSet" || method == "unmodifiableMap" {
+            let [collection] = args else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let collection_ty = self.expr(collection);
+            let wants_set = method == "unmodifiableSet";
+            let ok = if wants_set {
+                matches!(collection_ty, JType::Set(_) | JType::TreeSet(_))
+            } else {
+                matches!(collection_ty, JType::Map { .. } | JType::TreeMap { .. })
+            };
+            if !ok {
+                self.error(
+                    collection.span(),
+                    format!(
+                        "Collections.{method} takes a {}",
+                        if wants_set { "Set" } else { "Map" }
+                    ),
+                );
+                self.code.discard();
+                return None;
+            }
+            let descriptor = if wants_set {
+                "(Ljava/util/Set;)Ljava/util/Set;"
+            } else {
+                "(Ljava/util/Map;)Ljava/util/Map;"
+            };
+            let method_ref = intern_method_ref(self.pool, "Collections", method, descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(1);
+            return Some(Some(collection_ty));
+        }
         // `nCopies(n, value)` is the only other one whose first argument is
         // not a list; its element type comes from the value.
         if method == "nCopies" {
@@ -11493,8 +11612,8 @@ impl BodyGen<'_> {
                         "unmodifiableList" => {
                             return args.first().map_or(JType::Error, |a| self.type_of(a));
                         }
-                        // Its element type comes from the assignment context.
-                        "emptyList" => return JType::Null,
+                        // Empty immutable collections adopt their context.
+                        "emptyList" | "emptySet" | "emptyMap" => return JType::Null,
                         "nCopies" => {
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
                             return elem_type_of(value).map_or(JType::Error, JType::List);
@@ -11508,6 +11627,21 @@ impl BodyGen<'_> {
                                 .table
                                 .class_id("__Comparator")
                                 .map_or(JType::Error, JType::Object);
+                        }
+                        "singleton" => {
+                            let value = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return elem_type_of(value).map_or(JType::Error, JType::Set);
+                        }
+                        "singletonMap" => {
+                            let key = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
+                            return match (elem_type_of(key), elem_type_of(value)) {
+                                (Some(key), Some(value)) => JType::Map { key, value },
+                                _ => JType::Error,
+                            };
+                        }
+                        "unmodifiableSet" | "unmodifiableMap" => {
+                            return args.first().map_or(JType::Error, |a| self.type_of(a));
                         }
                         _ => {}
                     }

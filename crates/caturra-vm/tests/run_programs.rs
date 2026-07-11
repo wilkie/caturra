@@ -8671,6 +8671,61 @@ fn comparator_factories_build_and_chain_comparators() {
     );
 }
 
+/// The immutable Set/Map factories: `emptySet`/`emptyMap`, `singleton(e)`/
+/// `singletonMap(k, v)`, and `unmodifiableSet`/`unmodifiableMap` (whose views
+/// are unmodifiable too). Every mutator throws. Pinned JDK-free; the
+/// byte-for-byte JDK match is in `diff_immutable_set_and_map`.
+#[test]
+fn collections_immutable_set_and_map() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class C {
+            public static void main(String[] args) {
+                Set<String> es = Collections.emptySet();
+                System.out.println(es + " " + es.size() + " " + es.isEmpty());
+
+                Map<String, Integer> em = Collections.emptyMap();
+                System.out.println(em + " " + em.size());
+
+                Set<Integer> one = Collections.singleton(7);
+                System.out.println(one + " " + one.contains(7) + " " + one.contains(8));
+
+                Map<String, Integer> sm = Collections.singletonMap("a", 1);
+                System.out.println(sm + " " + sm.get("a") + " " + sm.containsKey("a"));
+
+                Set<Integer> backing = new HashSet<>(Arrays.asList(1, 2, 3));
+                Set<Integer> us = Collections.unmodifiableSet(backing);
+                System.out.println(us.size() + " " + us.contains(2));
+
+                Map<String, Integer> bm = new HashMap<>();
+                bm.put("x", 10); bm.put("y", 20);
+                Map<String, Integer> um = Collections.unmodifiableMap(bm);
+                int sum = 0;
+                for (int v : um.values()) { sum += v; }
+                System.out.println(um.get("x") + " " + um.size() + " " + sum);
+
+                try { one.add(9); } catch (UnsupportedOperationException e) { System.out.println("set"); }
+                try { sm.put("b", 2); } catch (UnsupportedOperationException e) { System.out.println("map"); }
+                try { us.remove(1); } catch (UnsupportedOperationException e) { System.out.println("view"); }
+                try { um.keySet().remove("x"); } catch (UnsupportedOperationException e) { System.out.println("keyset"); }
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(
+        out,
+        "[] 0 true\n\
+         {} 0\n\
+         [7] true false\n\
+         {a=1} 1 true\n\
+         3 true\n\
+         10 2 30\n\
+         set\nmap\nview\nkeyset\n"
+    );
+}
+
 /// `Collections.singletonList(e)` is an immutable one-element list;
 /// `Collections.reverseOrder()` / `reverseOrder(cmp)` are reversed comparators
 /// that order a sort or a `TreeSet`. Pinned JDK-free; the byte-for-byte JDK
