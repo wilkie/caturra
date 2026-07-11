@@ -8406,6 +8406,55 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// `java.util.LinkedList` as a `Queue`/`Deque`/`List`: order matches a list's,
+/// the empty ends return `null` (poll/peek) or throw (remove), and the
+/// interface faces expose the right methods. Pinned JDK-free for CI; the
+/// byte-for-byte JDK match is in `differential.rs`.
+#[test]
+fn linked_list_serves_as_queue_deque_and_list() {
+    let out = run_stdout(
+        r#"
+        import java.util.Deque;
+        import java.util.LinkedList;
+        import java.util.Queue;
+        public class L {
+            public static void main(String[] args) {
+                Queue<Integer> q = new LinkedList<>();
+                q.add(1); q.offer(2); q.offer(3);
+                System.out.println(q.poll() + " " + q.peek() + " " + q.size());
+                System.out.println(q);                // [2, 3]
+
+                Deque<Integer> st = new LinkedList<>();
+                st.push(10); st.push(20);
+                System.out.println(st.pop() + " " + st.peek());
+                System.out.println(st);               // [10]
+
+                LinkedList<String> ll = new LinkedList<>();
+                ll.addFirst("b"); ll.addFirst("a"); ll.addLast("c");
+                System.out.println(ll + " " + ll.get(1) + " " + ll.getLast());
+
+                Queue<Integer> empty = new LinkedList<>();
+                System.out.println(empty.poll() + " " + empty.peek());
+                try { empty.remove(); } catch (java.util.NoSuchElementException e) {
+                    System.out.println("nse");
+                }
+            }
+        }
+        "#,
+        "L",
+    );
+    assert_eq!(
+        out,
+        "1 2 2\n\
+         [2, 3]\n\
+         20 10\n\
+         [10]\n\
+         [a, b, c] b c\n\
+         null null\n\
+         nse\n"
+    );
+}
+
 /// Java's `Map` members that caturra cannot model name a reason rather than
 /// pretending they do not exist. The reason has to win over the arguments'
 /// own errors: `map.forEach(lambda)` must blame the missing lambda support,
@@ -9777,20 +9826,20 @@ fn unmodeled_library_classes_explain_themselves_in_every_position() {
     for (label, source) in [
         (
             "local",
-            "class M { static void r() { LinkedList<Integer> l; } }",
+            "class M { static void r() { TreeSet<Integer> l; } }",
         ),
-        ("raw local", "class M { static void r() { LinkedList l; } }"),
-        ("field", "class M { LinkedList<Integer> items; }"),
+        ("raw local", "class M { static void r() { TreeSet l; } }"),
+        ("field", "class M { TreeSet<Integer> items; }"),
         (
             "parameter",
-            "class M { static void f(LinkedList<Integer> l) {} }",
+            "class M { static void f(TreeSet<Integer> l) {} }",
         ),
-        ("array", "class M { static void r() { LinkedList[] l; } }"),
+        ("array", "class M { static void r() { TreeSet[] l; } }"),
         (
             "new",
-            "class M { static void r() { Object o = new LinkedList<Integer>(); } }",
+            "class M { static void r() { Object o = new TreeSet<Integer>(); } }",
         ),
-        ("extends", "class D extends LinkedList {} class M {}"),
+        ("extends", "class D extends TreeSet {} class M {}"),
         ("implements", "class D implements Iterator {} class M {}"),
         (
             "type argument",

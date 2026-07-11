@@ -415,6 +415,27 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     reasons. `TreeSet` stays unsupported (a sorted set is a different
     structure). Pinned against a real JDK by `diff_hash_set_core`,
     `_integer_order`, `_bulk_ops` and `_keyset_bridge`.
+  - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
+    (2026-07-10). The storage is the same ordered-element vector an
+    `ArrayList` uses — this VM models no node links or their cost — kept a
+    distinct type only so `getClass()` stays honest and so each interface face
+    exposes the right methods. As a **`List`** it has the full list surface
+    (`get`/`set`/`add(i,e)`/`remove(i)`/`indexOf`/…); as a **`Queue`**,
+    `offer`/`poll`/`peek`/`element`; as a **`Deque`**, those plus
+    `push`/`pop`/`addFirst`/`addLast`/`offerFirst`/`offerLast`/`removeFirst`/
+    `removeLast`/`pollFirst`/`pollLast`/`getFirst`/`getLast`/`peekFirst`/
+    `peekLast`. The **interface typing restricts the method set exactly as
+    javac does**: `Queue<E> q = new LinkedList<>()` cannot call `q.get(0)`
+    (a `Queue` is not a `List`), and accepting it would be the dangerous
+    direction. The nullable ends match Java: `poll`/`peek` (and the
+    `*First`/`*Last` polls/peeks) return the **boxed** element so an empty
+    collection yields `null`, while `remove()`/`element()`/`getFirst()` throw
+    `NoSuchElementException`. `new LinkedList<>(c)` copies any collection in
+    order; a `LinkedList` widens to `List`/`Collection` (and a `Deque` to
+    `Queue`), and for-each walks it by index. `iterator`/`stream`/`removeIf`
+    report honest reasons; `TreeMap`/`TreeSet`/`ArrayDeque`/`Stack` stay
+    unsupported. Pinned against a real JDK by `diff_linked_list_queue`,
+    `_deque` and `_as_list`.
   - **`toString` is honoured wherever a value becomes text** (2026-07-09).
     A container renders its elements by calling their `toString()`, as
     `AbstractCollection` and `AbstractMap` do — `println(list)`,
@@ -549,9 +570,9 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     a `NullPointerException`. `lineSeparator()` is always `"\n"`: the
     JVM's is system-dependent, and caturra runs where a line ends with a
     newline. Pinned by `diff_system_arraycopy_and_line_separator`.
-  - A real Java 11 class caturra does not model (`LinkedList`, `HashSet`,
-    `TreeMap`, `TreeSet`, `Iterator`, `Optional`, `BufferedReader`, ...)
-    reports an honest "java.util.LinkedList is not supported by caturra"
+  - A real Java 11 class caturra does not model (`TreeMap`, `TreeSet`,
+    `Stack`, `ArrayDeque`, `Iterator`, `Optional`, `BufferedReader`, ...)
+    reports an honest "java.util.TreeSet is not supported by caturra"
     **wherever it is written** (2026-07-09): a local or field declaration,
     a parameter, an array element, a type argument, `new`, `extends` and
     `implements`, qualified or not. Until then only `import` and `new`
@@ -562,14 +583,14 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     library one, and a genuine typo still gets `unknown type 'Frobnicator'`
     (blaming the type argument, not the `ArrayList` around it). javac
     accepts all of these, so this is deliberate strictness, pinned by
-    `strict_linked_list_is_refused_by_name` and
+    `strict_tree_set_is_refused_by_name` and
     `unmodeled_library_classes_explain_themselves_in_every_position`.
   - `import` statements are real (2026-07-03): declarations are
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
     an honest "not supported by caturra" instead), and using `Scanner`,
-    `ArrayList`, `HashMap`, `Map`, `Set`, `HashSet`, `Collection`, `File`,
-    or `PrintWriter` without the matching import
+    `ArrayList`, `HashMap`, `Map`, `Set`, `HashSet`, `LinkedList`, `Queue`,
+    `Deque`, `Collection`, `File`, or `PrintWriter` without the matching import
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
     imports (`IOException`, ...) are accepted for `throws` clauses;

@@ -1121,6 +1121,16 @@ impl MethodTable {
                     Some(JType::Map { key, value })
                 } else if simple == "Set" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Set)
+                } else if matches!(simple, "LinkedList" | "Queue" | "Deque")
+                    && args.len() == 1
+                    && !self.has_class(simple)
+                {
+                    let role = match simple {
+                        "Queue" => SeqRole::Queue,
+                        "Deque" => SeqRole::Deque,
+                        _ => SeqRole::Full,
+                    };
+                    elem_from_type_arg(&args[0], self).map(|elem| JType::LinkedList { elem, role })
                 } else if simple == "Collection" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Collection)
                 } else if matches!(simple, "Map.Entry" | "Entry")
@@ -1722,6 +1732,24 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         )
         || (from == JType::Null && to.is_reference())
         || (to == JType::Object(table.object_id) && from.is_reference())
+        // A LinkedList (or a narrower Queue/Deque face) assigns to a wider face
+        // of the same element type: `Queue<E> q = new LinkedList<>()`.
+        || matches!(
+            (from, to),
+            (
+                JType::LinkedList { elem: a, role: r },
+                JType::LinkedList { elem: b, role: to_role },
+            ) if a == b && r.widens_to(to_role)
+        )
+        // The concrete LinkedList is a List; any of them is a Collection.
+        || matches!(
+            (from, to),
+            (JType::LinkedList { elem: a, role: SeqRole::Full }, JType::List(b)) if a == b
+        )
+        || matches!(
+            (from, to),
+            (JType::LinkedList { elem: a, .. }, JType::Collection(b)) if a == b
+        )
         // A parameterized type and its raw class erase alike, so they
         // are mutually assignable (`Box<String> b = new Box<>()`).
         || matches!((from.erased_class(), to.erased_class()), (Some(a), Some(b)) if a == b)
@@ -1887,6 +1915,13 @@ enum JType {
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
+    /// `java.util.LinkedList<E>` and its `Queue`/`Deque` interface views. The
+    /// storage is a list; the `role` restricts which methods the receiver
+    /// exposes, so `Queue<E>.get(i)` is rejected exactly as javac rejects it.
+    LinkedList {
+        elem: ElemType,
+        role: SeqRole,
+    },
     /// `java.util.HashMap<K, V>` / `java.util.Map<K, V>` (intrinsic; K and
     /// V tracked at compile time, erased at runtime).
     Map {
@@ -1928,6 +1963,36 @@ enum JType {
     Error,
 }
 
+/// Which interface face of a `LinkedList` a receiver presents. `Full` is the
+/// concrete `LinkedList` (every method); `Queue` and `Deque` are the narrower
+/// interface views a `Queue<E>`/`Deque<E>` variable exposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeqRole {
+    Full,
+    Queue,
+    Deque,
+}
+
+impl SeqRole {
+    /// The JVM internal name of the type this role presents.
+    fn internal(self) -> &'static str {
+        match self {
+            SeqRole::Full => "java/util/LinkedList",
+            SeqRole::Queue => "java/util/Queue",
+            SeqRole::Deque => "java/util/Deque",
+        }
+    }
+
+    /// Whether a receiver of this role is assignable to one of `other`'s role:
+    /// the concrete `Full` list is any of them, and a `Deque` is also a `Queue`
+    /// (`Deque extends Queue`), but a `Queue` is neither a `Deque` nor a list.
+    fn widens_to(self, other: SeqRole) -> bool {
+        self == other
+            || self == SeqRole::Full
+            || (self == SeqRole::Deque && other == SeqRole::Queue)
+    }
+}
+
 impl JType {
     fn describe(self, table: &MethodTable) -> String {
         match self {
@@ -1946,6 +2011,14 @@ impl JType {
                 value.base_type().describe(table)
             ),
             JType::Set(elem) => format!("Set<{}>", elem.base_type().describe(table)),
+            JType::LinkedList { elem, role } => {
+                let name = match role {
+                    SeqRole::Full => "LinkedList",
+                    SeqRole::Queue => "Queue",
+                    SeqRole::Deque => "Deque",
+                };
+                format!("{name}<{}>", elem.base_type().describe(table))
+            }
             JType::Collection(elem) => {
                 format!("Collection<{}>", elem.base_type().describe(table))
             }
@@ -2024,6 +2097,7 @@ impl JType {
                 | JType::File
                 | JType::Writer
                 | JType::List(_)
+                | JType::LinkedList { .. }
                 | JType::Map { .. }
                 | JType::Set(_)
                 | JType::Collection(_)
@@ -2081,6 +2155,7 @@ impl JType {
             JType::Generic { class, .. } => format!("L{};", table.class_name(class)),
             JType::Map { .. } => String::from("Ljava/util/HashMap;"),
             JType::Set(_) | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
+            JType::LinkedList { role, .. } => format!("L{};", role.internal()),
             JType::Collection(_) => String::from("Ljava/util/Collection;"),
             JType::MapEntry { .. } => String::from("Ljava/util/Map$Entry;"),
             JType::Int => String::from("I"),
@@ -2518,7 +2593,11 @@ fn method_descriptor(
                 if simple == "HashSet" && !table.has_class("HashSet") {
                     simple = "Set";
                 }
-                if simple == "ArrayList" {
+                if matches!(simple, "LinkedList" | "Queue" | "Deque") && !table.has_class(simple) {
+                    out.push_str("Ljava/util/");
+                    out.push_str(simple);
+                    out.push(';');
+                } else if simple == "ArrayList" {
                     out.push_str("Ljava/util/ArrayList;");
                 } else if simple == "HashMap" {
                     out.push_str("Ljava/util/HashMap;");
@@ -2777,6 +2856,10 @@ enum BRet {
     CharArray,
     /// The list's element type.
     Elem,
+    /// The element type, boxed when primitive — for a `Queue`/`Deque` return
+    /// that is `null` on an empty collection (`poll`/`peek`), so the absence
+    /// is representable exactly as Java's is.
+    BoxedElem,
     /// `java.lang.Class` (`getClass`, `getSuperclass`).
     Class,
     /// `Field[]` (`Class.getDeclaredFields`).
@@ -3214,6 +3297,12 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Set", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Set", "stream", "streams are not supported by caturra"),
     ("Set", "removeIf", "Set.removeIf is not supported by caturra"),
+    ("LinkedList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
+    ("LinkedList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
+    ("LinkedList", "descendingIterator", "iterators are not supported by caturra"),
+    ("LinkedList", "stream", "streams are not supported by caturra"),
+    ("LinkedList", "removeIf", "LinkedList.removeIf is not supported by caturra"),
+    ("LinkedList", "toArray", "Object arrays are not supported by caturra"),
     ("Collection", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Collection", "stream", "streams are not supported by caturra"),
     ("Collection", "removeIf", "lambdas are not supported by caturra"),
@@ -3232,6 +3321,7 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::List(_) => "ArrayList",
         JType::Map { .. } => "HashMap",
         JType::Set(_) | JType::EntrySet { .. } => "Set",
+        JType::LinkedList { .. } => "LinkedList",
         JType::Collection(_) => "Collection",
         JType::MapEntry { .. } => "Map.Entry",
         JType::StringBuilder => "StringBuilder",
@@ -3447,6 +3537,268 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     // Capacity hints: real methods, observable-free in this VM.
     bm("ensureCapacity", &[I], BRet::Void, "(I)V"),
     bm("trimToSize", &[], BRet::Void, "()V"),
+];
+
+/// The `java.util.Queue<E>` methods a `Queue` variable exposes. The nullable
+/// `poll`/`peek` return the boxed element so their empty-collection `null` is
+/// representable; `remove()`/`element()` throw on empty instead.
+const QUEUE_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "add",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "offer",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("remove", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("poll", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("peek", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("element", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm(
+        "contains",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "remove",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "addAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.util.Deque<E>` — everything a `Queue` has, plus the two-ended and
+/// stack (`push`/`pop`) operations.
+const DEQUE_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "add",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "offer",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("remove", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("poll", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("peek", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("element", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("push", &[BParam::Elem], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm("pop", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm(
+        "addFirst",
+        &[BParam::Elem],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "addLast",
+        &[BParam::Elem],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "offerFirst",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "offerLast",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("removeFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("removeLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("pollFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("pollLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("getFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("getLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("peekFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("peekLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm(
+        "contains",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "remove",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "addAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// The concrete `java.util.LinkedList<E>` — every `List` method (it is a
+/// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
+/// the index methods come from being a list; the rest are the deque face.
+const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "add",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "add",
+        &[BParam::Int, BParam::Elem],
+        BRet::Void,
+        "(ILjava/lang/Object;)V",
+    ),
+    bm("get", &[BParam::Int], BRet::Elem, "(I)Ljava/lang/Object;"),
+    bm(
+        "set",
+        &[BParam::Int, BParam::Elem],
+        BRet::Elem,
+        "(ILjava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "remove",
+        &[BParam::Int],
+        BRet::Elem,
+        "(I)Ljava/lang/Object;",
+    ),
+    bm(
+        "remove",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "contains",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "indexOf",
+        &[BParam::Elem],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "lastIndexOf",
+        &[BParam::Elem],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "addAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "containsAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    // The Queue/Deque face.
+    bm(
+        "offer",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("remove", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("poll", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("peek", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("element", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("push", &[BParam::Elem], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm("pop", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm(
+        "addFirst",
+        &[BParam::Elem],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "addLast",
+        &[BParam::Elem],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "offerFirst",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "offerLast",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("removeFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("removeLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("pollFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("pollLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("getFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("getLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("peekFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("peekLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
 ];
 
 const FILE_METHODS: &[BuiltinMethod] = &[
@@ -4660,6 +5012,11 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
+        JType::LinkedList { role, .. } => Some(match role {
+            SeqRole::Full => ("java/util/LinkedList", LINKEDLIST_METHODS),
+            SeqRole::Queue => ("java/util/Queue", QUEUE_METHODS),
+            SeqRole::Deque => ("java/util/Deque", DEQUE_METHODS),
+        }),
         JType::Map { .. } => Some(("java/util/HashMap", MAP_METHODS)),
         JType::Set(_) => Some(("java/util/Set", SET_METHODS)),
         JType::Collection(_) => Some(("java/util/Collection", VIEW_METHODS)),
@@ -4767,7 +5124,10 @@ impl TypeArgs {
         match receiver {
             // A list's element, and a view's own element, are the first
             // type argument; a map's key and value are the two.
-            JType::List(elem) | JType::Set(elem) | JType::Collection(elem) => Self {
+            JType::List(elem)
+            | JType::Set(elem)
+            | JType::Collection(elem)
+            | JType::LinkedList { elem, .. } => Self {
                 first: Some(elem),
                 second: None,
             },
@@ -4873,9 +5233,13 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         // is a Collection too.
         BParam::SelfCollection => match (arg, args.first) {
             (JType::Null, _) => true,
-            (JType::List(elem) | JType::Set(elem) | JType::Collection(elem), Some(want)) => {
-                widens(elem.base_type(), want.base_type(), table)
-            }
+            (
+                JType::List(elem)
+                | JType::Set(elem)
+                | JType::Collection(elem)
+                | JType::LinkedList { elem, .. },
+                Some(want),
+            ) => widens(elem.base_type(), want.base_type(), table),
             _ => false,
         },
         other => widens(arg, bparam_type(other, args), table),
@@ -4935,7 +5299,8 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         }),
         BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
         BRet::Val => Some(boxed_if_primitive(args.second)),
-        BRet::Key => Some(boxed_if_primitive(args.first)),
+        // A map key and a queue/deque nullable element both box the first arg.
+        BRet::Key | BRet::BoxedElem => Some(boxed_if_primitive(args.first)),
         BRet::Keys => Some(args.first.map_or(JType::Error, JType::Set)),
         BRet::Values => Some(args.second.map_or(JType::Error, JType::Collection)),
         BRet::Entries => Some(match (args.first, args.second) {
@@ -6640,6 +7005,15 @@ impl BodyGen<'_> {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Set),
                 _ => JType::Null,
             },
+            "LinkedList" => match type_args {
+                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
+                    JType::LinkedList {
+                        elem,
+                        role: SeqRole::Full,
+                    }
+                }),
+                _ => JType::Null,
+            },
             _ => JType::Error,
         }
     }
@@ -6711,6 +7085,7 @@ impl BodyGen<'_> {
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "HashMap" => return self.new_hash_map(type_args, args, span),
                 "HashSet" => return self.new_hash_set(type_args, args, span),
+                "LinkedList" => return self.new_linked_list(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
                 "Integer" | "Double" | "Long" | "Float" | "Short" | "Byte" | "Character"
@@ -7184,6 +7559,78 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `new LinkedList<>()` / `new LinkedList<>(collection)`. Emits
+    /// `new java.util.LinkedList`; the concrete type exposes the full
+    /// `List`+`Deque` surface (`SeqRole::Full`).
+    fn new_linked_list(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        if args.len() > 1 {
+            self.error(span, "LinkedList takes at most one constructor argument");
+            return JType::Error;
+        }
+        let mut elem = match type_args {
+            [] => None,
+            [arg] => {
+                let Some(elem) = elem_from_type_arg(arg, self.table) else {
+                    self.error(
+                        span,
+                        "LinkedList element type must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some(elem)
+            }
+            _ => {
+                self.error(span, "LinkedList takes one type argument");
+                return JType::Error;
+            }
+        };
+        let list_class = intern_class(self.pool, "java/util/LinkedList");
+        self.code.push_op_u16(op::NEW, list_class, 1);
+        self.code.push_op(op::DUP, 1);
+        match args {
+            [] => {
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/LinkedList", "<init>", "()V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(1);
+            }
+            [source] => {
+                let source_ty = self.expr(source);
+                match source_ty {
+                    JType::List(source_elem)
+                    | JType::Set(source_elem)
+                    | JType::Collection(source_elem)
+                    | JType::LinkedList {
+                        elem: source_elem, ..
+                    } => {
+                        if elem.is_none() {
+                            elem = Some(source_elem);
+                        }
+                    }
+                    JType::Null => {}
+                    _ => self.error(span, "new LinkedList(...) takes a Collection"),
+                }
+                let init_ref = intern_method_ref(
+                    self.pool,
+                    "java/util/LinkedList",
+                    "<init>",
+                    "(Ljava/util/Collection;)V",
+                );
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+            }
+            _ => unreachable!("arg count checked above"),
+        }
+        match elem {
+            Some(elem) => JType::LinkedList {
+                elem,
+                role: SeqRole::Full,
+            },
+            None => JType::Null,
+        }
+    }
+
     /// `new HashSet<>()` / `new HashSet<>(int)` / `new HashSet<>(collection)`.
     /// Emits `new java.util.HashSet` so the VM builds a set backed by a map of
     /// the elements; the copy constructor deduplicates at runtime.
@@ -7379,6 +7826,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::List(_)
+            | JType::LinkedList { .. }
             | JType::Map { .. }
             | JType::Set(_)
             | JType::Collection(_)
@@ -8057,7 +8505,7 @@ impl BodyGen<'_> {
         // Every intrinsic collection compiles to the same index loop: caturra
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
-            JType::List(elem) => Some(("get", elem.base_type())),
+            JType::List(elem) | JType::LinkedList { elem, .. } => Some(("get", elem.base_type())),
             JType::Set(elem) | JType::Collection(elem) => {
                 Some(("__get", boxed_if_primitive(Some(elem))))
             }
@@ -9077,6 +9525,7 @@ impl BodyGen<'_> {
             | JType::Boxed(_)
             | JType::Map { .. }
             | JType::Set(_)
+            | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -9330,6 +9779,7 @@ impl BodyGen<'_> {
                         | JType::File
                         | JType::Writer
                         | JType::List(_)
+                        | JType::LinkedList { .. }
                         | JType::Map { .. }
                         | JType::Set(_)
                         | JType::Collection(_)
@@ -11337,6 +11787,7 @@ impl BodyGen<'_> {
             | JType::Boxed(_)
             | JType::Map { .. }
             | JType::Set(_)
+            | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -11745,6 +12196,10 @@ impl BodyGen<'_> {
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
             // A parameterized type and its raw class erase alike.
             (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
+            // A LinkedList (or its Queue/Deque face) erases to a list, so
+            // assigning it to a wider face, a `List`, or a `Collection` of the
+            // same element type needs no code — as `widens` already allows.
+            (JType::LinkedList { .. }, _) if widens(from, to, self.table) => {}
             // Array covariance: `Card[]` assigns to `Comparable[]`.
             (
                 JType::Array {

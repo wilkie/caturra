@@ -70,6 +70,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             closed: false,
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
+        "java/util/LinkedList" => Some(HeapObject::LinkedList(Vec::new())),
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
         "java/util/HashSet" => Some(HeapObject::HashSet(JavaHashMap::new())),
         "java/io/File" => Some(HeapObject::File(String::new())),
@@ -383,7 +384,9 @@ pub fn invoke_virtual(
         }
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
-        (HeapObject::ArrayList(_), _) => list_method(heap, receiver, method, descriptor, args),
+        (HeapObject::ArrayList(_) | HeapObject::LinkedList(_), _) => {
+            list_method(heap, receiver, method, descriptor, args)
+        }
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
         (
             HeapObject::Exception {
@@ -1914,7 +1917,18 @@ fn float_to_int_bits(value: f32) -> i32 {
     }
 }
 
-/// `java.util.ArrayList` methods (values stored unboxed).
+/// `Some(true)` for a method whose descriptor returns `boolean`, else `None`
+/// (a void method). Lets one arm serve both an appending `boolean` form
+/// (`offer`) and a void one (`addLast`) without unbalancing the caller's stack.
+fn boolean_return_if(descriptor: &str) -> Option<JValue> {
+    descriptor.ends_with(")Z").then_some(JValue::Int(1))
+}
+
+/// `java.util.ArrayList` methods, and the positional `java.util.LinkedList`
+/// (`Queue`/`Deque`) methods — both store their elements the same way, so the
+/// index-and-end operations that need no element comparison share this layer.
+/// (`contains`/`indexOf`/`remove(Object)`/`equals` compare elements, so they
+/// live in the interpreter, which can call a user `equals`.)
 #[allow(clippy::too_many_lines)] // one arm per documented method
 fn list_method(
     heap: &mut Heap,
@@ -1923,10 +1937,9 @@ fn list_method(
     descriptor: &str,
     args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
-    let list_len = match heap.get(receiver) {
-        Some(HeapObject::ArrayList(values)) => values.len(),
-        _ => unreachable!("receiver kind checked by caller"),
-    };
+    let list_len = heap
+        .list_values(receiver)
+        .map_or_else(|| unreachable!("receiver kind checked by caller"), Vec::len);
     let check = |index: i32, limit: usize| -> Result<usize, VmError> {
         usize::try_from(index)
             .ok()
@@ -1938,17 +1951,55 @@ fn list_method(
                 ))
             })
     };
+    // A `Deque`/`Queue` end operation that must not run on an empty list:
+    // `getFirst`/`removeFirst`/`element` throw `NoSuchElementException`, while
+    // `peek`/`poll` return `null` — the caller picks by passing the throw flag.
+    let end_value = |heap: &mut Heap, from_front: bool, remove: bool, throw_empty: bool| {
+        let Some(values) = heap.list_values_mut(receiver) else {
+            unreachable!()
+        };
+        if values.is_empty() {
+            return if throw_empty {
+                Err(throw("java.util.NoSuchElementException"))
+            } else {
+                Ok(Some(JValue::NULL))
+            };
+        }
+        let at = if from_front { 0 } else { values.len() - 1 };
+        let value = if remove {
+            values.remove(at)
+        } else {
+            values[at]
+        };
+        Ok(Some(value))
+    };
     match (method, descriptor, args) {
         ("size", _, []) => Ok(Some(JValue::Int(
             i32::try_from(list_len).unwrap_or(i32::MAX),
         ))),
         ("isEmpty", _, []) => Ok(Some(JValue::Int(i32::from(list_len == 0)))),
-        ("add", "(Ljava/lang/Object;)Z", [value]) => {
+        // `add`/`offer`/`addLast`/`offerLast` all append; `addFirst`/`offerFirst`
+        // and `push` prepend. The `offer*` forms and `Queue.add` return a
+        // boolean; `addFirst`/`addLast`/`push` are void — the descriptor says
+        // which, and returning a value for a void method would unbalance the
+        // stack.
+        (
+            "add" | "offer" | "addLast" | "offerLast",
+            "(Ljava/lang/Object;)Z" | "(Ljava/lang/Object;)V",
+            [value],
+        ) => {
             let value = *value;
-            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+            if let Some(values) = heap.list_values_mut(receiver) {
                 values.push(value);
             }
-            Ok(Some(JValue::Int(1)))
+            Ok(boolean_return_if(descriptor))
+        }
+        ("addFirst" | "offerFirst" | "push", _, [value]) => {
+            let value = *value;
+            if let Some(values) = heap.list_values_mut(receiver) {
+                values.insert(0, value);
+            }
+            Ok(boolean_return_if(descriptor))
         }
         ("add", "(ILjava/lang/Object;)V", [JValue::Int(index), value]) => {
             // Insertion allows index == size.
@@ -1962,22 +2013,21 @@ fn list_method(
                     ))
                 })?;
             let value = *value;
-            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+            if let Some(values) = heap.list_values_mut(receiver) {
                 values.insert(at, value);
             }
             Ok(None)
         }
         ("get", _, [JValue::Int(index)]) => {
             let at = check(*index, list_len)?;
-            match heap.get(receiver) {
-                Some(HeapObject::ArrayList(values)) => Ok(Some(values[at])),
-                _ => unreachable!(),
-            }
+            Ok(Some(
+                heap.list_values(receiver).map_or(JValue::NULL, |v| v[at]),
+            ))
         }
         ("set", _, [JValue::Int(index), value]) => {
             let at = check(*index, list_len)?;
             let value = *value;
-            let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) else {
+            let Some(values) = heap.list_values_mut(receiver) else {
                 unreachable!()
             };
             let previous = values[at];
@@ -1986,25 +2036,35 @@ fn list_method(
         }
         ("remove", _, [JValue::Int(index)]) => {
             let at = check(*index, list_len)?;
-            let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) else {
+            let Some(values) = heap.list_values_mut(receiver) else {
                 unreachable!()
             };
             Ok(Some(values.remove(at)))
         }
+        // Positional ends. `peek*`/`poll*` are null-on-empty; `getFirst`/
+        // `getLast`/`removeFirst`/`removeLast`/`element`/`pop`/`remove()` throw.
+        ("peek" | "peekFirst", _, []) => end_value(heap, true, false, false),
+        ("peekLast", _, []) => end_value(heap, false, false, false),
+        ("poll" | "pollFirst", _, []) => end_value(heap, true, true, false),
+        ("pollLast", _, []) => end_value(heap, false, true, false),
+        ("getFirst" | "element", _, []) => end_value(heap, true, false, true),
+        ("getLast", _, []) => end_value(heap, false, false, true),
+        ("removeFirst" | "pop" | "remove", _, []) => end_value(heap, true, true, true),
+        ("removeLast", _, []) => end_value(heap, false, true, true),
         ("clear", _, []) => {
-            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+            if let Some(values) = heap.list_values_mut(receiver) {
                 values.clear();
             }
             Ok(None)
         }
         ("addAll", "(Ljava/util/Collection;)Z", [JValue::Ref(other)]) => {
             let other = other.ok_or_else(|| throw("java.lang.NullPointerException"))?;
-            let incoming = match heap.get(other) {
-                Some(HeapObject::ArrayList(values)) => values.clone(),
+            let incoming = match heap.list_values(other) {
+                Some(values) => values.clone(),
                 _ => return Err(throw("java.lang.ClassCastException: not a list")),
             };
             let changed = !incoming.is_empty();
-            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+            if let Some(values) = heap.list_values_mut(receiver) {
                 values.extend(incoming);
             }
             Ok(Some(JValue::Int(i32::from(changed))))
@@ -2020,12 +2080,12 @@ fn list_method(
                          for length {list_len}"
                     ))
                 })?;
-            let incoming = match heap.get(other) {
-                Some(HeapObject::ArrayList(values)) => values.clone(),
+            let incoming = match heap.list_values(other) {
+                Some(values) => values.clone(),
                 _ => return Err(throw("java.lang.ClassCastException: not a list")),
             };
             let changed = !incoming.is_empty();
-            if let Some(HeapObject::ArrayList(values)) = heap.get_mut(receiver) {
+            if let Some(values) = heap.list_values_mut(receiver) {
                 for (offset, value) in incoming.into_iter().enumerate() {
                     values.insert(at + offset, value);
                 }
@@ -2035,7 +2095,7 @@ fn list_method(
         // Capacity hints: real methods, observable-free here.
         ("ensureCapacity", _, [JValue::Int(_)]) | ("trimToSize", _, []) => Ok(None),
         _ => Err(VmError::UnknownIntrinsic(format!(
-            "ArrayList.{method}{descriptor}"
+            "List.{method}{descriptor}"
         ))),
     }
 }

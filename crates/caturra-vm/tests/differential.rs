@@ -5266,9 +5266,9 @@ differential_reject!(
 );
 
 stricter_than_javac!(
-    strict_linked_list_is_refused_by_name,
-    "StrictLinkedList",
-    "import java.util.*;\npublic class StrictLinkedList { static void r() { LinkedList<Integer> l; } }"
+    strict_tree_set_is_refused_by_name,
+    "StrictTreeSet",
+    "import java.util.*;\npublic class StrictTreeSet { static void r() { TreeSet<Integer> s; } }"
 );
 
 differential_test!(
@@ -6532,9 +6532,130 @@ public class DiffHashSetKeys {
 );
 
 // ---------------------------------------------------------------------------
-// Reject wording, checked against javac rather than against our own memory of
-// it. Both sides are pinned: if javac's phrasing changes with the JDK, or if
-// caturra's drifts, the table says so.
+// java.util.LinkedList as a List, a Queue, and a Deque. The storage is a list,
+// so order and the List face match the JDK; the Queue/Deque faces add the
+// end operations, with the interface typing restricting which are callable.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_linked_list_queue,
+    "DiffLLQueue",
+    r#"
+import java.util.LinkedList;
+import java.util.Queue;
+
+public class DiffLLQueue {
+    public static void main(String[] args) {
+        Queue<Integer> q = new LinkedList<>();
+        System.out.println(q.offer(1) + " " + q.offer(2) + " " + q.add(3));
+        System.out.println(q.peek());     // 1
+        System.out.println(q.poll());     // 1
+        System.out.println(q);            // [2, 3]
+        System.out.println(q.size());     // 2
+
+        // Empty queue: poll/peek are null; remove/element throw.
+        Queue<Integer> empty = new LinkedList<>();
+        System.out.println(empty.poll());
+        System.out.println(empty.peek());
+        try {
+            empty.remove();
+        } catch (java.util.NoSuchElementException e) {
+            System.out.println("nse");
+        }
+
+        // BFS-style drain.
+        Queue<Integer> bfs = new LinkedList<>();
+        for (int i = 1; i <= 4; i++) {
+            bfs.add(i * 10);
+        }
+        StringBuilder sb = new StringBuilder();
+        while (!bfs.isEmpty()) {
+            sb.append(bfs.poll()).append(" ");
+        }
+        System.out.println(sb.toString().trim());  // 10 20 30 40
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_linked_list_deque,
+    "DiffLLDeque",
+    r#"
+import java.util.Deque;
+import java.util.LinkedList;
+
+public class DiffLLDeque {
+    public static void main(String[] args) {
+        // As a stack (push/pop/peek at the head).
+        Deque<Integer> stack = new LinkedList<>();
+        stack.push(10);
+        stack.push(20);
+        stack.push(30);
+        System.out.println(stack.peek());  // 30
+        System.out.println(stack.pop());   // 30
+        System.out.println(stack);         // [20, 10]
+
+        // As a double-ended queue.
+        Deque<String> d = new LinkedList<>();
+        d.addFirst("b");
+        d.addFirst("a");
+        d.addLast("c");
+        System.out.println(d);                            // [a, b, c]
+        System.out.println(d.getFirst() + " " + d.getLast());
+        System.out.println(d.pollFirst() + " " + d.pollLast());
+        System.out.println(d);                            // [b]
+        System.out.println(d.peekFirst() + " " + d.peekLast());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_linked_list_as_list,
+    "DiffLLAsList",
+    r#"
+import java.util.LinkedList;
+import java.util.List;
+
+public class DiffLLAsList {
+    public static void main(String[] args) {
+        LinkedList<String> ll = new LinkedList<>();
+        ll.add("b");
+        ll.addFirst("a");
+        ll.addLast("c");
+        ll.add(1, "X");
+        System.out.println(ll);            // [a, X, b, c]
+        System.out.println(ll.get(2));     // b
+        System.out.println(ll.indexOf("c"));
+        System.out.println(ll.contains("X"));
+        ll.set(0, "A");
+        ll.remove(1);
+        System.out.println(ll);            // [A, b, c]
+
+        // A LinkedList flows into a List variable and is walked by index.
+        List<Integer> nums = new LinkedList<>();
+        nums.add(5);
+        nums.add(6);
+        nums.add(7);
+        int sum = 0;
+        for (int n : nums) {
+            sum += n;
+        }
+        System.out.println(sum);           // 18
+        System.out.println(nums.equals(nums));
+
+        // Copy constructor from another collection, preserving order.
+        List<Integer> copy = new LinkedList<>(nums);
+        System.out.println(copy);          // [5, 6, 7]
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
+// java.util.HashSet — the element iteration order is a real HashSet's exactly,
+// because caturra backs it with the same bucket-order machinery as HashMap.
 // ---------------------------------------------------------------------------
 
 /// How caturra's diagnostic relates to javac's headline for the same program.

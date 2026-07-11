@@ -402,9 +402,10 @@ impl<'run> Interpreter<'run> {
                 Some(crate::value::HeapObject::RefArray(_, values)) => {
                     render_array(values.iter().map(|v| self.render_shallow(*v)))
                 }
-                Some(crate::value::HeapObject::ArrayList(values)) => {
-                    render_array(values.iter().map(|v| self.render_shallow(*v)))
-                }
+                Some(
+                    crate::value::HeapObject::ArrayList(values)
+                    | crate::value::HeapObject::LinkedList(values),
+                ) => render_array(values.iter().map(|v| self.render_shallow(*v))),
                 Some(crate::value::HeapObject::Instance { class_name, fields }) => {
                     if depth > 0 || fields.is_empty() {
                         return format!("{class_name}@{reference:x}");
@@ -1012,6 +1013,14 @@ impl<'run> Interpreter<'run> {
                                         target == "java/util/ArrayList"
                                             || target == "java/util/List"
                                     }
+                                    Some(crate::value::HeapObject::LinkedList(_)) => matches!(
+                                        target.as_str(),
+                                        "java/util/LinkedList"
+                                            | "java/util/List"
+                                            | "java/util/Queue"
+                                            | "java/util/Deque"
+                                            | "java/util/Collection"
+                                    ),
                                     // Boxed wrapper: `x instanceof Integer`.
                                     Some(crate::value::HeapObject::Boxed {
                                         class_name, ..
@@ -1791,6 +1800,22 @@ impl<'run> Interpreter<'run> {
             }
             return Ok(None);
         }
+        // `new LinkedList<>(collection)` copies its elements in order — from any
+        // list, set, or map view, so it belongs here rather than in the
+        // list-only intrinsic layer.
+        if target_class == "java/util/LinkedList" && descriptor == "(Ljava/util/Collection;)V" {
+            use crate::value::HeapObject;
+            let JValue::Ref(Some(source)) = args[0] else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            let elements = self.collection_elements(source);
+            if let Some(HeapObject::LinkedList(values)) = self.heap.get_mut(receiver) {
+                *values = elements;
+            }
+            return Ok(None);
+        }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         if classes.contains_key(&target_class) {
             // A user constructor or a `super.method(...)` call; the
@@ -2160,7 +2185,9 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::Instance { class_name, .. }) => {
                 Renderable::Instance(class_name.clone())
             }
-            Some(HeapObject::ArrayList(items)) => Renderable::List(items.clone()),
+            Some(HeapObject::ArrayList(items) | HeapObject::LinkedList(items)) => {
+                Renderable::List(items.clone())
+            }
             Some(HeapObject::UnmodifiableList(_)) => Renderable::List(self.list_items(reference)),
             Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
             // A set prints as `[a, b]` — its elements are the backing map's
@@ -2296,10 +2323,10 @@ impl<'run> Interpreter<'run> {
         // Everything below reads, or writes, the list itself.
         let unmodifiable = self.is_unmodifiable_list(list);
         let reference = self.backing_list(list);
-        let items = match self.heap.get(reference) {
-            Some(HeapObject::ArrayList(items)) => Some((reference, items.clone())),
-            _ => None,
-        };
+        let items = self
+            .heap
+            .list_values(reference)
+            .map(|items| (reference, items.clone()));
         match (method_name, args) {
             ("sort", [_] | [_, JValue::Ref(Some(_))]) => {
                 let Some((reference, items)) = items else {
@@ -2317,7 +2344,7 @@ impl<'run> Interpreter<'run> {
                     _ => None,
                 };
                 let sorted = self.merge_sort_by(items, comparator)?;
-                if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(reference) {
+                if let Some(slot) = self.heap.list_values_mut(reference) {
                     *slot = sorted;
                 }
             }
@@ -2395,7 +2422,7 @@ impl<'run> Interpreter<'run> {
                     VmError::UnknownIntrinsic(String::from("addAll needs an array"))
                 })?;
                 let changed = !elements.is_empty();
-                if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(reference) {
+                if let Some(slot) = self.heap.list_values_mut(reference) {
                     slot.extend(elements);
                 }
                 frame.stack.push(JValue::Int(i32::from(changed)));
@@ -2998,6 +3025,7 @@ impl<'run> Interpreter<'run> {
             self.heap.get(receiver),
             Some(
                 HeapObject::ArrayList(_)
+                    | HeapObject::LinkedList(_)
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashMap(_)
                     | HeapObject::HashSet(_)
@@ -3096,10 +3124,10 @@ impl<'run> Interpreter<'run> {
     /// The list's elements, detached from the heap borrow. An unmodifiable
     /// view reads through to what it wraps.
     fn list_items(&self, receiver: HeapRef) -> Vec<JValue> {
-        match self.heap.get(self.backing_list(receiver)) {
-            Some(crate::value::HeapObject::ArrayList(items)) => items.clone(),
-            _ => Vec::new(),
-        }
+        self.heap
+            .list_values(self.backing_list(receiver))
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn is_unmodifiable_list(&self, reference: HeapRef) -> bool {
@@ -3136,10 +3164,7 @@ impl<'run> Interpreter<'run> {
             )));
         };
         let other = self.backing_list(other);
-        if !matches!(
-            self.heap.get(other),
-            Some(crate::value::HeapObject::ArrayList(_))
-        ) {
+        if self.heap.list_values(other).is_none() {
             return Err(VmError::UncaughtException(String::from(
                 "java.lang.ClassCastException: not a Collection",
             )));
@@ -3179,8 +3204,7 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         args: &[JValue],
     ) -> Result<Answered, VmError> {
-        use crate::value::HeapObject;
-        if !matches!(self.heap.get(receiver), Some(HeapObject::ArrayList(_))) {
+        if self.heap.list_values(receiver).is_none() {
             return Ok(Answered::No);
         }
         let result = match (method_name, descriptor, args) {
@@ -3199,7 +3223,7 @@ impl<'run> Interpreter<'run> {
             ("sort", _, [JValue::Ref(Some(comparator))]) => {
                 let items = self.list_items(receiver);
                 let sorted = self.merge_sort_by(items, Some(*comparator))?;
-                if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(receiver) {
+                if let Some(slot) = self.heap.list_values_mut(receiver) {
                     *slot = sorted;
                 }
                 return Ok(Answered::Void);
@@ -3213,7 +3237,7 @@ impl<'run> Interpreter<'run> {
                 let at = self.list_index_of(receiver, *probe, false)?;
                 let found = at >= 0;
                 if let Ok(at) = usize::try_from(at)
-                    && let Some(HeapObject::ArrayList(items)) = self.heap.get_mut(receiver)
+                    && let Some(items) = self.heap.list_values_mut(receiver)
                 {
                     items.remove(at);
                 }
@@ -3225,8 +3249,8 @@ impl<'run> Interpreter<'run> {
                 let ours = self.list_items(receiver);
                 // An unmodifiable view equals the list it wraps.
                 let theirs = match other.map(|other| self.backing_list(other)) {
-                    Some(other) => match self.heap.get(other) {
-                        Some(HeapObject::ArrayList(items)) => items.clone(),
+                    Some(other) => match self.heap.list_values(other) {
+                        Some(items) => items.clone(),
                         _ => return Ok(Answered::Value(JValue::Int(0))),
                     },
                     None => return Ok(Answered::Value(JValue::Int(0))),
@@ -3267,7 +3291,7 @@ impl<'run> Interpreter<'run> {
                     }
                 }
                 let changed = kept.len() != self.list_items(receiver).len();
-                if let Some(HeapObject::ArrayList(items)) = self.heap.get_mut(receiver) {
+                if let Some(items) = self.heap.list_values_mut(receiver) {
                     *items = kept;
                 }
                 JValue::Int(i32::from(changed))
@@ -3734,9 +3758,11 @@ impl<'run> Interpreter<'run> {
     fn collection_elements(&self, reference: HeapRef) -> Vec<JValue> {
         use crate::value::HeapObject;
         match self.heap.get(reference) {
-            Some(HeapObject::ArrayList(_) | HeapObject::UnmodifiableList(_)) => {
-                self.list_items(reference)
-            }
+            Some(
+                HeapObject::ArrayList(_)
+                | HeapObject::LinkedList(_)
+                | HeapObject::UnmodifiableList(_),
+            ) => self.list_items(reference),
             Some(HeapObject::HashSet(entries)) => entries
                 .entries_in_order()
                 .into_iter()
@@ -4473,6 +4499,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
             Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
+            Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
             Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
@@ -4835,7 +4862,7 @@ impl<'run> Interpreter<'run> {
             }
         }
         let removed = kept.len() != self.list_items(receiver).len();
-        if let Some(crate::value::HeapObject::ArrayList(list)) = self.heap.get_mut(receiver) {
+        if let Some(list) = self.heap.list_values_mut(receiver) {
             *list = kept;
         }
         Ok(removed)
@@ -4879,7 +4906,7 @@ impl<'run> Interpreter<'run> {
             };
             replaced.push(stored);
         }
-        if let Some(crate::value::HeapObject::ArrayList(list)) = self.heap.get_mut(receiver) {
+        if let Some(list) = self.heap.list_values_mut(receiver) {
             *list = replaced;
         }
         Ok(())

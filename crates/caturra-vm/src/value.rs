@@ -112,6 +112,12 @@ pub enum HeapObject {
     /// A `java.util.ArrayList` (element types erased; values are
     /// stored directly — boxing is a no-op in this VM).
     ArrayList(Vec<JValue>),
+    /// A `java.util.LinkedList` — the same ordered-sequence storage as an
+    /// `ArrayList` (this VM does not model node links or their cost), kept a
+    /// distinct kind only so `getClass()` stays honest and so the compiler can
+    /// offer its `Queue`/`Deque` methods. Reachable through a `List`, `Queue`,
+    /// or `Deque` variable, each of which exposes a different method subset.
+    LinkedList(Vec<JValue>),
     /// An unmodifiable *view* of a list (`Collections.unmodifiableList`,
     /// `Collections.emptyList`). Java's is a view too: a later `add` to the
     /// backing list shows through, and every mutator throws.
@@ -217,6 +223,25 @@ impl Heap {
     #[must_use]
     pub fn get_mut(&mut self, reference: HeapRef) -> Option<&mut HeapObject> {
         self.objects.get_mut(reference as usize)
+    }
+
+    /// The backing element vector of an `ArrayList` or a `LinkedList` — both
+    /// store their elements the same way, so list operations read either.
+    #[must_use]
+    pub fn list_values(&self, reference: HeapRef) -> Option<&Vec<JValue>> {
+        match self.get(reference) {
+            Some(HeapObject::ArrayList(values) | HeapObject::LinkedList(values)) => Some(values),
+            _ => None,
+        }
+    }
+
+    /// The mutable backing vector of an `ArrayList` or a `LinkedList`.
+    #[must_use]
+    pub fn list_values_mut(&mut self, reference: HeapRef) -> Option<&mut Vec<JValue>> {
+        match self.get_mut(reference) {
+            Some(HeapObject::ArrayList(values) | HeapObject::LinkedList(values)) => Some(values),
+            _ => None,
+        }
     }
 
     /// The first string object with these exact code units, if any
