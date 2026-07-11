@@ -706,6 +706,12 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     accepts it (its erased `fill(Object[], Object)`) and throws
     `ArrayStoreException` — stricter, the safe direction. Pinned by
     `diff_arrays_copy_fill_and_binary_search` and `_errors`.
+  - `Arrays.setAll(array, i -> ...)` (2026-07-11) — fills each slot from a
+    generator of its index, for `int[]`, `double[]`, and object arrays. The
+    generator's parameter is the `int` index and its result the array's element
+    type (resolved from the array variable's declared type); it runs in index
+    order, so a generator may read already-filled slots (`Arrays.setAll(fib, i
+    -> i < 2 ? i : fib[i-1] + fib[i-2])`). Pinned by `diff_arrays_set_all`.
   - `Arrays.deepToString`/`deepEquals`/`deepHashCode` (2026-07-09),
     for 2D arrays. These three the VM answers rather than the bundled
     Java, because only it can see an element array's kind once the

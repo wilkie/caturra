@@ -3641,6 +3641,45 @@ fn wrapper_array_and_return_assignment_and_nested_copy() {
     assert_eq!(out, "10\n[a, b]\n");
 }
 
+/// `Arrays.setAll(array, generator)` fills each slot from a generator of its
+/// index, for `int[]`, object, and `double[]` arrays. Pinned JDK-free; the
+/// byte-for-byte JDK match is in `diff_arrays_set_all`.
+#[test]
+fn arrays_set_all_fills_from_index() {
+    let out = run_stdout(
+        r#"
+        import java.util.Arrays;
+        public class A {
+            public static void main(String[] args) {
+                int[] a = new int[5];
+                Arrays.setAll(a, i -> i * i);
+                System.out.println(Arrays.toString(a));
+
+                String[] s = new String[4];
+                Arrays.setAll(s, i -> "item" + i);
+                System.out.println(Arrays.toString(s));
+
+                double[] d = new double[3];
+                Arrays.setAll(d, i -> i / 2.0);
+                System.out.println(Arrays.toString(d));
+
+                int[] b = new int[4];
+                Arrays.setAll(b, i -> b.length - i);
+                System.out.println(Arrays.toString(b));
+            }
+        }
+        "#,
+        "A",
+    );
+    assert_eq!(
+        out,
+        "[0, 1, 4, 9, 16]\n\
+         [item0, item1, item2, item3]\n\
+         [0.0, 0.5, 1.0]\n\
+         [4, 3, 2, 1]\n"
+    );
+}
+
 #[test]
 fn arraylist_copy_and_aslist_varargs() {
     // ArrayList copy constructor (independent list), Arrays.asList varargs,

@@ -453,6 +453,8 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // bundled `__Consumer`/`__Predicate` too.
             || s.text.contains(".ifPresent(")
             || s.text.contains(".filter(")
+            // `Arrays.setAll(a, i -> ...)` uses the bundled `__UnaryOperator`.
+            || s.text.contains(".setAll(")
             // A stream pipeline's `filter`/`map`/… lambdas desugar to the
             // bundled functional interfaces.
             || s.text.contains(".stream(")

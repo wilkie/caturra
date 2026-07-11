@@ -572,6 +572,27 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `Arrays.setAll(array, i -> ...)`: the generator's parameter is the
+            // int index, its result the array's element type.
+            if method == "setAll"
+                && args.len() == 2
+                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. }) if path.len() == 1 && path[0] == "Arrays")
+                && matches!(&args[1], Expr::Lambda { params, .. } if params.len() == 1)
+                && let Some(elem) = array_elem_type(&args[0], ctx)
+            {
+                desugar_expr(&mut args[0], None, ctx);
+                let object = TypeRef::Named(String::from("Object"));
+                args[1] = build_erased_lambda(
+                    &mut args[1],
+                    "__UnaryOperator",
+                    "apply",
+                    &object,
+                    &[TypeRef::Int],
+                    Some(&elem),
+                    ctx,
+                );
+                return;
+            }
             // `Comparator.comparing*(keyExtractor)` — the extractor is a
             // `Function`, erased to `__UnaryOperator`. A method reference
             // (`Person::getAge`) self-types; a lambda needs the element type,
@@ -1014,6 +1035,22 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 /// The declared element type of a `List`/`ArrayList`/`Set`/`Collection`
 /// receiver, read syntactically from the local, parameter, or field it names
 /// — the same shape as `map_type_args`, for a single type argument.
+/// The element type of a receiver declared as an array (`int[]` → `int`,
+/// `String[]` → `String`) — for typing the generator of `Arrays.setAll`.
+fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let ty = match receiver {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)?
+        }
+        _ => return None,
+    };
+    match ty {
+        TypeRef::Array(elem) => Some(*elem),
+        _ => None,
+    }
+}
+
 /// The element type `E` of a receiver declared `Optional<E>` — for typing the
 /// lambda parameter of `ifPresent`/`filter`. Resolves a variable, a `this`
 /// field, or an inline `new`, the same shapes `list_elem_type` handles.

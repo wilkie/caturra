@@ -10459,6 +10459,11 @@ impl BodyGen<'_> {
         if class == "Arrays" && is_arrays_array_method(method) {
             return self.emit_arrays_array_call(method, args, span);
         }
+        // `Arrays.setAll(array, i -> ...)` fills the array from a generator of
+        // the index; the generator is already the erased `__UnaryOperator`.
+        if class == "Arrays" && method == "setAll" {
+            return self.emit_arrays_set_all(args, span);
+        }
         // `Collections.reverse/swap` are generic over the list element type;
         // emit the (uniform-at-runtime) list argument(s) and call the bundle,
         // bypassing invariant List<elem> parameter matching.
@@ -11114,6 +11119,32 @@ impl BodyGen<'_> {
     /// javac's wording when no `Arrays` overload matches the arguments.
     fn no_suitable_arrays_method(&mut self, method: &str, args: &[Expr], span: SourceSpan) {
         self.no_suitable_library_method("Arrays", method, args, span);
+    }
+
+    /// `Arrays.setAll(array, generator)` — the generator (already the erased
+    /// `__UnaryOperator`) is applied to each index and stored. Returns void; the
+    /// VM keys on the array's own kind for how to store each result.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_arrays_set_all(&mut self, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
+        let [array_arg, generator_arg] = args else {
+            self.no_suitable_library_method("Arrays", "setAll", args, span);
+            return None;
+        };
+        let array_ty = self.expr(array_arg);
+        if !matches!(array_ty, JType::Array { .. }) {
+            self.error(array_arg.span(), "Arrays.setAll takes an array");
+            self.code.discard();
+            return None;
+        }
+        self.expr(generator_arg);
+        let descriptor = format!(
+            "({}Ljava/util/function/IntUnaryOperator;)V",
+            array_ty.descriptor(self.table)
+        );
+        let method_ref = intern_method_ref(self.pool, "Arrays", "setAll", &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+        self.code.drop_stack(2);
+        Some(None)
     }
 
     /// `Arrays.copyOf(a, n)`, `copyOfRange(a, from, to)`, `fill(a[, from, to], v)`

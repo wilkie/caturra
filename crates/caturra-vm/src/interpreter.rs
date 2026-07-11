@@ -2835,6 +2835,46 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(list)));
             return Ok(true);
         }
+        // `setAll(array, generator)` stores `generator.apply(i)` at each index i;
+        // the array's own kind decides how each result is stored. Void.
+        if let ("setAll", [JValue::Ref(Some(array)), JValue::Ref(Some(generator))]) =
+            (method_name, args)
+        {
+            use crate::value::HeapObject;
+            let (array, generator) = (*array, *generator);
+            let len = match self.heap.get(array) {
+                Some(HeapObject::IntArray(_, v)) => v.len(),
+                Some(HeapObject::DoubleArray(v)) => v.len(),
+                Some(HeapObject::RefArray(_, v)) => v.len(),
+                _ => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
+            };
+            for i in 0..len {
+                let index = JValue::Int(i32::try_from(i).unwrap_or(i32::MAX));
+                let value = self.call_apply(generator, index)?;
+                match self.heap.get_mut(array) {
+                    Some(HeapObject::IntArray(_, v)) => {
+                        if let JValue::Int(n) = value {
+                            v[i] = n;
+                        }
+                    }
+                    Some(HeapObject::DoubleArray(v)) => {
+                        v[i] = match value {
+                            JValue::Double(d) => d,
+                            JValue::Int(n) => f64::from(n),
+                            JValue::Float(f) => f64::from(f),
+                            _ => 0.0,
+                        };
+                    }
+                    Some(HeapObject::RefArray(_, v)) => v[i] = value,
+                    _ => {}
+                }
+            }
+            return Ok(true);
+        }
         // These three recurse into element arrays, so an element array's kind
         // decides how it renders and hashes, and the elements' own
         // toString/equals/hashCode may be the user's.

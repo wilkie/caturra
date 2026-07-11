@@ -4202,6 +4202,39 @@ public class DiffArraysEquals {
 );
 
 differential_test!(
+    diff_arrays_set_all,
+    "DiffArraysSetAll",
+    r#"
+import java.util.Arrays;
+
+public class DiffArraysSetAll {
+    public static void main(String[] args) {
+        int[] a = new int[6];
+        Arrays.setAll(a, i -> i * i);
+        System.out.println(Arrays.toString(a));
+
+        String[] s = new String[4];
+        Arrays.setAll(s, i -> "n" + (i + 1));
+        System.out.println(Arrays.toString(s));
+
+        double[] d = new double[4];
+        Arrays.setAll(d, i -> i / 4.0);
+        System.out.println(Arrays.toString(d));
+
+        // A generator that reads the array it fills (already-set slots).
+        int[] fib = new int[8];
+        Arrays.setAll(fib, i -> i < 2 ? i : fib[i - 1] + fib[i - 2]);
+        System.out.println(Arrays.toString(fib));
+
+        Integer[] boxed = new Integer[3];
+        Arrays.setAll(boxed, i -> i + 10);
+        System.out.println(Arrays.toString(boxed));
+    }
+}
+"#
+);
+
+differential_test!(
     diff_arrays_sort_uses_compare_to,
     "DiffArraysSort",
     r#"
