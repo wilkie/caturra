@@ -517,21 +517,44 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
-            // `optional.ifPresent(x -> ...)` / `filter(x -> ...)`: a single
-            // lambda whose parameter is the Optional's element type. `ifPresent`
-            // erases to `__Consumer` (void), `filter` to `__Predicate` (boolean).
-            if matches!(method.as_str(), "ifPresent" | "filter")
+            // `optional.ifPresent(x -> ...)` / `filter(x -> ...)` / `map(x ->
+            // ...)`: a single lambda whose parameter is the Optional's element.
+            // `ifPresent` erases to `__Consumer` (void), `filter` to
+            // `__Predicate` (boolean), `map` to `__UnaryOperator` (its result
+            // erased to `Object`, like a stream's `map`).
+            if matches!(method.as_str(), "ifPresent" | "filter" | "map")
                 && args.len() == 1
                 && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
                 && let Some(r) = receiver.as_deref()
                 && let Some(elem) = optional_elem_type(r, ctx)
             {
-                let (iface, sam, ret) = if method == "ifPresent" {
-                    ("__Consumer", "accept", TypeRef::Void)
-                } else {
-                    ("__Predicate", "test", TypeRef::Boolean)
+                let object = TypeRef::Named(String::from("Object"));
+                let (iface, sam, ret) = match method.as_str() {
+                    "ifPresent" => ("__Consumer", "accept", TypeRef::Void),
+                    "filter" => ("__Predicate", "test", TypeRef::Boolean),
+                    _ => ("__UnaryOperator", "apply", object),
                 };
                 args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], None, ctx);
+                return;
+            }
+            // `optional.orElseGet(() -> ...)`: a zero-parameter supplier whose
+            // result is the Optional's element type.
+            if method == "orElseGet"
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.is_empty())
+                && let Some(r) = receiver.as_deref()
+                && let Some(elem) = optional_elem_type(r, ctx)
+            {
+                let object = TypeRef::Named(String::from("Object"));
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    "__Supplier",
+                    "get",
+                    &object,
+                    &[],
+                    Some(&elem),
+                    ctx,
+                );
                 return;
             }
             // `list.sort((a, b) -> ...)`: a two-parameter comparator whose

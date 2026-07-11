@@ -3015,6 +3015,8 @@ enum BParam {
     Consumer,
     Predicate,
     UnaryOperator,
+    /// `Optional.orElseGet`'s erased `__Supplier` (a zero-argument lambda).
+    Supplier,
     /// `list.sort`/`Collections.sort`'s erased `__Comparator`.
     Comparator,
     /// `java.lang.StringBuilder` (`StringBuilder.compareTo(StringBuilder)`).
@@ -3056,6 +3058,8 @@ enum BRet {
     IntArray,
     /// `Optional<E>` of the receiver's element (`findFirst`, `max`, `min`).
     Optional,
+    /// `Optional.map` — an `Optional` whose element is erased to `Object`.
+    OptionalErased,
     /// `OptionalInt` (`IntStream.max`/`min`).
     OptionalInt,
     /// `OptionalDouble` (`IntStream.average`).
@@ -4408,6 +4412,22 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
         &[BParam::Predicate],
         BRet::Optional,
         "(Ljava/util/function/Predicate;)Ljava/util/Optional;",
+    ),
+    // `map(function)` transforms a present value; its result element is erased
+    // (like a stream's `map`), so the `Optional`'s element becomes `Object`.
+    bm(
+        "map",
+        &[BParam::UnaryOperator],
+        BRet::OptionalErased,
+        "(Ljava/util/function/Function;)Ljava/util/Optional;",
+    ),
+    // `orElseGet(supplier)` yields the value or the supplier's result — both the
+    // element type.
+    bm(
+        "orElseGet",
+        &[BParam::Supplier],
+        BRet::Elem,
+        "(Ljava/util/function/Supplier;)Ljava/lang/Object;",
     ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
@@ -6182,6 +6202,7 @@ fn bparam_type(param: BParam, args: TypeArgs) -> JType {
         | BParam::Consumer
         | BParam::Predicate
         | BParam::UnaryOperator
+        | BParam::Supplier
         | BParam::Comparator => JType::Object(ClassId(0)),
         BParam::Builder => JType::StringBuilder,
         BParam::Key => boxed_if_primitive(args.first),
@@ -6214,6 +6235,10 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         ),
         BParam::UnaryOperator => matches!(
             (arg, table.class_id("__UnaryOperator")),
+            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+        ),
+        BParam::Supplier => matches!(
+            (arg, table.class_id("__Supplier")),
             (JType::Object(id), Some(target)) if table.is_subtype(id, target)
         ),
         BParam::Comparator => matches!(
@@ -6302,6 +6327,8 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             dims: 1,
         }),
         BRet::Optional => Some(args.first.map_or(JType::Error, JType::Optional)),
+        // `Optional.map` erases its result element to `Object`, like a stream's.
+        BRet::OptionalErased => Some(JType::Optional(ElemType::Object(table.object_id))),
         BRet::OptionalInt => Some(JType::OptionalInt),
         BRet::OptionalDouble => Some(JType::OptionalDouble),
         BRet::Collector => Some(JType::Collector),

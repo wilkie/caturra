@@ -8505,6 +8505,41 @@ fn optionals_from_stream_terminals() {
     assert_eq!(out, "5\n2.8\nbanana\nfalse none\nOptional.empty\n");
 }
 
+/// `Optional.map(function)` transforms a present value (its element erased,
+/// like a stream's `map`), and `orElseGet(supplier)` computes a fallback only
+/// when absent. Pinned JDK-free; the JDK match is in `diff_optional_map`.
+#[test]
+fn optional_map_and_or_else_get() {
+    let out = run_stdout(
+        r#"
+        import java.util.Optional;
+        public class O {
+            public static void main(String[] args) {
+                Optional<String> a = Optional.of("hello");
+                System.out.println(a.map(s -> s.length()).get());
+                System.out.println(a.map(s -> s.toUpperCase()).get());
+                Optional<String> e = Optional.empty();
+                System.out.println(e.map(s -> s.length()).isPresent());
+                System.out.println(a.map(s -> s + "!").orElse("none"));
+                System.out.println(e.map(s -> s + "!").orElse("none"));
+
+                System.out.println(a.orElseGet(() -> "default"));
+                System.out.println(e.orElseGet(() -> "computed"));
+                Optional<Integer> n = Optional.empty();
+                System.out.println(n.orElseGet(() -> 6 * 7));
+                Optional<Integer> m = Optional.of(10);
+                System.out.println(m.orElseGet(() -> 99));
+            }
+        }
+        "#,
+        "O",
+    );
+    assert_eq!(
+        out,
+        "5\nHELLO\nfalse\nhello!\nnone\nhello\ncomputed\n42\n10\n"
+    );
+}
+
 /// `Optional.ifPresent(consumer)` runs its lambda only when present, and
 /// `filter(predicate)` keeps a present value only if it matches (else empty).
 /// Both take a lambda parameterized by the Optional's element. Pinned JDK-free;

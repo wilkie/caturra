@@ -543,11 +543,14 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     `null`), so a method can return `Optional<T>`. Two lambda methods work too
     (2026-07-11): `ifPresent(x -> ...)` runs its consumer only when present, and
     `filter(x -> ...)` keeps a present value only if the predicate matches (else
-    an empty Optional). Their lambda parameter is typed by the Optional's
-    element, resolved from a variable/field receiver (a chained
-    `opt.filter(..).filter(..)` on a call receiver, and `map`/`orElseGet`, remain
-    unsupported). Pinned against a real JDK by `diff_optional`,
-    `diff_optional_factories`, and `diff_optional_lambdas`.
+    an empty Optional); `map(x -> ...)` transforms a present value (its result
+    element erased to `Object`, like a stream's `map`, so a function returning
+    `null` yields an empty Optional); and `orElseGet(() -> ...)` computes a
+    fallback only when absent (a zero-argument supplier). Their lambda parameter
+    is typed by the Optional's element, resolved from a variable/field receiver
+    — a chained `opt.filter(..).filter(..)` on a call receiver remains
+    unsupported. Pinned against a real JDK by `diff_optional`,
+    `diff_optional_factories`, `diff_optional_lambdas`, and `diff_optional_map`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a
@@ -711,7 +714,7 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     generator's parameter is the `int` index and its result the array's element
     type (resolved from the array variable's declared type); it runs in index
     order, so a generator may read already-filled slots (`Arrays.setAll(fib, i
-    -> i < 2 ? i : fib[i-1] + fib[i-2])`). Pinned by `diff_arrays_set_all`.
+-> i < 2 ? i : fib[i-1] + fib[i-2])`). Pinned by `diff_arrays_set_all`.
   - `Arrays.deepToString`/`deepEquals`/`deepHashCode` (2026-07-09),
     for 2D arrays. These three the VM answers rather than the bundled
     Java, because only it can see an element array's kind once the

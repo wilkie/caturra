@@ -5000,6 +5000,40 @@ impl<'run> Interpreter<'run> {
                     self.alloc_optional(kept, crate::value::OptionalKind::Ref),
                 ));
             }
+            // `map(function)`: transform a present value, else stay empty. A
+            // function yielding null makes an empty Optional, as Java's does.
+            // The result's element is erased to `Object`, so a primitive is
+            // boxed — `get()` is bytecode-typed as a reference.
+            ("map", [JValue::Ref(Some(function))]) => {
+                let mapped = match value {
+                    Some(present) => {
+                        let result = self
+                            .call_functional(
+                                *function,
+                                "apply",
+                                "(Ljava/lang/Object;)Ljava/lang/Object;",
+                                present,
+                            )?
+                            .unwrap_or(JValue::NULL);
+                        match result {
+                            JValue::Ref(None) => None,
+                            JValue::Ref(Some(_)) => Some(result),
+                            primitive => {
+                                Some(JValue::Ref(Some(self.box_primitive_value(primitive))))
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                return Ok(Answered::Value(
+                    self.alloc_optional(mapped, crate::value::OptionalKind::Ref),
+                ));
+            }
+            // `orElseGet(supplier)`: the value, or the supplier's result.
+            ("orElseGet", [JValue::Ref(Some(supplier))]) => match value {
+                Some(present) => present,
+                None => self.call_apply_supplier(*supplier)?,
+            },
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "Optional.{method}{descriptor}"
@@ -5048,14 +5082,39 @@ impl<'run> Interpreter<'run> {
             "(Ljava/lang/Object;)Ljava/lang/Object;",
             element,
         )?;
-        Ok(match result {
+        Ok(self.unbox_functional_result(result))
+    }
+
+    /// `supplier.get()` (a zero-argument lambda), unboxing a primitive result —
+    /// backs `Optional.orElseGet`.
+    fn call_apply_supplier(&mut self, supplier: HeapRef) -> Result<JValue, VmError> {
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(supplier)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        let dispatched =
+            self.user_virtual_dispatch(supplier, &class_name, "get", "()Ljava/lang/Object;", &[])?;
+        let result = match dispatched {
+            UserDispatch::Call(frame) => self.run_nested(frame)?,
+            UserDispatch::Value(value) => value,
+        };
+        Ok(self.unbox_functional_result(result))
+    }
+
+    /// Unbox a boxed-primitive lambda result so it stores like caturra's other
+    /// (unboxed) values; a reference or absent result passes through.
+    fn unbox_functional_result(&self, result: Option<JValue>) -> JValue {
+        match result {
             Some(JValue::Ref(Some(r))) => match self.heap.get(r) {
                 Some(crate::value::HeapObject::Boxed { value, .. }) => *value,
                 _ => JValue::Ref(Some(r)),
             },
             Some(value) => value,
             None => JValue::NULL,
-        })
+        }
     }
 
     /// `java.util.stream.Stream` operations. Element comparison/transformation

@@ -455,6 +455,10 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains(".filter(")
             // `Arrays.setAll(a, i -> ...)` uses the bundled `__UnaryOperator`.
             || s.text.contains(".setAll(")
+            // `optional.map(x -> ...)` / `orElseGet(() -> ...)` use the bundled
+            // `__UnaryOperator` / `__Supplier`.
+            || s.text.contains(".map(")
+            || s.text.contains(".orElseGet(")
             // A stream pipeline's `filter`/`map`/… lambdas desugar to the
             // bundled functional interfaces.
             || s.text.contains(".stream(")

@@ -23,6 +23,10 @@ interface __UnaryOperator {
   Object apply(Object element);
 }
 
+interface __Supplier {
+  Object get();
+}
+
 interface __Comparator {
   int compare(Object left, Object right);
 }

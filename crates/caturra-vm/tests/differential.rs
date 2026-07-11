@@ -6701,6 +6701,40 @@ public class DiffStreamJoin {
 // from the stream terminals (findFirst / max / min / average).
 // ---------------------------------------------------------------------------
 
+// Optional.map(function) transforms a present value (its element erased, like a
+// stream's map); orElseGet(supplier) computes a fallback only when absent.
+differential_test!(
+    diff_optional_map,
+    "DiffOptionalMap",
+    r#"
+import java.util.Optional;
+
+public class DiffOptionalMap {
+    public static void main(String[] args) {
+        Optional<String> a = Optional.of("hello");
+        System.out.println(a.map(s -> s.length()).get());
+        System.out.println(a.map(s -> s.toUpperCase()).get());
+        System.out.println(a.map(s -> s + "!").orElse("none"));
+
+        Optional<String> e = Optional.empty();
+        System.out.println(e.map(s -> s.length()).isPresent());
+        System.out.println(e.map(s -> s + "!").orElse("none"));
+
+        // orElseGet: the value when present, the supplier's result when absent.
+        System.out.println(a.orElseGet(() -> "fallback"));
+        System.out.println(e.orElseGet(() -> "fallback"));
+        Optional<Integer> n = Optional.empty();
+        System.out.println(n.orElseGet(() -> 3 * 14));
+        Optional<Integer> present = Optional.of(5);
+        System.out.println(present.orElseGet(() -> 100));
+
+        // A map that yields null becomes an empty Optional.
+        System.out.println(a.map(s -> (String) null).isPresent());
+    }
+}
+"#
+);
+
 // Optional.ifPresent(consumer) runs its lambda only when present; filter keeps
 // a present value only if it matches (else empty). Both lambdas are typed by the
 // Optional's element.
