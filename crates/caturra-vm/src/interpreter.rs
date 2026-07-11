@@ -3554,6 +3554,10 @@ impl<'run> Interpreter<'run> {
                 };
                 JValue::Int(i32::from(found))
             }
+            ("forEach", [JValue::Ref(Some(consumer))]) => {
+                self.view_for_each(map, kind, *consumer)?;
+                return Ok(Answered::Void);
+            }
             // The element at a position in the map's iteration order.
             ("__get", [JValue::Int(position)]) => {
                 let position = usize::try_from(*position).unwrap_or(usize::MAX);
@@ -4544,6 +4548,49 @@ impl<'run> Interpreter<'run> {
         }
         if let Some(crate::value::HeapObject::ArrayList(list)) = self.heap.get_mut(receiver) {
             *list = replaced;
+        }
+        Ok(())
+    }
+
+    /// `keySet()/values()/entrySet().forEach(consumer)`: call `accept` on each
+    /// view element in the map's iteration order — a key, a value, or a live
+    /// `Map.Entry`. Runs user Java through the nested-call path.
+    fn view_for_each(
+        &mut self,
+        map: HeapRef,
+        kind: MapViewKind,
+        consumer: HeapRef,
+    ) -> Result<(), VmError> {
+        let entries = match self.heap.get(map) {
+            Some(crate::value::HeapObject::HashMap(entries)) => entries.entries_in_order(),
+            _ => return Ok(()),
+        };
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        for (key, value) in entries {
+            let element = match kind {
+                MapViewKind::Keys => key,
+                MapViewKind::Values => value,
+                MapViewKind::Entries => JValue::Ref(Some(
+                    self.heap
+                        .alloc(crate::value::HeapObject::MapEntry { map, key }),
+                )),
+            };
+            let dispatched = self.user_virtual_dispatch(
+                consumer,
+                &class_name,
+                "accept",
+                "(Ljava/lang/Object;)V",
+                &[element],
+            )?;
+            if let UserDispatch::Call(frame) = dispatched {
+                self.run_nested(frame)?;
+            }
         }
         Ok(())
     }

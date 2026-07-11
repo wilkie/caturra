@@ -3201,14 +3201,12 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("HashMap", "ofEntries", "varargs are not supported by caturra"),
     ("Set", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Set", "stream", "streams are not supported by caturra"),
-    ("Set", "forEach", "lambdas are not supported by caturra"),
     ("Set", "removeIf", "lambdas are not supported by caturra"),
     ("Set", "add", "a map's keySet() does not support add — Java throws UnsupportedOperationException"),
     ("Set", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
     ("Set", "clear", "clearing through a map's view is not supported by caturra (clear the map itself)"),
     ("Collection", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Collection", "stream", "streams are not supported by caturra"),
-    ("Collection", "forEach", "lambdas are not supported by caturra"),
     ("Collection", "removeIf", "lambdas are not supported by caturra"),
     ("Collection", "add", "a map's values() does not support add — Java throws UnsupportedOperationException"),
     ("Collection", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
@@ -4534,6 +4532,13 @@ const MAP_METHODS: &[BuiltinMethod] = &[
 const VIEW_METHODS: &[BuiltinMethod] = &[
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    // `forEach(Consumer)` over the view's elements (keys or values).
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     bm(
         "contains",
         &[BParam::Key],

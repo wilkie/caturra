@@ -6314,6 +6314,48 @@ public class DiffLambdaStmtBody {
 "#
 );
 
+differential_test!(
+    diff_map_view_for_each,
+    "DiffViewForEach",
+    r#"
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+public class DiffViewForEach {
+    public static void main(String[] args) {
+        Map<Integer, String> m = new HashMap<Integer, String>();
+        for (int i = 0; i < 4; i++) m.put(i * 7, "v" + i);
+
+        // keySet().forEach and values().forEach, in the map's iteration order.
+        m.keySet().forEach(k -> System.out.print(k + " "));
+        System.out.println();
+        m.values().forEach(v -> System.out.print(v + " "));
+        System.out.println();
+
+        // An accumulator over the keys.
+        int[] sum = {0};
+        m.keySet().forEach(k -> sum[0] += k);
+        System.out.println(sum[0]);
+
+        // A Set/Collection variable holding a view.
+        Set<Integer> keys = m.keySet();
+        keys.forEach(k -> System.out.print(k + ","));
+        System.out.println();
+        Collection<String> vals = m.values();
+        vals.forEach(v -> System.out.print(v + ","));
+        System.out.println();
+
+        // Empty map.
+        Map<String, Integer> empty = new HashMap<String, Integer>();
+        empty.keySet().forEach(k -> System.out.println("never"));
+        System.out.println("done");
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

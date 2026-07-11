@@ -769,6 +769,24 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
 /// receiver, read syntactically from the local, parameter, or field it names
 /// — the same shape as `map_type_args`, for a single type argument.
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    // A `map.keySet()`/`values()` view: the element is the map's key or value
+    // type. `entrySet()` yields `Map.Entry`, whose lambda parameter typing
+    // differs, so it is not handled here.
+    if let Expr::Call {
+        receiver: Some(map),
+        method,
+        args,
+        ..
+    } = receiver
+        && args.is_empty()
+        && let Some((key, value)) = map_type_args(map, ctx)
+    {
+        return match method.as_str() {
+            "keySet" => Some(key),
+            "values" => Some(value),
+            _ => None,
+        };
+    }
     let ty = match receiver {
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {

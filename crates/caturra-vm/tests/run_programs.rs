@@ -11057,3 +11057,40 @@ fn a_lambda_body_may_be_a_statement_expression() {
     );
     assert_eq!(out, "6\n2\n50\n");
 }
+
+/// `map.keySet().forEach(...)` and `map.values().forEach(...)` — and a `Set`/
+/// `Collection` variable holding such a view — run a `Consumer` lambda over
+/// the view's elements in the map's iteration order (2026-07-09). The lambda's
+/// parameter is typed from the map's key or value type. `entrySet().forEach`
+/// (a `Map.Entry` parameter) remains a compile error, the safe direction.
+/// Pinned against a real JDK by `diff_map_view_for_each`.
+#[test]
+fn a_map_view_runs_for_each() {
+    let out = run_stdout(
+        r#"
+        import java.util.Collection;
+        import java.util.HashMap;
+        import java.util.Map;
+        import java.util.Set;
+        public class M {
+            public static void main(String[] args) {
+                Map<Integer, String> m = new HashMap<Integer, String>();
+                m.put(1, "a"); m.put(2, "b"); m.put(3, "c");
+                int[] keySum = {0};
+                m.keySet().forEach(k -> keySum[0] += k);
+                System.out.println(keySum[0]);
+                int[] valLen = {0};
+                Collection<String> vals = m.values();
+                vals.forEach(v -> valLen[0] += v.length());
+                System.out.println(valLen[0]);
+                Set<Integer> keys = m.keySet();
+                int[] count = {0};
+                keys.forEach(k -> count[0]++);
+                System.out.println(count[0]);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "6\n3\n3\n");
+}

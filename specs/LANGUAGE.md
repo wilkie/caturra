@@ -355,7 +355,13 @@ put/putIfAbsent/remove` (by key, and by key+value)/`replace` (both)/
     for-each walks all three (an index loop over a synthetic accessor,
     since caturra has no iterators — so mutating a map inside such a
     loop silently sees the change where a real JDK throws
-    `ConcurrentModificationException`). Keys hash and compare with
+    `ConcurrentModificationException`). **`keySet().forEach(k -> ...)`** and
+    **`values().forEach(v -> ...)`** (2026-07-09), and the same on a
+    `Set`/`Collection` variable holding a view, run a `Consumer` over the
+    view's elements in the map's iteration order; the lambda's parameter is
+    typed from the map's key or value type. `entrySet().forEach` (a
+    `Map.Entry` parameter) is not yet target-typed — a compile error, the
+    safe direction. Keys hash and compare with
     **their own `hashCode` and `equals`** (2026-07-09), overrides
     included — so a map's iteration order follows a user's `hashCode`,
     and a class that overrides `equals` without `hashCode` loses its
