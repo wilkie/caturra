@@ -103,10 +103,7 @@ const JAVA_LANG: &[&str] = &[
 /// implement — named so the message is honest instead of a misleading
 /// "cannot find symbol".
 const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
-    (
-        "java.util",
-        &["Iterator", "Optional", "Vector", "Hashtable"],
-    ),
+    ("java.util", &["Iterator", "Vector", "Hashtable"]),
     (
         "java.io",
         &[

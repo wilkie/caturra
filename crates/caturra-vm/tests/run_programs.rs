@@ -8432,6 +8432,41 @@ fn optionals_from_stream_terminals() {
     assert_eq!(out, "5\n2.8\nbanana\nfalse none\nOptional.empty\n");
 }
 
+/// The `Optional` factories: `of(x)` / `ofNullable(x)` wrap a present value,
+/// `empty()` an absent one, so a method can build and return an `Optional`.
+/// Pinned JDK-free; the byte-for-byte JDK match is in `diff_optional_factories`.
+#[test]
+fn optional_factories_build_present_and_absent() {
+    let out = run_stdout(
+        r#"
+        import java.util.Optional;
+        public class O {
+            static Optional<String> find(int x) {
+                if (x > 0) { return Optional.of("pos"); }
+                return Optional.empty();
+            }
+            public static void main(String[] args) {
+                Optional<Integer> a = Optional.of(5);
+                System.out.println(a.isPresent() + " " + a.get() + " " + a);
+                Optional<String> b = Optional.empty();
+                System.out.println(b.isPresent() + " " + b.orElse("none") + " " + b);
+                Optional<String> c = Optional.ofNullable("hi");
+                System.out.println(c.get());
+                System.out.println(find(3).get() + " " + find(-1).isPresent());
+            }
+        }
+        "#,
+        "O",
+    );
+    assert_eq!(
+        out,
+        "true 5 Optional[5]\n\
+         false none Optional.empty\n\
+         hi\n\
+         pos false\n"
+    );
+}
+
 /// `java.util.stream.IntStream`: `mapToInt`/`range` and the numeric terminals,
 /// with primitive-int lambdas. Pinned JDK-free for CI; the byte-for-byte JDK
 /// match is in `differential.rs`.

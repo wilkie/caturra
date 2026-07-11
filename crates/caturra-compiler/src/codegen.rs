@@ -2757,8 +2757,16 @@ fn method_descriptor(
                 if simple == "HashSet" && !table.has_class("HashSet") {
                     simple = "Set";
                 }
-                if matches!(simple, "LinkedList" | "Queue" | "Deque" | "PriorityQueue")
-                    && !table.has_class(simple)
+                if matches!(
+                    simple,
+                    "LinkedList"
+                        | "Queue"
+                        | "Deque"
+                        | "PriorityQueue"
+                        | "ArrayDeque"
+                        | "Stack"
+                        | "Optional"
+                ) && !table.has_class(simple)
                 {
                     out.push_str("Ljava/util/");
                     out.push_str(simple);
@@ -10263,7 +10271,12 @@ impl BodyGen<'_> {
                 [single] => {
                     if self.lookup(single).is_some() {
                         Some(CallTarget::Instance(expr))
-                    } else if self.table.has_class(single) || builtin_static_table(single).is_some()
+                    } else if self.table.has_class(single)
+                        || builtin_static_table(single).is_some()
+                        // `Optional` holds static factories (`of`/`empty`/
+                        // `ofNullable`) but is not a bundled class nor in a fixed
+                        // static table — its return type is argument-dependent.
+                        || single == "Optional"
                     {
                         Some(CallTarget::Static(single.to_owned()))
                     } else if self.table.field(self.current_class, single).is_some()
@@ -10396,6 +10409,12 @@ impl BodyGen<'_> {
         if class == "Collections" && is_collections_method(method) {
             return self.emit_collections_call(method, args, span);
         }
+        // `Optional.of/ofNullable(x)` build an Optional of the argument's type;
+        // `Optional.empty()` adopts its context (types like `null`). The return
+        // type is argument-dependent, so no fixed static table fits.
+        if class == "Optional" && matches!(method, "of" | "ofNullable" | "empty") {
+            return self.emit_optional_static(method, args, span);
+        }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             // Emit the arguments so their own diagnostics surface.
@@ -10471,6 +10490,54 @@ impl BodyGen<'_> {
         // `ArrayList`, but type the result as a `List` of the argument array's
         // element type so `List<String> x = Arrays.asList(strs)` type-checks.
         Some(sig.ret)
+    }
+
+    /// `Optional.of(x)` / `Optional.ofNullable(x)` / `Optional.empty()`. The VM
+    /// stores the value directly (unboxed, as caturra stores every element), so
+    /// the call passes the primitive with a descriptor built from its type,
+    /// exactly as `Collections.nCopies` does — no boxing. `empty()` returns a
+    /// `null`-typed Optional that adopts its assignment context.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_optional_static(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        if method == "empty" {
+            if !args.is_empty() {
+                self.no_suitable_library_method("Optional", method, args, span);
+                return None;
+            }
+            let method_ref =
+                intern_method_ref(self.pool, "Optional", "empty", "()Ljava/util/Optional;");
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            return Some(Some(JType::Null));
+        }
+        let [value] = args else {
+            self.no_suitable_library_method("Optional", method, args, span);
+            return None;
+        };
+        let value_ty = self.expr(value);
+        let Some(elem) = elem_type_of(value_ty) else {
+            self.error(
+                value.span(),
+                format!(
+                    "Optional.{method} cannot hold {}",
+                    value_ty.describe(self.table)
+                ),
+            );
+            self.code.discard();
+            return None;
+        };
+        let descriptor = format!(
+            "({})Ljava/util/Optional;",
+            elem.base_type().descriptor(self.table)
+        );
+        let method_ref = intern_method_ref(self.pool, "Optional", method, &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(value_ty.width());
+        Some(Some(JType::Optional(elem)))
     }
 
     /// `Collections.reverse(list)` / `Collections.swap(list, i, j)`: emit the
@@ -11365,6 +11432,17 @@ impl BodyGen<'_> {
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
                             return elem_type_of(value).map_or(JType::Error, JType::List);
                         }
+                        _ => {}
+                    }
+                }
+                if class == "Optional" {
+                    match method.as_str() {
+                        "of" | "ofNullable" => {
+                            let arg = args.first().map_or(JType::Error, |a| self.type_of(a));
+                            return elem_type_of(arg).map_or(JType::Error, JType::Optional);
+                        }
+                        // An empty Optional adopts its context, typing like `null`.
+                        "empty" => return JType::Null,
                         _ => {}
                     }
                 }

@@ -536,11 +536,14 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     (throw `NoSuchElementException` when absent), `orElse(default)`,
     `ifPresent(consumer)`. `toString` matches Java exactly — `Optional[x]`,
     `Optional.empty`, `OptionalInt[9]`, `OptionalDouble.empty`. This closes the
-    `average`/`min`/`max`/`findFirst` gap the streams left. `Optional.of`/
-    `empty`/`ofNullable` (constructing one directly) and `map`/`filter`/`orElseGet`
-    (which take lambdas) are not yet reachable from source — students almost
-    always get an Optional from a stream and immediately unwrap it. Pinned
-    against a real JDK by `diff_optional`.
+    `average`/`min`/`max`/`findFirst` gap the streams left. An Optional can also
+    be **constructed directly** (2026-07-11): `Optional.of(x)` and
+    `Optional.ofNullable(x)` build a present Optional of the argument's type,
+    `Optional.empty()` an absent one that adopts its assignment context (like
+    `null`), so a method can return `Optional<T>`. `map`/`filter`/`orElseGet`/
+    `ifPresent` (which take lambdas needing the Optional's element type) are not
+    yet reachable from source. Pinned against a real JDK by `diff_optional` and
+    `diff_optional_factories`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a

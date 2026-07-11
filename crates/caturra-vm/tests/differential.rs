@@ -6636,6 +6636,42 @@ public class DiffStreamJoin {
 // from the stream terminals (findFirst / max / min / average).
 // ---------------------------------------------------------------------------
 
+// The Optional factories: of(x)/ofNullable(x) build a present Optional,
+// empty() an absent one, so a method can construct and return an Optional
+// rather than only receive one from a stream terminal.
+differential_test!(
+    diff_optional_factories,
+    "DiffOptionalFactory",
+    r#"
+import java.util.Optional;
+
+public class DiffOptionalFactory {
+    static Optional<String> lookup(int key) {
+        if (key == 1) return Optional.of("one");
+        if (key == 2) return Optional.ofNullable("two");
+        return Optional.empty();
+    }
+
+    public static void main(String[] args) {
+        Optional<Integer> a = Optional.of(42);
+        System.out.println(a.isPresent() + " " + a.get() + " " + a);   // true 42 Optional[42]
+
+        Optional<String> e = Optional.empty();
+        System.out.println(e.isPresent() + " " + e.isEmpty() + " " + e.orElse("x") + " " + e);
+
+        Optional<Double> d = Optional.of(3.5);
+        System.out.println(d.get() + " " + d);
+
+        System.out.println(lookup(1).get());
+        System.out.println(lookup(2).orElse("none"));
+        System.out.println(lookup(9).isPresent() + " " + lookup(9).orElse("absent"));
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
+
 differential_test!(
     diff_optional,
     "DiffOptional",
