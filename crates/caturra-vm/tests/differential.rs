@@ -6532,6 +6532,112 @@ public class DiffHashSetKeys {
 );
 
 // ---------------------------------------------------------------------------
+// java.util.TreeMap — a sorted map. Entries are kept in key order, so
+// iteration, the views, and the key navigation all read off the sorted vector.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_tree_map_core,
+    "DiffTreeMapCore",
+    r#"
+import java.util.TreeMap;
+
+public class DiffTreeMapCore {
+    public static void main(String[] args) {
+        TreeMap<String, Integer> t = new TreeMap<>();
+        t.put("banana", 3);
+        t.put("apple", 5);
+        t.put("cherry", 1);
+        System.out.println(t);                          // {apple=5, banana=3, cherry=1}
+        System.out.println(t.get("banana") + " " + t.get("z"));
+        System.out.println(t.firstKey() + " " + t.lastKey());
+        System.out.println(t.floorKey("b") + " " + t.ceilingKey("b"));
+        System.out.println(t.lowerKey("banana") + " " + t.higherKey("banana"));
+        System.out.println(t.lowerKey("apple") + " " + t.higherKey("cherry")); // null null
+        System.out.println(t.keySet());                 // [apple, banana, cherry]
+        System.out.println(t.values());                 // [5, 3, 1]
+        System.out.println(t.containsKey("apple") + " " + t.containsValue(1));
+        System.out.println(t.getOrDefault("z", -1));    // -1
+        System.out.println(t.put("apple", 9) + " " + t.get("apple")); // 5 9
+        System.out.println(t.remove("cherry") + " " + t);            // 1 {apple=9, banana=3}
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_tree_map_int_keys_and_views,
+    "DiffTreeMapInt",
+    r#"
+import java.util.Map;
+import java.util.SortedMap;
+import java.util.TreeMap;
+
+public class DiffTreeMapInt {
+    public static void main(String[] args) {
+        TreeMap<Integer, String> nums = new TreeMap<>();
+        for (int i = 5; i >= 1; i--) {
+            nums.put(i, "v" + i);
+        }
+        System.out.println(nums);                       // {1=v1, ..., 5=v5}
+
+        int keySum = 0;
+        for (int k : nums.keySet()) {
+            keySum += k;
+        }
+        System.out.println(keySum);                     // 15
+
+        StringBuilder sb = new StringBuilder();
+        nums.forEach((k, v) -> sb.append(k).append(v).append(" "));
+        System.out.println(sb.toString().trim());       // 1v1 2v2 3v3 4v4 5v5
+
+        StringBuilder es = new StringBuilder();
+        for (Map.Entry<Integer, String> e : nums.entrySet()) {
+            es.append(e.getKey()).append('=').append(e.getValue()).append(' ');
+        }
+        System.out.println(es.toString().trim());
+
+        // Copy constructor keeps sorted order; a TreeMap is a Map.
+        Map<Integer, String> copy = new TreeMap<>(nums);
+        System.out.println(copy);
+
+        SortedMap<Integer, Integer> sm = new TreeMap<>();
+        sm.put(3, 30);
+        sm.put(1, 10);
+        System.out.println(sm.firstKey() + " " + sm.lastKey());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_tree_map_user_comparable_keys,
+    "DiffTreeMapCmp",
+    r#"
+import java.util.TreeMap;
+
+public class DiffTreeMapCmp {
+    static class Version implements Comparable<Version> {
+        int major;
+        Version(int m) { major = m; }
+        public int compareTo(Version o) { return Integer.compare(major, o.major); }
+        public String toString() { return "v" + major; }
+    }
+
+    public static void main(String[] args) {
+        TreeMap<Version, String> m = new TreeMap<>();
+        m.put(new Version(3), "three");
+        m.put(new Version(1), "one");
+        m.put(new Version(2), "two");
+        m.put(new Version(1), "ONE");            // same key (compareTo 0) → replace
+        System.out.println(m);                   // {v1=ONE, v2=two, v3=three}
+        System.out.println(m.firstKey() + " " + m.size());
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
 // java.util.TreeSet — a sorted set. Iteration, first/last and the navigation
 // methods read off elements kept in sorted order (natural / Comparable).
 // ---------------------------------------------------------------------------

@@ -1119,6 +1119,13 @@ impl MethodTable {
                     let key = elem_from_type_arg(&args[0], self)?;
                     let value = elem_from_type_arg(&args[1], self)?;
                     Some(JType::Map { key, value })
+                } else if matches!(simple, "TreeMap" | "SortedMap" | "NavigableMap")
+                    && args.len() == 2
+                    && !self.has_class(simple)
+                {
+                    let key = elem_from_type_arg(&args[0], self)?;
+                    let value = elem_from_type_arg(&args[1], self)?;
+                    Some(JType::TreeMap { key, value })
                 } else if simple == "Set" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Set)
                 } else if matches!(simple, "TreeSet" | "SortedSet" | "NavigableSet")
@@ -1692,6 +1699,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
 
 /// Method-invocation / assignment widening (JLS §5.3 without boxing),
 /// including reference widening up the class hierarchy.
+#[allow(clippy::too_many_lines)] // one big disjunction of widening rules
 fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
     from == to
         || matches!(
@@ -1759,6 +1767,14 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (JType::TreeSet(a), JType::Set(b) | JType::Collection(b)) if a == b
+        )
+        // A TreeMap is a Map of its key/value types.
+        || matches!(
+            (from, to),
+            (
+                JType::TreeMap { key: k1, value: v1 },
+                JType::Map { key: k2, value: v2 },
+            ) if k1 == k2 && v1 == v2
         )
         // A parameterized type and its raw class erase alike, so they
         // are mutually assignable (`Box<String> b = new Box<>()`).
@@ -1944,6 +1960,13 @@ enum JType {
     /// sorted set, backed by an ordered vector. Distinct from `Set` because it
     /// adds the sorted navigation (`first`/`last`/`floor`/`ceiling`/…).
     TreeSet(ElemType),
+    /// `java.util.TreeMap<K, V>` (also its `SortedMap`/`NavigableMap` faces): a
+    /// sorted map. Distinct from `Map` because it adds the key navigation
+    /// (`firstKey`/`lastKey`/`floorKey`/`ceilingKey`/…).
+    TreeMap {
+        key: ElemType,
+        value: ElemType,
+    },
     /// `java.util.Collection<E>` — a map's `values()` view.
     Collection(ElemType),
     /// `Set<Map.Entry<K, V>>` — a map's `entrySet()` view.
@@ -2021,6 +2044,11 @@ impl JType {
             }
             JType::Map { key, value } => format!(
                 "HashMap<{}, {}>",
+                key.base_type().describe(table),
+                value.base_type().describe(table)
+            ),
+            JType::TreeMap { key, value } => format!(
+                "TreeMap<{}, {}>",
                 key.base_type().describe(table),
                 value.base_type().describe(table)
             ),
@@ -2114,6 +2142,7 @@ impl JType {
                 | JType::List(_)
                 | JType::LinkedList { .. }
                 | JType::Map { .. }
+                | JType::TreeMap { .. }
                 | JType::Set(_)
                 | JType::TreeSet(_)
                 | JType::Collection(_)
@@ -2170,6 +2199,7 @@ impl JType {
             JType::Boxed(elem) => format!("L{};", wrapper_internal(elem)),
             JType::Generic { class, .. } => format!("L{};", table.class_name(class)),
             JType::Map { .. } => String::from("Ljava/util/HashMap;"),
+            JType::TreeMap { .. } => String::from("Ljava/util/TreeMap;"),
             JType::Set(_) | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
             JType::TreeSet(_) => String::from("Ljava/util/TreeSet;"),
             JType::LinkedList { role, .. } => format!("L{};", role.internal()),
@@ -2618,6 +2648,10 @@ fn method_descriptor(
                     out.push_str("Ljava/util/ArrayList;");
                 } else if simple == "HashMap" {
                     out.push_str("Ljava/util/HashMap;");
+                } else if matches!(simple, "TreeMap" | "SortedMap" | "NavigableMap")
+                    && !table.has_class(simple)
+                {
+                    out.push_str("Ljava/util/TreeMap;");
                 } else if simple == "Set" && !table.has_class(simple) {
                     out.push_str("Ljava/util/Set;");
                 } else if matches!(simple, "TreeSet" | "SortedSet" | "NavigableSet")
@@ -3318,6 +3352,15 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Set", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Set", "stream", "streams are not supported by caturra"),
     ("Set", "removeIf", "Set.removeIf is not supported by caturra"),
+    ("TreeMap", "clone", "clone is not supported by caturra"),
+    ("TreeMap", "headMap", "TreeMap range views are not supported by caturra"),
+    ("TreeMap", "tailMap", "TreeMap range views are not supported by caturra"),
+    ("TreeMap", "subMap", "TreeMap range views are not supported by caturra"),
+    ("TreeMap", "descendingMap", "TreeMap.descendingMap is not supported by caturra"),
+    ("TreeMap", "firstEntry", "TreeMap entry views are not supported by caturra (use firstKey)"),
+    ("TreeMap", "lastEntry", "TreeMap entry views are not supported by caturra (use lastKey)"),
+    ("TreeMap", "pollFirstEntry", "TreeMap entry views are not supported by caturra"),
+    ("TreeMap", "pollLastEntry", "TreeMap entry views are not supported by caturra"),
     ("TreeSet", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("TreeSet", "descendingIterator", "iterators are not supported by caturra"),
     ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
@@ -3349,6 +3392,7 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Scanner => "Scanner",
         JType::List(_) => "ArrayList",
         JType::Map { .. } => "HashMap",
+        JType::TreeMap { .. } => "TreeMap",
         JType::Set(_) | JType::EntrySet { .. } => "Set",
         JType::TreeSet(_) => "TreeSet",
         JType::LinkedList { .. } => "LinkedList",
@@ -4917,6 +4961,120 @@ const MAP_METHODS: &[BuiltinMethod] = &[
     bm("entrySet", &[], BRet::Entries, "()Ljava/util/Set;"),
 ];
 
+/// `java.util.TreeMap<K, V>` (also its `SortedMap`/`NavigableMap` faces): the
+/// `Map` surface plus the sorted-key navigation. `firstKey`/`lastKey` throw on
+/// an empty map; the `floorKey`/`ceilingKey`/`lowerKey`/`higherKey` return the
+/// boxed key so an absent result is `null`. Keys iterate in sorted order.
+const TREEMAP_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm(
+        "forEach",
+        &[BParam::BiConsumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm(
+        "containsKey",
+        &[BParam::Key],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "containsValue",
+        &[BParam::Val],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "get",
+        &[BParam::Key],
+        BRet::Val,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "getOrDefault",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "put",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "putIfAbsent",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "remove",
+        &[BParam::Key],
+        BRet::Val,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "remove",
+        &[BParam::Key, BParam::Val],
+        BRet::Boolean,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "replace",
+        &[BParam::Key, BParam::Val],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "putAll",
+        &[BParam::SelfMap],
+        BRet::Void,
+        "(Ljava/util/Map;)V",
+    ),
+    bm(
+        "equals",
+        &[BParam::SelfMap],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("keySet", &[], BRet::Keys, "()Ljava/util/Set;"),
+    bm("values", &[], BRet::Values, "()Ljava/util/Collection;"),
+    bm("entrySet", &[], BRet::Entries, "()Ljava/util/Set;"),
+    // Sorted navigation. The keys are boxed so an absent result is `null`.
+    bm("firstKey", &[], BRet::Key, "()Ljava/lang/Object;"),
+    bm("lastKey", &[], BRet::Key, "()Ljava/lang/Object;"),
+    bm(
+        "floorKey",
+        &[BParam::Key],
+        BRet::Key,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "ceilingKey",
+        &[BParam::Key],
+        BRet::Key,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "lowerKey",
+        &[BParam::Key],
+        BRet::Key,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "higherKey",
+        &[BParam::Key],
+        BRet::Key,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+];
+
 /// `java.util.Set<E>` / `java.util.Collection<E>` — a map's `keySet()` and
 /// `values()` views. `__get` is caturra's own indexed accessor, standing in
 /// for the iterator the enhanced-for loop would otherwise need.
@@ -5130,6 +5288,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
             SeqRole::Deque => ("java/util/Deque", DEQUE_METHODS),
         }),
         JType::Map { .. } => Some(("java/util/HashMap", MAP_METHODS)),
+        JType::TreeMap { .. } => Some(("java/util/TreeMap", TREEMAP_METHODS)),
         JType::Set(_) => Some(("java/util/Set", SET_METHODS)),
         JType::TreeSet(_) => Some(("java/util/TreeSet", TREESET_METHODS)),
         JType::Collection(_) => Some(("java/util/Collection", VIEW_METHODS)),
@@ -5246,6 +5405,7 @@ impl TypeArgs {
                 second: None,
             },
             JType::Map { key, value }
+            | JType::TreeMap { key, value }
             | JType::EntrySet { key, value }
             | JType::MapEntry { key, value } => Self {
                 first: Some(key),
@@ -7133,6 +7293,16 @@ impl BodyGen<'_> {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::TreeSet),
                 _ => JType::Null,
             },
+            "TreeMap" => match type_args {
+                [key, value] => match (
+                    elem_from_type_arg(key, self.table),
+                    elem_from_type_arg(value, self.table),
+                ) {
+                    (Some(key), Some(value)) => JType::TreeMap { key, value },
+                    _ => JType::Null,
+                },
+                _ => JType::Null,
+            },
             _ => JType::Error,
         }
     }
@@ -7205,6 +7375,7 @@ impl BodyGen<'_> {
                 "HashMap" => return self.new_hash_map(type_args, args, span),
                 "HashSet" => return self.new_hash_set(type_args, args, span),
                 "TreeSet" => return self.new_tree_set(type_args, args, span),
+                "TreeMap" => return self.new_tree_map(type_args, args, span),
                 "LinkedList" => return self.new_linked_list(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
@@ -7897,6 +8068,77 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `new TreeMap<>()` (natural ordering), `new TreeMap<>(comparator)`, or
+    /// `new TreeMap<>(map)` (copy + sort by key). Emits `new java.util.TreeMap`.
+    fn new_tree_map(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        if args.len() > 1 {
+            self.error(span, "TreeMap takes at most one constructor argument");
+            return JType::Error;
+        }
+        let mut entry = match type_args {
+            [] => None,
+            [key, value] => {
+                let key = elem_from_type_arg(key, self.table);
+                let value = elem_from_type_arg(value, self.table);
+                let (Some(key), Some(value)) = (key, value) else {
+                    self.error(
+                        span,
+                        "TreeMap key and value types must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some((key, value))
+            }
+            _ => {
+                self.error(span, "TreeMap takes two type arguments");
+                return JType::Error;
+            }
+        };
+        let map_class = intern_class(self.pool, "java/util/TreeMap");
+        self.code.push_op_u16(op::NEW, map_class, 1);
+        self.code.push_op(op::DUP, 1);
+        match args {
+            [] => {
+                let init_ref = intern_method_ref(self.pool, "java/util/TreeMap", "<init>", "()V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(1);
+            }
+            [source] => {
+                let source_ty = self.expr(source);
+                let descriptor = match source_ty {
+                    JType::Map { key, value } | JType::TreeMap { key, value } => {
+                        if entry.is_none() {
+                            entry = Some((key, value));
+                        }
+                        "(Ljava/util/Map;)V"
+                    }
+                    JType::Object(id)
+                        if self
+                            .table
+                            .class_id("__Comparator")
+                            .is_some_and(|target| self.table.is_subtype(id, target)) =>
+                    {
+                        "(Ljava/util/Comparator;)V"
+                    }
+                    _ => {
+                        self.error(span, "new TreeMap(...) takes a Map or a Comparator");
+                        "(Ljava/util/Map;)V"
+                    }
+                };
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/TreeMap", "<init>", descriptor);
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+            }
+            _ => unreachable!("arg count checked above"),
+        }
+        match entry {
+            Some((key, value)) => JType::TreeMap { key, value },
+            None => JType::Null,
+        }
+    }
+
     /// Substitute a tracked type argument for a type variable on a
     /// read: emits a `checkcast` to the argument's class and returns
     /// its concrete type. Non-type-variable types pass through.
@@ -8022,6 +8264,7 @@ impl BodyGen<'_> {
             | JType::List(_)
             | JType::LinkedList { .. }
             | JType::Map { .. }
+            | JType::TreeMap { .. }
             | JType::Set(_)
             | JType::TreeSet(_)
             | JType::Collection(_)
@@ -9719,6 +9962,7 @@ impl BodyGen<'_> {
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Map { .. }
+            | JType::TreeMap { .. }
             | JType::Set(_)
             | JType::TreeSet(_)
             | JType::LinkedList { .. }
@@ -9977,6 +10221,7 @@ impl BodyGen<'_> {
                         | JType::List(_)
                         | JType::LinkedList { .. }
                         | JType::Map { .. }
+                        | JType::TreeMap { .. }
                         | JType::Set(_)
                         | JType::TreeSet(_)
                         | JType::Collection(_)
@@ -11983,6 +12228,7 @@ impl BodyGen<'_> {
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Map { .. }
+            | JType::TreeMap { .. }
             | JType::Set(_)
             | JType::TreeSet(_)
             | JType::LinkedList { .. }
@@ -12398,7 +12644,8 @@ impl BodyGen<'_> {
             // list/set, so assigning it to a wider face, a `List`/`Set`, or a
             // `Collection` of the same element type needs no code — as `widens`
             // already allows.
-            (JType::LinkedList { .. } | JType::TreeSet(_), _) if widens(from, to, self.table) => {}
+            (JType::LinkedList { .. } | JType::TreeSet(_) | JType::TreeMap { .. }, _)
+                if widens(from, to, self.table) => {}
             // Array covariance: `Card[]` assigns to `Comparable[]`.
             (
                 JType::Array {

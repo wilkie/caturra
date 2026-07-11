@@ -1856,6 +1856,42 @@ impl<'run> Interpreter<'run> {
                 return Ok(None);
             }
         }
+        // `new TreeMap<>(comparator)` stores the comparator; `new TreeMap<>(m)`
+        // copies and sorts a map. Both compare keys with user code.
+        if target_class == "java/util/TreeMap" {
+            use crate::value::HeapObject;
+            if descriptor == "(Ljava/util/Comparator;)V" {
+                let comparator = match args[0] {
+                    JValue::Ref(r) => r,
+                    _ => None,
+                };
+                if let Some(HeapObject::TreeMap {
+                    comparator: slot, ..
+                }) = self.heap.get_mut(receiver)
+                {
+                    *slot = comparator;
+                }
+                return Ok(None);
+            }
+            if descriptor == "(Ljava/util/Map;)V" || descriptor == "(Ljava/util/SortedMap;)V" {
+                let JValue::Ref(Some(source)) = args[0] else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                let comparator = self.tree_map_comparator(source);
+                if let Some(HeapObject::TreeMap {
+                    comparator: slot, ..
+                }) = self.heap.get_mut(receiver)
+                {
+                    *slot = comparator;
+                }
+                for (key, value) in self.map_entries(source) {
+                    self.map_put(receiver, key, value)?;
+                }
+                return Ok(None);
+            }
+        }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         if classes.contains_key(&target_class) {
             // A user constructor or a `super.method(...)` call; the
@@ -2230,6 +2266,8 @@ impl<'run> Interpreter<'run> {
             }
             Some(HeapObject::UnmodifiableList(_)) => Renderable::List(self.list_items(reference)),
             Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
+            // A TreeMap prints `{k=v, ...}` with its entries already key-sorted.
+            Some(HeapObject::TreeMap { entries, .. }) => Renderable::Map(entries.clone()),
             // A set prints as `[a, b]` — its elements are the backing map's
             // keys, so the keys-view renderer produces exactly that.
             Some(HeapObject::HashSet(map)) => {
@@ -2239,11 +2277,15 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::TreeSet { values, .. }) => Renderable::List(values.clone()),
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
-                match self.heap.get(map) {
-                    Some(HeapObject::HashMap(map)) => {
-                        Renderable::View(map.entries_in_order(), kind)
-                    }
-                    _ => Renderable::Opaque,
+                // A view over any map (Hash or Tree) renders its entries in that
+                // map's iteration order.
+                if matches!(
+                    self.heap.get(map),
+                    Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. })
+                ) {
+                    Renderable::View(self.map_entries(map), kind)
+                } else {
+                    Renderable::Opaque
                 }
             }
             Some(HeapObject::MapEntry { map, key }) => Renderable::Entry(*map, *key),
@@ -3070,6 +3112,7 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::LinkedList(_)
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashMap(_)
+                    | HeapObject::TreeMap { .. }
                     | HeapObject::HashSet(_)
                     | HeapObject::TreeSet { .. }
                     | HeapObject::MapView { .. }
@@ -3358,8 +3401,35 @@ impl<'run> Interpreter<'run> {
     /// hashes first and only then `equals`, so a key whose `hashCode`
     /// disagrees with its `equals` goes missing — here exactly as there.
     fn map_find(&mut self, map: HeapRef, key: JValue) -> Result<Option<usize>, VmError> {
+        // A TreeMap locates a key by comparison, not hashing.
+        if matches!(
+            self.heap.get(map),
+            Some(crate::value::HeapObject::TreeMap { .. })
+        ) {
+            return self.tree_map_index_of(map, key);
+        }
         let hash = self.java_hash_code(key)?;
         self.map_find_hashed(map, hash, key)
+    }
+
+    /// The comparator a `TreeMap` orders keys with (or `None` for natural
+    /// ordering), detached from the heap borrow.
+    fn tree_map_comparator(&self, map: HeapRef) -> Option<HeapRef> {
+        match self.heap.get(map) {
+            Some(crate::value::HeapObject::TreeMap { comparator, .. }) => *comparator,
+            _ => None,
+        }
+    }
+
+    /// The position of the entry whose key compares equal to `key`, if present.
+    fn tree_map_index_of(&mut self, map: HeapRef, key: JValue) -> Result<Option<usize>, VmError> {
+        let comparator = self.tree_map_comparator(map);
+        for (index, (stored, _)) in self.map_entries(map).into_iter().enumerate() {
+            if self.compare_with(key, stored, comparator)? == 0 {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
     }
 
     /// The same, when the key's hash is already in hand — Java hashes a key
@@ -3393,14 +3463,10 @@ impl<'run> Interpreter<'run> {
 
     /// The value a `Map.Entry` currently maps to (it is a live view).
     fn map_entry_value(&mut self, map: HeapRef, key: JValue) -> Result<JValue, VmError> {
-        use crate::value::HeapObject;
         let Some(at) = self.map_find(map, key)? else {
             return Ok(JValue::NULL);
         };
-        match self.heap.get(map) {
-            Some(HeapObject::HashMap(entries)) => Ok(entries.value_at(at)),
-            _ => Ok(JValue::NULL),
-        }
+        Ok(self.map_value_at(map, at))
     }
 
     /// Whether any value in the map equals `probe`. `AbstractMap` asks the
@@ -3421,6 +3487,8 @@ impl<'run> Interpreter<'run> {
                 crate::value::HeapObject::HashMap(entries)
                 | crate::value::HeapObject::HashSet(entries),
             ) => entries.entries_in_order(),
+            // A TreeMap's entries are already stored in key order.
+            Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.clone(),
             _ => Vec::new(),
         }
     }
@@ -3431,6 +3499,7 @@ impl<'run> Interpreter<'run> {
                 crate::value::HeapObject::HashMap(entries)
                 | crate::value::HeapObject::HashSet(entries),
             ) => entries.len(),
+            Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.len(),
             _ => 0,
         }
     }
@@ -3438,6 +3507,9 @@ impl<'run> Interpreter<'run> {
     /// `map.put(key, value)`, returning the previous value (or `null`).
     fn map_put(&mut self, map: HeapRef, key: JValue, value: JValue) -> Result<JValue, VmError> {
         use crate::value::HeapObject;
+        if matches!(self.heap.get(map), Some(HeapObject::TreeMap { .. })) {
+            return self.tree_map_put(map, key, value);
+        }
         let hash = self.java_hash_code(key)?;
         if let Some(at) = self.map_find_hashed(map, hash, key)?
             && let Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) =
@@ -3449,6 +3521,38 @@ impl<'run> Interpreter<'run> {
             self.heap.get_mut(map)
         {
             entries.insert_new(hash, key, value);
+        }
+        Ok(JValue::NULL)
+    }
+
+    /// `treeMap.put(key, value)`: replace the value if the key is present
+    /// (`compare == 0`), otherwise insert the entry in sorted key position.
+    /// Returns the previous value, or `null`.
+    fn tree_map_put(
+        &mut self,
+        map: HeapRef,
+        key: JValue,
+        value: JValue,
+    ) -> Result<JValue, VmError> {
+        use crate::value::HeapObject;
+        let comparator = self.tree_map_comparator(map);
+        let entries = self.map_entries(map);
+        let mut at = entries.len();
+        for (index, (stored, _)) in entries.iter().enumerate() {
+            let ordering = self.compare_with(key, *stored, comparator)?;
+            if ordering == 0 {
+                let Some(HeapObject::TreeMap { entries, .. }) = self.heap.get_mut(map) else {
+                    return Ok(JValue::NULL);
+                };
+                return Ok(std::mem::replace(&mut entries[index].1, value));
+            }
+            if ordering < 0 {
+                at = index;
+                break;
+            }
+        }
+        if let Some(HeapObject::TreeMap { entries, .. }) = self.heap.get_mut(map) {
+            entries.insert(at, (key, value));
         }
         Ok(JValue::NULL)
     }
@@ -3465,8 +3569,11 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
+        // A TreeMap flows through the same arms: its methods reach the map
+        // helpers, which route a TreeMap to comparison-based lookup and its
+        // sorted vector. The sorted-only navigation methods are handled below.
         match self.heap.get(receiver) {
-            Some(HeapObject::HashMap(_)) => {}
+            Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. }) => {}
             Some(HeapObject::HashSet(_)) => {
                 return self.set_intrinsic(receiver, method_name, descriptor, args);
             }
@@ -3488,14 +3595,36 @@ impl<'run> Interpreter<'run> {
             ("size", []) => JValue::Int(i32::try_from(self.map_len(receiver)).unwrap_or(i32::MAX)),
             ("isEmpty", []) => JValue::Int(i32::from(self.map_len(receiver) == 0)),
             ("clear", []) => {
-                if let Some(HeapObject::HashMap(entries)) = self.heap.get_mut(receiver) {
-                    entries.clear();
+                match self.heap.get_mut(receiver) {
+                    Some(HeapObject::HashMap(entries)) => entries.clear(),
+                    Some(HeapObject::TreeMap { entries, .. }) => entries.clear(),
+                    _ => {}
                 }
                 return Ok(Answered::Void);
             }
             ("forEach", [JValue::Ref(Some(consumer))]) => {
                 self.map_for_each(receiver, *consumer)?;
                 return Ok(Answered::Void);
+            }
+            // TreeMap key navigation (the receiver is only ever a TreeMap here,
+            // since HashMap does not declare these). `firstKey`/`lastKey` throw
+            // on an empty map; the others return `null` when absent.
+            ("firstKey" | "lastKey", []) => {
+                let entries = self.map_entries(receiver);
+                let entry = if method_name == "firstKey" {
+                    entries.first()
+                } else {
+                    entries.last()
+                };
+                let Some((key, _)) = entry else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.util.NoSuchElementException",
+                    )));
+                };
+                *key
+            }
+            ("floorKey" | "ceilingKey" | "lowerKey" | "higherKey", [probe]) => {
+                self.tree_map_navigate_key(receiver, method_name, *probe)?
             }
             ("containsKey", [key]) => {
                 JValue::Int(i32::from(self.map_find(receiver, *key)?.is_some()))
@@ -3541,20 +3670,15 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(removed))
             }
             ("replace", [key, value]) => match self.map_find(receiver, *key)? {
-                Some(at) => match self.heap.get_mut(receiver) {
-                    Some(HeapObject::HashMap(entries)) => entries.set_value_at(at, *value),
-                    _ => JValue::NULL,
-                },
+                Some(at) => self.map_set_value_at(receiver, at, *value),
                 None => JValue::NULL,
             },
             ("replace", [key, expected, value]) => {
                 let replaced = match self.map_find(receiver, *key)? {
                     Some(at) => {
                         let held = self.map_value_at(receiver, at);
-                        if self.java_equals(*expected, held)?
-                            && let Some(HeapObject::HashMap(entries)) = self.heap.get_mut(receiver)
-                        {
-                            entries.set_value_at(at, *value);
+                        if self.java_equals(*expected, held)? {
+                            self.map_set_value_at(receiver, at, *value);
                             true
                         } else {
                             false
@@ -3576,8 +3700,10 @@ impl<'run> Interpreter<'run> {
                 let Some(other) = *other else {
                     return Ok(Answered::Value(JValue::Int(0)));
                 };
-                if !matches!(self.heap.get(other), Some(HeapObject::HashMap(_)))
-                    || self.map_len(receiver) != self.map_len(other)
+                if !matches!(
+                    self.heap.get(other),
+                    Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. })
+                ) || self.map_len(receiver) != self.map_len(other)
                 {
                     return Ok(Answered::Value(JValue::Int(0)));
                 }
@@ -4100,7 +4226,62 @@ impl<'run> Interpreter<'run> {
                 crate::value::HeapObject::HashMap(entries)
                 | crate::value::HeapObject::HashSet(entries),
             ) => entries.value_at(at),
+            Some(crate::value::HeapObject::TreeMap { entries, .. }) => {
+                entries.get(at).map_or(JValue::NULL, |(_, value)| *value)
+            }
             _ => JValue::NULL,
+        }
+    }
+
+    /// Overwrite the value at a position, returning the previous one.
+    fn map_set_value_at(&mut self, map: HeapRef, at: usize, value: JValue) -> JValue {
+        match self.heap.get_mut(map) {
+            Some(crate::value::HeapObject::HashMap(entries)) => entries.set_value_at(at, value),
+            Some(crate::value::HeapObject::TreeMap { entries, .. }) if at < entries.len() => {
+                std::mem::replace(&mut entries[at].1, value)
+            }
+            _ => JValue::NULL,
+        }
+    }
+
+    /// `floorKey`/`ceilingKey`/`lowerKey`/`higherKey` over the sorted keys.
+    fn tree_map_navigate_key(
+        &mut self,
+        map: HeapRef,
+        which: &str,
+        probe: JValue,
+    ) -> Result<JValue, VmError> {
+        let comparator = self.tree_map_comparator(map);
+        let mut best = JValue::NULL;
+        for (key, _) in self.map_entries(map) {
+            let ordering = self.compare_with(key, probe, comparator)?;
+            let matches = match which {
+                "floorKey" => ordering <= 0,
+                "lowerKey" => ordering < 0,
+                "ceilingKey" => ordering >= 0,
+                "higherKey" => ordering > 0,
+                _ => false,
+            };
+            if matches {
+                // floor/lower want the greatest match; ceiling/higher the least.
+                if which == "ceilingKey" || which == "higherKey" {
+                    return Ok(key);
+                }
+                best = key;
+            }
+        }
+        Ok(best)
+    }
+
+    /// The key/value pair at a position in a map's iteration order.
+    fn map_entry_at(&self, map: HeapRef, at: usize) -> Option<(JValue, JValue)> {
+        match self.heap.get(map) {
+            Some(
+                crate::value::HeapObject::HashMap(entries)
+                | crate::value::HeapObject::HashSet(entries),
+            ) => entries.entry_at(at),
+            Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.get(at).copied(),
+            _ => None,
         }
     }
 
@@ -4110,6 +4291,13 @@ impl<'run> Interpreter<'run> {
                 crate::value::HeapObject::HashMap(entries)
                 | crate::value::HeapObject::HashSet(entries),
             ) => entries.remove_at(at),
+            Some(crate::value::HeapObject::TreeMap { entries, .. }) => {
+                if at < entries.len() {
+                    entries.remove(at).1
+                } else {
+                    JValue::NULL
+                }
+            }
             _ => JValue::NULL,
         }
     }
@@ -4158,11 +4346,7 @@ impl<'run> Interpreter<'run> {
             // The element at a position in the map's iteration order.
             ("__get", [JValue::Int(position)]) => {
                 let position = usize::try_from(*position).unwrap_or(usize::MAX);
-                let entry = match self.heap.get(map) {
-                    Some(HeapObject::HashMap(entries)) => entries.entry_at(position),
-                    _ => None,
-                };
-                let Some((key, value)) = entry else {
+                let Some((key, value)) = self.map_entry_at(map, position) else {
                     return Err(VmError::UncaughtException(format!(
                         "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
                     )));
@@ -4814,6 +4998,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
             Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
             Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
+            Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }
@@ -5090,10 +5275,7 @@ impl<'run> Interpreter<'run> {
     /// `ConcurrentModificationException` there; caturra walks the snapshot,
     /// the same deviation its for-each over a map already has.
     fn map_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
-        let entries = match self.heap.get(receiver) {
-            Some(crate::value::HeapObject::HashMap(map)) => map.entries_in_order(),
-            _ => return Ok(()),
-        };
+        let entries = self.map_entries(receiver);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -5234,10 +5416,7 @@ impl<'run> Interpreter<'run> {
         kind: MapViewKind,
         consumer: HeapRef,
     ) -> Result<(), VmError> {
-        let entries = match self.heap.get(map) {
-            Some(crate::value::HeapObject::HashMap(entries)) => entries.entries_in_order(),
-            _ => return Ok(()),
-        };
+        let entries = self.map_entries(map);
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(

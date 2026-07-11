@@ -21,6 +21,9 @@ const JAVA_UTIL: &[&str] = &[
     "List",
     "HashMap",
     "Map",
+    "TreeMap",
+    "SortedMap",
+    "NavigableMap",
     "Set",
     "HashSet",
     "TreeSet",
@@ -85,14 +88,7 @@ const JAVA_LANG: &[&str] = &[
 const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.util",
-        &[
-            "TreeMap",
-            "ArrayDeque",
-            "Stack",
-            "Iterator",
-            "Optional",
-            "Comparator",
-        ],
+        &["ArrayDeque", "Stack", "Iterator", "Optional", "Comparator"],
     ),
     (
         "java.io",
@@ -133,6 +129,9 @@ const REQUIRES_IMPORT: &[&str] = &[
     "List",
     "HashMap",
     "Map",
+    "TreeMap",
+    "SortedMap",
+    "NavigableMap",
     "Set",
     "HashSet",
     "TreeSet",

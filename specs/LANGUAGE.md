@@ -432,6 +432,23 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     range views (`headSet`/`tailSet`/`subSet`/`descendingSet`) report honest
     reasons. Pinned against a real JDK by `diff_tree_set_core`,
     `_strings_and_copy` and `_user_comparable`.
+  - `TreeMap<K, V>` / `SortedMap<K, V>` / `NavigableMap<K, V>` (2026-07-10) — a
+    **sorted map**, the map analogue of `TreeSet`. Entries are kept in an
+    ordered vector by key, so iteration, the three views, and the key
+    navigation all read straight off it — and it flows through the same code
+    as `HashMap` (`put`/`get`/`containsKey`/`remove`/`keySet`/`values`/
+    `entrySet`/`forEach`/…), because the shared map helpers route a TreeMap to
+    comparison-based key lookup and its sorted vector. Keys order by their
+    natural (`Comparable`) ordering, a user `compareTo` included, which decides
+    key identity too (`compareTo == 0` replaces rather than adds). It adds
+    `firstKey`/`lastKey` (throw when empty) and `floorKey`/`ceilingKey`/
+    `lowerKey`/`higherKey` (boxed, `null` when absent). `new TreeMap<>(map)`
+    copies and re-sorts; a `TreeMap` widens to `Map`. As with `TreeSet`, the
+    `Comparator` constructor is VM-modelled but not yet reachable from source.
+    The entry-view and range methods (`firstEntry`/`headMap`/`tailMap`/
+    `subMap`/`descendingMap`/…) report honest reasons. Pinned against a real
+    JDK by `diff_tree_map_core`, `_int_keys_and_views` and
+    `_user_comparable_keys`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a
@@ -587,8 +604,8 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     a `NullPointerException`. `lineSeparator()` is always `"\n"`: the
     JVM's is system-dependent, and caturra runs where a line ends with a
     newline. Pinned by `diff_system_arraycopy_and_line_separator`.
-  - A real Java 11 class caturra does not model (`TreeMap`, `Stack`,
-    `ArrayDeque`, `Iterator`, `Optional`, `BufferedReader`, ...)
+  - A real Java 11 class caturra does not model (`Stack`, `ArrayDeque`,
+    `Iterator`, `Optional`, `Comparator`, `BufferedReader`, ...)
     reports an honest "java.util.Stack is not supported by caturra"
     **wherever it is written** (2026-07-09): a local or field declaration,
     a parameter, an array element, a type argument, `new`, `extends` and
@@ -606,9 +623,9 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
     an honest "not supported by caturra" instead), and using `Scanner`,
-    `ArrayList`, `HashMap`, `Map`, `Set`, `HashSet`, `TreeSet`, `LinkedList`,
-    `Queue`, `Deque`, `Collection`, `File`, or `PrintWriter` without the
-    matching import
+    `ArrayList`, `HashMap`, `Map`, `TreeMap`, `Set`, `HashSet`, `TreeSet`,
+    `LinkedList`, `Queue`, `Deque`, `Collection`, `File`, or `PrintWriter`
+    without the matching import
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
     imports (`IOException`, ...) are accepted for `throws` clauses;

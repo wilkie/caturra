@@ -6218,8 +6218,8 @@ fn stage6_compile_errors_match_javac_wording() {
             "package foo.bar does not exist",
         ),
         (
-            "import java.util.TreeMap; class M { }",
-            "java.util.TreeMap is not supported by caturra (the class library covers the AP CS A subset)",
+            "import java.util.ArrayDeque; class M { }",
+            "java.util.ArrayDeque is not supported by caturra (the class library covers the AP CS A subset)",
         ),
         (
             // java.awt / javax.swing (and java.awt.event listeners) are
@@ -8406,6 +8406,49 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// `java.util.TreeMap` keeps its entries sorted by key, so iteration, the
+/// views, and the key navigation all read off the sorted vector. Pinned
+/// JDK-free for CI; the byte-for-byte JDK match is in `differential.rs`.
+#[test]
+fn tree_map_keeps_entries_sorted_by_key() {
+    let out = run_stdout(
+        r#"
+        import java.util.Map;
+        import java.util.TreeMap;
+        public class T {
+            public static void main(String[] args) {
+                TreeMap<String, Integer> t = new TreeMap<>();
+                t.put("banana", 3); t.put("apple", 5); t.put("cherry", 1);
+                System.out.println(t);                          // {apple=5, banana=3, cherry=1}
+                System.out.println(t.firstKey() + " " + t.lastKey());
+                System.out.println(t.floorKey("b") + " " + t.ceilingKey("b"));
+                System.out.println(t.keySet() + " " + t.values());
+                System.out.println(t.get("apple") + " " + t.getOrDefault("z", -1));
+                t.put("apple", 9);
+                System.out.println(t.remove("cherry") + " " + t);
+
+                TreeMap<Integer, Integer> n = new TreeMap<>();
+                for (int i = 4; i >= 1; i--) { n.put(i, i * i); }
+                int sum = 0;
+                for (Map.Entry<Integer, Integer> e : n.entrySet()) { sum += e.getValue(); }
+                System.out.println(n + " " + sum);
+            }
+        }
+        "#,
+        "T",
+    );
+    assert_eq!(
+        out,
+        "{apple=5, banana=3, cherry=1}\n\
+         apple cherry\n\
+         apple banana\n\
+         [apple, banana, cherry] [5, 3, 1]\n\
+         5 -1\n\
+         1 {apple=9, banana=3}\n\
+         {1=1, 2=4, 3=9, 4=16} 30\n"
+    );
+}
+
 /// `java.util.TreeSet` keeps its elements sorted (natural / `Comparable`
 /// ordering), deduplicates by `compareTo == 0`, and answers the navigation
 /// methods off the sorted vector. Pinned JDK-free for CI; the byte-for-byte
@@ -9885,7 +9928,7 @@ fn unmodeled_library_classes_explain_themselves_in_every_position() {
         ),
         (
             "qualified",
-            "class M { static void r() { java.util.TreeMap<String, Integer> m; } }",
+            "class M { static void r() { java.util.ArrayDeque<Integer> m; } }",
         ),
     ] {
         let text = format!("import java.util.*;\n{source}");

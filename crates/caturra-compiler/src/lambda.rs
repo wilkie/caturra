@@ -759,7 +759,11 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
     let TypeRef::Generic { base, args } = ty else {
         return None;
     };
-    if (base != "Map" && base != "HashMap") || args.len() != 2 {
+    if !matches!(
+        base.as_str(),
+        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap"
+    ) || args.len() != 2
+    {
         return None;
     }
     Some((args[0].clone(), args[1].clone()))

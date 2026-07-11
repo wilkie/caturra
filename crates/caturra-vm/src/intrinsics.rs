@@ -77,6 +77,10 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             values: Vec::new(),
             comparator: None,
         }),
+        "java/util/TreeMap" => Some(HeapObject::TreeMap {
+            entries: Vec::new(),
+            comparator: None,
+        }),
         "java/io/File" => Some(HeapObject::File(String::new())),
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),

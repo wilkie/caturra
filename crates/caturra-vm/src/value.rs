@@ -125,6 +125,15 @@ pub enum HeapObject {
     /// A `java.util.HashMap` (key/value types erased), carrying the JDK's
     /// iteration order. See [`crate::map`].
     HashMap(crate::map::JavaHashMap),
+    /// A `java.util.TreeMap` (key/value types erased): its entries kept sorted
+    /// by key, so iteration, `firstKey`/`lastKey` and the key navigation read
+    /// straight off the vector. `comparator` orders the keys (or `None` for
+    /// natural `Comparable` ordering); both may run user code, so all ordering
+    /// lives in the interpreter.
+    TreeMap {
+        entries: Vec<(JValue, JValue)>,
+        comparator: Option<HeapRef>,
+    },
     /// A `java.util.HashSet` (element type erased). The JDK backs a `HashSet`
     /// with a `HashMap` whose keys are the elements, so a set's iteration
     /// order is exactly that map's key order — modelled by reusing
