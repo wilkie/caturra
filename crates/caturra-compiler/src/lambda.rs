@@ -471,18 +471,30 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // `list.forEach(x -> ...)` / `list.removeIf(x -> ...)`: a single
             // lambda whose parameter type is the receiver's element type. The
             // erased SAM is `__Consumer` (void) or `__Predicate` (boolean).
-            if matches!(method.as_str(), "forEach" | "removeIf")
+            if matches!(method.as_str(), "forEach" | "removeIf" | "replaceAll")
                 && args.len() == 1
                 && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
                 && let Some(r) = receiver.as_deref()
                 && let Some(elem) = list_elem_type(r, ctx)
             {
-                let (iface, sam, ret) = if method == "forEach" {
-                    ("__Consumer", "accept", TypeRef::Void)
-                } else {
-                    ("__Predicate", "test", TypeRef::Boolean)
+                let object = TypeRef::Named(String::from("Object"));
+                let (iface, sam, ret) = match method.as_str() {
+                    "forEach" => ("__Consumer", "accept", TypeRef::Void),
+                    "removeIf" => ("__Predicate", "test", TypeRef::Boolean),
+                    // `UnaryOperator<E>` — `E apply(E)`, erased to `Object
+                    // apply(Object)`. The result is boxed on return.
+                    _ => ("__UnaryOperator", "apply", object),
                 };
-                args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], ctx);
+                let result_type = (method == "replaceAll").then(|| elem.clone());
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    iface,
+                    sam,
+                    &ret,
+                    &[elem],
+                    result_type.as_ref(),
+                    ctx,
+                );
                 return;
             }
             // `list.add(() -> ...)` / `list.set(i, () -> ...)`: the element
@@ -755,8 +767,82 @@ fn build_bi_consumer_class(
         "accept",
         &TypeRef::Void,
         &[key.clone(), value.clone()],
+        None,
         ctx,
     )
+}
+
+/// Rewrite every `return e;` in `stmts` to `{ T __caturraResult = e; return
+/// __caturraResult; }`, so the body's result is checked against the element
+/// type `ty`. Recurses into nested statements; a lambda has no inner method
+/// or class to stop at.
+fn coerce_returns(stmts: &mut [Stmt], ty: &TypeRef, span: crate::diagnostics::SourceSpan) {
+    for stmt in stmts {
+        coerce_return_in(stmt, ty, span);
+    }
+}
+
+fn coerce_return_in(stmt: &mut Stmt, ty: &TypeRef, span: crate::diagnostics::SourceSpan) {
+    match stmt {
+        Stmt::Return { value: Some(_), .. } => {
+            let Stmt::Return { value, .. } = stmt else {
+                unreachable!("matched Return");
+            };
+            let e = value.take().expect("matched Some");
+            *stmt = Stmt::Block(vec![
+                Stmt::LocalDecl {
+                    ty: ty.clone(),
+                    is_final: false,
+                    declarators: vec![crate::ast::LocalDeclarator {
+                        name: String::from("__caturraResult"),
+                        init: Some(e),
+                        span,
+                        extra_dims: 0,
+                    }],
+                    span,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Name {
+                        path: vec![String::from("__caturraResult")],
+                        span,
+                    }),
+                    span,
+                },
+            ]);
+        }
+        Stmt::Block(body) => coerce_returns(body, ty, span),
+        Stmt::If { then, els, .. } => {
+            coerce_return_in(then, ty, span);
+            if let Some(e) = els {
+                coerce_return_in(e, ty, span);
+            }
+        }
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForEach { body, .. }
+        | Stmt::Labeled { body, .. } => coerce_return_in(body, ty, span),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            coerce_returns(body, ty, span);
+            for c in catches {
+                coerce_returns(&mut c.body, ty, span);
+            }
+            if let Some(f) = finally_body {
+                coerce_returns(f, ty, span);
+            }
+        }
+        Stmt::Switch { arms, .. } => {
+            for arm in arms {
+                coerce_returns(&mut arm.body, ty, span);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Build the erased functional class for a collection lambda: `__Consumer`,
@@ -764,12 +850,18 @@ fn build_bi_consumer_class(
 /// generics) and opens with a cast of each back to the collection's declared
 /// element type, the way javac's bridge method does, binding the lambda's own
 /// parameter names. An expression body returns for a non-void SAM.
+#[allow(clippy::too_many_lines)] // one class-assembly, linear
 fn build_erased_lambda(
     lambda: &mut Expr,
     interface: &str,
     method: &str,
     ret: &TypeRef,
     elem_types: &[TypeRef],
+    // For `replaceAll`, the declared element type the result must convert to.
+    // The erased SAM returns `Object`, which would otherwise accept any
+    // reference; assigning the body to a local of this type restores the
+    // check javac makes on `UnaryOperator<E>.apply`.
+    result_type: Option<&TypeRef>,
     ctx: &mut Ctx,
 ) -> Expr {
     let Expr::Lambda { params, body, span } = lambda else {
@@ -819,6 +911,27 @@ fn build_erased_lambda(
             desugar_expr(&mut e, None, ctx);
             if is_void {
                 method_body.push(Stmt::Expr(*e));
+            } else if let Some(declared) = result_type {
+                // `E __caturraResult = (expr); return __caturraResult;` — the
+                // assignment type-checks the body against the element type.
+                method_body.push(Stmt::LocalDecl {
+                    ty: declared.clone(),
+                    is_final: false,
+                    declarators: vec![crate::ast::LocalDeclarator {
+                        name: String::from("__caturraResult"),
+                        init: Some(*e),
+                        span,
+                        extra_dims: 0,
+                    }],
+                    span,
+                });
+                method_body.push(Stmt::Return {
+                    value: Some(Expr::Name {
+                        path: vec![String::from("__caturraResult")],
+                        span,
+                    }),
+                    span,
+                });
             } else {
                 method_body.push(Stmt::Return {
                     value: Some(*e),
@@ -829,6 +942,12 @@ fn build_erased_lambda(
         LambdaBody::Block(mut stmts) => {
             for stmt in &mut stmts {
                 desugar_stmt(stmt, ctx);
+            }
+            // For `replaceAll`, each `return e;` must convert to the element
+            // type — the erased `Object` return would otherwise accept any
+            // reference, more permissive than javac.
+            if let Some(declared) = result_type {
+                coerce_returns(&mut stmts, declared, span);
             }
             method_body.extend(stmts);
         }

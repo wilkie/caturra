@@ -18,3 +18,7 @@ interface __Consumer {
 interface __Predicate {
   boolean test(Object element);
 }
+
+interface __UnaryOperator {
+  Object apply(Object element);
+}

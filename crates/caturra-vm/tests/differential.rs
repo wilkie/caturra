@@ -6150,6 +6150,59 @@ public class DiffListForEach {
 "#
 );
 
+differential_test!(
+    diff_list_replace_all,
+    "DiffReplaceAll",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class DiffReplaceAll {
+    public static void main(String[] args) {
+        ArrayList<Integer> nums = new ArrayList<Integer>();
+        nums.add(1);
+        nums.add(2);
+        nums.add(3);
+        int factor = 10;
+        nums.replaceAll(n -> n * factor);   // primitive result, captured factor
+        System.out.println(nums);
+        int sum = 0;
+        for (int i = 0; i < nums.size(); i++) sum += nums.get(i);
+        System.out.println(sum);
+
+        ArrayList<String> words = new ArrayList<String>();
+        words.add("a");
+        words.add("bb");
+        words.replaceAll(s -> s.toUpperCase() + s.length());   // reference result
+        System.out.println(words);
+
+        List<Double> ds = new ArrayList<Double>();
+        ds.add(1.5);
+        ds.add(2.5);
+        ds.replaceAll(x -> x + 0.5);
+        System.out.println(ds);
+
+        // A block body with a nested return.
+        ArrayList<Integer> b = new ArrayList<Integer>();
+        b.add(1);
+        b.add(5);
+        b.replaceAll(n -> {
+            if (n > 3) {
+                return n;
+            }
+            return 0;
+        });
+        System.out.println(b);
+
+        // Empty list.
+        ArrayList<Integer> e = new ArrayList<Integer>();
+        e.replaceAll(x -> x + 1);
+        System.out.println(e);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

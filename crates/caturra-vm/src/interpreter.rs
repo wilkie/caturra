@@ -3157,6 +3157,10 @@ impl<'run> Interpreter<'run> {
                 let removed = self.list_remove_if(receiver, *predicate)?;
                 return Ok(Answered::Value(JValue::Int(i32::from(removed))));
             }
+            ("replaceAll", _, [JValue::Ref(Some(op))]) => {
+                self.list_replace_all(receiver, *op)?;
+                return Ok(Answered::Void);
+            }
             ("contains", _, [probe]) => {
                 JValue::Int(i32::from(self.list_index_of(receiver, *probe, false)? >= 0))
             }
@@ -4440,6 +4444,50 @@ impl<'run> Interpreter<'run> {
             *list = kept;
         }
         Ok(removed)
+    }
+
+    /// `list.replaceAll(operator)`: replace each element with `apply(element)`,
+    /// in order. The operator's erased SAM returns `Object`, so the result is
+    /// already a `JValue` the list stores directly (boxing is a no-op here).
+    fn list_replace_all(&mut self, receiver: HeapRef, operator: HeapRef) -> Result<(), VmError> {
+        let items = self.list_items(receiver);
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(operator)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        let mut replaced: Vec<JValue> = Vec::with_capacity(items.len());
+        for element in items {
+            let dispatched = self.user_virtual_dispatch(
+                operator,
+                &class_name,
+                "apply",
+                "(Ljava/lang/Object;)Ljava/lang/Object;",
+                &[element],
+            )?;
+            let result = match dispatched {
+                UserDispatch::Call(frame) => self.run_nested(frame)?,
+                UserDispatch::Value(value) => value,
+            };
+            // The erased `apply` returns `Object`, so a primitive result comes
+            // back boxed. A caturra list stores wrappers unboxed, so unbox it;
+            // a String or user object stays a reference.
+            let stored = match result {
+                Some(JValue::Ref(Some(r))) => match self.heap.get(r) {
+                    Some(crate::value::HeapObject::Boxed { value, .. }) => *value,
+                    _ => JValue::Ref(Some(r)),
+                },
+                Some(value) => value,
+                None => JValue::NULL,
+            };
+            replaced.push(stored);
+        }
+        if let Some(crate::value::HeapObject::ArrayList(list)) = self.heap.get_mut(receiver) {
+            *list = replaced;
+        }
+        Ok(())
     }
 
     /// `a.compareTo(b)` on a user object. The erased descriptor finds a

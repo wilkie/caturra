@@ -444,12 +444,13 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<util>"), unit));
     }
-    if sources
+    if sources.iter().any(|s| {
+        s.text.contains(".forEach(")
+            || s.text.contains(".removeIf(")
+            || s.text.contains(".replaceAll(")
+    }) && !units
         .iter()
-        .any(|s| s.text.contains(".forEach(") || s.text.contains(".removeIf("))
-        && !units
-            .iter()
-            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))
+        .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))
     {
         let (tokens, _) = lexer::lex("<function>", FUNCTION_LIB);
         let (unit, mut errs) = parser::parse("<function>", tokens);

@@ -783,11 +783,14 @@ final`, or `from an inner class` for an anonymous class. Copying a
 -> ...`), an assignment target (including array elements), a `return`
   statement, a method-call parameter (single-candidate resolution), or
   the **element type of a collection** for `list.add(() -> ...)`,
-  `list.set(i, () -> ...)`, `list.forEach(x -> ...)` and
-  `list.removeIf(x -> ...)` — the element argument is typed against the
-  receiver's `ArrayList`/`List`/`Set`/`Collection<E>` argument, the same
-  receiver-driven typing `Map.forEach` uses (`forEach`/`removeIf` bind the
-  erased `__Consumer`/`__Predicate`). Expression bodies
+  `list.set(i, () -> ...)`, `list.forEach(x -> ...)`, `list.removeIf(x ->
+...)` and `list.replaceAll(x -> ...)` — the element argument is typed
+  against the receiver's `ArrayList`/`List`/`Set`/`Collection<E>` argument,
+  the same receiver-driven typing `Map.forEach` uses.
+  `forEach`/`removeIf`/`replaceAll` bind the erased
+  `__Consumer`/`__Predicate`/`__UnaryOperator`, and `replaceAll`'s result
+  is checked against the element type (which the erased `Object` return
+  would otherwise drop). Expression bodies
   become `return e;` (or `e;` for a void SAM); block bodies are used
   directly. A lambda in a position with no functional target type is
   reported. Pinned by `diff_lambda_as_a_list_element`.

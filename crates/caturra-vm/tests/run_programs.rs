@@ -8328,8 +8328,8 @@ fn hash_map_iterates_and_boxes_like_the_jdk() {
 fn unsupported_map_members_explain_themselves() {
     for (source, want) in [
         (
-            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().replaceAll(s -> s); } }",
-            "ArrayList.replaceAll exists in Java, but lambdas are not supported by caturra",
+            "import java.util.ArrayList; class M { static void r() {              new ArrayList<String>().sort((x, y) -> 0); } }",
+            "ArrayList.sort exists in Java, but comparators are not supported by caturra",
         ),
         (
             "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().merge(null, null, null); } }",
@@ -10903,5 +10903,62 @@ fn a_list_lambda_is_refused_where_javac_refuses_it() {
             text: String::from(source),
         }]);
         assert!(!compilation.success(), "should not compile: {source}");
+    }
+}
+
+/// `list.replaceAll(x -> ...)` (a `UnaryOperator<E>`) applies the operator to
+/// each element in place (2026-07-09). The erased SAM returns `Object`, so a
+/// primitive result comes back boxed and is unboxed to match the list's
+/// storage; the body's result is coerced to the element type, so a wrong
+/// return is rejected. Pinned against a real JDK by `diff_list_replace_all`.
+#[test]
+fn a_list_replace_all_transforms_each_element() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        public class M {
+            public static void main(String[] args) {
+                ArrayList<Integer> nums = new ArrayList<Integer>();
+                nums.add(1); nums.add(2); nums.add(3);
+                nums.replaceAll(n -> n * 10);
+                System.out.println(nums);
+                int sum = 0;
+                for (int i = 0; i < nums.size(); i++) sum += nums.get(i);
+                System.out.println(sum);
+                ArrayList<String> w = new ArrayList<String>();
+                w.add("a"); w.add("bb");
+                w.replaceAll(s -> s.toUpperCase() + s.length());
+                System.out.println(w);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "[10, 20, 30]\n60\n[A1, BB2]\n");
+}
+
+/// `replaceAll` keeps the element-type check javac makes, even though the SAM
+/// erases to `Object` — a result of the wrong type is rejected, in an
+/// expression body and a block body alike. The safe direction.
+#[test]
+fn a_replace_all_result_must_convert_to_the_element_type() {
+    for source in [
+        "import java.util.*; class M { static void r() { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.replaceAll(n -> \"x\"); } }",
+        "import java.util.*; class M { static void r() { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.replaceAll(n -> { return \"x\"; }); } }",
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+        assert!(
+            compilation.diagnostics[0]
+                .message
+                .contains("cannot be converted to Integer"),
+            "got: {}",
+            compilation.diagnostics[0].message
+        );
     }
 }
