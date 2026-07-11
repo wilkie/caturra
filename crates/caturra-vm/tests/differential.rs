@@ -6636,6 +6636,36 @@ public class DiffStreamJoin {
 // from the stream terminals (findFirst / max / min / average).
 // ---------------------------------------------------------------------------
 
+// Optional.ifPresent(consumer) runs its lambda only when present; filter keeps
+// a present value only if it matches (else empty). Both lambdas are typed by the
+// Optional's element.
+differential_test!(
+    diff_optional_lambdas,
+    "DiffOptionalLambda",
+    r#"
+import java.util.Optional;
+
+public class DiffOptionalLambda {
+    public static void main(String[] args) {
+        Optional<String> a = Optional.of("hello");
+        a.ifPresent(s -> System.out.println("len " + s.length()));
+        Optional<String> b = Optional.empty();
+        b.ifPresent(s -> System.out.println("never"));
+
+        Optional<Integer> n = Optional.of(7);
+        System.out.println(n.filter(x -> x > 5).isPresent());
+        System.out.println(n.filter(x -> x > 10).isPresent());
+        System.out.println(n.filter(x -> x > 5).get());
+        System.out.println(b.filter(s -> s.length() > 0).isPresent());
+
+        Optional<String> c = Optional.of("world");
+        System.out.println(c.filter(s -> s.startsWith("w")).orElse("none"));
+        System.out.println(c.filter(s -> s.startsWith("z")));
+    }
+}
+"#
+);
+
 // The Optional factories: of(x)/ofNullable(x) build a present Optional,
 // empty() an absent one, so a method can construct and return an Optional
 // rather than only receive one from a stream terminal.

@@ -517,6 +517,23 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `optional.ifPresent(x -> ...)` / `filter(x -> ...)`: a single
+            // lambda whose parameter is the Optional's element type. `ifPresent`
+            // erases to `__Consumer` (void), `filter` to `__Predicate` (boolean).
+            if matches!(method.as_str(), "ifPresent" | "filter")
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
+                && let Some(r) = receiver.as_deref()
+                && let Some(elem) = optional_elem_type(r, ctx)
+            {
+                let (iface, sam, ret) = if method == "ifPresent" {
+                    ("__Consumer", "accept", TypeRef::Void)
+                } else {
+                    ("__Predicate", "test", TypeRef::Boolean)
+                };
+                args[0] = build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], None, ctx);
+                return;
+            }
             // `list.sort((a, b) -> ...)`: a two-parameter comparator whose
             // parameters are both the receiver's element type, returning int.
             if method == "sort"
@@ -997,6 +1014,23 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 /// The declared element type of a `List`/`ArrayList`/`Set`/`Collection`
 /// receiver, read syntactically from the local, parameter, or field it names
 /// — the same shape as `map_type_args`, for a single type argument.
+/// The element type `E` of a receiver declared `Optional<E>` — for typing the
+/// lambda parameter of `ifPresent`/`filter`. Resolves a variable, a `this`
+/// field, or an inline `new`, the same shapes `list_elem_type` handles.
+fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let ty = match receiver {
+        Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
+        Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
+            ctx.lookup(name)?
+        }
+        _ => return None,
+    };
+    let TypeRef::Generic { base, args } = ty else {
+        return None;
+    };
+    (base == "Optional" && args.len() == 1).then(|| args[0].clone())
+}
+
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     // A `map.keySet()`/`values()` view: the element is the map's key or value
     // type. `entrySet()` yields `Map.Entry`, whose lambda parameter typing

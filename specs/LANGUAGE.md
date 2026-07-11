@@ -540,10 +540,14 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     be **constructed directly** (2026-07-11): `Optional.of(x)` and
     `Optional.ofNullable(x)` build a present Optional of the argument's type,
     `Optional.empty()` an absent one that adopts its assignment context (like
-    `null`), so a method can return `Optional<T>`. `map`/`filter`/`orElseGet`/
-    `ifPresent` (which take lambdas needing the Optional's element type) are not
-    yet reachable from source. Pinned against a real JDK by `diff_optional` and
-    `diff_optional_factories`.
+    `null`), so a method can return `Optional<T>`. Two lambda methods work too
+    (2026-07-11): `ifPresent(x -> ...)` runs its consumer only when present, and
+    `filter(x -> ...)` keeps a present value only if the predicate matches (else
+    an empty Optional). Their lambda parameter is typed by the Optional's
+    element, resolved from a variable/field receiver (a chained
+    `opt.filter(..).filter(..)` on a call receiver, and `map`/`orElseGet`, remain
+    unsupported). Pinned against a real JDK by `diff_optional`,
+    `diff_optional_factories`, and `diff_optional_lambdas`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a

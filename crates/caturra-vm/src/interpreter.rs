@@ -4949,6 +4949,17 @@ impl<'run> Interpreter<'run> {
                 }
                 return Ok(Answered::Void);
             }
+            // `filter(predicate)`: keep a present value only if it matches, else
+            // an empty Optional. (Only a reference Optional has `filter`.)
+            ("filter", [JValue::Ref(Some(predicate))]) => {
+                let kept = match value {
+                    Some(present) if self.call_test(*predicate, present)? => Some(present),
+                    _ => None,
+                };
+                return Ok(Answered::Value(
+                    self.alloc_optional(kept, crate::value::OptionalKind::Ref),
+                ));
+            }
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "Optional.{method}{descriptor}"

@@ -4398,6 +4398,14 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/util/function/Consumer;)V",
     ),
+    // `filter(predicate)` keeps a present value only if it matches, so the
+    // result is an `Optional` of the same element type.
+    bm(
+        "filter",
+        &[BParam::Predicate],
+        BRet::Optional,
+        "(Ljava/util/function/Predicate;)Ljava/util/Optional;",
+    ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 

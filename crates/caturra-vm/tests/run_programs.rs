@@ -8432,6 +8432,50 @@ fn optionals_from_stream_terminals() {
     assert_eq!(out, "5\n2.8\nbanana\nfalse none\nOptional.empty\n");
 }
 
+/// `Optional.ifPresent(consumer)` runs its lambda only when present, and
+/// `filter(predicate)` keeps a present value only if it matches (else empty).
+/// Both take a lambda parameterized by the Optional's element. Pinned JDK-free;
+/// the byte-for-byte JDK match is in `diff_optional_lambdas`.
+#[test]
+fn optional_if_present_and_filter() {
+    let out = run_stdout(
+        r#"
+        import java.util.Optional;
+        public class O {
+            public static void main(String[] args) {
+                Optional<String> a = Optional.of("hello");
+                a.ifPresent(s -> System.out.println("got " + s));
+                Optional<String> b = Optional.empty();
+                b.ifPresent(s -> System.out.println("never " + s));
+
+                Optional<Integer> n = Optional.of(7);
+                System.out.println(n.filter(x -> x > 5).isPresent());
+                System.out.println(n.filter(x -> x > 10).isPresent());
+                System.out.println(n.filter(x -> x > 5).get());
+                System.out.println(b.filter(s -> s.length() > 0).isPresent());
+
+                Optional<String> c = Optional.of("world");
+                System.out.println(c.filter(s -> s.startsWith("w")).orElse("none"));
+                System.out.println(c.filter(s -> s.startsWith("z")).orElse("none"));
+                System.out.println(c.filter(s -> s.startsWith("z")));
+            }
+        }
+        "#,
+        "O",
+    );
+    assert_eq!(
+        out,
+        "got hello\n\
+         true\n\
+         false\n\
+         7\n\
+         false\n\
+         world\n\
+         none\n\
+         Optional.empty\n"
+    );
+}
+
 /// The `Optional` factories: `of(x)` / `ofNullable(x)` wrap a present value,
 /// `empty()` an absent one, so a method can build and return an `Optional`.
 /// Pinned JDK-free; the byte-for-byte JDK match is in `diff_optional_factories`.

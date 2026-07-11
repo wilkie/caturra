@@ -449,6 +449,10 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains(".removeIf(")
             || s.text.contains(".replaceAll(")
             || s.text.contains(".sort(")
+            // `optional.ifPresent(x -> ...)` / `filter(x -> ...)` desugar to the
+            // bundled `__Consumer`/`__Predicate` too.
+            || s.text.contains(".ifPresent(")
+            || s.text.contains(".filter(")
             // A stream pipeline's `filter`/`map`/… lambdas desugar to the
             // bundled functional interfaces.
             || s.text.contains(".stream(")
