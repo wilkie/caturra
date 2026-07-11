@@ -33,6 +33,7 @@ const JAVA_UTIL: &[&str] = &[
     "Queue",
     "Deque",
     "Collection",
+    "Comparator",
     "Arrays",
     "Random",
     "Collections",
@@ -88,7 +89,7 @@ const JAVA_LANG: &[&str] = &[
 const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.util",
-        &["ArrayDeque", "Stack", "Iterator", "Optional", "Comparator"],
+        &["ArrayDeque", "Stack", "Iterator", "Optional"],
     ),
     (
         "java.io",
@@ -141,6 +142,7 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Queue",
     "Deque",
     "Collection",
+    "Comparator",
     "File",
     "PrintWriter",
     "InputMismatchException",

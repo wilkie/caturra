@@ -6532,6 +6532,103 @@ public class DiffHashSetKeys {
 );
 
 // ---------------------------------------------------------------------------
+// java.util.Comparator — a user-facing alias for the bundled erased
+// `__Comparator`. A user Comparator class, a comparator variable, and a
+// comparator lambda all order sort/TreeSet/TreeMap, exactly as on a JDK.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_comparator_classes,
+    "DiffCmpClass",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class DiffCmpClass {
+    static class Person {
+        String name;
+        int age;
+        Person(String n, int a) { name = n; age = a; }
+        public String toString() { return name + "(" + age + ")"; }
+    }
+    static class ByAge implements Comparator<Person> {
+        public int compare(Person a, Person b) { return Integer.compare(a.age, b.age); }
+    }
+    static class ByName implements Comparator<Person> {
+        public int compare(Person a, Person b) { return a.name.compareTo(b.name); }
+    }
+
+    public static void main(String[] args) {
+        List<Person> people = new ArrayList<>();
+        people.add(new Person("Carol", 30));
+        people.add(new Person("Alice", 25));
+        people.add(new Person("Bob", 35));
+
+        people.sort(new ByAge());
+        System.out.println(people);                  // [Alice(25), Carol(30), Bob(35)]
+        Collections.sort(people, new ByName());
+        System.out.println(people);                  // [Alice(25), Bob(35), Carol(30)]
+
+        // A Comparator held in a variable.
+        Comparator<Person> byAge = new ByAge();
+        Collections.sort(people, byAge);
+        System.out.println(people);
+
+        // Comparator-ordered TreeSet and TreeMap (a user class).
+        TreeSet<Person> byName = new TreeSet<>(new ByName());
+        byName.add(new Person("Carol", 30));
+        byName.add(new Person("Alice", 25));
+        byName.add(new Person("Bob", 35));
+        System.out.println(byName + " first=" + byName.first());
+
+        TreeMap<Person, String> tm = new TreeMap<>(new ByAge());
+        tm.put(new Person("Carol", 30), "c");
+        tm.put(new Person("Alice", 25), "a");
+        System.out.println(tm.firstKey());           // Alice(25)
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_comparator_lambdas,
+    "DiffCmpLambda",
+    r#"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class DiffCmpLambda {
+    public static void main(String[] args) {
+        List<Integer> xs = new ArrayList<>();
+        xs.add(3); xs.add(1); xs.add(2);
+
+        // A comparator lambda held in a variable.
+        Comparator<Integer> desc = (a, b) -> b - a;
+        xs.sort(desc);
+        System.out.println(xs);                       // [3, 2, 1]
+
+        // Inline comparator lambdas in the sorted-collection constructors.
+        TreeSet<Integer> t = new TreeSet<>((a, b) -> b - a);
+        t.add(1); t.add(3); t.add(2); t.add(2);
+        System.out.println(t + " first=" + t.first()); // [3, 2, 1] first=3
+
+        TreeMap<String, Integer> m = new TreeMap<>((a, b) -> b.compareTo(a));
+        m.put("apple", 1); m.put("cherry", 2); m.put("banana", 3);
+        System.out.println(m);                        // {cherry=2, banana=3, apple=1}
+        System.out.println(m.firstKey());             // cherry
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
 // java.util.TreeMap — a sorted map. Entries are kept in key order, so
 // iteration, the views, and the key navigation all read off the sorted vector.
 // ---------------------------------------------------------------------------

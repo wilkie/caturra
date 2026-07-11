@@ -449,6 +449,8 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains(".removeIf(")
             || s.text.contains(".replaceAll(")
             || s.text.contains(".sort(")
+            // A user `Comparator` aliases the bundled `__Comparator` interface.
+            || s.text.contains("Comparator")
     }) && !units
         .iter()
         .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))

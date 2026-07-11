@@ -433,6 +433,26 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             return;
         }
     }
+    // A comparator lambda in a `Comparator<E>` position (a variable, field,
+    // parameter, or return): the erased SAM is `__Comparator.compare`, and both
+    // parameters cast back to `E` — like `list.sort`, but with `E` read from the
+    // target type's argument rather than a receiver's element.
+    if let Expr::Lambda { params, .. } = expr
+        && params.len() == 2
+        && let Some(target) = expected
+        && let Some(elem) = comparator_target_elem(target)
+    {
+        *expr = build_erased_lambda(
+            expr,
+            "__Comparator",
+            "compare",
+            &TypeRef::Int,
+            &[elem.clone(), elem],
+            None,
+            ctx,
+        );
+        return;
+    }
     // A lambda in a target-typed position: rewrite it.
     if matches!(expr, Expr::Lambda { .. }) {
         if let Some(target) = expected
@@ -566,7 +586,35 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 desugar_expr(arg, expected.as_ref(), ctx);
             }
         }
-        Expr::NewObject { class, args, .. } => {
+        Expr::NewObject {
+            class,
+            type_args,
+            args,
+            ..
+        } => {
+            // A comparator lambda argument to a `TreeSet`/`TreeMap` constructor:
+            // its parameters are the set's element / the map's key type, read
+            // from the `new`'s own type arguments or, for a diamond, the
+            // declaration target it initializes.
+            if matches!(class.as_str(), "TreeSet" | "TreeMap")
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 2)
+                && let Some(elem) = type_args
+                    .first()
+                    .cloned()
+                    .or_else(|| expected.and_then(sorted_ctor_elem))
+            {
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    "__Comparator",
+                    "compare",
+                    &TypeRef::Int,
+                    &[elem.clone(), elem],
+                    None,
+                    ctx,
+                );
+                return;
+            }
             // Target-type a lambda constructor argument (`new Timer(40, e -> …)`)
             // when exactly one constructor of the class takes this many args.
             let param_types = ctx.constructors.get(class).and_then(|sigs| {
@@ -767,6 +815,31 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
         return None;
     }
     Some((args[0].clone(), args[1].clone()))
+}
+
+/// The comparator element of a `TreeSet<E>` (`E`) or `TreeMap<K, V>` (`K`, the
+/// key it orders) declaration target — for a diamond `new TreeSet<>(cmp)`
+/// whose element type lives on the left-hand side.
+fn sorted_ctor_elem(target: &TypeRef) -> Option<TypeRef> {
+    let TypeRef::Generic { base, args } = target else {
+        return None;
+    };
+    matches!(
+        base.as_str(),
+        "TreeSet" | "SortedSet" | "NavigableSet" | "TreeMap" | "SortedMap" | "NavigableMap"
+    )
+    .then(|| args.first().cloned())
+    .flatten()
+}
+
+/// The element type `E` of a `Comparator<E>` target type, for casting a
+/// comparator lambda's two parameters. `null` for anything else.
+fn comparator_target_elem(target: &TypeRef) -> Option<TypeRef> {
+    let TypeRef::Generic { base, args } = target else {
+        return None;
+    };
+    (matches!(base.as_str(), "Comparator" | "java.util.Comparator") && args.len() == 1)
+        .then(|| args[0].clone())
 }
 
 /// The declared element type of a `List`/`ArrayList`/`Set`/`Collection`

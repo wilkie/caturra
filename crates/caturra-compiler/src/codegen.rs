@@ -695,6 +695,9 @@ impl MethodTable {
                     .interfaces
                     .iter()
                     .filter_map(|name| {
+                        // `implements Comparator<T>` implements the bundled
+                        // erased `__Comparator` (a student-facing alias).
+                        let name = comparator_alias(name);
                         let id = table.class_id(name);
                         if id.is_none() {
                             diagnostics.push(Diagnostic::error(
@@ -1048,6 +1051,13 @@ impl MethodTable {
                 {
                     return Some(JType::Object(id));
                 }
+                // `Comparator` aliases the bundled erased `__Comparator`.
+                if (name == "Comparator" || name == "java.util.Comparator")
+                    && !self.has_class("Comparator")
+                    && let Some(id) = self.class_id("__Comparator")
+                {
+                    return Some(JType::Object(id));
+                }
                 // The erased single type variable of the enclosing
                 // generic class.
                 if name == crate::parser::TYPEVAR_SENTINEL {
@@ -1152,6 +1162,12 @@ impl MethodTable {
                     let key = elem_from_type_arg(&args[0], self)?;
                     let value = elem_from_type_arg(&args[1], self)?;
                     Some(JType::MapEntry { key, value })
+                } else if matches!(simple, "Comparator")
+                    && !self.has_class("Comparator")
+                    && let Some(id) = self.class_id("__Comparator")
+                {
+                    // `Comparator<T>` erases to the bundled `__Comparator`.
+                    Some(JType::Object(id))
                 } else if !self.has_class(base)
                     && matches!(simple, "Class" | "Constructor" | "Field")
                 {
@@ -1694,6 +1710,17 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         // A wrapper array element stores its primitive (`Integer[]` -> `int[]`).
         JType::Boxed(elem) => Some(elem),
         _ => None,
+    }
+}
+
+/// The bundled interface a source `Comparator` name aliases: student code
+/// writes `Comparator`, which caturra models with the erased `__Comparator`
+/// (its `compare(Object, Object)` reaches a user `compare(T, T)` through the
+/// VM's erasure bridge, exactly as `Comparable.compareTo` does).
+fn comparator_alias(name: &str) -> &str {
+    match name {
+        "Comparator" | "java.util.Comparator" => "__Comparator",
+        other => other,
     }
 }
 

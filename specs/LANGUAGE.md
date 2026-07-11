@@ -425,10 +425,9 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     `floor`(≤)/`ceiling`(≥)/`lower`(<)/`higher`(>) and `pollFirst`/`pollLast`
     (all boxed, `null`/empty-safe), and for-each in sorted order. A `TreeSet`
     widens to `Set`/`Collection`, and `new TreeSet<>(collection)` copies and
-    sorts. The `Comparator` constructor is modelled by the VM but not yet
-    reachable from source, because a user `java.util.Comparator` and an inline
-    comparator lambda in the constructor are not supported yet — a documented
-    limitation, the safe direction. `iterator`/`stream`/`removeIf` and the
+    sorts. `new TreeSet<>(comparator)` orders by a `Comparator` (a class or a
+    lambda — see below) instead of the natural ordering.
+    `iterator`/`stream`/`removeIf` and the
     range views (`headSet`/`tailSet`/`subSet`/`descendingSet`) report honest
     reasons. Pinned against a real JDK by `diff_tree_set_core`,
     `_strings_and_copy` and `_user_comparable`.
@@ -443,12 +442,27 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     key identity too (`compareTo == 0` replaces rather than adds). It adds
     `firstKey`/`lastKey` (throw when empty) and `floorKey`/`ceilingKey`/
     `lowerKey`/`higherKey` (boxed, `null` when absent). `new TreeMap<>(map)`
-    copies and re-sorts; a `TreeMap` widens to `Map`. As with `TreeSet`, the
-    `Comparator` constructor is VM-modelled but not yet reachable from source.
+    copies and re-sorts; a `TreeMap` widens to `Map`. `new TreeMap<>(comparator)`
+    orders keys by a `Comparator` (see below) rather than naturally.
     The entry-view and range methods (`firstEntry`/`headMap`/`tailMap`/
     `subMap`/`descendingMap`/…) report honest reasons. Pinned against a real
     JDK by `diff_tree_map_core`, `_int_keys_and_views` and
     `_user_comparable_keys`.
+  - `java.util.Comparator<T>` (2026-07-11) — students can now write their own,
+    as a **class** (`class ByAge implements Comparator<Person> { public int
+compare(Person a, Person b) {...} }`), a **variable** (`Comparator<Person>
+c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
+    `list.sort(cmp)`, `Collections.sort(list, cmp)`, `new TreeSet<>(cmp)` and
+    `new TreeMap<>(cmp)`. It is a student-facing alias for the erased
+    `__Comparator` caturra already used internally for sort lambdas: `Comparator`
+    resolves to it, `implements Comparator<T>` implements it, and the SAM
+    `compare(Object, Object)` reaches a user `compare(T, T)` through the same
+    erasure bridge as `Comparable.compareTo` (matched by name and arity). A
+    comparator lambda casts both parameters back to the element type, read from
+    the `Comparator<E>` target or the `TreeSet<E>`/`TreeMap<K, V>` being
+    constructed. `Comparator`'s static factories (`comparing`, `naturalOrder`,
+    `reversed`, …) are not modelled — write the comparison directly. Pinned
+    against a real JDK by `diff_comparator_classes` and `_lambdas`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a
@@ -605,7 +619,7 @@ containsAll/forEach/equals/hashCode/toString`, and for-each (the same
     JVM's is system-dependent, and caturra runs where a line ends with a
     newline. Pinned by `diff_system_arraycopy_and_line_separator`.
   - A real Java 11 class caturra does not model (`Stack`, `ArrayDeque`,
-    `Iterator`, `Optional`, `Comparator`, `BufferedReader`, ...)
+    `Iterator`, `Optional`, `PriorityQueue`, `BufferedReader`, ...)
     reports an honest "java.util.Stack is not supported by caturra"
     **wherever it is written** (2026-07-09): a local or field declaration,
     a parameter, an array element, a type argument, `new`, `extends` and

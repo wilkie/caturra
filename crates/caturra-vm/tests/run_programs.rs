@@ -8406,6 +8406,45 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// A user `java.util.Comparator` (class or lambda) orders `sort`, `TreeSet`,
+/// and `TreeMap` — it aliases the bundled erased `__Comparator`, and its
+/// `compare(T, T)` reaches through the VM's erasure bridge. Pinned JDK-free for
+/// CI; the byte-for-byte JDK match is in `differential.rs`.
+#[test]
+fn user_comparator_orders_sorts_and_trees() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Comparator;
+        import java.util.List;
+        import java.util.TreeSet;
+        public class C {
+            static class ByLen implements Comparator<String> {
+                public int compare(String a, String b) { return a.length() - b.length(); }
+            }
+            public static void main(String[] args) {
+                List<String> ws = new ArrayList<>();
+                ws.add("ccc"); ws.add("a"); ws.add("bb");
+                ws.sort(new ByLen());
+                System.out.println(ws);                  // [a, bb, ccc]
+
+                Comparator<Integer> desc = (a, b) -> b - a;
+                List<Integer> ns = new ArrayList<>();
+                ns.add(1); ns.add(3); ns.add(2);
+                ns.sort(desc);
+                System.out.println(ns);                  // [3, 2, 1]
+
+                TreeSet<Integer> t = new TreeSet<>((a, b) -> b - a);
+                t.add(1); t.add(3); t.add(2);
+                System.out.println(t + " " + t.first()); // [3, 2, 1] 3
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(out, "[a, bb, ccc]\n[3, 2, 1]\n[3, 2, 1] 3\n");
+}
+
 /// `java.util.TreeMap` keeps its entries sorted by key, so iteration, the
 /// views, and the key navigation all read off the sorted vector. Pinned
 /// JDK-free for CI; the byte-for-byte JDK match is in `differential.rs`.
