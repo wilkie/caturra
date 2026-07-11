@@ -434,6 +434,45 @@ fn theater_image_pixel_manipulation() {
     );
 }
 
+/// `SoundLoader.read` returns a non-empty **silent** buffer (10 s at 44.1 kHz)
+/// rather than `double[0]`, so the Code.org sound lessons' time-indexed clip
+/// extraction (`sound[start * 44100]`, e.g. `createClip(sound, 2, 5)`) runs
+/// instead of throwing `ArrayIndexOutOfBoundsException`. Headless audio can't be
+/// decoded, so the samples are silence (zeros) — the honest stub. Regression
+/// pin for the theater sound-clip levels.
+#[test]
+fn sound_loader_returns_indexable_silent_buffer() {
+    let (stdout, log) = run_theater(
+        r#"
+        import org.code.theater.*;
+        import org.code.media.*;
+        public class SoundArt extends Scene {
+            static double[] createClip(double[] sound, int start, int end) {
+                int startIndex = start * 44100;
+                int endIndex = end * 44100;
+                double[] clip = new double[endIndex - startIndex];
+                for (int i = startIndex; i < endIndex; i++) {
+                    clip[i - startIndex] = sound[i];
+                }
+                return clip;
+            }
+            public static void main(String[] args) {
+                double[] sound = SoundLoader.read("beat.wav");
+                System.out.println("len=" + sound.length);
+                double[] clip = createClip(sound, 2, 5);
+                System.out.println("clip=" + clip.length + " first=" + clip[0]);
+                SoundArt s = new SoundArt();
+                s.playSound(clip);
+                Theater.playScenes(s);
+            }
+        }
+        "#,
+        "SoundArt",
+    );
+    assert_eq!(stdout, "len=441000\nclip=132300 first=0.0\n");
+    assert_eq!(log, "sound 132300 samples\n");
+}
+
 /// Compile a Swing program (the bundled `javax.swing` / `java.awt` library
 /// is auto-injected), run it, and return `swing.json` — the component tree
 /// `frame.setVisible(true)` serializes for the accessible-DOM renderer.

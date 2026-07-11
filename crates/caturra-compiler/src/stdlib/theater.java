@@ -175,9 +175,13 @@ class Scene {
 }
 
 class SoundLoader {
-  // Audio decoding needs real assets (Phase 2); return silence so
-  // sound levels compile and run headless.
-  public static double[] read(String filename) { return new double[0]; }
+  // Real audio decoding needs the asset bytes (Phase 2), which the headless
+  // runner does not have. Return silence of a plausible length instead of an
+  // empty array: the lessons index the samples by time (`sound[start * 44100]`,
+  // e.g. `createClip(sound, 2, 5)` reads up to 5 s), so an empty buffer throws
+  // ArrayIndexOutOfBounds. 10 s at 44.1 kHz covers the corpus's clip ranges;
+  // a `double[]` is zero-initialized, which is silence.
+  public static double[] read(String filename) { return new double[44100 * 10]; }
 }
 
 class Theater {
