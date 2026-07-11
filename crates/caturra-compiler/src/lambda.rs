@@ -555,6 +555,47 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // A stream op with a lambda: the parameter type is the stream's
+            // current element, walked back through the pipeline to `.stream()`.
+            // (After a `map` the element is erased to `Object`.)
+            if let Some(stream_receiver) = receiver.as_deref()
+                && let Some(elem) = stream_elem_type(stream_receiver, ctx)
+            {
+                let object = TypeRef::Named(String::from("Object"));
+                let single = match method.as_str() {
+                    "filter" | "anyMatch" | "allMatch" | "noneMatch" => {
+                        Some(("__Predicate", "test", TypeRef::Boolean))
+                    }
+                    "map" | "mapToObj" => Some(("__UnaryOperator", "apply", object)),
+                    "forEach" | "forEachOrdered" | "peek" => {
+                        Some(("__Consumer", "accept", TypeRef::Void))
+                    }
+                    _ => None,
+                };
+                if let Some((iface, sam, ret)) = single
+                    && args.len() == 1
+                    && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
+                {
+                    args[0] =
+                        build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], None, ctx);
+                    return;
+                }
+                if method == "sorted"
+                    && args.len() == 1
+                    && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 2)
+                {
+                    args[0] = build_erased_lambda(
+                        &mut args[0],
+                        "__Comparator",
+                        "compare",
+                        &TypeRef::Int,
+                        &[elem.clone(), elem],
+                        None,
+                        ctx,
+                    );
+                    return;
+                }
+            }
             // `list.add(() -> ...)` / `list.set(i, () -> ...)`: the element
             // argument's target type is the receiver's declared element type,
             // not a user method signature. `add`/`set` take the element last.
@@ -847,6 +888,30 @@ fn comparator_target_elem(target: &TypeRef) -> Option<TypeRef> {
     };
     (matches!(base.as_str(), "Comparator" | "java.util.Comparator") && args.len() == 1)
         .then(|| args[0].clone())
+}
+
+/// The current element type of a stream-pipeline receiver, for typing a stream
+/// lambda's parameter. `X.stream()` yields the collection `X`'s element; the
+/// element-preserving ops (`filter`/`sorted`/`distinct`/`limit`/`skip`/`peek`)
+/// recurse into the prior stage; `map` erases it to `Object`.
+fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    let Expr::Call {
+        receiver: Some(prev),
+        method,
+        args,
+        ..
+    } = receiver
+    else {
+        return None;
+    };
+    if method == "stream" && args.is_empty() {
+        return list_elem_type(prev, ctx);
+    }
+    match method.as_str() {
+        "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" => stream_elem_type(prev, ctx),
+        "map" | "mapToObj" => Some(TypeRef::Named(String::from("Object"))),
+        _ => None,
+    }
 }
 
 /// The declared element type of a `List`/`ArrayList`/`Set`/`Collection`

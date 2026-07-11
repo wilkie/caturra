@@ -1984,6 +1984,12 @@ enum JType {
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
+    /// `java.util.stream.Stream<E>` — an eager pipeline of elements (see the
+    /// VM). `map` erases the element to `Object`; `collect` adopts the result
+    /// element from the assignment context.
+    Stream(ElemType),
+    /// A `java.util.stream.Collectors` recipe, the argument to `Stream.collect`.
+    Collector,
     /// `java.util.LinkedList<E>` and its `Queue`/`Deque` interface views. The
     /// storage is a list; the `role` restricts which methods the receiver
     /// exposes, so `Queue<E>.get(i)` is rejected exactly as javac rejects it.
@@ -2097,6 +2103,8 @@ impl JType {
             ),
             JType::Set(elem) => format!("Set<{}>", elem.base_type().describe(table)),
             JType::TreeSet(elem) => format!("TreeSet<{}>", elem.base_type().describe(table)),
+            JType::Stream(elem) => format!("Stream<{}>", elem.base_type().describe(table)),
+            JType::Collector => String::from("Collector"),
             JType::LinkedList { elem, role } => {
                 let name = match role {
                     SeqRole::Full => "LinkedList",
@@ -2188,6 +2196,8 @@ impl JType {
                 | JType::TreeMap { .. }
                 | JType::Set(_)
                 | JType::TreeSet(_)
+                | JType::Stream(_)
+                | JType::Collector
                 | JType::Collection(_)
                 | JType::EntrySet { .. }
                 | JType::MapEntry { .. }
@@ -2245,6 +2255,8 @@ impl JType {
             JType::TreeMap { .. } => String::from("Ljava/util/TreeMap;"),
             JType::Set(_) | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
             JType::TreeSet(_) => String::from("Ljava/util/TreeSet;"),
+            JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
+            JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::LinkedList { role, .. } => format!("L{};", role.internal()),
             JType::Collection(_) => String::from("Ljava/util/Collection;"),
             JType::MapEntry { .. } => String::from("Ljava/util/Map$Entry;"),
@@ -2935,6 +2947,8 @@ enum BParam {
     Val,
     /// The receiver's own map type (`putAll(otherMap)`).
     SelfMap,
+    /// A `Collector` (`Stream.collect(Collectors.toList())`).
+    Collector,
 }
 
 /// The return of an intrinsic method.
@@ -2949,6 +2963,15 @@ enum BRet {
     Byte,
     Boolean,
     Char,
+    /// `Stream<E>` of the receiver's element type (an element-preserving op).
+    Stream,
+    /// `Stream<Object>` — an op (`map`) whose element type is erased.
+    StreamErased,
+    /// `Collector` (a `Collectors.toX()` factory result).
+    Collector,
+    /// `null`-typed, adopting the assignment context — for `collect`, whose
+    /// element type comes from the left-hand side (like a diamond `new`).
+    Nullish,
     Str,
     /// `String[]` (e.g. `String.split`).
     StrArray,
@@ -3373,7 +3396,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("ArrayList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
-    ("ArrayList", "stream", "streams are not supported by caturra"),
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
     ("ArrayList", "toArray", "Object arrays are not supported by caturra"),
     ("ArrayList", "subList", "list views are not supported by caturra"),
@@ -3395,7 +3417,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("HashMap", "of", "varargs are not supported by caturra"),
     ("HashMap", "ofEntries", "varargs are not supported by caturra"),
     ("Set", "iterator", "iterators are not supported by caturra (use for-each)"),
-    ("Set", "stream", "streams are not supported by caturra"),
     ("Set", "removeIf", "Set.removeIf is not supported by caturra"),
     ("TreeMap", "clone", "clone is not supported by caturra"),
     ("TreeMap", "headMap", "TreeMap range views are not supported by caturra"),
@@ -3409,7 +3430,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("TreeSet", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("TreeSet", "descendingIterator", "iterators are not supported by caturra"),
     ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
-    ("TreeSet", "stream", "streams are not supported by caturra"),
     ("TreeSet", "removeIf", "TreeSet.removeIf is not supported by caturra"),
     ("TreeSet", "headSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "tailSet", "TreeSet range views are not supported by caturra"),
@@ -3417,11 +3437,9 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("LinkedList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("LinkedList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("LinkedList", "descendingIterator", "iterators are not supported by caturra"),
-    ("LinkedList", "stream", "streams are not supported by caturra"),
     ("LinkedList", "removeIf", "LinkedList.removeIf is not supported by caturra"),
     ("LinkedList", "toArray", "Object arrays are not supported by caturra"),
     ("Collection", "iterator", "iterators are not supported by caturra (use for-each)"),
-    ("Collection", "stream", "streams are not supported by caturra"),
     ("Collection", "removeIf", "lambdas are not supported by caturra"),
     ("Collection", "add", "a map's values() does not support add — Java throws UnsupportedOperationException"),
     ("Collection", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
@@ -3918,6 +3936,87 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
     bm("getLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm("peekFirst", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm("peekLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+];
+
+/// `java.util.stream.Stream<E>`. Intermediate ops return a stream; `map` erases
+/// the element to `Object` (its output type is not tracked); `collect` returns
+/// a `null`-typed result that adopts the assignment context, like a diamond.
+const STREAM_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "filter",
+        &[BParam::Predicate],
+        BRet::Stream,
+        "(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "map",
+        &[BParam::UnaryOperator],
+        BRet::StreamErased,
+        "(Ljava/util/function/Function;)Ljava/util/stream/Stream;",
+    ),
+    bm("sorted", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    bm(
+        "sorted",
+        &[BParam::Comparator],
+        BRet::Stream,
+        "(Ljava/util/Comparator;)Ljava/util/stream/Stream;",
+    ),
+    bm("distinct", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    bm(
+        "limit",
+        &[BParam::Long],
+        BRet::Stream,
+        "(J)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "skip",
+        &[BParam::Long],
+        BRet::Stream,
+        "(J)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "peek",
+        &[BParam::Consumer],
+        BRet::Stream,
+        "(Ljava/util/function/Consumer;)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/Consumer;)V",
+    ),
+    bm(
+        "forEachOrdered",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/Consumer;)V",
+    ),
+    bm("count", &[], BRet::Long, "()J"),
+    bm(
+        "anyMatch",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/util/function/Predicate;)Z",
+    ),
+    bm(
+        "allMatch",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/util/function/Predicate;)Z",
+    ),
+    bm(
+        "noneMatch",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/util/function/Predicate;)Z",
+    ),
+    bm(
+        "collect",
+        &[BParam::Collector],
+        BRet::Nullish,
+        "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+    ),
 ];
 
 const FILE_METHODS: &[BuiltinMethod] = &[
@@ -5327,6 +5426,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
+        JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::LinkedList { role, .. } => Some(match role {
             SeqRole::Full => ("java/util/LinkedList", LINKEDLIST_METHODS),
             SeqRole::Queue => ("java/util/Queue", QUEUE_METHODS),
@@ -5351,9 +5451,57 @@ const CLASS_STATIC_METHODS: &[BuiltinMethod] = &[bm(
     "(Ljava/lang/String;)Ljava/lang/Class;",
 )];
 
+/// `java.util.stream.Collectors` factories — each returns a `Collector` the VM
+/// recognizes in `Stream.collect`.
+const COLLECTORS_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "toList",
+        &[],
+        BRet::Collector,
+        "()Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "toUnmodifiableList",
+        &[],
+        BRet::Collector,
+        "()Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "toSet",
+        &[],
+        BRet::Collector,
+        "()Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "toUnmodifiableSet",
+        &[],
+        BRet::Collector,
+        "()Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "joining",
+        &[],
+        BRet::Collector,
+        "()Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "joining",
+        &[BParam::Str],
+        BRet::Collector,
+        "(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "joining",
+        &[BParam::Str, BParam::Str, BParam::Str],
+        BRet::Collector,
+        "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;",
+    ),
+];
+
 fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
+        "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
@@ -5444,6 +5592,7 @@ impl TypeArgs {
             JType::List(elem)
             | JType::Set(elem)
             | JType::TreeSet(elem)
+            | JType::Stream(elem)
             | JType::Collection(elem)
             | JType::LinkedList { elem, .. } => Self {
                 first: Some(elem),
@@ -5518,6 +5667,7 @@ fn bparam_type(param: BParam, args: TypeArgs) -> JType {
             (Some(key), Some(value)) => JType::Map { key, value },
             _ => JType::Error,
         },
+        BParam::Collector => JType::Collector,
     }
 }
 
@@ -5547,6 +5697,7 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
             (arg, table.class_id("__Comparator")),
             (JType::Object(id), Some(target)) if table.is_subtype(id, target)
         ),
+        BParam::Collector => matches!(arg, JType::Collector | JType::Null),
         // A collection whose elements are assignable to the receiver's — a
         // `List`, `Set` or `Collection` of a widening element type. `null`
         // is a Collection too.
@@ -5618,6 +5769,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             dims: 1,
         }),
         BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
+        BRet::Stream => Some(args.first.map_or(JType::Error, JType::Stream)),
+        BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
+        BRet::Collector => Some(JType::Collector),
+        BRet::Nullish => Some(JType::Null),
         BRet::Val => Some(boxed_if_primitive(args.second)),
         // A map key and a queue/deque nullable element both box the first arg.
         BRet::Key | BRet::BoxedElem => Some(boxed_if_primitive(args.first)),
@@ -7977,6 +8132,31 @@ impl BodyGen<'_> {
         }
     }
 
+    /// The result type of `stream.collect(collector)` from the collector's
+    /// syntactic form. `joining()` is a `String`; `toSet()`/`toList()` give a
+    /// Set/List of the stream's element — but once `map` has erased the element
+    /// to `Object`, a `null` that adopts the assignment context (like a diamond
+    /// `new`), so `List<R> r = ....map(...).collect(toList())` still type-checks.
+    fn collector_result_type(&mut self, collector: &Expr, stream_elem: ElemType) -> JType {
+        let erased = matches!(stream_elem, ElemType::Object(id) if id == self.table.object_id);
+        let factory = match collector {
+            Expr::Call {
+                receiver: Some(receiver),
+                method,
+                ..
+            } if matches!(receiver.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "Collectors") => {
+                method.as_str()
+            }
+            _ => return JType::Null,
+        };
+        match factory {
+            "joining" => JType::Str,
+            "toSet" | "toUnmodifiableSet" if !erased => JType::Set(stream_elem),
+            "toList" | "toUnmodifiableList" if !erased => JType::List(stream_elem),
+            _ => JType::Null,
+        }
+    }
+
     /// Whether a type is a `Comparator` — a `__Comparator` implementor (a user
     /// class, a desugared lambda, or a `Comparator`-typed value).
     fn is_comparator_type(&self, ty: JType) -> bool {
@@ -8423,6 +8603,8 @@ impl BodyGen<'_> {
             | JType::TreeMap { .. }
             | JType::Set(_)
             | JType::TreeSet(_)
+            | JType::Stream(_)
+            | JType::Collector
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -8503,7 +8685,7 @@ impl BodyGen<'_> {
 
     /// Resolve and emit an intrinsic instance call (String / Scanner /
     /// `ArrayList`); the receiver value is already on the stack.
-    #[allow(clippy::option_option)]
+    #[allow(clippy::option_option, clippy::too_many_lines)]
     fn builtin_instance_call(
         &mut self,
         receiver_ty: JType,
@@ -8524,6 +8706,49 @@ impl BodyGen<'_> {
         // varargs into an Object[] (autoboxing primitives).
         if receiver_ty == JType::Method && method == "invoke" {
             return self.emit_method_invoke(args, span);
+        }
+        // `collection.stream()` → a Stream of the receiver's element type. Works
+        // on any collection (list, set, tree, queue, or a map view); the VM
+        // dispatches by the receiver object, so the invokevirtual class is only
+        // nominal.
+        if method == "stream"
+            && args.is_empty()
+            && matches!(
+                receiver_ty,
+                JType::List(_)
+                    | JType::LinkedList { .. }
+                    | JType::Set(_)
+                    | JType::TreeSet(_)
+                    | JType::Collection(_)
+            )
+            && let Some(elem) = TypeArgs::of(receiver_ty).first
+        {
+            let (class, _) = builtin_instance_table(receiver_ty).expect("collection has a table");
+            let method_ref =
+                intern_method_ref(self.pool, class, "stream", "()Ljava/util/stream/Stream;");
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return Some(Some(JType::Stream(elem)));
+        }
+        // `stream.collect(collector)`: the result type comes from the collector
+        // — `joining()` is a `String`, `toList()`/`toSet()` a List/Set of the
+        // stream's element (or, once `map` has erased it, `null` adopting the
+        // assignment context, like a diamond).
+        if let JType::Stream(elem) = receiver_ty
+            && method == "collect"
+            && args.len() == 1
+        {
+            let result_ty = self.collector_result_type(&args[0], elem);
+            self.expr(&args[0]);
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/util/stream/Stream",
+                "collect",
+                "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(2);
+            return Some(Some(result_ty));
         }
         let (class, methods) =
             builtin_instance_table(receiver_ty).expect("caller checked receiver kind");
@@ -10121,6 +10346,8 @@ impl BodyGen<'_> {
             | JType::TreeMap { .. }
             | JType::Set(_)
             | JType::TreeSet(_)
+            | JType::Stream(_)
+            | JType::Collector
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
@@ -10380,6 +10607,8 @@ impl BodyGen<'_> {
                         | JType::TreeMap { .. }
                         | JType::Set(_)
                         | JType::TreeSet(_)
+                        | JType::Stream(_)
+                        | JType::Collector
                         | JType::Collection(_)
                         | JType::EntrySet { .. }
                         | JType::MapEntry { .. }
@@ -12387,6 +12616,8 @@ impl BodyGen<'_> {
             | JType::TreeMap { .. }
             | JType::Set(_)
             | JType::TreeSet(_)
+            | JType::Stream(_)
+            | JType::Collector
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }

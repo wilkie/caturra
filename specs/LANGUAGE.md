@@ -479,6 +479,26 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     interface (`Queue<E> q = new PriorityQueue<>()`), differing only in the
     heap object behind it. Pinned against a real JDK by
     `diff_priority_queue_core` and `_comparator_and_heapify`.
+  - `java.util.stream.Stream<E>` (2026-07-11), the `collection.stream()`
+    pipeline, modelled **eagerly** — each intermediate op transforms a vector
+    and each terminal op consumes it, which gives identical results to a lazy
+    JDK stream for the finite streams student code builds. Intermediate:
+    `filter`/`map`/`sorted`/`sorted(cmp)`/`distinct`/`limit`/`skip`/`peek`.
+    Terminal: `collect(Collectors.toList()/toSet()/joining(...))`,
+    `forEach`/`forEachOrdered`, `count`, `anyMatch`/`allMatch`/`noneMatch`. A
+    lambda's parameter type flows **syntactically** from the source collection
+    through the element-preserving ops (`list.stream().filter(p -> p.age > 18)`
+    types `p` from the list) — the lambda is desugared before types are known,
+    so the one gap is a lambda **after** a `map`, whose element is erased to
+    `Object` (fine when it is only printed or matched; an element-specific use
+    is an honest error). `collect` reads its result type from the collector:
+    `joining()` is a `String`; `toList()`/`toSet()` a `List`/`Set` of the
+    element, or — once `map` has erased it — a `null` that adopts the
+    assignment context (`List<R> r = ...map(...).collect(toList())` works; an
+    inline bare-iteration over such a result does not, the one documented
+    limitation). `IntStream` and the numeric terminals (`mapToInt`/`sum`/
+    `average`) are not yet modelled. Pinned against a real JDK by
+    `diff_stream_pipeline` and `_joining_limit_skip`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a

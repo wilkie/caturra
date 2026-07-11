@@ -449,6 +449,9 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains(".removeIf(")
             || s.text.contains(".replaceAll(")
             || s.text.contains(".sort(")
+            // A stream pipeline's `filter`/`map`/… lambdas desugar to the
+            // bundled functional interfaces.
+            || s.text.contains(".stream(")
             // A user `Comparator` aliases the bundled `__Comparator` interface.
             || s.text.contains("Comparator")
             // A comparator lambda in a sorted collection's constructor

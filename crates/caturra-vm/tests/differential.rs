@@ -6532,6 +6532,106 @@ public class DiffHashSetKeys {
 );
 
 // ---------------------------------------------------------------------------
+// java.util.stream.Stream — the filter/map/sorted/collect pipeline, modelled
+// eagerly. The lambda parameter types flow syntactically from the source
+// collection through the element-preserving ops.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_stream_pipeline,
+    "DiffStream",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public class DiffStream {
+    static class Person {
+        String name;
+        int age;
+        Person(String n, int a) { name = n; age = a; }
+    }
+
+    public static void main(String[] args) {
+        List<Person> people = new ArrayList<>();
+        people.add(new Person("Carol", 30));
+        people.add(new Person("Alice", 25));
+        people.add(new Person("Bob", 35));
+
+        // filter -> map -> collect
+        List<String> adults = people.stream()
+            .filter(p -> p.age >= 30)
+            .map(p -> p.name)
+            .collect(Collectors.toList());
+        System.out.println(adults);                 // [Carol, Bob]
+
+        // map -> sorted -> collect
+        List<String> names = people.stream()
+            .map(p -> p.name)
+            .sorted()
+            .collect(Collectors.toList());
+        System.out.println(names);                  // [Alice, Bob, Carol]
+
+        System.out.println(people.stream().filter(p -> p.age > 28).count());
+        System.out.println(people.stream().anyMatch(p -> p.age > 34));
+        System.out.println(people.stream().allMatch(p -> p.age > 20));
+        System.out.println(people.stream().noneMatch(p -> p.age > 40));
+
+        // A comparator lambda in sorted(), then forEach.
+        people.stream()
+            .sorted((a, b) -> a.age - b.age)
+            .forEach(p -> System.out.print(p.name + " "));
+        System.out.println();                       // Alice Carol Bob
+
+        // toSet gives a HashSet (JDK iteration order).
+        List<Integer> nums = new ArrayList<>();
+        nums.add(3); nums.add(1); nums.add(3); nums.add(2); nums.add(1);
+        Set<Integer> uniq = nums.stream().collect(Collectors.toSet());
+        System.out.println(uniq + " " + uniq.size());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_stream_joining_limit_skip,
+    "DiffStreamJoin",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class DiffStreamJoin {
+    public static void main(String[] args) {
+        List<Integer> nums = new ArrayList<>(Arrays.asList(3, 1, 3, 2, 1, 4));
+
+        // distinct -> sorted -> map -> joining with prefix/suffix
+        String joined = nums.stream()
+            .distinct()
+            .sorted()
+            .map(n -> "" + n)
+            .collect(Collectors.joining(", ", "[", "]"));
+        System.out.println(joined);                 // [1, 2, 3, 4]
+
+        // sorted -> skip -> limit
+        List<Integer> window = nums.stream()
+            .sorted()
+            .skip(2)
+            .limit(2)
+            .collect(Collectors.toList());
+        System.out.println(window);
+
+        // plain joining
+        System.out.println(nums.stream().distinct().sorted().map(n -> "" + n)
+            .collect(Collectors.joining()));        // 1234
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
 // java.util.PriorityQueue — a real binary min-heap, so peek/poll return the
 // least element while iteration/toString show the heap-array order. The exact
 // siftUp/siftDown/heapify is replicated so both match a JVM byte for byte.

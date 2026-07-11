@@ -2598,6 +2598,49 @@ impl<'run> Interpreter<'run> {
     /// The `java.util.Arrays` methods the VM answers rather than the bundled
     /// Java: they need an array's element kind at run time, which only the
     /// heap knows once the static type is gone. Returns whether it answered.
+    /// `java.util.stream.Collectors` factories, each producing a `Collector`
+    /// recipe for `Stream.collect`. Returns whether it answered.
+    #[allow(clippy::unnecessary_wraps)] // uniform with the other *_static_intrinsic
+    fn collectors_static_intrinsic(
+        &mut self,
+        frame: &mut Frame<'run>,
+        class_name: &str,
+        method_name: &str,
+        args: &[JValue],
+    ) -> Result<bool, VmError> {
+        use crate::value::{CollectorKind, HeapObject};
+        if class_name != "Collectors" && class_name != "java/util/stream/Collectors" {
+            return Ok(false);
+        }
+        let text = |vm: &Self, value: &JValue| match value {
+            JValue::Ref(Some(r)) => vm.heap.string_text(*r).unwrap_or_default(),
+            _ => String::new(),
+        };
+        let kind = match (method_name, args) {
+            ("toList" | "toUnmodifiableList", []) => CollectorKind::ToList,
+            ("toSet" | "toUnmodifiableSet", []) => CollectorKind::ToSet,
+            ("joining", []) => CollectorKind::Joining {
+                delimiter: String::new(),
+                prefix: String::new(),
+                suffix: String::new(),
+            },
+            ("joining", [delimiter]) => CollectorKind::Joining {
+                delimiter: text(self, delimiter),
+                prefix: String::new(),
+                suffix: String::new(),
+            },
+            ("joining", [delimiter, prefix, suffix]) => CollectorKind::Joining {
+                delimiter: text(self, delimiter),
+                prefix: text(self, prefix),
+                suffix: text(self, suffix),
+            },
+            _ => return Ok(false),
+        };
+        let collector = self.heap.alloc(HeapObject::Collector(kind));
+        frame.stack.push(JValue::Ref(Some(collector)));
+        Ok(true)
+    }
+
     fn arrays_static_intrinsic(
         &mut self,
         frame: &mut Frame<'run>,
@@ -4502,6 +4545,250 @@ impl<'run> Interpreter<'run> {
         Ok(Answered::Value(result))
     }
 
+    /// Whether a heap object is a collection `stream()` can be taken of.
+    fn is_streamable(&self, reference: HeapRef) -> bool {
+        use crate::value::HeapObject;
+        matches!(
+            self.heap.get(reference),
+            Some(
+                HeapObject::ArrayList(_)
+                    | HeapObject::LinkedList(_)
+                    | HeapObject::UnmodifiableList(_)
+                    | HeapObject::HashSet(_)
+                    | HeapObject::TreeSet { .. }
+                    | HeapObject::PriorityQueue { .. }
+                    | HeapObject::MapView { .. }
+            )
+        )
+    }
+
+    /// `collection.stream()` and every method on the resulting `Stream`. A
+    /// stream is modelled eagerly (its `Vec` holds the current pipeline), so an
+    /// intermediate op makes a new one and a terminal op consumes it.
+    fn stream_dispatch(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        use crate::value::HeapObject;
+        if method == "stream" && args.is_empty() && self.is_streamable(receiver) {
+            let elements = self.collection_elements(receiver);
+            let stream = self.heap.alloc(HeapObject::Stream(elements));
+            return Ok(Answered::Value(JValue::Ref(Some(stream))));
+        }
+        if matches!(self.heap.get(receiver), Some(HeapObject::Stream(_))) {
+            return self.stream_intrinsic(receiver, method, descriptor, args);
+        }
+        Ok(Answered::No)
+    }
+
+    /// The current elements of a `Stream`, detached from the heap borrow.
+    fn stream_elements(&self, stream: HeapRef) -> Vec<JValue> {
+        match self.heap.get(stream) {
+            Some(crate::value::HeapObject::Stream(elements)) => elements.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn alloc_stream(&mut self, elements: Vec<JValue>) -> JValue {
+        JValue::Ref(Some(
+            self.heap.alloc(crate::value::HeapObject::Stream(elements)),
+        ))
+    }
+
+    /// Call a one-argument functional lambda (`test`/`apply`/`accept`) on an
+    /// element, running the synthesized class through the nested-call path.
+    fn call_functional(
+        &mut self,
+        target: HeapRef,
+        method: &str,
+        descriptor: &str,
+        element: JValue,
+    ) -> Result<Option<JValue>, VmError> {
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(target)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        let dispatched =
+            self.user_virtual_dispatch(target, &class_name, method, descriptor, &[element])?;
+        Ok(match dispatched {
+            UserDispatch::Call(frame) => self.run_nested(frame)?,
+            UserDispatch::Value(value) => value,
+        })
+    }
+
+    /// `predicate.test(element)`.
+    fn call_test(&mut self, predicate: HeapRef, element: JValue) -> Result<bool, VmError> {
+        let result = self.call_functional(predicate, "test", "(Ljava/lang/Object;)Z", element)?;
+        Ok(result.is_some() && result != Some(JValue::Int(0)))
+    }
+
+    /// `function.apply(element)`, unboxing a primitive result so it stores like
+    /// caturra's other collection elements (as `list.replaceAll` does).
+    fn call_apply(&mut self, function: HeapRef, element: JValue) -> Result<JValue, VmError> {
+        let result = self.call_functional(
+            function,
+            "apply",
+            "(Ljava/lang/Object;)Ljava/lang/Object;",
+            element,
+        )?;
+        Ok(match result {
+            Some(JValue::Ref(Some(r))) => match self.heap.get(r) {
+                Some(crate::value::HeapObject::Boxed { value, .. }) => *value,
+                _ => JValue::Ref(Some(r)),
+            },
+            Some(value) => value,
+            None => JValue::NULL,
+        })
+    }
+
+    /// `java.util.stream.Stream` operations. Element comparison/transformation
+    /// may run user lambdas, so this lives in the interpreter.
+    #[allow(clippy::too_many_lines)] // one method table
+    fn stream_intrinsic(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        let elements = self.stream_elements(receiver);
+        let result = match (method, args) {
+            ("filter", [JValue::Ref(Some(pred))]) => {
+                let mut kept = Vec::with_capacity(elements.len());
+                for element in elements {
+                    if self.call_test(*pred, element)? {
+                        kept.push(element);
+                    }
+                }
+                self.alloc_stream(kept)
+            }
+            ("map", [JValue::Ref(Some(function))]) => {
+                let mut mapped = Vec::with_capacity(elements.len());
+                for element in elements {
+                    mapped.push(self.call_apply(*function, element)?);
+                }
+                self.alloc_stream(mapped)
+            }
+            ("sorted", []) => {
+                let sorted = self.merge_sort_by(elements, None)?;
+                self.alloc_stream(sorted)
+            }
+            ("sorted", [JValue::Ref(Some(comparator))]) => {
+                let sorted = self.merge_sort_by(elements, Some(*comparator))?;
+                self.alloc_stream(sorted)
+            }
+            ("distinct", []) => {
+                let mut unique: Vec<JValue> = Vec::new();
+                for element in elements {
+                    let mut seen = false;
+                    for kept in &unique {
+                        if self.java_equals(element, *kept)? {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if !seen {
+                        unique.push(element);
+                    }
+                }
+                self.alloc_stream(unique)
+            }
+            ("limit", [count]) => {
+                let count = stream_count_arg(*count);
+                self.alloc_stream(elements.into_iter().take(count).collect())
+            }
+            ("skip", [count]) => {
+                let count = stream_count_arg(*count);
+                self.alloc_stream(elements.into_iter().skip(count).collect())
+            }
+            ("peek", [JValue::Ref(Some(consumer))]) => {
+                for element in &elements {
+                    self.call_functional(*consumer, "accept", "(Ljava/lang/Object;)V", *element)?;
+                }
+                self.alloc_stream(elements)
+            }
+            ("forEach" | "forEachOrdered", [JValue::Ref(Some(consumer))]) => {
+                for element in elements {
+                    self.call_functional(*consumer, "accept", "(Ljava/lang/Object;)V", element)?;
+                }
+                return Ok(Answered::Void);
+            }
+            ("count", []) => JValue::Long(i64::try_from(elements.len()).unwrap_or(i64::MAX)),
+            ("anyMatch" | "allMatch" | "noneMatch", [JValue::Ref(Some(pred))]) => {
+                let mut any = false;
+                let mut all = true;
+                for element in elements {
+                    if self.call_test(*pred, element)? {
+                        any = true;
+                    } else {
+                        all = false;
+                    }
+                }
+                let matched = match method {
+                    "anyMatch" => any,
+                    "allMatch" => all,
+                    _ => !any,
+                };
+                JValue::Int(i32::from(matched))
+            }
+            ("collect", [JValue::Ref(Some(collector))]) => {
+                self.stream_collect(elements, *collector)?
+            }
+            _ => {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "Stream.{method}{descriptor}"
+                )));
+            }
+        };
+        Ok(Answered::Value(result))
+    }
+
+    /// `stream.collect(collector)`: gather the elements per the collector recipe.
+    fn stream_collect(
+        &mut self,
+        elements: Vec<JValue>,
+        collector: HeapRef,
+    ) -> Result<JValue, VmError> {
+        use crate::value::{CollectorKind, HeapObject};
+        let Some(HeapObject::Collector(kind)) = self.heap.get(collector) else {
+            return Err(VmError::UnknownIntrinsic(String::from(
+                "collect: not a Collector",
+            )));
+        };
+        match kind.clone() {
+            CollectorKind::ToList => Ok(JValue::Ref(Some(
+                self.heap.alloc(HeapObject::ArrayList(elements)),
+            ))),
+            CollectorKind::ToSet => {
+                let set = self
+                    .heap
+                    .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
+                for element in elements {
+                    self.set_add(set, element)?;
+                }
+                Ok(JValue::Ref(Some(set)))
+            }
+            CollectorKind::Joining {
+                delimiter,
+                prefix,
+                suffix,
+            } => {
+                let mut parts = Vec::with_capacity(elements.len());
+                for element in elements {
+                    parts.push(self.string_value_of(element, 0)?);
+                }
+                let text = format!("{prefix}{}{suffix}", parts.join(&delimiter));
+                Ok(JValue::Ref(Some(self.heap.alloc_string(&text))))
+            }
+        }
+    }
+
     /// The elements of any collection caturra can walk, in iteration order: an
     /// `ArrayList` (or its unmodifiable view), a `HashSet`, a `TreeSet`, or a
     /// map's `keySet()`/`values()` view. Backs `addAll`/`removeAll`/`retainAll`
@@ -5057,6 +5344,9 @@ impl<'run> Interpreter<'run> {
         if self.arrays_static_intrinsic(frame, class_name, method_name, args)? {
             return Ok(None);
         }
+        if self.collectors_static_intrinsic(frame, class_name, method_name, args)? {
+            return Ok(None);
+        }
         // `Class.forName(name)` — a reflection handle for a loaded class.
         // Needs the class table, which the intrinsic layer lacks.
         if class_name == "java/lang/Class" && method_name == "forName" {
@@ -5245,11 +5535,17 @@ impl<'run> Interpreter<'run> {
         }
         // Likewise for comparing elements or keys, which may call a user
         // `equals` and `hashCode`.
-        let compared =
-            match self.list_equality_intrinsic(receiver, &method_name, &descriptor, &args)? {
-                Answered::No => self.map_intrinsic(receiver, &method_name, &descriptor, &args)?,
-                answered => answered,
-            };
+        let compared = match self.stream_dispatch(receiver, &method_name, &descriptor, &args)? {
+            Answered::No => {
+                match self.list_equality_intrinsic(receiver, &method_name, &descriptor, &args)? {
+                    Answered::No => {
+                        self.map_intrinsic(receiver, &method_name, &descriptor, &args)?
+                    }
+                    answered => answered,
+                }
+            }
+            answered => answered,
+        };
         match compared {
             Answered::No => {}
             Answered::Void => return Ok(None),
@@ -7482,6 +7778,17 @@ fn descriptor_arg_widths(descriptor: &str) -> Option<Vec<u16>> {
 /// operand-stack entry in this VM regardless of JVMS slot width).
 fn descriptor_arg_count(descriptor: &str) -> Option<usize> {
     descriptor_arg_widths(descriptor).map(|w| w.len())
+}
+
+/// A `Stream.limit`/`skip` count (a `long`, but occasionally passed as an int),
+/// clamped to a usable index.
+fn stream_count_arg(value: JValue) -> usize {
+    let raw = match value {
+        JValue::Long(n) => n,
+        JValue::Int(n) => i64::from(n),
+        _ => 0,
+    };
+    usize::try_from(raw).unwrap_or(0)
 }
 
 #[cfg(test)]

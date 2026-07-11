@@ -7588,10 +7588,6 @@ fn try_catch_compile_errors_match_javac() {
             "String.lines exists in Java, but streams are not supported by caturra",
         ),
         (
-            "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.stream(); } }",
-            "ArrayList.stream exists in Java, but streams are not supported by caturra",
-        ),
-        (
             "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.iterator(); } }",
             "ArrayList.iterator exists in Java, but iterators are not supported by caturra (use for-each or an index loop)",
         ),
@@ -8406,6 +8402,56 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// `java.util.stream.Stream`: the filter/map/sorted/collect pipeline, with
+/// lambda parameter types flowing from the source collection. Pinned JDK-free
+/// for CI; the byte-for-byte JDK match is in `differential.rs`.
+#[test]
+fn stream_pipeline_filters_maps_and_collects() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.List;
+        import java.util.stream.Collectors;
+        public class S {
+            public static void main(String[] args) {
+                List<String> words = new ArrayList<>();
+                words.add("apple"); words.add("fig"); words.add("banana"); words.add("kiwi");
+
+                List<String> longUpper = words.stream()
+                    .filter(w -> w.length() > 3)
+                    .map(w -> w.toUpperCase())
+                    .sorted()
+                    .collect(Collectors.toList());
+                System.out.println(longUpper);              // [APPLE, BANANA, KIWI]
+
+                System.out.println(words.stream().filter(w -> w.length() > 3).count());
+                System.out.println(words.stream().anyMatch(w -> w.startsWith("b")));
+                System.out.println(words.stream().allMatch(w -> w.length() >= 3));
+
+                String joined = words.stream()
+                    .sorted()
+                    .collect(Collectors.joining(", ", "[", "]"));
+                System.out.println(joined);
+
+                int total = 0;
+                for (String w : words) { total += w.length(); }
+                System.out.println(total);
+            }
+        }
+        "#,
+        "S",
+    );
+    assert_eq!(
+        out,
+        "[APPLE, BANANA, KIWI]\n\
+         3\n\
+         true\n\
+         true\n\
+         [apple, banana, fig, kiwi]\n\
+         18\n"
+    );
+}
+
 /// `java.util.PriorityQueue` is a real binary min-heap: `peek`/`poll` return the
 /// least element, while iteration and `toString` show the heap-array order
 /// (Java's exact `siftUp`/`siftDown`). Pinned JDK-free for CI; the byte-for-byte
@@ -8616,8 +8662,8 @@ fn linked_list_serves_as_queue_deque_and_list() {
 fn unsupported_map_members_explain_themselves() {
     for (source, want) in [
         (
-            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().stream(); } }",
-            "ArrayList.stream exists in Java, but streams are not supported by caturra",
+            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().toArray(); } }",
+            "ArrayList.toArray exists in Java, but Object arrays are not supported by caturra",
         ),
         (
             "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().merge(null, null, null); } }",
@@ -8628,8 +8674,8 @@ fn unsupported_map_members_explain_themselves() {
             "Set.iterator exists in Java, but iterators are not supported by caturra (use for-each)",
         ),
         (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().stream(); } }",
-            "Collection.stream exists in Java, but streams are not supported by caturra",
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().removeIf(x -> true); } }",
+            "Collection.removeIf exists in Java, but lambdas are not supported by caturra",
         ),
     ] {
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {

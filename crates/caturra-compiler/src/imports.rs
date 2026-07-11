@@ -51,6 +51,15 @@ const JAVA_IO: &[&str] = &[
     "FileNotFoundException",
     "IOException",
 ];
+/// `java.util.stream` — the Stream pipeline and its collectors.
+const JAVA_UTIL_STREAM: &[&str] = &[
+    "Stream",
+    "IntStream",
+    "LongStream",
+    "DoubleStream",
+    "Collectors",
+    "Collector",
+];
 /// `java.lang` is implicitly imported; explicit imports of it are
 /// legal (and redundant) in Java, so accept the names we model.
 const JAVA_LANG: &[&str] = &[
@@ -119,7 +128,6 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
     "java.math",
     "java.sql",
     "java.util.function",
-    "java.util.stream",
     "java.util.regex",
     "java.util.concurrent",
 ];
@@ -145,6 +153,8 @@ const REQUIRES_IMPORT: &[&str] = &[
     "PriorityQueue",
     "Collection",
     "Comparator",
+    "Collectors",
+    "Stream",
     "File",
     "PrintWriter",
     "InputMismatchException",
@@ -211,6 +221,7 @@ pub(crate) fn unknown_qualified_message(dotted: &str) -> String {
 fn package_classes(package: &str) -> Option<&'static [&'static str]> {
     match package {
         "java.util" => Some(JAVA_UTIL),
+        "java.util.stream" => Some(JAVA_UTIL_STREAM),
         "java.io" => Some(JAVA_IO),
         "java.lang" => Some(JAVA_LANG),
         // Bundled clean-room library (auto-injected in `compile`); the

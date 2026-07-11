@@ -35,6 +35,22 @@ pub enum IntKind {
     Char,
 }
 
+/// What a `Stream.collect(Collectors.…())` gathers its elements into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CollectorKind {
+    /// `Collectors.toList()` — an `ArrayList` of the elements, in order.
+    ToList,
+    /// `Collectors.toSet()` — a `HashSet`, in the JDK's iteration order.
+    ToSet,
+    /// `Collectors.joining(...)` — the elements' text, with a delimiter,
+    /// prefix, and suffix.
+    Joining {
+        delimiter: String,
+        prefix: String,
+        suffix: String,
+    },
+}
+
 /// Which of a map's three views a [`HeapObject::MapView`] presents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapViewKind {
@@ -140,6 +156,14 @@ pub enum HeapObject {
     /// [`crate::map::JavaHashMap`] with each element stored as a key mapped to
     /// a placeholder value.
     HashSet(crate::map::JavaHashMap),
+    /// A `java.util.stream.Stream` (element type erased). Modelled eagerly: the
+    /// vector holds the pipeline's current elements, each intermediate operation
+    /// (`filter`/`map`/`sorted`/…) produces a new one, and a terminal operation
+    /// (`collect`/`forEach`/`count`/…) consumes it. Finite streams give
+    /// identical results to a lazy JDK stream.
+    Stream(Vec<JValue>),
+    /// The recipe a `Stream.collect` gathers into, from a `Collectors` factory.
+    Collector(CollectorKind),
     /// A `java.util.PriorityQueue` (element type erased): a binary min-heap in
     /// an array, so `peek`/`poll` return the least element while iteration and
     /// `toString` show the heap-array order — replicated exactly (Java's
