@@ -71,6 +71,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         "java/util/LinkedList" => Some(HeapObject::LinkedList(Vec::new())),
+        "java/util/Stack" => Some(HeapObject::Stack(Vec::new())),
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
         "java/util/HashSet" => Some(HeapObject::HashSet(JavaHashMap::new())),
         "java/util/TreeSet" => Some(HeapObject::TreeSet {
@@ -399,6 +400,14 @@ pub fn invoke_virtual(
         (HeapObject::ArrayList(_) | HeapObject::LinkedList(_), _) => {
             list_method(heap, receiver, method, descriptor, args)
         }
+        // A `Stack` is a `List`, so it shares `list_method` for everything but
+        // the five LIFO operations, whose `top`-end semantics and
+        // `EmptyStackException` differ from the deque/list methods of the same
+        // spelling.
+        (HeapObject::Stack(_), _) => match stack_method(heap, receiver, method, args)? {
+            Some(value) => Ok(Some(value)),
+            None => list_method(heap, receiver, method, descriptor, args),
+        },
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
         (
             HeapObject::Exception {
@@ -1934,6 +1943,42 @@ fn float_to_int_bits(value: f32) -> i32 {
 /// (`offer`) and a void one (`addLast`) without unbalancing the caller's stack.
 fn boolean_return_if(descriptor: &str) -> Option<JValue> {
     descriptor.ends_with(")Z").then_some(JValue::Int(1))
+}
+
+/// The `java.util.Stack` LIFO operations, which differ from the like-named
+/// deque/list methods: `push`/`pop`/`peek` act on the TOP (the vector's end,
+/// not a deque's head), and an empty `pop`/`peek` throws `EmptyStackException`.
+/// Every one of them returns a value, so `Ok(None)` unambiguously means "not a
+/// stack method" and the caller falls through to the shared `list_method` (a
+/// Stack is a `List`). `search` compares elements, so it lives in the
+/// interpreter with the other element-comparing list methods.
+fn stack_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let Some(values) = heap.list_values_mut(receiver) else {
+        unreachable!("stack receiver checked by caller")
+    };
+    let answer = match (method, args) {
+        // `push` returns the pushed element (not a boolean like `add`).
+        ("push", [value]) => {
+            let value = *value;
+            values.push(value);
+            value
+        }
+        ("pop", []) => values
+            .pop()
+            .ok_or_else(|| throw("java.util.EmptyStackException"))?,
+        ("peek", []) => values
+            .last()
+            .copied()
+            .ok_or_else(|| throw("java.util.EmptyStackException"))?,
+        ("empty", []) => JValue::Int(i32::from(values.is_empty())),
+        _ => return Ok(None),
+    };
+    Ok(Some(answer))
 }
 
 /// `java.util.ArrayList` methods, and the positional `java.util.LinkedList`

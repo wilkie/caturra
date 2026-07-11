@@ -8636,6 +8636,82 @@ fn comparator_factories_build_and_chain_comparators() {
     );
 }
 
+/// `java.util.Stack` is a `Vector`-backed LIFO: `push`/`pop`/`peek` act on the
+/// top (the end), `empty`/`search` round out the stack face, and — because it
+/// is a `List` — every list method and for-each work too. Pinned JDK-free for
+/// CI; the byte-for-byte JDK match is in `diff_stack_lifo_and_list`.
+#[test]
+fn stack_is_a_lifo_and_a_list() {
+    let out = run_stdout(
+        r#"
+        import java.util.List;
+        import java.util.Stack;
+        public class S {
+            public static void main(String[] args) {
+                Stack<Integer> s = new Stack<>();
+                s.push(1); s.push(2); s.push(3);
+                System.out.println(s);                    // [1, 2, 3]
+                System.out.println(s.peek() + " " + s.pop() + " " + s);
+                System.out.println(s.empty() + " " + s.size());
+                s.push(5);
+                System.out.println(s.search(1) + " " + s.search(5) + " " + s.search(99));
+                System.out.println(s.get(0) + " " + s.contains(5) + " " + s.indexOf(2));
+
+                // A Stack is a List.
+                List<String> ls = new Stack<>();
+                ls.add("a"); ls.add("b");
+                System.out.println(ls);                   // [a, b]
+                for (String x : ls) { System.out.print(x); }
+                System.out.println();
+
+                // Drain it LIFO.
+                Stack<String> st = new Stack<>();
+                st.push("x"); st.push("y");
+                while (!st.empty()) { System.out.print(st.pop()); }
+                System.out.println(" tail=" + s);
+            }
+        }
+        "#,
+        "S",
+    );
+    assert_eq!(
+        out,
+        "[1, 2, 3]\n\
+         3 3 [1, 2]\n\
+         false 2\n\
+         3 1 -1\n\
+         1 true 1\n\
+         [a, b]\n\
+         ab\n\
+         yx tail=[1, 2, 5]\n"
+    );
+}
+
+/// An empty `Stack.pop()`/`peek()` throws `EmptyStackException`, not the
+/// `NoSuchElementException` a `Deque` throws. Pinned JDK-free.
+#[test]
+fn empty_stack_pop_throws_empty_stack_exception() {
+    let (result, console) = compile_and_run(
+        r#"
+        import java.util.Stack;
+        public class S {
+            public static void main(String[] args) {
+                Stack<Integer> s = new Stack<>();
+                try {
+                    s.pop();
+                } catch (java.util.EmptyStackException e) {
+                    System.out.println("caught empty");
+                }
+                System.out.println("done");
+            }
+        }
+        "#,
+        "S",
+    );
+    assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
+    assert_eq!(console.stdout_text(), "caught empty\ndone\n");
+}
+
 /// `java.util.TreeMap` keeps its entries sorted by key, so iteration, the
 /// views, and the key navigation all read off the sorted vector. Pinned
 /// JDK-free for CI; the byte-for-byte JDK match is in `differential.rs`.
@@ -10138,23 +10214,23 @@ fn unresolvable_qualified_names_reject_like_javac() {
 fn unmodeled_library_classes_explain_themselves_in_every_position() {
     let reason = "is not supported by caturra";
     for (label, source) in [
-        ("local", "class M { static void r() { Stack<Integer> l; } }"),
-        ("raw local", "class M { static void r() { Stack l; } }"),
-        ("field", "class M { Stack<Integer> items; }"),
+        ("local", "class M { static void r() { ArrayDeque<Integer> l; } }"),
+        ("raw local", "class M { static void r() { ArrayDeque l; } }"),
+        ("field", "class M { ArrayDeque<Integer> items; }"),
         (
             "parameter",
-            "class M { static void f(Stack<Integer> l) {} }",
+            "class M { static void f(ArrayDeque<Integer> l) {} }",
         ),
-        ("array", "class M { static void r() { Stack[] l; } }"),
+        ("array", "class M { static void r() { ArrayDeque[] l; } }"),
         (
             "new",
-            "class M { static void r() { Object o = new Stack<Integer>(); } }",
+            "class M { static void r() { Object o = new ArrayDeque<Integer>(); } }",
         ),
-        ("extends", "class D extends Stack {} class M {}"),
+        ("extends", "class D extends ArrayDeque {} class M {}"),
         ("implements", "class D implements Iterator {} class M {}"),
         (
             "type argument",
-            "class M { static void r() { ArrayList<Stack> l; } }",
+            "class M { static void r() { ArrayList<ArrayDeque> l; } }",
         ),
         (
             "qualified",

@@ -5266,9 +5266,9 @@ differential_reject!(
 );
 
 stricter_than_javac!(
-    strict_stack_is_refused_by_name,
-    "StrictStack",
-    "import java.util.*;\npublic class StrictStack { static void r() { Stack<Integer> s; } }"
+    strict_array_deque_is_refused_by_name,
+    "StrictArrayDeque",
+    "import java.util.*;\npublic class StrictArrayDeque { static void r() { ArrayDeque<Integer> d; } }"
 );
 
 differential_test!(
@@ -6969,6 +6969,53 @@ public class DiffCmpFactory {
         // comparingInt over a method reference on the element itself.
         words.sort(Comparator.comparingInt(String::length).thenComparing(Comparator.naturalOrder()));
         System.out.println(words);                          // [apple, banana, cherry]
+    }
+}
+"#
+);
+
+// java.util.Stack — a Vector-backed LIFO. push/pop/peek act on the top (the
+// end); it is a List, so every list method and for-each work; an empty
+// pop/peek throws EmptyStackException.
+differential_test!(
+    diff_stack_lifo_and_list,
+    "DiffStack",
+    r#"
+import java.util.List;
+import java.util.Stack;
+
+public class DiffStack {
+    public static void main(String[] args) {
+        Stack<Integer> s = new Stack<>();
+        s.push(1); s.push(2); s.push(3);
+        System.out.println(s);                          // [1, 2, 3]
+        System.out.println(s.peek() + " " + s.pop() + " " + s);
+        System.out.println(s.empty() + " " + s.size() + " " + s.isEmpty());
+        s.push(5);
+        System.out.println(s.search(1) + " " + s.search(5) + " " + s.search(99));
+        System.out.println(s.get(0) + " " + s.contains(5) + " " + s.indexOf(2));
+
+        // A Stack is a List and a Collection.
+        List<String> ls = new Stack<>();
+        ls.add("a"); ls.add("b"); ls.add(0, "z");
+        System.out.println(ls);                         // [z, a, b]
+        for (String x : ls) { System.out.print(x); }
+        System.out.println();
+
+        // Drain LIFO.
+        Stack<String> st = new Stack<>();
+        st.push("x"); st.push("y"); st.push("w");
+        StringBuilder out = new StringBuilder();
+        while (!st.empty()) { out.append(st.pop()); }
+        System.out.println(out + " tail=" + s);
+
+        // Empty-stack pop throws EmptyStackException, not NoSuchElementException.
+        Stack<Integer> e = new Stack<>();
+        try {
+            e.pop();
+        } catch (java.util.EmptyStackException ex) {
+            System.out.println("empty: " + ex.getMessage());
+        }
     }
 }
 "#

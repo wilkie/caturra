@@ -170,6 +170,12 @@ pub enum HeapObject {
     /// offer its `Queue`/`Deque` methods. Reachable through a `List`, `Queue`,
     /// or `Deque` variable, each of which exposes a different method subset.
     LinkedList(Vec<JValue>),
+    /// A `java.util.Stack` — a `Vector`-backed LIFO. The same ordered-sequence
+    /// storage as an `ArrayList` (it *is* a `List`, so every list method reads
+    /// it), kept a distinct kind so `push`/`pop`/`peek` act on the top (the
+    /// *end*, unlike a `Deque`'s head), an empty `pop`/`peek` throws
+    /// `EmptyStackException`, and `getClass()` stays honest.
+    Stack(Vec<JValue>),
     /// An unmodifiable *view* of a list (`Collections.unmodifiableList`,
     /// `Collections.emptyList`). Java's is a view too: a later `add` to the
     /// backing list shows through, and every mutator throws.
@@ -329,7 +335,11 @@ impl Heap {
     #[must_use]
     pub fn list_values(&self, reference: HeapRef) -> Option<&Vec<JValue>> {
         match self.get(reference) {
-            Some(HeapObject::ArrayList(values) | HeapObject::LinkedList(values)) => Some(values),
+            Some(
+                HeapObject::ArrayList(values)
+                | HeapObject::LinkedList(values)
+                | HeapObject::Stack(values),
+            ) => Some(values),
             _ => None,
         }
     }
@@ -338,7 +348,11 @@ impl Heap {
     #[must_use]
     pub fn list_values_mut(&mut self, reference: HeapRef) -> Option<&mut Vec<JValue>> {
         match self.get_mut(reference) {
-            Some(HeapObject::ArrayList(values) | HeapObject::LinkedList(values)) => Some(values),
+            Some(
+                HeapObject::ArrayList(values)
+                | HeapObject::LinkedList(values)
+                | HeapObject::Stack(values),
+            ) => Some(values),
             _ => None,
         }
     }

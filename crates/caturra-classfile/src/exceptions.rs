@@ -64,6 +64,10 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/util/NoSuchElementException",
     ),
     (
+        "java/util/EmptyStackException",
+        "java/lang/RuntimeException",
+    ),
+    (
         "java/util/IllegalFormatException",
         "java/lang/IllegalArgumentException",
     ),

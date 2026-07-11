@@ -404,7 +404,8 @@ impl<'run> Interpreter<'run> {
                 }
                 Some(
                     crate::value::HeapObject::ArrayList(values)
-                    | crate::value::HeapObject::LinkedList(values),
+                    | crate::value::HeapObject::LinkedList(values)
+                    | crate::value::HeapObject::Stack(values),
                 ) => render_array(values.iter().map(|v| self.render_shallow(*v))),
                 Some(crate::value::HeapObject::Instance { class_name, fields }) => {
                     if depth > 0 || fields.is_empty() {
@@ -1013,6 +1014,13 @@ impl<'run> Interpreter<'run> {
                                         target == "java/util/ArrayList"
                                             || target == "java/util/List"
                                     }
+                                    Some(crate::value::HeapObject::Stack(_)) => matches!(
+                                        target.as_str(),
+                                        "java/util/Stack"
+                                            | "java/util/Vector"
+                                            | "java/util/List"
+                                            | "java/util/Collection"
+                                    ),
                                     Some(crate::value::HeapObject::LinkedList(_)) => matches!(
                                         target.as_str(),
                                         "java/util/LinkedList"
@@ -2318,9 +2326,11 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::Instance { class_name, .. }) => {
                 Renderable::Instance(class_name.clone())
             }
-            Some(HeapObject::ArrayList(items) | HeapObject::LinkedList(items)) => {
-                Renderable::List(items.clone())
-            }
+            Some(
+                HeapObject::ArrayList(items)
+                | HeapObject::LinkedList(items)
+                | HeapObject::Stack(items),
+            ) => Renderable::List(items.clone()),
             Some(HeapObject::UnmodifiableList(_)) => Renderable::List(self.list_items(reference)),
             Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
             // A TreeMap prints `{k=v, ...}` with its entries already key-sorted.
@@ -3258,6 +3268,7 @@ impl<'run> Interpreter<'run> {
             Some(
                 HeapObject::ArrayList(_)
                     | HeapObject::LinkedList(_)
+                    | HeapObject::Stack(_)
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashMap(_)
                     | HeapObject::TreeMap { .. }
@@ -3433,6 +3444,7 @@ impl<'run> Interpreter<'run> {
     /// The `ArrayList` methods that compare elements. They live here rather
     /// than in the intrinsic layer because a user class may override `equals`
     /// and `hashCode`, and calling those needs the interpreter.
+    #[allow(clippy::too_many_lines)] // one arm per element-comparing method
     fn list_equality_intrinsic(
         &mut self,
         receiver: HeapRef,
@@ -3469,6 +3481,17 @@ impl<'run> Interpreter<'run> {
             }
             ("indexOf", _, [probe]) => JValue::Int(self.list_index_of(receiver, *probe, false)?),
             ("lastIndexOf", _, [probe]) => JValue::Int(self.list_index_of(receiver, *probe, true)?),
+            // `Stack.search(o)`: the 1-based distance from the top (the end) of
+            // the topmost matching element, or -1 if absent. Java's uses
+            // `lastIndexOf`, so a duplicate reports its position nearest the top.
+            ("search", _, [probe]) => {
+                let at = self.list_index_of(receiver, *probe, true)?;
+                JValue::Int(if at >= 0 {
+                    i32::try_from(self.list_items(receiver).len()).unwrap_or(i32::MAX) - at
+                } else {
+                    -1
+                })
+            }
             ("remove", "(Ljava/lang/Object;)Z", [probe]) => {
                 let at = self.list_index_of(receiver, *probe, false)?;
                 let found = at >= 0;
@@ -4601,6 +4624,7 @@ impl<'run> Interpreter<'run> {
             Some(
                 HeapObject::ArrayList(_)
                     | HeapObject::LinkedList(_)
+                    | HeapObject::Stack(_)
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashSet(_)
                     | HeapObject::TreeSet { .. }
@@ -5019,6 +5043,7 @@ impl<'run> Interpreter<'run> {
             Some(
                 HeapObject::ArrayList(_)
                 | HeapObject::LinkedList(_)
+                | HeapObject::Stack(_)
                 | HeapObject::UnmodifiableList(_),
             ) => self.list_items(reference),
             Some(HeapObject::TreeSet { values, .. }) => values.clone(),
@@ -5860,6 +5885,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
             Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
             Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
+            Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
             Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
             Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
             Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),

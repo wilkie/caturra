@@ -1127,6 +1127,8 @@ impl MethodTable {
                 }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
+                } else if simple == "Stack" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::Stack)
                 } else if simple == "HashMap" && args.len() == 2 && !self.has_class(simple) {
                     let key = elem_from_type_arg(&args[0], self)?;
                     let value = elem_from_type_arg(&args[1], self)?;
@@ -1810,6 +1812,12 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::LinkedList { elem: a, .. }, JType::Collection(b)) if a == b
         )
+        // A Stack is a List (it extends Vector), and so a Collection, of its
+        // element type: `List<E> l = new Stack<>()`.
+        || matches!(
+            (from, to),
+            (JType::Stack(a), JType::List(b) | JType::Collection(b)) if a == b
+        )
         // A TreeSet is a Set (and a Collection) of its element type.
         || matches!(
             (from, to),
@@ -1988,6 +1996,11 @@ enum JType {
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
+    /// `java.util.Stack<E>` — a `Vector`-backed LIFO. It *is* a `List` (extends
+    /// `Vector`), so it shares the list method surface and widens to
+    /// `List`/`Collection`; distinct from `List` because it adds
+    /// `push`/`pop`/`peek`/`empty`/`search` (which act on the top / the end).
+    Stack(ElemType),
     /// `java.util.stream.Stream<E>` — an eager pipeline of elements (see the
     /// VM). `map` erases the element to `Object`; `collect` adopts the result
     /// element from the assignment context.
@@ -2180,6 +2193,9 @@ impl JType {
             JType::List(elem) => {
                 format!("ArrayList<{}>", wrapper_name(elem, table))
             }
+            JType::Stack(elem) => {
+                format!("Stack<{}>", wrapper_name(elem, table))
+            }
             JType::Unsupported => String::from("an unsupported type"),
             JType::Error => String::from("an unknown type"),
         }
@@ -2209,6 +2225,7 @@ impl JType {
                 | JType::File
                 | JType::Writer
                 | JType::List(_)
+                | JType::Stack(_)
                 | JType::LinkedList { .. }
                 | JType::Map { .. }
                 | JType::TreeMap { .. }
@@ -2312,6 +2329,7 @@ impl JType {
             JType::File => String::from("Ljava/io/File;"),
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::List(_) => String::from("Ljava/util/ArrayList;"),
+            JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
             JType::TypeVar | JType::Unsupported | JType::Error => {
@@ -3715,6 +3733,136 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     // Capacity hints: real methods, observable-free in this VM.
     bm("ensureCapacity", &[I], BRet::Void, "(I)V"),
     bm("trimToSize", &[], BRet::Void, "()V"),
+];
+
+/// `java.util.Stack<E>` — everything a `List` has (it extends `Vector`), plus
+/// the five LIFO operations. `push`/`pop`/`peek` act on the top (the end);
+/// `empty` mirrors `isEmpty`; `search` is a 1-based distance from the top.
+const STACK_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "push",
+        &[BParam::Elem],
+        BRet::Elem,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm("pop", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    bm("peek", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    bm("empty", &[], BRet::Boolean, "()Z"),
+    bm(
+        "search",
+        &[BParam::Elem],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    // The `List`/`Vector` surface.
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "removeIf",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "replaceAll",
+        &[BParam::UnaryOperator],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "sort",
+        &[BParam::Comparator],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "add",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "add",
+        &[BParam::Int, BParam::Elem],
+        BRet::Void,
+        "(ILjava/lang/Object;)V",
+    ),
+    bm("get", &[BParam::Int], BRet::Elem, "(I)Ljava/lang/Object;"),
+    bm(
+        "set",
+        &[BParam::Int, BParam::Elem],
+        BRet::Elem,
+        "(ILjava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "remove",
+        &[BParam::Int],
+        BRet::Elem,
+        "(I)Ljava/lang/Object;",
+    ),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "contains",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "indexOf",
+        &[BParam::Elem],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "lastIndexOf",
+        &[BParam::Elem],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "remove",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "addAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "containsAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "equals",
+        &[BParam::SelfList],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
 /// The `java.util.Queue<E>` methods a `Queue` variable exposes. The nullable
@@ -5646,6 +5794,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
+        JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
         JType::Optional(_) => Some(("java/util/Optional", OPTIONAL_METHODS)),
@@ -5858,6 +6007,7 @@ impl TypeArgs {
             // A list's element, and a view's own element, are the first
             // type argument; a map's key and value are the two.
             JType::List(elem)
+            | JType::Stack(elem)
             | JType::Set(elem)
             | JType::TreeSet(elem)
             | JType::Stream(elem)
@@ -7752,6 +7902,10 @@ impl BodyGen<'_> {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::List),
                 _ => JType::Null,
             },
+            "Stack" => match type_args {
+                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Stack),
+                _ => JType::Null,
+            },
             "HashMap" | "Map" => match type_args {
                 [key, value] => match (
                     elem_from_type_arg(key, self.table),
@@ -7869,6 +8023,7 @@ impl BodyGen<'_> {
                 "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
                 "ArrayList" => return self.new_array_list(type_args, args, span),
+                "Stack" => return self.new_stack(type_args, args, span),
                 "HashMap" => return self.new_hash_map(type_args, args, span),
                 "HashSet" => return self.new_hash_set(type_args, args, span),
                 "TreeSet" => return self.new_tree_set(type_args, args, span),
@@ -8279,6 +8434,44 @@ impl BodyGen<'_> {
             // Diamond: callers in declaration position convert with
             // the declared type; `Null` behaves as assignable-to-any
             // reference, which matches the diamond's intent.
+            None => JType::Null,
+        }
+    }
+
+    /// `new Stack<E>()` — the only constructor `java.util.Stack` declares. (It
+    /// inherits `Vector`'s copy constructor but does not expose one of its own,
+    /// so `new Stack<>(collection)` does not compile, matching javac.)
+    fn new_stack(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        if !args.is_empty() {
+            self.error(span, "Stack takes no constructor arguments");
+            return JType::Error;
+        }
+        let elem = match type_args {
+            [] => None,
+            [arg] => {
+                let Some(elem) = elem_from_type_arg(arg, self.table) else {
+                    self.error(
+                        span,
+                        "Stack element type must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some(elem)
+            }
+            _ => {
+                self.error(span, "Stack takes one type argument");
+                return JType::Error;
+            }
+        };
+        let stack_class = intern_class(self.pool, "java/util/Stack");
+        self.code.push_op_u16(op::NEW, stack_class, 1);
+        self.code.push_op(op::DUP, 1);
+        let init_ref = intern_method_ref(self.pool, "java/util/Stack", "<init>", "()V");
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code.drop_stack(1);
+        match elem {
+            Some(elem) => JType::Stack(elem),
             None => JType::Null,
         }
     }
@@ -8942,6 +9135,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::List(_)
+            | JType::Stack(_)
             | JType::LinkedList { .. }
             | JType::Map { .. }
             | JType::TreeMap { .. }
@@ -9064,6 +9258,7 @@ impl BodyGen<'_> {
             && matches!(
                 receiver_ty,
                 JType::List(_)
+                    | JType::Stack(_)
                     | JType::LinkedList { .. }
                     | JType::Set(_)
                     | JType::TreeSet(_)
@@ -9194,6 +9389,7 @@ impl BodyGen<'_> {
             let ty = match ty {
                 JType::Object(_)
                 | JType::List(_)
+                | JType::Stack(_)
                 | JType::Map { .. }
                 | JType::Set(_)
                 | JType::Collection(_)
@@ -9463,13 +9659,13 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             return JType::Str;
         }
-        if matches!(ty, JType::List(_)) {
-            let method_ref = intern_method_ref(
-                self.pool,
-                "java/util/ArrayList",
-                "toString",
-                "()Ljava/lang/String;",
-            );
+        if let Some(class) = match ty {
+            JType::List(_) => Some("java/util/ArrayList"),
+            JType::Stack(_) => Some("java/util/Stack"),
+            _ => None,
+        } {
+            let method_ref =
+                intern_method_ref(self.pool, class, "toString", "()Ljava/lang/String;");
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
             self.code.drop_stack(1);
             return JType::Str;
@@ -9672,7 +9868,9 @@ impl BodyGen<'_> {
         // Every intrinsic collection compiles to the same index loop: caturra
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
-            JType::List(elem) | JType::LinkedList { elem, .. } => Some(("get", elem.base_type())),
+            JType::List(elem) | JType::Stack(elem) | JType::LinkedList { elem, .. } => {
+                Some(("get", elem.base_type()))
+            }
             JType::Set(elem) | JType::TreeSet(elem) | JType::Collection(elem) => {
                 Some(("__get", boxed_if_primitive(Some(elem))))
             }
@@ -10717,12 +10915,13 @@ impl BodyGen<'_> {
             JType::Boolean => Some(String::from("(Z)V")),
             JType::Char => Some(String::from("(C)V")),
             // Objects and lists are coerced to String before this is
-            // consulted.
-            JType::Str | JType::Object(_) | JType::List(_) | JType::Exception(_) => {
-                Some(String::from("(Ljava/lang/String;)V"))
-            }
-            // File is coerced to its path string upstream.
-            JType::File => Some(String::from("(Ljava/lang/String;)V")),
+            // consulted; File is coerced to its path string upstream.
+            JType::Str
+            | JType::Object(_)
+            | JType::List(_)
+            | JType::Stack(_)
+            | JType::Exception(_)
+            | JType::File => Some(String::from("(Ljava/lang/String;)V")),
             JType::Scanner | JType::Writer => {
                 self.error(
                     span,
@@ -10966,6 +11165,7 @@ impl BodyGen<'_> {
                         | JType::File
                         | JType::Writer
                         | JType::List(_)
+                        | JType::Stack(_)
                         | JType::LinkedList { .. }
                         | JType::Map { .. }
                         | JType::TreeMap { .. }
@@ -11349,6 +11549,7 @@ impl BodyGen<'_> {
             JType::Str => String::from("java/lang/String"),
             // `x instanceof ArrayList<…>` — a runtime list check.
             JType::List(_) => String::from("java/util/ArrayList"),
+            JType::Stack(_) => String::from("java/util/Stack"),
             JType::Map { .. } => String::from("java/util/HashMap"),
             // `type instanceof ParameterizedType` — a runtime check on the
             // reflect Type's kind (the VM inspects the value).
@@ -13012,6 +13213,7 @@ impl BodyGen<'_> {
             | JType::Null
             | JType::Object(_)
             | JType::List(_)
+            | JType::Stack(_)
             | JType::File
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             JType::Scanner | JType::Writer => {
@@ -13276,6 +13478,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::List(_)
+            | JType::Stack(_)
             | JType::Map { .. }
             | JType::Set(_)
             | JType::Collection(_)
@@ -13300,6 +13503,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::List(_)
+            | JType::Stack(_)
             | JType::Map { .. }
             | JType::Set(_)
             | JType::Collection(_)

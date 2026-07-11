@@ -487,6 +487,18 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     interface (`Queue<E> q = new PriorityQueue<>()`), differing only in the
     heap object behind it. Pinned against a real JDK by
     `diff_priority_queue_core` and `_comparator_and_heapify`.
+  - `java.util.Stack<E>` (2026-07-11) — the `Vector`-backed LIFO. `push`/`pop`/
+    `peek` act on the **top** (the end of the list, unlike a `Deque`'s
+    head-based `push`/`pop`); `empty()` mirrors `isEmpty()`; `search(o)` is the
+    1-based distance from the top (via `lastIndexOf`, so a duplicate reports the
+    position nearest the top), or `-1`. An empty `pop()`/`peek()` throws
+    `EmptyStackException` (not the `NoSuchElementException` a `Deque` throws).
+    Because a `Stack` **is** a `List` (it extends `Vector`), every list method —
+    `get`/`set`/`add(i, e)`/`remove(i)`/`indexOf`/`contains`/`size`/`sort`/
+    `forEach`/… — and for-each work on it, and it widens to `List<E>` and
+    `Collection<E>` (`List<E> l = new Stack<>()`). Only the no-argument
+    constructor is offered, matching javac (Stack declares no copy constructor of
+    its own). Pinned against a real JDK by `diff_stack_lifo_and_list`.
   - `java.util.stream.Stream<E>` (2026-07-11), the `collection.stream()`
     pipeline, modelled **eagerly** — each intermediate op transforms a vector
     and each terminal op consumes it, which gives identical results to a lazy
