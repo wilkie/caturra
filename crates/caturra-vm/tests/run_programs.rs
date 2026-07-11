@@ -8402,6 +8402,36 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// `java.util.Optional` from the stream terminals: `findFirst`/`max`/`min`/
+/// `average`, with `isPresent`/`get`/`orElse` and the `Optional[x]`/`.empty`
+/// toString. Pinned JDK-free for CI; the JDK match is in `differential.rs`.
+#[test]
+fn optionals_from_stream_terminals() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Arrays;
+        import java.util.List;
+        import java.util.Optional;
+        public class O {
+            public static void main(String[] args) {
+                List<Integer> nums = new ArrayList<>(Arrays.asList(3, 1, 4, 1, 5));
+                System.out.println(nums.stream().mapToInt(x -> x).max().getAsInt());   // 5
+                System.out.println(nums.stream().mapToInt(x -> x).average().getAsDouble());
+                List<String> ws = new ArrayList<>(Arrays.asList("fig", "banana"));
+                Optional<String> longest = ws.stream().max((a, b) -> a.length() - b.length());
+                System.out.println(longest.get());                                    // banana
+                Optional<String> z = ws.stream().filter(w -> w.startsWith("z")).findFirst();
+                System.out.println(z.isPresent() + " " + z.orElse("none"));            // false none
+                System.out.println(z);                                                // Optional.empty
+            }
+        }
+        "#,
+        "O",
+    );
+    assert_eq!(out, "5\n2.8\nbanana\nfalse none\nOptional.empty\n");
+}
+
 /// `java.util.stream.IntStream`: `mapToInt`/`range` and the numeric terminals,
 /// with primitive-int lambdas. Pinned JDK-free for CI; the byte-for-byte JDK
 /// match is in `differential.rs`.

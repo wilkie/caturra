@@ -506,9 +506,20 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     `Stream<Integer>`. Terminal: **`sum()`**, `count()`, `toArray()` → `int[]`,
     `forEach`, `anyMatch`/`allMatch`/`noneMatch`. So the ubiquitous
     `list.stream().mapToInt(x -> x).sum()` and `IntStream.range(0, n).forEach(...)`
-    both work. `average()`/`min()`/`max()` return `OptionalInt`/`OptionalDouble`,
-    which caturra does not model yet — a documented gap. Pinned against a real
-    JDK by `diff_int_stream`.
+    both work. Pinned against a real JDK by `diff_int_stream`.
+  - `java.util.Optional<E>` / `OptionalInt` / `OptionalDouble` (2026-07-11) — the
+    present-or-absent results of the stream terminals: `Stream.findFirst()`/
+    `findAny()` and `max(cmp)`/`min(cmp)` give an `Optional<E>`; `IntStream.max()`/
+    `min()` an `OptionalInt`; `IntStream.average()` an `OptionalDouble`. Methods:
+    `isPresent`/`isEmpty`, `get`/`getAsInt`/`getAsDouble` and `orElseThrow`
+    (throw `NoSuchElementException` when absent), `orElse(default)`,
+    `ifPresent(consumer)`. `toString` matches Java exactly — `Optional[x]`,
+    `Optional.empty`, `OptionalInt[9]`, `OptionalDouble.empty`. This closes the
+    `average`/`min`/`max`/`findFirst` gap the streams left. `Optional.of`/
+    `empty`/`ofNullable` (constructing one directly) and `map`/`filter`/`orElseGet`
+    (which take lambdas) are not yet reachable from source — students almost
+    always get an Optional from a stream and immediately unwrap it. Pinned
+    against a real JDK by `diff_optional`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a

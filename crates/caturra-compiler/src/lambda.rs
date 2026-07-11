@@ -582,7 +582,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], None, ctx);
                     return;
                 }
-                if method == "sorted"
+                if matches!(method.as_str(), "sorted" | "max" | "min")
                     && args.len() == 1
                     && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 2)
                 {

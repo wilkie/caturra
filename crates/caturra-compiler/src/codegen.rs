@@ -1093,6 +1093,8 @@ impl MethodTable {
                     "StringBuilder" => Some(JType::StringBuilder),
                     "File" => Some(JType::File),
                     "PrintWriter" => Some(JType::Writer),
+                    "OptionalInt" if !self.has_class(simple) => Some(JType::OptionalInt),
+                    "OptionalDouble" if !self.has_class(simple) => Some(JType::OptionalDouble),
                     "Class" => Some(JType::Class),
                     "Field" => Some(JType::Field),
                     "Method" => Some(JType::Method),
@@ -1143,6 +1145,8 @@ impl MethodTable {
                     && !self.has_class(simple)
                 {
                     elem_from_type_arg(&args[0], self).map(JType::TreeSet)
+                } else if simple == "Optional" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::Optional)
                 } else if matches!(simple, "LinkedList" | "Queue" | "Deque" | "PriorityQueue")
                     && args.len() == 1
                     && !self.has_class(simple)
@@ -1994,6 +1998,12 @@ enum JType {
     /// models it as a `Stream` of unboxed ints). Adds numeric terminals
     /// (`sum`/`toArray`) the object `Stream` lacks.
     IntStream,
+    /// `java.util.Optional<E>` — a present-or-absent value; `get` returns `E`.
+    Optional(ElemType),
+    /// `java.util.OptionalInt` — `getAsInt` returns `int`.
+    OptionalInt,
+    /// `java.util.OptionalDouble` — `getAsDouble` returns `double`.
+    OptionalDouble,
     /// `java.util.LinkedList<E>` and its `Queue`/`Deque` interface views. The
     /// storage is a list; the `role` restricts which methods the receiver
     /// exposes, so `Queue<E>.get(i)` is rejected exactly as javac rejects it.
@@ -2110,6 +2120,9 @@ impl JType {
             JType::Stream(elem) => format!("Stream<{}>", elem.base_type().describe(table)),
             JType::Collector => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
+            JType::Optional(elem) => format!("Optional<{}>", elem.base_type().describe(table)),
+            JType::OptionalInt => String::from("OptionalInt"),
+            JType::OptionalDouble => String::from("OptionalDouble"),
             JType::LinkedList { elem, role } => {
                 let name = match role {
                     SeqRole::Full => "LinkedList",
@@ -2204,6 +2217,9 @@ impl JType {
                 | JType::Stream(_)
                 | JType::Collector
                 | JType::IntStream
+                | JType::Optional(_)
+                | JType::OptionalInt
+                | JType::OptionalDouble
                 | JType::Collection(_)
                 | JType::EntrySet { .. }
                 | JType::MapEntry { .. }
@@ -2264,6 +2280,9 @@ impl JType {
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
+            JType::Optional(_) => String::from("Ljava/util/Optional;"),
+            JType::OptionalInt => String::from("Ljava/util/OptionalInt;"),
+            JType::OptionalDouble => String::from("Ljava/util/OptionalDouble;"),
             JType::LinkedList { role, .. } => format!("L{};", role.internal()),
             JType::Collection(_) => String::from("Ljava/util/Collection;"),
             JType::MapEntry { .. } => String::from("Ljava/util/Map$Entry;"),
@@ -2980,6 +2999,12 @@ enum BRet {
     StreamInteger,
     /// `int[]` — `IntStream.toArray()`.
     IntArray,
+    /// `Optional<E>` of the receiver's element (`findFirst`, `max`, `min`).
+    Optional,
+    /// `OptionalInt` (`IntStream.max`/`min`).
+    OptionalInt,
+    /// `OptionalDouble` (`IntStream.average`).
+    OptionalDouble,
     /// `Collector` (a `Collectors.toX()` factory result).
     Collector,
     /// `null`-typed, adopting the assignment context — for `collect`, whose
@@ -4036,6 +4061,20 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         BRet::Nullish,
         "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
     ),
+    bm("findFirst", &[], BRet::Optional, "()Ljava/util/Optional;"),
+    bm("findAny", &[], BRet::Optional, "()Ljava/util/Optional;"),
+    bm(
+        "max",
+        &[BParam::Comparator],
+        BRet::Optional,
+        "(Ljava/util/Comparator;)Ljava/util/Optional;",
+    ),
+    bm(
+        "min",
+        &[BParam::Comparator],
+        BRet::Optional,
+        "(Ljava/util/Comparator;)Ljava/util/Optional;",
+    ),
 ];
 
 /// `java.util.stream.IntStream` — a primitive int stream. Its lambdas take a
@@ -4100,6 +4139,14 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm("sum", &[], BRet::Int, "()I"),
     bm("count", &[], BRet::Long, "()J"),
     bm("toArray", &[], BRet::IntArray, "()[I"),
+    bm("max", &[], BRet::OptionalInt, "()Ljava/util/OptionalInt;"),
+    bm("min", &[], BRet::OptionalInt, "()Ljava/util/OptionalInt;"),
+    bm(
+        "average",
+        &[],
+        BRet::OptionalDouble,
+        "()Ljava/util/OptionalDouble;",
+    ),
     bm(
         "anyMatch",
         &[BParam::Predicate],
@@ -4134,6 +4181,59 @@ const INTSTREAM_STATIC_METHODS: &[BuiltinMethod] = &[
         BRet::IntStream,
         "(II)Ljava/util/stream/IntStream;",
     ),
+];
+
+/// `java.util.Optional<E>` — `get`/`orElse`/`orElseThrow` yield the element.
+const OPTIONAL_METHODS: &[BuiltinMethod] = &[
+    bm("isPresent", &[], BRet::Boolean, "()Z"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("get", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    bm("orElseThrow", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    bm(
+        "orElse",
+        &[BParam::Key],
+        BRet::Elem,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "ifPresent",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/Consumer;)V",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.util.OptionalInt` — `getAsInt`/`orElse` yield an `int`.
+const OPTIONALINT_METHODS: &[BuiltinMethod] = &[
+    bm("isPresent", &[], BRet::Boolean, "()Z"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("getAsInt", &[], BRet::Int, "()I"),
+    bm("orElseThrow", &[], BRet::Int, "()I"),
+    bm("orElse", &[BParam::Int], BRet::Int, "(I)I"),
+    bm(
+        "ifPresent",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/IntConsumer;)V",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
+/// `java.util.OptionalDouble` — `getAsDouble`/`orElse` yield a `double`.
+const OPTIONALDOUBLE_METHODS: &[BuiltinMethod] = &[
+    bm("isPresent", &[], BRet::Boolean, "()Z"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("getAsDouble", &[], BRet::Double, "()D"),
+    bm("orElseThrow", &[], BRet::Double, "()D"),
+    bm("orElse", &[BParam::Double], BRet::Double, "(D)D"),
+    bm(
+        "ifPresent",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/DoubleConsumer;)V",
+    ),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
 const FILE_METHODS: &[BuiltinMethod] = &[
@@ -5545,6 +5645,9 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
+        JType::Optional(_) => Some(("java/util/Optional", OPTIONAL_METHODS)),
+        JType::OptionalInt => Some(("java/util/OptionalInt", OPTIONALINT_METHODS)),
+        JType::OptionalDouble => Some(("java/util/OptionalDouble", OPTIONALDOUBLE_METHODS)),
         JType::LinkedList { role, .. } => Some(match role {
             SeqRole::Full => ("java/util/LinkedList", LINKEDLIST_METHODS),
             SeqRole::Queue => ("java/util/Queue", QUEUE_METHODS),
@@ -5712,6 +5815,7 @@ impl TypeArgs {
             | JType::Set(elem)
             | JType::TreeSet(elem)
             | JType::Stream(elem)
+            | JType::Optional(elem)
             | JType::Collection(elem)
             | JType::LinkedList { elem, .. } => Self {
                 first: Some(elem),
@@ -5901,6 +6005,9 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::Int,
             dims: 1,
         }),
+        BRet::Optional => Some(args.first.map_or(JType::Error, JType::Optional)),
+        BRet::OptionalInt => Some(JType::OptionalInt),
+        BRet::OptionalDouble => Some(JType::OptionalDouble),
         BRet::Collector => Some(JType::Collector),
         BRet::Nullish => Some(JType::Null),
         BRet::Val => Some(boxed_if_primitive(args.second)),
@@ -8736,6 +8843,9 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::Optional(_)
+            | JType::OptionalInt
+            | JType::OptionalDouble
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -10480,6 +10590,9 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::Optional(_)
+            | JType::OptionalInt
+            | JType::OptionalDouble
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
@@ -10742,6 +10855,9 @@ impl BodyGen<'_> {
                         | JType::Stream(_)
                         | JType::Collector
                         | JType::IntStream
+                        | JType::Optional(_)
+                        | JType::OptionalInt
+                        | JType::OptionalDouble
                         | JType::Collection(_)
                         | JType::EntrySet { .. }
                         | JType::MapEntry { .. }
@@ -12752,6 +12868,9 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::Optional(_)
+            | JType::OptionalInt
+            | JType::OptionalDouble
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }

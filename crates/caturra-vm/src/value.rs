@@ -51,6 +51,27 @@ pub enum CollectorKind {
     },
 }
 
+/// Which flavour of `Optional` a [`HeapObject::Optional`] is — only its
+/// `toString` prefix differs (`Optional[x]` / `OptionalInt[x]` / `OptionalDouble[x]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionalKind {
+    Ref,
+    Int,
+    Double,
+}
+
+impl OptionalKind {
+    /// The `toString` prefix Java uses for this flavour.
+    #[must_use]
+    pub fn prefix(self) -> &'static str {
+        match self {
+            OptionalKind::Ref => "Optional",
+            OptionalKind::Int => "OptionalInt",
+            OptionalKind::Double => "OptionalDouble",
+        }
+    }
+}
+
 /// Which of a map's three views a [`HeapObject::MapView`] presents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapViewKind {
@@ -164,6 +185,14 @@ pub enum HeapObject {
     Stream(Vec<JValue>),
     /// The recipe a `Stream.collect` gathers into, from a `Collectors` factory.
     Collector(CollectorKind),
+    /// A `java.util.Optional` / `OptionalInt` / `OptionalDouble`: a value that
+    /// is present or absent. `kind` is only for `toString` (`Optional[x]` vs
+    /// `OptionalInt[x]`); the accessors (`get`/`getAsInt`/`getAsDouble`) are the
+    /// same at runtime, the compiler having picked the right one.
+    Optional {
+        value: Option<JValue>,
+        kind: OptionalKind,
+    },
     /// A `java.util.PriorityQueue` (element type erased): a binary min-heap in
     /// an array, so `peek`/`poll` return the least element while iteration and
     /// `toString` show the heap-array order — replicated exactly (Java's

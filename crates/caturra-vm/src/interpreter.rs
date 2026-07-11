@@ -2294,6 +2294,7 @@ impl<'run> Interpreter<'run> {
     /// intrinsic renderers, which see only the heap, this calls a user
     /// `toString()` — and so renders a list or a map by rendering its
     /// elements, exactly as `AbstractCollection` and `AbstractMap` do.
+    #[allow(clippy::too_many_lines)] // one arm per renderable container kind
     fn string_value_of(&mut self, value: JValue, depth: u32) -> Result<String, VmError> {
         use crate::value::HeapObject;
         // An indirect cycle (a list inside a list that holds it) overflows a
@@ -2333,6 +2334,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::TreeSet { values, .. }) => Renderable::List(values.clone()),
             // A PriorityQueue prints its heap-array order (as Java's does).
             Some(HeapObject::PriorityQueue { heap, .. }) => Renderable::List(heap.clone()),
+            Some(HeapObject::Optional { value, kind }) => Renderable::Optional(*value, *kind),
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
                 // A view over any map (Hash or Tree) renders its entries in that
@@ -2397,6 +2399,16 @@ impl<'run> Interpreter<'run> {
                     self.render_element(value, reference, depth, THIS_MAP)?
                 ))
             }
+            Renderable::Optional(inner, kind) => Ok(match inner {
+                Some(present) => {
+                    format!(
+                        "{}[{}]",
+                        kind.prefix(),
+                        self.string_value_of(present, depth + 1)?
+                    )
+                }
+                None => format!("{}.empty", kind.prefix()),
+            }),
             Renderable::Opaque => Ok(intrinsics::object_display(&self.heap, value)),
         }
     }
@@ -3217,6 +3229,7 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::HashSet(_)
                     | HeapObject::TreeSet { .. }
                     | HeapObject::PriorityQueue { .. }
+                    | HeapObject::Optional { .. }
                     | HeapObject::MapView { .. }
                     | HeapObject::MapEntry { .. }
             )
@@ -4581,6 +4594,9 @@ impl<'run> Interpreter<'run> {
         if matches!(self.heap.get(receiver), Some(HeapObject::Stream(_))) {
             return self.stream_intrinsic(receiver, method, descriptor, args);
         }
+        if matches!(self.heap.get(receiver), Some(HeapObject::Optional { .. })) {
+            return self.optional_intrinsic(receiver, method, descriptor, args);
+        }
         Ok(Answered::No)
     }
 
@@ -4596,6 +4612,55 @@ impl<'run> Interpreter<'run> {
         JValue::Ref(Some(
             self.heap.alloc(crate::value::HeapObject::Stream(elements)),
         ))
+    }
+
+    fn alloc_optional(
+        &mut self,
+        value: Option<JValue>,
+        kind: crate::value::OptionalKind,
+    ) -> JValue {
+        JValue::Ref(Some(
+            self.heap
+                .alloc(crate::value::HeapObject::Optional { value, kind }),
+        ))
+    }
+
+    /// `java.util.Optional` / `OptionalInt` / `OptionalDouble` methods.
+    fn optional_intrinsic(
+        &mut self,
+        receiver: HeapRef,
+        method: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        let value = match self.heap.get(receiver) {
+            Some(crate::value::HeapObject::Optional { value, .. }) => *value,
+            _ => return Ok(Answered::No),
+        };
+        let result = match (method, args) {
+            ("isPresent", []) => JValue::Int(i32::from(value.is_some())),
+            ("isEmpty", []) => JValue::Int(i32::from(value.is_none())),
+            // The accessor and `orElseThrow()` yield the value or throw.
+            ("get" | "getAsInt" | "getAsDouble" | "getAsLong" | "orElseThrow", []) => value
+                .ok_or_else(|| {
+                    VmError::UncaughtException(String::from(
+                        "java.util.NoSuchElementException: No value present",
+                    ))
+                })?,
+            ("orElse", [fallback]) => value.unwrap_or(*fallback),
+            ("ifPresent", [JValue::Ref(Some(consumer))]) => {
+                if let Some(present) = value {
+                    self.call_functional(*consumer, "accept", "(Ljava/lang/Object;)V", present)?;
+                }
+                return Ok(Answered::Void);
+            }
+            _ => {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "Optional.{method}{descriptor}"
+                )));
+            }
+        };
+        Ok(Answered::Value(result))
     }
 
     /// Call a one-argument functional lambda (`test`/`apply`/`accept`) on an
@@ -4657,6 +4722,7 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         args: &[JValue],
     ) -> Result<Answered, VmError> {
+        use crate::value::OptionalKind;
         let elements = self.stream_elements(receiver);
         let result = match (method, args) {
             ("filter", [JValue::Ref(Some(pred))]) => {
@@ -4750,6 +4816,63 @@ impl<'run> Interpreter<'run> {
                 return Ok(Answered::Void);
             }
             ("count", []) => JValue::Long(i64::try_from(elements.len()).unwrap_or(i64::MAX)),
+            ("findFirst" | "findAny", []) => {
+                self.alloc_optional(elements.first().copied(), OptionalKind::Ref)
+            }
+            // `Stream.max`/`min(Comparator)` — the extreme by the comparator,
+            // keeping the accumulator on ties (Java's `maxBy`/`minBy`).
+            ("max" | "min", [JValue::Ref(Some(comparator))]) => {
+                let want_max = method == "max";
+                let mut best: Option<JValue> = None;
+                for element in elements {
+                    best = Some(match best {
+                        None => element,
+                        Some(current) => {
+                            let ordering =
+                                self.compare_with(element, current, Some(*comparator))?;
+                            let take = if want_max { ordering > 0 } else { ordering < 0 };
+                            if take { element } else { current }
+                        }
+                    });
+                }
+                self.alloc_optional(best, OptionalKind::Ref)
+            }
+            // `IntStream.max`/`min()` — natural int ordering.
+            ("max" | "min", []) => {
+                let want_max = method == "max";
+                let mut best: Option<i32> = None;
+                for element in &elements {
+                    if let JValue::Int(n) = element {
+                        best = Some(match best {
+                            None => *n,
+                            Some(current) if want_max => current.max(*n),
+                            Some(current) => current.min(*n),
+                        });
+                    }
+                }
+                self.alloc_optional(best.map(JValue::Int), OptionalKind::Int)
+            }
+            // `IntStream.average()` — the mean as an OptionalDouble.
+            ("average", []) => {
+                let value = if elements.is_empty() {
+                    None
+                } else {
+                    let sum: i64 = elements
+                        .iter()
+                        .map(|e| {
+                            if let JValue::Int(n) = e {
+                                i64::from(*n)
+                            } else {
+                                0
+                            }
+                        })
+                        .sum();
+                    #[allow(clippy::cast_precision_loss)]
+                    let mean = sum as f64 / elements.len() as f64;
+                    Some(JValue::Double(mean))
+                };
+                self.alloc_optional(value, OptionalKind::Double)
+            }
             ("anyMatch" | "allMatch" | "noneMatch", [JValue::Ref(Some(pred))]) => {
                 let mut any = false;
                 let mut all = true;
@@ -5393,6 +5516,20 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(stream)));
             return Ok(None);
         }
+        // `Optional.of(x)` / `empty()` / `ofNullable(x)`.
+        if class_name == "Optional" || class_name == "java/util/Optional" {
+            let value = match (method_name, args) {
+                ("empty", []) => Some(None),
+                ("of", [v]) => Some(Some(*v)),
+                ("ofNullable", [v]) => Some((*v != JValue::NULL).then_some(*v)),
+                _ => None,
+            };
+            if let Some(value) = value {
+                let optional = self.alloc_optional(value, crate::value::OptionalKind::Ref);
+                frame.stack.push(optional);
+                return Ok(None);
+            }
+        }
         // `Class.forName(name)` — a reflection handle for a loaded class.
         // Needs the class table, which the intrinsic layer lacks.
         if class_name == "java/lang/Class" && method_name == "forName" {
@@ -5657,6 +5794,9 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
             Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
             Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),
+            Some(HeapObject::Optional { kind, .. }) => {
+                format!("java/util/{}", kind.prefix())
+            }
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }
@@ -7117,6 +7257,9 @@ enum Renderable {
     View(Vec<(JValue, JValue)>, MapViewKind),
     /// A `Map.Entry`: its map and its key, so the value is read live.
     Entry(HeapRef, JValue),
+    /// An `Optional`/`OptionalInt`/`OptionalDouble`: its value (if present) and
+    /// its `toString` prefix.
+    Optional(Option<JValue>, crate::value::OptionalKind),
     /// Anything the intrinsic layer can render without calling Java.
     Opaque,
 }

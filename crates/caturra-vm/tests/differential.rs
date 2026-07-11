@@ -6632,6 +6632,51 @@ public class DiffStreamJoin {
 );
 
 // ---------------------------------------------------------------------------
+// java.util.Optional / OptionalInt / OptionalDouble — present-or-absent values
+// from the stream terminals (findFirst / max / min / average).
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_optional,
+    "DiffOptional",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+
+public class DiffOptional {
+    public static void main(String[] args) {
+        List<Integer> nums = new ArrayList<>(Arrays.asList(3, 1, 4, 1, 5, 9));
+
+        // IntStream numeric terminals -> OptionalInt / OptionalDouble
+        System.out.println(nums.stream().mapToInt(x -> x).average().getAsDouble());
+        System.out.println(nums.stream().mapToInt(x -> x).max().getAsInt());   // 9
+        System.out.println(nums.stream().mapToInt(x -> x).min().getAsInt());   // 1
+
+        // Stream.max/min with a comparator lambda -> Optional
+        List<String> words = new ArrayList<>(Arrays.asList("fig", "banana", "kiwi"));
+        System.out.println(words.stream().max((a, b) -> a.length() - b.length()).get());
+        System.out.println(words.stream().min((a, b) -> a.length() - b.length()).get());
+
+        // findFirst present / absent
+        Optional<String> first = words.stream().filter(w -> w.startsWith("k")).findFirst();
+        System.out.println(first.isPresent() + " " + first.get());
+        Optional<String> none = words.stream().filter(w -> w.startsWith("z")).findFirst();
+        System.out.println(none.isPresent() + " " + none.isEmpty() + " " + none.orElse("default"));
+
+        // toString and orElse on an empty numeric optional
+        System.out.println(first);                                            // Optional[kiwi]
+        System.out.println(none);                                             // Optional.empty
+        System.out.println(nums.stream().mapToInt(x -> x).max());             // OptionalInt[9]
+        List<Integer> empty = new ArrayList<>();
+        System.out.println(empty.stream().mapToInt(x -> x).max().orElse(-1)); // -1
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
 // java.util.stream.IntStream — a primitive int stream: mapToInt/range plus the
 // numeric terminals (sum/count/toArray) and int-parameter lambdas.
 // ---------------------------------------------------------------------------
