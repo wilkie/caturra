@@ -2734,6 +2734,8 @@ enum BParam {
     Consumer,
     Predicate,
     UnaryOperator,
+    /// `list.sort`/`Collections.sort`'s erased `__Comparator`.
+    Comparator,
     /// `java.lang.StringBuilder` (`StringBuilder.compareTo(StringBuilder)`).
     Builder,
     /// A map's key type, boxed when primitive (`map.get(k)`).
@@ -3176,7 +3178,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Integer", "getInteger", "system properties are not supported by caturra"),
     ("ArrayList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("ArrayList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
-    ("ArrayList", "sort", "comparators are not supported by caturra"),
     ("ArrayList", "stream", "streams are not supported by caturra"),
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
     ("ArrayList", "toArray", "Object arrays are not supported by caturra"),
@@ -3327,6 +3328,13 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
         name: "replaceAll",
         params: &[BParam::UnaryOperator],
+        ret: BRet::Void,
+        descriptor: "(Ljava/lang/Object;)V",
+    },
+    // `sort(Comparator)` — a stable sort by the comparator.
+    BuiltinMethod {
+        name: "sort",
+        params: &[BParam::Comparator],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/Object;)V",
     },
@@ -4740,7 +4748,8 @@ fn bparam_type(param: BParam, args: TypeArgs) -> JType {
         | BParam::BiConsumer
         | BParam::Consumer
         | BParam::Predicate
-        | BParam::UnaryOperator => JType::Object(ClassId(0)),
+        | BParam::UnaryOperator
+        | BParam::Comparator => JType::Object(ClassId(0)),
         BParam::Builder => JType::StringBuilder,
         BParam::Key => boxed_if_primitive(args.first),
         BParam::Val => boxed_if_primitive(args.second),
@@ -4771,6 +4780,10 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         ),
         BParam::UnaryOperator => matches!(
             (arg, table.class_id("__UnaryOperator")),
+            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+        ),
+        BParam::Comparator => matches!(
+            (arg, table.class_id("__Comparator")),
             (JType::Object(id), Some(target)) if table.is_subtype(id, target)
         ),
         other => widens(arg, bparam_type(other, args), table),
@@ -8403,6 +8416,34 @@ impl BodyGen<'_> {
             return Some(Some(JType::List(elem)));
         }
 
+        // `Collections.sort(list, comparator)` — the comparator is a
+        // desugared `__Comparator`, and the element need not be Comparable.
+        if method == "sort" && args.len() == 2 {
+            let JType::List(elem) = self.type_of(&args[0]) else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let is_comparator = matches!(
+                (self.type_of(&args[1]), self.table.class_id("__Comparator")),
+                (JType::Object(id), Some(target)) if self.table.is_subtype(id, target)
+            );
+            if !is_comparator {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            }
+            self.expr(&args[0]);
+            self.expr(&args[1]);
+            let method_ref = intern_method_ref(
+                self.pool,
+                "Collections",
+                "sort",
+                "(Ljava/util/ArrayList;Ljava/lang/Object;)V",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+            self.code.drop_stack(2);
+            let _ = elem;
+            return Some(None);
+        }
         let want = match method {
             "reverse" | "sort" | "max" | "min" | "unmodifiableList" => 1usize,
             "frequency" | "binarySearch" => 2,

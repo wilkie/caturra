@@ -320,9 +320,12 @@ be referenced from a static context`, and `cannot find symbol` when the
     JDK. **`forEach(x -> ...)`** (a `Consumer<E>`) and **`removeIf(x ->
 ...)`** (a `Predicate<E>`) run their lambda over the elements
     (2026-07-09), the element-typed single-parameter counterpart of
-    `Map.forEach`; `removeIf` reports whether any element went. Iterators,
-    comparators, `replaceAll`, `sort(Comparator)`, streams, `toArray`, and
-    `subList` still report honest reasons. Autoboxing (a no-op in this VM — boxed-equality caching
+    `Map.forEach`; `removeIf` reports whether any element went.
+    **`replaceAll(x -> ...)`** (a `UnaryOperator<E>`) transforms each element
+    in place, and **`sort((a, b) -> ...)`** (a `Comparator<E>`) runs a stable
+    sort — as does `Collections.sort(list, (a, b) -> ...)`, which previously
+    compiled and silently ignored the comparator. Iterators, streams,
+    `toArray`, and `subList` still report honest reasons. Autoboxing (a no-op in this VM — boxed-equality caching
     semantics are not modeled), `println(list)` printing `[a, b]`,
     for-each, and `IndexOutOfBoundsException` in Java 11's wording.
     Nested generics (`ArrayList<ArrayList<...>>`) are rejected kindly.
@@ -787,10 +790,12 @@ final`, or `from an inner class` for an anonymous class. Copying a
 ...)` and `list.replaceAll(x -> ...)` — the element argument is typed
   against the receiver's `ArrayList`/`List`/`Set`/`Collection<E>` argument,
   the same receiver-driven typing `Map.forEach` uses.
-  `forEach`/`removeIf`/`replaceAll` bind the erased
-  `__Consumer`/`__Predicate`/`__UnaryOperator`, and `replaceAll`'s result
-  is checked against the element type (which the erased `Object` return
-  would otherwise drop). Expression bodies
+  `list.replaceAll(x -> ...)`, `list.sort((a, b) -> ...)` and
+  `Collections.sort(list, (a, b) -> ...)` bind the erased
+  `__Consumer`/`__Predicate`/`__UnaryOperator`/`__Comparator`; `sort`'s
+  lambda is typed from the receiver's (or the first argument's) element
+  type, and `replaceAll`'s result is checked against the element type
+  (which the erased `Object` return would otherwise drop). Expression bodies
   become `return e;` (or `e;` for a void SAM); block bodies are used
   directly. A lambda in a position with no functional target type is
   reported. Pinned by `diff_lambda_as_a_list_element`.

@@ -6203,6 +6203,68 @@ public class DiffReplaceAll {
 "#
 );
 
+differential_test!(
+    diff_sort_with_comparator,
+    "DiffSortComparator",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+class Rec {
+    String name;
+    int n;
+    Rec(String name, int n) { this.name = name; this.n = n; }
+    public String toString() { return name + n; }
+}
+
+public class DiffSortComparator {
+    public static void main(String[] args) {
+        List<Integer> nums = new ArrayList<Integer>();
+        nums.add(3);
+        nums.add(1);
+        nums.add(2);
+        nums.sort((x, y) -> x - y);
+        System.out.println(nums);
+        nums.sort((x, y) -> y - x);
+        System.out.println(nums);
+
+        // Captured direction.
+        int dir = -1;
+        nums.sort((x, y) -> dir * (x - y));
+        System.out.println(nums);
+
+        // Collections.sort(list, comparator) — the two-argument form.
+        List<String> words = new ArrayList<String>();
+        words.add("ccc");
+        words.add("a");
+        words.add("bb");
+        Collections.sort(words, (x, y) -> x.length() - y.length());
+        System.out.println(words);
+
+        // Stability: equal keys keep input order.
+        List<Rec> recs = new ArrayList<Rec>();
+        recs.add(new Rec("B", 2));
+        recs.add(new Rec("A", 1));
+        recs.add(new Rec("C", 2));
+        recs.sort((x, y) -> x.n - y.n);
+        System.out.println(recs);
+
+        // A block-body comparator.
+        recs.sort((x, y) -> {
+            return x.name.compareTo(y.name);
+        });
+        System.out.println(recs);
+
+        // Empty.
+        List<Integer> empty = new ArrayList<Integer>();
+        empty.sort((x, y) -> x - y);
+        System.out.println(empty);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

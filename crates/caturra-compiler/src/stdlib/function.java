@@ -22,3 +22,7 @@ interface __Predicate {
 interface __UnaryOperator {
   Object apply(Object element);
 }
+
+interface __Comparator {
+  int compare(Object left, Object right);
+}

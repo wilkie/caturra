@@ -2273,7 +2273,7 @@ impl<'run> Interpreter<'run> {
             _ => None,
         };
         match (method_name, args) {
-            ("sort", [_]) => {
+            ("sort", [_] | [_, JValue::Ref(Some(_))]) => {
                 let Some((reference, items)) = items else {
                     return Ok(true);
                 };
@@ -2282,7 +2282,13 @@ impl<'run> Interpreter<'run> {
                         "java.lang.UnsupportedOperationException",
                     )));
                 }
-                let sorted = self.merge_sort(items)?;
+                // A second argument is the comparator; one argument sorts by
+                // natural ordering.
+                let comparator = match args {
+                    [_, JValue::Ref(Some(comparator))] => Some(*comparator),
+                    _ => None,
+                };
+                let sorted = self.merge_sort_by(items, comparator)?;
                 if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(reference) {
                     *slot = sorted;
                 }
@@ -3159,6 +3165,14 @@ impl<'run> Interpreter<'run> {
             }
             ("replaceAll", _, [JValue::Ref(Some(op))]) => {
                 self.list_replace_all(receiver, *op)?;
+                return Ok(Answered::Void);
+            }
+            ("sort", _, [JValue::Ref(Some(comparator))]) => {
+                let items = self.list_items(receiver);
+                let sorted = self.merge_sort_by(items, Some(*comparator))?;
+                if let Some(HeapObject::ArrayList(slot)) = self.heap.get_mut(receiver) {
+                    *slot = sorted;
+                }
                 return Ok(Answered::Void);
             }
             ("contains", _, [probe]) => {
@@ -4295,20 +4309,26 @@ impl<'run> Interpreter<'run> {
     /// A stable merge sort, as `Collections.sort` is. It cannot use
     /// `slice::sort_by`, because comparing two user objects runs their
     /// `compareTo` — which may throw, and so must be able to fail.
-    fn merge_sort(&mut self, mut items: Vec<JValue>) -> Result<Vec<JValue>, VmError> {
+    /// A stable merge sort by a comparator when `comparator` is `Some` (its
+    /// `compare(a, b)` runs user Java), otherwise by natural ordering.
+    fn merge_sort_by(
+        &mut self,
+        mut items: Vec<JValue>,
+        comparator: Option<HeapRef>,
+    ) -> Result<Vec<JValue>, VmError> {
         if items.len() <= 1 {
             return Ok(items);
         }
         let right = items.split_off(items.len() / 2);
-        let left = self.merge_sort(items)?;
-        let right = self.merge_sort(right)?;
+        let left = self.merge_sort_by(items, comparator)?;
+        let right = self.merge_sort_by(right, comparator)?;
 
         let mut merged = Vec::with_capacity(left.len() + right.len());
         let (mut i, mut j) = (0, 0);
         while i < left.len() && j < right.len() {
             // `<= 0` takes from the left on a tie, which is what keeps the
             // sort stable.
-            if self.compare_for_sort(left[i], right[j])? <= 0 {
+            if self.compare_with(left[i], right[j], comparator)? <= 0 {
                 merged.push(left[i]);
                 i += 1;
             } else {
@@ -4319,6 +4339,44 @@ impl<'run> Interpreter<'run> {
         merged.extend_from_slice(&left[i..]);
         merged.extend_from_slice(&right[j..]);
         Ok(merged)
+    }
+
+    /// Compare two elements by a comparator's `compare` (user Java) or, with
+    /// no comparator, by natural ordering.
+    fn compare_with(
+        &mut self,
+        a: JValue,
+        b: JValue,
+        comparator: Option<HeapRef>,
+    ) -> Result<i32, VmError> {
+        match comparator {
+            None => self.compare_for_sort(a, b),
+            Some(comparator) => {
+                let Some(crate::value::HeapObject::Instance { class_name, .. }) =
+                    self.heap.get(comparator)
+                else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                let class_name = class_name.clone();
+                let dispatched = self.user_virtual_dispatch(
+                    comparator,
+                    &class_name,
+                    "compare",
+                    "(Ljava/lang/Object;Ljava/lang/Object;)I",
+                    &[a, b],
+                )?;
+                let result = match dispatched {
+                    UserDispatch::Call(frame) => self.run_nested(frame)?,
+                    UserDispatch::Value(value) => value,
+                };
+                Ok(match result {
+                    Some(JValue::Int(n)) => n,
+                    _ => 0,
+                })
+            }
+        }
     }
 
     /// Compare two list elements the way `Collections.sort` does: a user

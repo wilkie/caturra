@@ -7588,8 +7588,8 @@ fn try_catch_compile_errors_match_javac() {
             "String.lines exists in Java, but streams are not supported by caturra",
         ),
         (
-            "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.sort(null); } }",
-            "ArrayList.sort exists in Java, but comparators are not supported by caturra",
+            "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.stream(); } }",
+            "ArrayList.stream exists in Java, but streams are not supported by caturra",
         ),
         (
             "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.iterator(); } }",
@@ -8328,8 +8328,8 @@ fn hash_map_iterates_and_boxes_like_the_jdk() {
 fn unsupported_map_members_explain_themselves() {
     for (source, want) in [
         (
-            "import java.util.ArrayList; class M { static void r() {              new ArrayList<String>().sort((x, y) -> 0); } }",
-            "ArrayList.sort exists in Java, but comparators are not supported by caturra",
+            "import java.util.ArrayList; class M { static void r() { new ArrayList<String>().stream(); } }",
+            "ArrayList.stream exists in Java, but streams are not supported by caturra",
         ),
         (
             "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().merge(null, null, null); } }",
@@ -10961,4 +10961,65 @@ fn a_replace_all_result_must_convert_to_the_element_type() {
             compilation.diagnostics[0].message
         );
     }
+}
+
+/// `list.sort((a, b) -> ...)` and `Collections.sort(list, (a, b) -> ...)` sort
+/// by a comparator (2026-07-09). The lambda's two parameters are the element
+/// type and it returns int; the erased SAM is the bundled `__Comparator`, and
+/// the VM runs a stable merge sort calling `compare`. `Collections.sort(l,
+/// cmp)` previously compiled and **silently ignored** the comparator, the
+/// worst kind of divergence. Pinned against a real JDK by
+/// `diff_sort_with_comparator`.
+#[test]
+fn a_list_sorts_by_a_comparator_lambda() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Collections;
+        import java.util.List;
+        public class M {
+            public static void main(String[] args) {
+                List<Integer> nums = new ArrayList<Integer>();
+                nums.add(3); nums.add(1); nums.add(2);
+                nums.sort((x, y) -> x - y);
+                System.out.println(nums);
+                nums.sort((x, y) -> y - x);
+                System.out.println(nums);
+                List<String> w = new ArrayList<String>();
+                w.add("ccc"); w.add("a"); w.add("bb");
+                Collections.sort(w, (x, y) -> x.length() - y.length());
+                System.out.println(w);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "[1, 2, 3]\n[3, 2, 1]\n[a, bb, ccc]\n");
+}
+
+/// The comparator target-typing fires only where javac accepts it: a
+/// one-parameter lambda and a non-int result are both rejected, and
+/// `Collections.sort(l)` and `list` natural-ordering keep working.
+#[test]
+fn a_sort_comparator_is_refused_where_javac_refuses_it() {
+    for source in [
+        "import java.util.*; class M { static void r() { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.sort(n -> n); } }",
+        "import java.util.*; class M { static void r() { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.sort((x, y) -> \"z\"); } }",
+    ] {
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("M.java"),
+            text: String::from(source),
+        }]);
+        assert!(!compilation.success(), "should not compile: {source}");
+    }
+    // Natural ordering (no comparator) still sorts.
+    let out = run_stdout(
+        "import java.util.*; public class M { public static void main(String[] a) { \
+         ArrayList<Integer> l = new ArrayList<Integer>(); l.add(3); l.add(1); l.add(2); \
+         Collections.sort(l); System.out.println(l); } }",
+        "M",
+    );
+    assert_eq!(out, "[1, 2, 3]\n");
 }

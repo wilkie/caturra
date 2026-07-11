@@ -497,6 +497,44 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `list.sort((a, b) -> ...)`: a two-parameter comparator whose
+            // parameters are both the receiver's element type, returning int.
+            if method == "sort"
+                && args.len() == 1
+                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 2)
+                && let Some(r) = receiver.as_deref()
+                && let Some(elem) = list_elem_type(r, ctx)
+            {
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    "__Comparator",
+                    "compare",
+                    &TypeRef::Int,
+                    &[elem.clone(), elem],
+                    None,
+                    ctx,
+                );
+                return;
+            }
+            // `Collections.sort(list, (a, b) -> ...)`: the comparator is the
+            // second argument, its parameters the FIRST argument's element type.
+            if method == "sort"
+                && args.len() == 2
+                && matches!(&args[1], Expr::Lambda { params, .. } if params.len() == 2)
+                && let Some(elem) = list_elem_type(&args[0], ctx)
+            {
+                desugar_expr(&mut args[0], None, ctx);
+                args[1] = build_erased_lambda(
+                    &mut args[1],
+                    "__Comparator",
+                    "compare",
+                    &TypeRef::Int,
+                    &[elem.clone(), elem],
+                    None,
+                    ctx,
+                );
+                return;
+            }
             // `list.add(() -> ...)` / `list.set(i, () -> ...)`: the element
             // argument's target type is the receiver's declared element type,
             // not a user method signature. `add`/`set` take the element last.

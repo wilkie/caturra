@@ -448,6 +448,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         s.text.contains(".forEach(")
             || s.text.contains(".removeIf(")
             || s.text.contains(".replaceAll(")
+            || s.text.contains(".sort(")
     }) && !units
         .iter()
         .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))
