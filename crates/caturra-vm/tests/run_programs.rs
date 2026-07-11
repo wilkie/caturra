@@ -8402,6 +8402,35 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// `java.util.stream.IntStream`: `mapToInt`/`range` and the numeric terminals,
+/// with primitive-int lambdas. Pinned JDK-free for CI; the byte-for-byte JDK
+/// match is in `differential.rs`.
+#[test]
+fn int_stream_sums_and_ranges() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Arrays;
+        import java.util.List;
+        import java.util.stream.IntStream;
+        public class I {
+            public static void main(String[] args) {
+                List<String> words = new ArrayList<>(Arrays.asList("apple", "fig", "banana"));
+                System.out.println(words.stream().mapToInt(w -> w.length()).sum());  // 14
+                System.out.println(IntStream.range(0, 5).sum());                     // 10
+                System.out.println(IntStream.rangeClosed(1, 5).sum());               // 15
+                System.out.println(IntStream.range(1, 4).map(i -> i * i).sum());     // 14
+                System.out.println(IntStream.rangeClosed(1, 10).filter(i -> i % 2 == 0).count());
+                int[] a = IntStream.range(0, 4).toArray();
+                System.out.println(Arrays.toString(a));                              // [0, 1, 2, 3]
+            }
+        }
+        "#,
+        "I",
+    );
+    assert_eq!(out, "14\n10\n15\n14\n5\n[0, 1, 2, 3]\n");
+}
+
 /// `java.util.stream.Stream`: the filter/map/sorted/collect pipeline, with
 /// lambda parameter types flowing from the source collection. Pinned JDK-free
 /// for CI; the byte-for-byte JDK match is in `differential.rs`.

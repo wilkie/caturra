@@ -4668,12 +4668,42 @@ impl<'run> Interpreter<'run> {
                 }
                 self.alloc_stream(kept)
             }
-            ("map", [JValue::Ref(Some(function))]) => {
+            // `map`/`mapToInt`/`mapToObj` all apply a one-argument function to
+            // each element; the difference (object vs int result) is compile-time
+            // only, since caturra stores primitives unboxed.
+            (
+                "map" | "mapToInt" | "mapToObj" | "mapToLong" | "mapToDouble",
+                [JValue::Ref(Some(function))],
+            ) => {
                 let mut mapped = Vec::with_capacity(elements.len());
                 for element in elements {
                     mapped.push(self.call_apply(*function, element)?);
                 }
                 self.alloc_stream(mapped)
+            }
+            // `IntStream.boxed()` / `asLongStream()` — a no-op here (elements are
+            // stored unboxed either way), just a retyping.
+            ("boxed" | "asLongStream" | "asDoubleStream", []) => self.alloc_stream(elements),
+            // `IntStream.sum()` — add the (unboxed int) elements, wrapping.
+            ("sum", []) => {
+                let mut total = 0i32;
+                for element in elements {
+                    if let JValue::Int(n) = element {
+                        total = total.wrapping_add(n);
+                    }
+                }
+                JValue::Int(total)
+            }
+            // `IntStream.toArray()` — the ints as an `int[]`.
+            ("toArray", []) => {
+                let ints: Vec<i32> = elements
+                    .into_iter()
+                    .map(|e| if let JValue::Int(n) = e { n } else { 0 })
+                    .collect();
+                JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::IntArray(
+                    crate::value::IntKind::Int,
+                    ints,
+                ))))
             }
             ("sorted", []) => {
                 let sorted = self.merge_sort_by(elements, None)?;
@@ -5345,6 +5375,22 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         }
         if self.collectors_static_intrinsic(frame, class_name, method_name, args)? {
+            return Ok(None);
+        }
+        // `IntStream.range(a, b)` / `rangeClosed(a, b)` — a stream of consecutive
+        // ints (the VM models an IntStream as a Stream of unboxed ints).
+        if (class_name == "IntStream" || class_name == "java/util/stream/IntStream")
+            && let ("range" | "rangeClosed", [JValue::Int(from), JValue::Int(to)]) =
+                (method_name, args)
+        {
+            let end = if method_name == "rangeClosed" {
+                to.saturating_add(1)
+            } else {
+                *to
+            };
+            let ints: Vec<JValue> = (*from..end).map(JValue::Int).collect();
+            let stream = self.heap.alloc(crate::value::HeapObject::Stream(ints));
+            frame.stack.push(JValue::Ref(Some(stream)));
             return Ok(None);
         }
         // `Class.forName(name)` — a reflection handle for a loaded class.

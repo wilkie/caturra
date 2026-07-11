@@ -496,9 +496,19 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     element, or — once `map` has erased it — a `null` that adopts the
     assignment context (`List<R> r = ...map(...).collect(toList())` works; an
     inline bare-iteration over such a result does not, the one documented
-    limitation). `IntStream` and the numeric terminals (`mapToInt`/`sum`/
-    `average`) are not yet modelled. Pinned against a real JDK by
-    `diff_stream_pipeline` and `_joining_limit_skip`.
+    limitation). Pinned against a real JDK by `diff_stream_pipeline` and
+    `_joining_limit_skip`.
+  - `java.util.stream.IntStream` (2026-07-11) — a primitive `int` stream,
+    modelled as a `Stream` of unboxed ints. Sources: `collection.stream().mapToInt(e -> ...)`
+    and `IntStream.range(a, b)` / `rangeClosed(a, b)`. Intermediate:
+    `map`/`filter`/`sorted`/`distinct`/`limit`/`skip` (their lambdas take a
+    single `int`), `mapToObj(i -> ...)` → `Stream<R>`, `boxed()` →
+    `Stream<Integer>`. Terminal: **`sum()`**, `count()`, `toArray()` → `int[]`,
+    `forEach`, `anyMatch`/`allMatch`/`noneMatch`. So the ubiquitous
+    `list.stream().mapToInt(x -> x).sum()` and `IntStream.range(0, n).forEach(...)`
+    both work. `average()`/`min()`/`max()` return `OptionalInt`/`OptionalDouble`,
+    which caturra does not model yet — a documented gap. Pinned against a real
+    JDK by `diff_int_stream`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a

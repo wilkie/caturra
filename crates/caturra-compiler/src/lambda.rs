@@ -566,7 +566,9 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     "filter" | "anyMatch" | "allMatch" | "noneMatch" => {
                         Some(("__Predicate", "test", TypeRef::Boolean))
                     }
-                    "map" | "mapToObj" => Some(("__UnaryOperator", "apply", object)),
+                    "map" | "mapToObj" | "mapToInt" | "mapToLong" | "mapToDouble" => {
+                        Some(("__UnaryOperator", "apply", object))
+                    }
                     "forEach" | "forEachOrdered" | "peek" => {
                         Some(("__Consumer", "accept", TypeRef::Void))
                     }
@@ -907,8 +909,16 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if method == "stream" && args.is_empty() {
         return list_elem_type(prev, ctx);
     }
+    // `IntStream.range(a, b)` / `rangeClosed(a, b)` — a source of `int`s.
+    if matches!(method.as_str(), "range" | "rangeClosed")
+        && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "IntStream")
+    {
+        return Some(TypeRef::Int);
+    }
     match method.as_str() {
         "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" => stream_elem_type(prev, ctx),
+        // `mapToInt` produces an int stream; `map`/`mapToObj` an erased one.
+        "mapToInt" => Some(TypeRef::Int),
         "map" | "mapToObj" => Some(TypeRef::Named(String::from("Object"))),
         _ => None,
     }

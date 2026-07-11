@@ -1990,6 +1990,10 @@ enum JType {
     Stream(ElemType),
     /// A `java.util.stream.Collectors` recipe, the argument to `Stream.collect`.
     Collector,
+    /// `java.util.stream.IntStream` — a stream of primitive `int`s (the VM
+    /// models it as a `Stream` of unboxed ints). Adds numeric terminals
+    /// (`sum`/`toArray`) the object `Stream` lacks.
+    IntStream,
     /// `java.util.LinkedList<E>` and its `Queue`/`Deque` interface views. The
     /// storage is a list; the `role` restricts which methods the receiver
     /// exposes, so `Queue<E>.get(i)` is rejected exactly as javac rejects it.
@@ -2105,6 +2109,7 @@ impl JType {
             JType::TreeSet(elem) => format!("TreeSet<{}>", elem.base_type().describe(table)),
             JType::Stream(elem) => format!("Stream<{}>", elem.base_type().describe(table)),
             JType::Collector => String::from("Collector"),
+            JType::IntStream => String::from("IntStream"),
             JType::LinkedList { elem, role } => {
                 let name = match role {
                     SeqRole::Full => "LinkedList",
@@ -2198,6 +2203,7 @@ impl JType {
                 | JType::TreeSet(_)
                 | JType::Stream(_)
                 | JType::Collector
+                | JType::IntStream
                 | JType::Collection(_)
                 | JType::EntrySet { .. }
                 | JType::MapEntry { .. }
@@ -2257,6 +2263,7 @@ impl JType {
             JType::TreeSet(_) => String::from("Ljava/util/TreeSet;"),
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
+            JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
             JType::LinkedList { role, .. } => format!("L{};", role.internal()),
             JType::Collection(_) => String::from("Ljava/util/Collection;"),
             JType::MapEntry { .. } => String::from("Ljava/util/Map$Entry;"),
@@ -2967,6 +2974,12 @@ enum BRet {
     Stream,
     /// `Stream<Object>` — an op (`map`) whose element type is erased.
     StreamErased,
+    /// `IntStream` (`mapToInt`, and the `IntStream` intermediate ops).
+    IntStream,
+    /// `Stream<Integer>` — `IntStream.boxed()`.
+    StreamInteger,
+    /// `int[]` — `IntStream.toArray()`.
+    IntArray,
     /// `Collector` (a `Collectors.toX()` factory result).
     Collector,
     /// `null`-typed, adopting the assignment context — for `collect`, whose
@@ -3954,6 +3967,12 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         BRet::StreamErased,
         "(Ljava/util/function/Function;)Ljava/util/stream/Stream;",
     ),
+    bm(
+        "mapToInt",
+        &[BParam::UnaryOperator],
+        BRet::IntStream,
+        "(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;",
+    ),
     bm("sorted", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm(
         "sorted",
@@ -4016,6 +4035,104 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         &[BParam::Collector],
         BRet::Nullish,
         "(Ljava/util/stream/Collector;)Ljava/lang/Object;",
+    ),
+];
+
+/// `java.util.stream.IntStream` — a primitive int stream. Its lambdas take a
+/// single `int` (the VM stores the elements unboxed, so the same erased
+/// interfaces serve). `sum`/`toArray` are the numeric terminals `Stream` lacks;
+/// `average`/`min`/`max` return `Optional…`, which caturra does not model.
+const INTSTREAM_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "filter",
+        &[BParam::Predicate],
+        BRet::IntStream,
+        "(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "map",
+        &[BParam::UnaryOperator],
+        BRet::IntStream,
+        "(Ljava/util/function/IntUnaryOperator;)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "mapToObj",
+        &[BParam::UnaryOperator],
+        BRet::StreamErased,
+        "(Ljava/util/function/IntFunction;)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "boxed",
+        &[],
+        BRet::StreamInteger,
+        "()Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "sorted",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "distinct",
+        &[],
+        BRet::IntStream,
+        "()Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "limit",
+        &[BParam::Long],
+        BRet::IntStream,
+        "(J)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "skip",
+        &[BParam::Long],
+        BRet::IntStream,
+        "(J)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/util/function/IntConsumer;)V",
+    ),
+    bm("sum", &[], BRet::Int, "()I"),
+    bm("count", &[], BRet::Long, "()J"),
+    bm("toArray", &[], BRet::IntArray, "()[I"),
+    bm(
+        "anyMatch",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/util/function/IntPredicate;)Z",
+    ),
+    bm(
+        "allMatch",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/util/function/IntPredicate;)Z",
+    ),
+    bm(
+        "noneMatch",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/util/function/IntPredicate;)Z",
+    ),
+];
+
+/// `java.util.stream.IntStream` static factories.
+const INTSTREAM_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "range",
+        &[BParam::Int, BParam::Int],
+        BRet::IntStream,
+        "(II)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "rangeClosed",
+        &[BParam::Int, BParam::Int],
+        BRet::IntStream,
+        "(II)Ljava/util/stream/IntStream;",
     ),
 ];
 
@@ -5427,6 +5544,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
+        JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
         JType::LinkedList { role, .. } => Some(match role {
             SeqRole::Full => ("java/util/LinkedList", LINKEDLIST_METHODS),
             SeqRole::Queue => ("java/util/Queue", QUEUE_METHODS),
@@ -5502,6 +5620,7 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
+        "IntStream" => Some(("java/util/stream/IntStream", INTSTREAM_STATIC_METHODS)),
         "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
@@ -5596,6 +5715,11 @@ impl TypeArgs {
             | JType::Collection(elem)
             | JType::LinkedList { elem, .. } => Self {
                 first: Some(elem),
+                second: None,
+            },
+            // An IntStream's element is a primitive `int`.
+            JType::IntStream => Self {
+                first: Some(ElemType::Int),
                 second: None,
             },
             JType::Map { key, value }
@@ -5771,6 +5895,12 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
         BRet::Stream => Some(args.first.map_or(JType::Error, JType::Stream)),
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
+        BRet::IntStream => Some(JType::IntStream),
+        BRet::StreamInteger => Some(JType::Stream(ElemType::Int)),
+        BRet::IntArray => Some(JType::Array {
+            elem: ElemType::Int,
+            dims: 1,
+        }),
         BRet::Collector => Some(JType::Collector),
         BRet::Nullish => Some(JType::Null),
         BRet::Val => Some(boxed_if_primitive(args.second)),
@@ -8605,6 +8735,7 @@ impl BodyGen<'_> {
             | JType::TreeSet(_)
             | JType::Stream(_)
             | JType::Collector
+            | JType::IntStream
             | JType::Collection(_)
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
@@ -10348,6 +10479,7 @@ impl BodyGen<'_> {
             | JType::TreeSet(_)
             | JType::Stream(_)
             | JType::Collector
+            | JType::IntStream
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }
@@ -10609,6 +10741,7 @@ impl BodyGen<'_> {
                         | JType::TreeSet(_)
                         | JType::Stream(_)
                         | JType::Collector
+                        | JType::IntStream
                         | JType::Collection(_)
                         | JType::EntrySet { .. }
                         | JType::MapEntry { .. }
@@ -12618,6 +12751,7 @@ impl BodyGen<'_> {
             | JType::TreeSet(_)
             | JType::Stream(_)
             | JType::Collector
+            | JType::IntStream
             | JType::LinkedList { .. }
             | JType::Collection(_)
             | JType::EntrySet { .. }

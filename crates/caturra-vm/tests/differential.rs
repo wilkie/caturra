@@ -6632,6 +6632,61 @@ public class DiffStreamJoin {
 );
 
 // ---------------------------------------------------------------------------
+// java.util.stream.IntStream — a primitive int stream: mapToInt/range plus the
+// numeric terminals (sum/count/toArray) and int-parameter lambdas.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_int_stream,
+    "DiffIntStream",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+public class DiffIntStream {
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<>(Arrays.asList("apple", "fig", "banana"));
+
+        // mapToInt -> sum
+        System.out.println(words.stream().mapToInt(w -> w.length()).sum());   // 14
+        // mapToInt -> filter -> count
+        System.out.println(words.stream().mapToInt(w -> w.length()).filter(n -> n > 3).count());
+
+        // IntStream.range / rangeClosed
+        System.out.println(IntStream.range(0, 5).sum());          // 10
+        System.out.println(IntStream.rangeClosed(1, 5).sum());    // 15
+
+        // int-parameter lambdas: map, filter, forEach
+        System.out.println(IntStream.range(1, 4).map(i -> i * i).sum());               // 14
+        System.out.println(IntStream.rangeClosed(1, 10).filter(i -> i % 2 == 0).count());
+
+        StringBuilder sb = new StringBuilder();
+        IntStream.range(0, 4).forEach(i -> sb.append(i).append(" "));
+        System.out.println(sb.toString().trim());                 // 0 1 2 3
+
+        // mapToObj -> collect
+        List<String> labels = IntStream.rangeClosed(1, 3)
+            .mapToObj(i -> "n" + i)
+            .collect(Collectors.toList());
+        System.out.println(labels);                               // [n1, n2, n3]
+
+        // boxed -> collect
+        List<Integer> boxed = IntStream.range(0, 3).boxed().collect(Collectors.toList());
+        System.out.println(boxed);                                // [0, 1, 2]
+
+        // sorted -> distinct -> toArray
+        List<Integer> vals = new ArrayList<>(Arrays.asList(3, 1, 2, 3, 1));
+        int[] arr = vals.stream().mapToInt(x -> x).sorted().distinct().toArray();
+        System.out.println(Arrays.toString(arr));                 // [1, 2, 3]
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
 // java.util.PriorityQueue — a real binary min-heap, so peek/poll return the
 // least element while iteration/toString show the heap-array order. The exact
 // siftUp/siftDown/heapify is replicated so both match a JVM byte for byte.
