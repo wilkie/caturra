@@ -35,6 +35,21 @@ pub enum IntKind {
     Char,
 }
 
+/// How a factory-built `Comparator` orders two values — evaluated natively by
+/// the interpreter (which can run the key extractor and `compareTo`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComparatorSpec {
+    /// `Comparator.naturalOrder()` — the elements' own `compareTo`.
+    Natural,
+    /// `Comparator.comparing(keyExtractor)` / `comparingInt(...)` — compare the
+    /// keys the extractor (a `Function`) returns, by their natural ordering.
+    ByKey(HeapRef),
+    /// `comparator.reversed()` / `Comparator.reverseOrder()` — the inverse.
+    Reversed(HeapRef),
+    /// `first.thenComparing(second)` — `first`, then `second` on a tie.
+    Then(HeapRef, HeapRef),
+}
+
 /// What a `Stream.collect(Collectors.…())` gathers its elements into.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollectorKind {
@@ -185,6 +200,10 @@ pub enum HeapObject {
     Stream(Vec<JValue>),
     /// The recipe a `Stream.collect` gathers into, from a `Collectors` factory.
     Collector(CollectorKind),
+    /// A `Comparator` built by the `Comparator` static factories / combinators
+    /// (`comparing`/`naturalOrder`/`reversed`/`thenComparing`) rather than a
+    /// user class. The interpreter evaluates it natively (see [`ComparatorSpec`]).
+    Comparator(ComparatorSpec),
     /// A `java.util.Optional` / `OptionalInt` / `OptionalDouble`: a value that
     /// is present or absent. `kind` is only for `toString` (`Optional[x]` vs
     /// `OptionalInt[x]`); the accessors (`get`/`getAsInt`/`getAsDouble`) are the

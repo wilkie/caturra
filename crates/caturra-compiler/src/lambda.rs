@@ -555,6 +555,32 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `Comparator.comparing*(keyExtractor)` — the extractor is a
+            // `Function`, erased to `__UnaryOperator`. A method reference
+            // (`Person::getAge`) self-types; a lambda needs the element type,
+            // which a `sort`/declaration context supplies (see `desugar_stmt`
+            // and the `sort` branch above via `comparator_arg_elem`).
+            if matches!(
+                method.as_str(),
+                "comparing" | "comparingInt" | "comparingDouble" | "comparingLong"
+            ) && args.len() == 1
+                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. }) if path.len() == 1 && path[0] == "Comparator")
+            {
+                if !desugar_key_extractor(&mut args[0], ctx) {
+                    let unary = TypeRef::Named(String::from("__UnaryOperator"));
+                    desugar_expr(&mut args[0], Some(&unary), ctx);
+                }
+                return;
+            }
+            // `comparator.thenComparing(keyExtractor)` — a method-reference key
+            // extractor (the receiver is already desugared above). A `Comparator`
+            // argument passes through untouched.
+            if method == "thenComparing"
+                && args.len() == 1
+                && desugar_key_extractor(&mut args[0], ctx)
+            {
+                return;
+            }
             // A stream op with a lambda: the parameter type is the stream's
             // current element, walked back through the pipeline to `.stream()`.
             // (After a `map` the element is erased to `Object`.)
@@ -754,6 +780,10 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &Ctx) -> Expr {
         _ => None,
     };
 
+    // For an unbound-instance ref (`Person::getAge`), the first parameter IS
+    // the receiver and must be typed as the qualifier class, so the call
+    // resolves against it rather than `Object`.
+    let mut receiver_param_type: Option<TypeRef> = None;
     let call: Expr = if method == "new" {
         // Constructor reference: `new Type(p0, ...)`.
         let class = qualifier_type_name(qualifier);
@@ -779,6 +809,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &Ctx) -> Expr {
             }
         } else {
             // Unbound instance: `p0.method(p1, ...)`.
+            receiver_param_type = Some(TypeRef::Named(class));
             Expr::Call {
                 receiver: Some(Box::new(name_expr(&param_names[0]))),
                 method: method.clone(),
@@ -798,7 +829,15 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &Ctx) -> Expr {
 
     let params = param_names
         .into_iter()
-        .map(|name| crate::ast::LambdaParam { name, ty: None })
+        .enumerate()
+        .map(|(i, name)| crate::ast::LambdaParam {
+            name,
+            ty: if i == 0 {
+                receiver_param_type.clone()
+            } else {
+                None
+            },
+        })
         .collect();
     Expr::Lambda {
         params,
@@ -890,6 +929,37 @@ fn comparator_target_elem(target: &TypeRef) -> Option<TypeRef> {
     };
     (matches!(base.as_str(), "Comparator" | "java.util.Comparator") && args.len() == 1)
         .then(|| args[0].clone())
+}
+
+/// Desugar a `Comparator.comparing*`/`thenComparing` **method-reference** key
+/// extractor (`Person::getAge`) into an erased `__UnaryOperator` whose parameter
+/// is cast to the qualifier class. Returns whether it handled `arg` (false for a
+/// lambda or a non-extractor, which the caller types some other way).
+fn desugar_key_extractor(arg: &mut Expr, ctx: &mut Ctx) -> bool {
+    let Expr::MethodRef { qualifier, .. } = &*arg else {
+        return false;
+    };
+    let Expr::Name { path, .. } = qualifier.as_ref() else {
+        return false;
+    };
+    if path.len() != 1 {
+        return false;
+    }
+    let elem = TypeRef::Named(path[0].clone());
+    let Some(sam) = ctx.sams.get("__UnaryOperator").cloned() else {
+        return false;
+    };
+    *arg = method_ref_to_lambda(arg, &sam, ctx);
+    *arg = build_erased_lambda(
+        arg,
+        "__UnaryOperator",
+        "apply",
+        &TypeRef::Named(String::from("Object")),
+        &[elem],
+        None,
+        ctx,
+    );
+    true
 }
 
 /// The current element type of a stream-pipeline receiver, for typing a stream

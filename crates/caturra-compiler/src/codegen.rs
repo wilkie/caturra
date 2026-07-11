@@ -3007,6 +3007,9 @@ enum BRet {
     OptionalDouble,
     /// `Collector` (a `Collectors.toX()` factory result).
     Collector,
+    /// A `Comparator` (the `Comparator` static factories / combinators) — the
+    /// bundled `__Comparator` interface type.
+    Comparator,
     /// `null`-typed, adopting the assignment context — for `collect`, whose
     /// element type comes from the left-hand side (like a diamond `new`).
     Nullish,
@@ -5719,10 +5722,53 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
     ),
 ];
 
+/// `java.util.Comparator` static factories. `comparing*` takes a key-extractor
+/// `Function`; the four `comparing`/`comparingInt`/`comparingDouble`/
+/// `comparingLong` compare the key naturally, so they share one implementation.
+const COMPARATOR_STATIC_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "naturalOrder",
+        &[],
+        BRet::Comparator,
+        "()Ljava/util/Comparator;",
+    ),
+    bm(
+        "reverseOrder",
+        &[],
+        BRet::Comparator,
+        "()Ljava/util/Comparator;",
+    ),
+    bm(
+        "comparing",
+        &[BParam::UnaryOperator],
+        BRet::Comparator,
+        "(Ljava/util/function/Function;)Ljava/util/Comparator;",
+    ),
+    bm(
+        "comparingInt",
+        &[BParam::UnaryOperator],
+        BRet::Comparator,
+        "(Ljava/util/function/ToIntFunction;)Ljava/util/Comparator;",
+    ),
+    bm(
+        "comparingDouble",
+        &[BParam::UnaryOperator],
+        BRet::Comparator,
+        "(Ljava/util/function/ToDoubleFunction;)Ljava/util/Comparator;",
+    ),
+    bm(
+        "comparingLong",
+        &[BParam::UnaryOperator],
+        BRet::Comparator,
+        "(Ljava/util/function/ToLongFunction;)Ljava/util/Comparator;",
+    ),
+];
+
 fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
     match class {
         "Math" => Some(("java/lang/Math", MATH_METHODS)),
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
+        "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
         "IntStream" => Some(("java/util/stream/IntStream", INTSTREAM_STATIC_METHODS)),
         "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
@@ -6009,6 +6055,11 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::OptionalInt => Some(JType::OptionalInt),
         BRet::OptionalDouble => Some(JType::OptionalDouble),
         BRet::Collector => Some(JType::Collector),
+        BRet::Comparator => Some(
+            table
+                .class_id("__Comparator")
+                .map_or(JType::Error, JType::Object),
+        ),
         BRet::Nullish => Some(JType::Null),
         BRet::Val => Some(boxed_if_primitive(args.second)),
         // A map key and a queue/deque nullable element both box the first arg.
@@ -8394,6 +8445,56 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `comparator.reversed()` / `.thenComparing(...)` — build a derived
+    /// comparator. The receiver comparator is already on the stack.
+    #[allow(clippy::option_option)]
+    fn emit_comparator_combinator(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let comparator_ty = self
+            .table
+            .class_id("__Comparator")
+            .map_or(JType::Error, JType::Object);
+        if method == "reversed" {
+            if !args.is_empty() {
+                self.error(span, "reversed() takes no arguments");
+            }
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/util/Comparator",
+                "reversed",
+                "()Ljava/util/Comparator;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return Some(Some(comparator_ty));
+        }
+        // thenComparing: a key-extractor Function, or another Comparator.
+        let [next] = args else {
+            self.error(span, "thenComparing takes one argument");
+            return None;
+        };
+        let next_ty = self.type_of(next);
+        let descriptor = if self.is_comparator_type(next_ty) {
+            "(Ljava/util/Comparator;)Ljava/util/Comparator;"
+        } else {
+            "(Ljava/util/function/Function;)Ljava/util/Comparator;"
+        };
+        self.expr(next);
+        let method_ref = intern_method_ref(
+            self.pool,
+            "java/util/Comparator",
+            "thenComparing",
+            descriptor,
+        );
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+        self.code.drop_stack(2);
+        Some(Some(comparator_ty))
+    }
+
     /// Whether a type is a `Comparator` — a `__Comparator` implementor (a user
     /// class, a desugared lambda, or a `Comparator`-typed value).
     fn is_comparator_type(&self, ty: JType) -> bool {
@@ -8812,6 +8913,12 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> Option<Option<JType>> {
         let receiver_ty = self.expr(receiver);
+        // `Comparator` combinators (`reversed`/`thenComparing`) on a comparator
+        // value — the bundled `__Comparator` interface has no such methods, so
+        // caturra builds a derived comparator itself.
+        if matches!(method, "reversed" | "thenComparing") && self.is_comparator_type(receiver_ty) {
+            return self.emit_comparator_combinator(method, args, span);
+        }
         let class_id = match receiver_ty {
             JType::Object(id) => id,
             // A parameterized receiver: dispatch on the erased class,
@@ -10786,6 +10893,18 @@ impl BodyGen<'_> {
                 args,
                 ..
             } => {
+                // `Comparator` combinators build another comparator (mirrors the
+                // emission-path intercept in `instance_call`).
+                if matches!(method.as_str(), "reversed" | "thenComparing")
+                    && let Some(recv) = receiver.as_deref()
+                    && let recv_ty = self.type_of(recv)
+                    && self.is_comparator_type(recv_ty)
+                {
+                    return self
+                        .table
+                        .class_id("__Comparator")
+                        .map_or(JType::Error, JType::Object);
+                }
                 // Mirror emission-path resolution, silently.
                 let class = match receiver.as_deref() {
                     None => self.current_class.to_owned(),

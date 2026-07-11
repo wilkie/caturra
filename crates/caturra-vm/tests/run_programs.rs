@@ -8580,6 +8580,62 @@ fn user_comparator_orders_sorts_and_trees() {
     assert_eq!(out, "[a, bb, ccc]\n[3, 2, 1]\n[3, 2, 1] 3\n");
 }
 
+/// The `Comparator` static factories and combinators build comparators from
+/// method-reference key extractors and chain them. Pinned JDK-free for CI; the
+/// byte-for-byte JDK match is in `diff_comparator_factories`.
+#[test]
+fn comparator_factories_build_and_chain_comparators() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.Comparator;
+        import java.util.List;
+        public class C {
+            static class P {
+                String name; int age;
+                P(String n, int a) { name = n; age = a; }
+                String getName() { return name; }
+                int getAge() { return age; }
+                public String toString() { return name + "(" + age + ")"; }
+            }
+            public static void main(String[] args) {
+                List<P> ps = new ArrayList<>();
+                ps.add(new P("Carol", 30)); ps.add(new P("Alice", 30)); ps.add(new P("Bob", 25));
+
+                ps.sort(Comparator.comparingInt(P::getAge));
+                System.out.println(ps);                     // [Bob(25), Carol(30), Alice(30)]
+
+                ps.sort(Comparator.comparingInt(P::getAge).reversed());
+                System.out.println(ps);                     // [Carol(30), Alice(30), Bob(25)]
+
+                ps.sort(Comparator.comparingInt(P::getAge).thenComparing(P::getName));
+                System.out.println(ps);                     // [Bob(25), Alice(30), Carol(30)]
+
+                ps.sort(Comparator.comparing(P::getName).reversed());
+                System.out.println(ps);                     // [Carol(30), Bob(25), Alice(30)]
+
+                List<String> ws = new ArrayList<>();
+                ws.add("banana"); ws.add("apple"); ws.add("cherry");
+                ws.sort(Comparator.naturalOrder());
+                System.out.println(ws);                     // [apple, banana, cherry]
+                ws.sort(Comparator.reverseOrder());
+                System.out.println(ws);                     // [cherry, banana, apple]
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(
+        out,
+        "[Bob(25), Carol(30), Alice(30)]\n\
+         [Carol(30), Alice(30), Bob(25)]\n\
+         [Bob(25), Alice(30), Carol(30)]\n\
+         [Carol(30), Bob(25), Alice(30)]\n\
+         [apple, banana, cherry]\n\
+         [cherry, banana, apple]\n"
+    );
+}
+
 /// `java.util.TreeMap` keeps its entries sorted by key, so iteration, the
 /// views, and the key navigation all read off the sorted vector. Pinned
 /// JDK-free for CI; the byte-for-byte JDK match is in `differential.rs`.

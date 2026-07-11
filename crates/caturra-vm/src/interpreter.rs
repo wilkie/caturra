@@ -2612,6 +2612,41 @@ impl<'run> Interpreter<'run> {
     /// heap knows once the static type is gone. Returns whether it answered.
     /// `java.util.stream.Collectors` factories, each producing a `Collector`
     /// recipe for `Stream.collect`. Returns whether it answered.
+    /// `java.util.Comparator` static factories — each builds a native
+    /// [`crate::value::ComparatorSpec`]. Returns whether it answered.
+    #[allow(clippy::unnecessary_wraps)] // uniform with the other *_static_intrinsic
+    fn comparator_static_intrinsic(
+        &mut self,
+        frame: &mut Frame<'run>,
+        class_name: &str,
+        method_name: &str,
+        args: &[JValue],
+    ) -> Result<bool, VmError> {
+        use crate::value::{ComparatorSpec, HeapObject};
+        if class_name != "Comparator" && class_name != "java/util/Comparator" {
+            return Ok(false);
+        }
+        let spec = match (method_name, args) {
+            ("naturalOrder", []) => ComparatorSpec::Natural,
+            ("reverseOrder", []) => {
+                let natural = self
+                    .heap
+                    .alloc(HeapObject::Comparator(ComparatorSpec::Natural));
+                ComparatorSpec::Reversed(natural)
+            }
+            // `comparing`/`comparingInt`/`comparingDouble`/`comparingLong` — the
+            // key is compared by natural ordering, so all four are the same here.
+            (
+                "comparing" | "comparingInt" | "comparingDouble" | "comparingLong",
+                [JValue::Ref(Some(extractor))],
+            ) => ComparatorSpec::ByKey(*extractor),
+            _ => return Ok(false),
+        };
+        let comparator = self.heap.alloc(HeapObject::Comparator(spec));
+        frame.stack.push(JValue::Ref(Some(comparator)));
+        Ok(true)
+    }
+
     #[allow(clippy::unnecessary_wraps)] // uniform with the other *_static_intrinsic
     fn collectors_static_intrinsic(
         &mut self,
@@ -4597,6 +4632,38 @@ impl<'run> Interpreter<'run> {
         if matches!(self.heap.get(receiver), Some(HeapObject::Optional { .. })) {
             return self.optional_intrinsic(receiver, method, descriptor, args);
         }
+        // Combinators on a factory-built comparator.
+        if matches!(self.heap.get(receiver), Some(HeapObject::Comparator(_))) {
+            use crate::value::ComparatorSpec;
+            match (method, args) {
+                ("reversed", []) => {
+                    let reversed = self
+                        .heap
+                        .alloc(HeapObject::Comparator(ComparatorSpec::Reversed(receiver)));
+                    return Ok(Answered::Value(JValue::Ref(Some(reversed))));
+                }
+                ("thenComparing", [JValue::Ref(Some(next))]) => {
+                    // `thenComparing(keyExtractor)` wraps a Function; the
+                    // `Comparator` overload passes one straight through.
+                    let second = if descriptor.contains("function/Function") {
+                        self.heap
+                            .alloc(HeapObject::Comparator(ComparatorSpec::ByKey(*next)))
+                    } else {
+                        *next
+                    };
+                    let then = self.heap.alloc(HeapObject::Comparator(ComparatorSpec::Then(
+                        receiver, second,
+                    )));
+                    return Ok(Answered::Value(JValue::Ref(Some(then))));
+                }
+                ("compare", [a, b]) => {
+                    return Ok(Answered::Value(JValue::Int(
+                        self.compare_by_spec(*a, *b, receiver)?,
+                    )));
+                }
+                _ => {}
+            }
+        }
         Ok(Answered::No)
     }
 
@@ -5500,6 +5567,9 @@ impl<'run> Interpreter<'run> {
         if self.collectors_static_intrinsic(frame, class_name, method_name, args)? {
             return Ok(None);
         }
+        if self.comparator_static_intrinsic(frame, class_name, method_name, args)? {
+            return Ok(None);
+        }
         // `IntStream.range(a, b)` / `rangeClosed(a, b)` — a stream of consecutive
         // ints (the VM models an IntStream as a Stream of unboxed ints).
         if (class_name == "IntStream" || class_name == "java/util/stream/IntStream")
@@ -6011,6 +6081,16 @@ impl<'run> Interpreter<'run> {
     ) -> Result<i32, VmError> {
         match comparator {
             None => self.compare_for_sort(a, b),
+            // A factory-built comparator (`Comparator.comparing`/`reversed`/…):
+            // evaluate its recipe natively.
+            Some(comparator)
+                if matches!(
+                    self.heap.get(comparator),
+                    Some(crate::value::HeapObject::Comparator(_))
+                ) =>
+            {
+                self.compare_by_spec(a, b, comparator)
+            }
             Some(comparator) => {
                 let Some(crate::value::HeapObject::Instance { class_name, .. }) =
                     self.heap.get(comparator)
@@ -6061,6 +6141,37 @@ impl<'run> Interpreter<'run> {
             std::cmp::Ordering::Equal => 0,
             std::cmp::Ordering::Greater => 1,
         })
+    }
+
+    /// Evaluate a factory-built [`crate::value::ComparatorSpec`] on two values.
+    fn compare_by_spec(
+        &mut self,
+        a: JValue,
+        b: JValue,
+        comparator: HeapRef,
+    ) -> Result<i32, VmError> {
+        use crate::value::{ComparatorSpec, HeapObject};
+        let spec = match self.heap.get(comparator) {
+            Some(HeapObject::Comparator(spec)) => spec.clone(),
+            _ => return Ok(0),
+        };
+        match spec {
+            ComparatorSpec::Natural => self.compare_for_sort(a, b),
+            ComparatorSpec::ByKey(extractor) => {
+                let key_a = self.call_apply(extractor, a)?;
+                let key_b = self.call_apply(extractor, b)?;
+                self.compare_for_sort(key_a, key_b)
+            }
+            ComparatorSpec::Reversed(inner) => Ok(-self.compare_with(a, b, Some(inner))?),
+            ComparatorSpec::Then(first, second) => {
+                let primary = self.compare_with(a, b, Some(first))?;
+                if primary != 0 {
+                    Ok(primary)
+                } else {
+                    self.compare_with(a, b, Some(second))
+                }
+            }
+        }
     }
 
     /// `map.forEach(consumer)`: call `accept(key, value)` on every entry, in

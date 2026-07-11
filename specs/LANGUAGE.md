@@ -460,9 +460,17 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     erasure bridge as `Comparable.compareTo` (matched by name and arity). A
     comparator lambda casts both parameters back to the element type, read from
     the `Comparator<E>` target or the `TreeSet<E>`/`TreeMap<K, V>` being
-    constructed. `Comparator`'s static factories (`comparing`, `naturalOrder`,
-    `reversed`, …) are not modelled — write the comparison directly. Pinned
-    against a real JDK by `diff_comparator_classes` and `_lambdas`.
+    constructed. The static factories and combinators are also modelled
+    (2026-07-11): `Comparator.naturalOrder()`/`reverseOrder()` order
+    `Comparable`s; `Comparator.comparing`/`comparingInt`/`comparingDouble`/
+    `comparingLong(keyExtractor)` build a key-extractor comparator; and
+    `.reversed()`/`.thenComparing(other)`/`.thenComparing(keyExtractor)` chain
+    them. The key extractor must be a **method reference** (`Person::getAge`,
+    `String::length`) — its qualifier class types the extracted key — because a
+    bare `Comparator.comparingInt(p -> p.age)` has no receiver to flow the
+    element type from and is an honest compile error (write the method reference,
+    or a full `(a, b) -> …` comparator lambda, instead). Pinned against a real
+    JDK by `diff_comparator_classes`, `_lambdas`, and `_factories`.
   - `PriorityQueue<E>` (2026-07-11) — a real **binary min-heap**, so `peek`/
     `poll`/`element`/`remove()` return the _least_ element, but `toString`,
     for-each, and the iterator show the **heap-array order, not sorted** — and

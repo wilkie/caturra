@@ -6913,6 +6913,67 @@ public class DiffCmpLambda {
 "#
 );
 
+// The Comparator static factories and combinators: `comparing`/`comparingInt`
+// build a key-extractor comparator from a method reference; `naturalOrder`/
+// `reverseOrder` order Comparables; `reversed`/`thenComparing` chain them.
+differential_test!(
+    diff_comparator_factories,
+    "DiffCmpFactory",
+    r#"
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
+public class DiffCmpFactory {
+    static class Person {
+        String name;
+        int age;
+        Person(String n, int a) { name = n; age = a; }
+        String getName() { return name; }
+        int getAge() { return age; }
+        public String toString() { return name + "(" + age + ")"; }
+    }
+
+    public static void main(String[] args) {
+        List<Person> people = new ArrayList<>();
+        people.add(new Person("Carol", 30));
+        people.add(new Person("Alice", 30));
+        people.add(new Person("Bob", 25));
+
+        // comparingInt via method reference.
+        people.sort(Comparator.comparingInt(Person::getAge));
+        System.out.println(people);                         // [Bob(25), Carol(30), Alice(30)]
+
+        // A key-extractor comparator, reversed.
+        people.sort(Comparator.comparingInt(Person::getAge).reversed());
+        System.out.println(people);                         // [Carol(30), Alice(30), Bob(25)]
+
+        // Chained: by age, then by name.
+        people.sort(Comparator.comparingInt(Person::getAge)
+                .thenComparing(Person::getName));
+        System.out.println(people);                         // [Bob(25), Alice(30), Carol(30)]
+
+        // comparing with a String key, reversed.
+        people.sort(Comparator.comparing(Person::getName).reversed());
+        System.out.println(people);                         // [Carol(30), Bob(25), Alice(30)]
+
+        // naturalOrder / reverseOrder over Comparables.
+        List<String> words = new ArrayList<>();
+        words.add("banana"); words.add("apple"); words.add("cherry");
+        Collections.sort(words, Comparator.naturalOrder());
+        System.out.println(words);                          // [apple, banana, cherry]
+        Collections.sort(words, Comparator.reverseOrder());
+        System.out.println(words);                          // [cherry, banana, apple]
+
+        // comparingInt over a method reference on the element itself.
+        words.sort(Comparator.comparingInt(String::length).thenComparing(Comparator.naturalOrder()));
+        System.out.println(words);                          // [apple, banana, cherry]
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // java.util.TreeMap — a sorted map. Entries are kept in key order, so
 // iteration, the views, and the key navigation all read off the sorted vector.
