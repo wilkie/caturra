@@ -232,6 +232,12 @@ be referenced from a static context`, and `cannot find symbol` when the
     not its backing array, so `ensureCapacity`/`trimToSize` are the
     no-ops they observably are, and `capacity()` — having no honest
     answer — reports a reason rather than a cannot-find-symbol.
+    `StringBuilder` is a full type wherever a type is written — a field, a
+    parameter, a return type, or a captured lambda local (2026-07-09; the
+    JVM descriptor builder handled `String`/`Scanner` but not
+    `StringBuilder`, so those gave "unknown type 'StringBuilder'"),
+    unblocking `list.forEach(x -> sb.append(x))`. Pinned by
+    `diff_string_builder_as_a_type`.
   - The full Java 11 `Math` API for int/double (2026-07-03): trig,
     hyperbolic, log/exp families, `cbrt`/`hypot`/`rint`/`signum`/
     `toDegrees`/`toRadians`/`copySign`/`ulp`/`nextUp`/`nextDown`/

@@ -11094,3 +11094,39 @@ fn a_map_view_runs_for_each() {
     );
     assert_eq!(out, "6\n3\n3\n");
 }
+
+/// `StringBuilder` works as a field, parameter, return type, and captured
+/// local — `push_type` (the JVM descriptor builder) handled `String`/`Scanner`
+/// but not `StringBuilder`, so any of those gave "unknown type '`StringBuilder`'"
+/// (2026-07-09). This unblocks the common `list.forEach(x -> sb.append(x))`
+/// pattern. Pinned against a real JDK by `diff_string_builder_as_a_type`.
+#[test]
+fn string_builder_works_as_a_type_everywhere() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.List;
+        interface Run { void go(); }
+        public class M {
+            StringBuilder field = new StringBuilder();
+            static StringBuilder twice(StringBuilder s) { return s.append(s); }
+            public static void main(String[] args) {
+                StringBuilder sb = new StringBuilder();
+                Run r = () -> sb.append("x");
+                r.go(); r.go();
+                System.out.println(sb);
+                StringBuilder acc = new StringBuilder();
+                List<String> w = new ArrayList<String>();
+                w.add("a"); w.add("b");
+                w.forEach(s -> acc.append(s));
+                System.out.println(acc);
+                M obj = new M();
+                obj.field.append("f");
+                System.out.println(obj.field);
+            }
+        }
+        "#,
+        "M",
+    );
+    assert_eq!(out, "xx\nab\nf\n");
+}

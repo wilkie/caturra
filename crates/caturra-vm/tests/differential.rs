@@ -6356,6 +6356,52 @@ public class DiffViewForEach {
 "#
 );
 
+differential_test!(
+    diff_string_builder_as_a_type,
+    "DiffSbType",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+interface Run {
+    void go();
+}
+
+public class DiffSbType {
+    StringBuilder field = new StringBuilder("[");
+
+    static StringBuilder decorate(StringBuilder s) {
+        return s.append("!");
+    }
+
+    public static void main(String[] args) {
+        // Captured in a lambda.
+        StringBuilder sb = new StringBuilder();
+        Run r = () -> sb.append("x");
+        r.go();
+        r.go();
+        System.out.println(sb);
+
+        // A `forEach` appending to a captured builder.
+        StringBuilder acc = new StringBuilder();
+        List<String> words = new ArrayList<String>();
+        words.add("a");
+        words.add("bb");
+        words.forEach(w -> acc.append(w).append(w.length()));
+        System.out.println(acc);
+
+        // Parameter and return type.
+        System.out.println(decorate(new StringBuilder("hi")));
+
+        // Instance field.
+        DiffSbType obj = new DiffSbType();
+        obj.field.append("f]");
+        System.out.println(obj.field);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // Reject wording, checked against javac rather than against our own memory of
 // it. Both sides are pinned: if javac's phrasing changes with the JDK, or if

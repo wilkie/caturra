@@ -2539,6 +2539,8 @@ fn method_descriptor(
                 let simple = crate::imports::canonical_library_class(name).unwrap_or(name.as_str());
                 if simple == "String" {
                     out.push_str("Ljava/lang/String;");
+                } else if simple == "StringBuilder" && !table.has_class(simple) {
+                    out.push_str("Ljava/lang/StringBuilder;");
                 } else if simple == "Scanner" && !table.has_class(simple) {
                     out.push_str("Ljava/util/Scanner;");
                 } else if simple == "File" && !table.has_class(simple) {
