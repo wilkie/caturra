@@ -8406,6 +8406,36 @@ fn keyset_view_add_throws_but_remove_writes_through() {
     assert_eq!(out, "uoe\n{b=2}\n");
 }
 
+/// `java.util.PriorityQueue` is a real binary min-heap: `peek`/`poll` return the
+/// least element, while iteration and `toString` show the heap-array order
+/// (Java's exact `siftUp`/`siftDown`). Pinned JDK-free for CI; the byte-for-byte
+/// JDK match is in `differential.rs`.
+#[test]
+fn priority_queue_is_a_binary_min_heap() {
+    let out = run_stdout(
+        r#"
+        import java.util.PriorityQueue;
+        public class P {
+            public static void main(String[] args) {
+                PriorityQueue<Integer> pq = new PriorityQueue<>();
+                pq.offer(5); pq.offer(1); pq.offer(3); pq.offer(2); pq.offer(4);
+                System.out.println(pq);              // heap-array order, not sorted
+                System.out.println(pq.peek());       // 1
+                StringBuilder sb = new StringBuilder();
+                while (!pq.isEmpty()) { sb.append(pq.poll()).append(" "); }
+                System.out.println(sb.toString().trim());  // 1 2 3 4 5
+
+                PriorityQueue<Integer> max = new PriorityQueue<>((a, b) -> b - a);
+                max.add(1); max.add(3); max.add(2);
+                System.out.println(max.peek() + " " + max.poll() + " " + max.poll());
+            }
+        }
+        "#,
+        "P",
+    );
+    assert_eq!(out, "[1, 2, 3, 5, 4]\n1\n1 2 3 4 5\n3 3 2\n");
+}
+
 /// A user `java.util.Comparator` (class or lambda) orders `sort`, `TreeSet`,
 /// and `TreeMap` — it aliases the bundled erased `__Comparator`, and its
 /// `compare(T, T)` reaches through the VM's erasure bridge. Pinned JDK-free for

@@ -1143,12 +1143,14 @@ impl MethodTable {
                     && !self.has_class(simple)
                 {
                     elem_from_type_arg(&args[0], self).map(JType::TreeSet)
-                } else if matches!(simple, "LinkedList" | "Queue" | "Deque")
+                } else if matches!(simple, "LinkedList" | "Queue" | "Deque" | "PriorityQueue")
                     && args.len() == 1
                     && !self.has_class(simple)
                 {
                     let role = match simple {
-                        "Queue" => SeqRole::Queue,
+                        // A PriorityQueue is a Queue (a distinct heap object at
+                        // runtime, but the same restricted method surface).
+                        "Queue" | "PriorityQueue" => SeqRole::Queue,
                         "Deque" => SeqRole::Deque,
                         _ => SeqRole::Full,
                     };
@@ -1709,6 +1711,20 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Class => Some(ElemType::Class),
         // A wrapper array element stores its primitive (`Integer[]` -> `int[]`).
         JType::Boxed(elem) => Some(elem),
+        _ => None,
+    }
+}
+
+/// The element type of any single-element collection type (a `List`, `Set`,
+/// `TreeSet`, `Collection`, or `LinkedList`/`Queue`/`Deque`), for a constructor
+/// that copies one.
+fn collection_element_type(ty: JType) -> Option<ElemType> {
+    match ty {
+        JType::List(elem)
+        | JType::Set(elem)
+        | JType::TreeSet(elem)
+        | JType::Collection(elem)
+        | JType::LinkedList { elem, .. } => Some(elem),
         _ => None,
     }
 }
@@ -2667,7 +2683,9 @@ fn method_descriptor(
                 if simple == "HashSet" && !table.has_class("HashSet") {
                     simple = "Set";
                 }
-                if matches!(simple, "LinkedList" | "Queue" | "Deque") && !table.has_class(simple) {
+                if matches!(simple, "LinkedList" | "Queue" | "Deque" | "PriorityQueue")
+                    && !table.has_class(simple)
+                {
                     out.push_str("Ljava/util/");
                     out.push_str(simple);
                     out.push(';');
@@ -7316,6 +7334,15 @@ impl BodyGen<'_> {
                 }),
                 _ => JType::Null,
             },
+            "PriorityQueue" => match type_args {
+                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
+                    JType::LinkedList {
+                        elem,
+                        role: SeqRole::Queue,
+                    }
+                }),
+                _ => JType::Null,
+            },
             "TreeSet" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::TreeSet),
                 _ => JType::Null,
@@ -7404,6 +7431,7 @@ impl BodyGen<'_> {
                 "TreeSet" => return self.new_tree_set(type_args, args, span),
                 "TreeMap" => return self.new_tree_map(type_args, args, span),
                 "LinkedList" => return self.new_linked_list(type_args, args, span),
+                "PriorityQueue" => return self.new_priority_queue(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
                 "Integer" | "Double" | "Long" | "Float" | "Short" | "Byte" | "Character"
@@ -7944,6 +7972,107 @@ impl BodyGen<'_> {
             Some(elem) => JType::LinkedList {
                 elem,
                 role: SeqRole::Full,
+            },
+            None => JType::Null,
+        }
+    }
+
+    /// Whether a type is a `Comparator` — a `__Comparator` implementor (a user
+    /// class, a desugared lambda, or a `Comparator`-typed value).
+    fn is_comparator_type(&self, ty: JType) -> bool {
+        matches!(
+            (ty, self.table.class_id("__Comparator")),
+            (JType::Object(id), Some(target)) if self.table.is_subtype(id, target)
+        )
+    }
+
+    /// `new PriorityQueue<>()` / `(int)` / `(Comparator)` / `(int, Comparator)` /
+    /// `(Collection)`. Emits `new java.util.PriorityQueue`; the VM keeps a real
+    /// binary heap. Reuses the `Queue` type — a `PriorityQueue` *is* a `Queue`.
+    fn new_priority_queue(
+        &mut self,
+        type_args: &[TypeRef],
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> JType {
+        if args.len() > 2 {
+            self.error(
+                span,
+                "PriorityQueue takes at most two constructor arguments",
+            );
+            return JType::Error;
+        }
+        let mut elem = match type_args {
+            [] => None,
+            [arg] => {
+                let Some(elem) = elem_from_type_arg(arg, self.table) else {
+                    self.error(
+                        span,
+                        "PriorityQueue element type must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some(elem)
+            }
+            _ => {
+                self.error(span, "PriorityQueue takes one type argument");
+                return JType::Error;
+            }
+        };
+        let pq_class = intern_class(self.pool, "java/util/PriorityQueue");
+        self.code.push_op_u16(op::NEW, pq_class, 1);
+        self.code.push_op(op::DUP, 1);
+        let descriptor = match args {
+            [] => "()V",
+            [only] => {
+                let ty = self.expr(only);
+                if self.is_comparator_type(ty) {
+                    "(Ljava/util/Comparator;)V"
+                } else if let Some(source_elem) = collection_element_type(ty) {
+                    if elem.is_none() {
+                        elem = Some(source_elem);
+                    }
+                    "(Ljava/util/Collection;)V"
+                } else {
+                    if !widens(ty, JType::Int, self.table) {
+                        self.error(
+                            span,
+                            "new PriorityQueue(...) takes an int capacity, a Comparator, \
+                             or a Collection",
+                        );
+                    }
+                    "(I)V"
+                }
+            }
+            [capacity, comparator] => {
+                let capacity_ty = self.expr(capacity);
+                if !widens(capacity_ty, JType::Int, self.table) {
+                    self.error(
+                        span,
+                        "new PriorityQueue(int, Comparator): the first argument is the capacity",
+                    );
+                }
+                let comparator_ty = self.expr(comparator);
+                if !self.is_comparator_type(comparator_ty) {
+                    self.error(
+                        span,
+                        "new PriorityQueue(int, Comparator): the second argument is a Comparator",
+                    );
+                }
+                "(ILjava/util/Comparator;)V"
+            }
+            _ => unreachable!("arg count checked above"),
+        };
+        let init_ref =
+            intern_method_ref(self.pool, "java/util/PriorityQueue", "<init>", descriptor);
+        self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+        self.code
+            .drop_stack(1 + u16::try_from(args.len()).unwrap_or(0));
+        match elem {
+            Some(elem) => JType::LinkedList {
+                elem,
+                role: SeqRole::Queue,
             },
             None => JType::Null,
         }

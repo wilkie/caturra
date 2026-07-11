@@ -1892,6 +1892,62 @@ impl<'run> Interpreter<'run> {
                 return Ok(None);
             }
         }
+        // `new PriorityQueue<>(...)`: a comparator (with or without a capacity),
+        // or a collection to heapify. All compare with user code.
+        if target_class == "java/util/PriorityQueue" {
+            use crate::value::HeapObject;
+            let store_comparator = |vm: &mut Self, value: JValue| {
+                let comparator = match value {
+                    JValue::Ref(r) => r,
+                    _ => None,
+                };
+                if let Some(HeapObject::PriorityQueue {
+                    comparator: slot, ..
+                }) = vm.heap.get_mut(receiver)
+                {
+                    *slot = comparator;
+                }
+            };
+            if descriptor == "(Ljava/util/Comparator;)V" {
+                store_comparator(self, args[0]);
+                return Ok(None);
+            }
+            if descriptor == "(ILjava/util/Comparator;)V" {
+                // args[0] is the capacity hint (no observable effect here).
+                store_comparator(self, args[1]);
+                return Ok(None);
+            }
+            if descriptor == "(Ljava/util/Collection;)V" {
+                let JValue::Ref(Some(source)) = args[0] else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                // A PriorityQueue or SortedSet source passes its comparator on,
+                // and its elements are already in valid heap order (a sorted
+                // sequence is a min-heap), so no re-heapify is needed.
+                let source_kind = self.heap.get(source);
+                let already_heaped = matches!(
+                    source_kind,
+                    Some(HeapObject::PriorityQueue { .. } | HeapObject::TreeSet { .. })
+                );
+                let comparator = self
+                    .pq_comparator(source)
+                    .or_else(|| self.tree_set_comparator(source));
+                if let Some(HeapObject::PriorityQueue {
+                    comparator: slot, ..
+                }) = self.heap.get_mut(receiver)
+                {
+                    *slot = comparator;
+                }
+                let elements = self.collection_elements(source);
+                self.set_pq_heap(receiver, elements);
+                if !already_heaped {
+                    self.pq_heapify(receiver)?;
+                }
+                return Ok(None);
+            }
+        }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         if classes.contains_key(&target_class) {
             // A user constructor or a `super.method(...)` call; the
@@ -2275,6 +2331,8 @@ impl<'run> Interpreter<'run> {
             }
             // A TreeSet prints its (already sorted) elements as `[a, b]`.
             Some(HeapObject::TreeSet { values, .. }) => Renderable::List(values.clone()),
+            // A PriorityQueue prints its heap-array order (as Java's does).
+            Some(HeapObject::PriorityQueue { heap, .. }) => Renderable::List(heap.clone()),
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
                 // A view over any map (Hash or Tree) renders its entries in that
@@ -3115,6 +3173,7 @@ impl<'run> Interpreter<'run> {
                     | HeapObject::TreeMap { .. }
                     | HeapObject::HashSet(_)
                     | HeapObject::TreeSet { .. }
+                    | HeapObject::PriorityQueue { .. }
                     | HeapObject::MapView { .. }
                     | HeapObject::MapEntry { .. }
             )
@@ -3579,6 +3638,9 @@ impl<'run> Interpreter<'run> {
             }
             Some(HeapObject::TreeSet { .. }) => {
                 return self.tree_set_intrinsic(receiver, method_name, descriptor, args);
+            }
+            Some(HeapObject::PriorityQueue { .. }) => {
+                return self.priority_queue_intrinsic(receiver, method_name, descriptor, args);
             }
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
@@ -4188,6 +4250,258 @@ impl<'run> Interpreter<'run> {
         Ok(())
     }
 
+    /// The comparator a `PriorityQueue` orders by (or `None` for natural
+    /// ordering), detached from the heap borrow.
+    fn pq_comparator(&self, pq: HeapRef) -> Option<HeapRef> {
+        match self.heap.get(pq) {
+            Some(crate::value::HeapObject::PriorityQueue { comparator, .. }) => *comparator,
+            _ => None,
+        }
+    }
+
+    /// The heap-array of a `PriorityQueue` (its iteration order), detached from
+    /// the borrow.
+    fn pq_heap(&self, pq: HeapRef) -> Vec<JValue> {
+        match self.heap.get(pq) {
+            Some(crate::value::HeapObject::PriorityQueue { heap, .. }) => heap.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn set_pq_heap(&mut self, pq: HeapRef, values: Vec<JValue>) {
+        if let Some(crate::value::HeapObject::PriorityQueue { heap, .. }) = self.heap.get_mut(pq) {
+            *heap = values;
+        }
+    }
+
+    /// `queue.offer(e)`: append and sift up into heap position. Mirrors Java's
+    /// `siftUp` (swap-based, which lands each element where the shift-based JDK
+    /// code does), so the resulting heap array is identical.
+    fn pq_offer(&mut self, pq: HeapRef, element: JValue) -> Result<(), VmError> {
+        let comparator = self.pq_comparator(pq);
+        let mut heap = self.pq_heap(pq);
+        heap.push(element);
+        let mut k = heap.len() - 1;
+        while k > 0 {
+            let parent = (k - 1) >> 1;
+            if self.compare_with(heap[k], heap[parent], comparator)? >= 0 {
+                break;
+            }
+            heap.swap(k, parent);
+            k = parent;
+        }
+        self.set_pq_heap(pq, heap);
+        Ok(())
+    }
+
+    /// Sift the element at `start` down to its heap position, over `heap`.
+    fn pq_sift_down(
+        &mut self,
+        heap: &mut [JValue],
+        comparator: Option<HeapRef>,
+        start: usize,
+    ) -> Result<(), VmError> {
+        let size = heap.len();
+        let mut k = start;
+        let half = size >> 1;
+        while k < half {
+            let mut child = 2 * k + 1;
+            let right = child + 1;
+            if right < size && self.compare_with(heap[child], heap[right], comparator)? > 0 {
+                child = right;
+            }
+            if self.compare_with(heap[k], heap[child], comparator)? <= 0 {
+                break;
+            }
+            heap.swap(k, child);
+            k = child;
+        }
+        Ok(())
+    }
+
+    /// `queue.poll()`: remove and return the least element (the root), moving
+    /// the last element to the root and sifting it down — the JDK's algorithm,
+    /// so the remaining heap array matches. `null` when empty.
+    fn pq_poll(&mut self, pq: HeapRef) -> Result<JValue, VmError> {
+        let comparator = self.pq_comparator(pq);
+        let mut heap = self.pq_heap(pq);
+        if heap.is_empty() {
+            return Ok(JValue::NULL);
+        }
+        let result = heap[0];
+        let last = heap.pop().expect("non-empty");
+        if !heap.is_empty() {
+            heap[0] = last;
+            self.pq_sift_down(&mut heap, comparator, 0)?;
+        }
+        self.set_pq_heap(pq, heap);
+        Ok(result)
+    }
+
+    /// `queue.remove(o)`: drop the first element that `equals` `o`, then repair
+    /// the heap the way Java's `removeAt` does (move the last element into the
+    /// hole, sift it down, and — if it did not move — sift it up).
+    fn pq_remove_object(&mut self, pq: HeapRef, probe: JValue) -> Result<bool, VmError> {
+        let comparator = self.pq_comparator(pq);
+        let mut heap = self.pq_heap(pq);
+        let mut at = None;
+        for (index, element) in heap.iter().enumerate() {
+            if self.java_equals(probe, *element)? {
+                at = Some(index);
+                break;
+            }
+        }
+        let Some(i) = at else {
+            return Ok(false);
+        };
+        let last = heap.len() - 1;
+        if i == last {
+            heap.pop();
+        } else {
+            let moved = heap.pop().expect("non-empty");
+            heap[i] = moved;
+            self.pq_sift_down(&mut heap, comparator, i)?;
+            if heap[i] == moved {
+                // It did not sift down; try sifting it up.
+                let mut k = i;
+                while k > 0 {
+                    let parent = (k - 1) >> 1;
+                    if self.compare_with(heap[k], heap[parent], comparator)? >= 0 {
+                        break;
+                    }
+                    heap.swap(k, parent);
+                    k = parent;
+                }
+            }
+        }
+        self.set_pq_heap(pq, heap);
+        Ok(true)
+    }
+
+    /// Build a valid heap from an arbitrary vector (Java's `heapify`: sift down
+    /// from the last internal node to the root). Used by the collection copy
+    /// constructor.
+    fn pq_heapify(&mut self, pq: HeapRef) -> Result<(), VmError> {
+        let comparator = self.pq_comparator(pq);
+        let mut heap = self.pq_heap(pq);
+        let size = heap.len();
+        for start in (0..size / 2).rev() {
+            self.pq_sift_down(&mut heap, comparator, start)?;
+        }
+        self.set_pq_heap(pq, heap);
+        Ok(())
+    }
+
+    /// `java.util.PriorityQueue`. A real binary min-heap so `peek`/`poll` return
+    /// the least element and the heap-array iteration order matches a JVM's.
+    fn priority_queue_intrinsic(
+        &mut self,
+        receiver: HeapRef,
+        method_name: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        let len = self.pq_heap(receiver).len();
+        let result = match (method_name, args) {
+            ("size", []) => JValue::Int(i32::try_from(len).unwrap_or(i32::MAX)),
+            ("isEmpty", []) => JValue::Int(i32::from(len == 0)),
+            ("clear", []) => {
+                self.set_pq_heap(receiver, Vec::new());
+                return Ok(Answered::Void);
+            }
+            ("add" | "offer", [element]) => {
+                self.pq_offer(receiver, *element)?;
+                // add/offer both report success (true); the descriptor is `Z`.
+                JValue::Int(1)
+            }
+            ("peek", []) => self
+                .pq_heap(receiver)
+                .first()
+                .copied()
+                .unwrap_or(JValue::NULL),
+            ("poll", []) => self.pq_poll(receiver)?,
+            // `element`/`remove()` are peek/poll that throw when empty.
+            ("element", []) => {
+                let Some(top) = self.pq_heap(receiver).first().copied() else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.util.NoSuchElementException",
+                    )));
+                };
+                top
+            }
+            ("remove", []) => {
+                if len == 0 {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.util.NoSuchElementException",
+                    )));
+                }
+                self.pq_poll(receiver)?
+            }
+            ("remove", [probe]) => JValue::Int(i32::from(self.pq_remove_object(receiver, *probe)?)),
+            ("contains", [probe]) => {
+                let mut found = false;
+                for element in self.pq_heap(receiver) {
+                    if self.java_equals(*probe, element)? {
+                        found = true;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(found))
+            }
+            ("addAll", [JValue::Ref(Some(source))]) => {
+                let mut changed = false;
+                for element in self.collection_elements(*source) {
+                    self.pq_offer(receiver, element)?;
+                    changed = true;
+                }
+                JValue::Int(i32::from(changed))
+            }
+            ("forEach", [JValue::Ref(Some(consumer))]) => {
+                // Heap-array order, as Java's iterator yields.
+                let elements = self.pq_heap(receiver);
+                let Some(crate::value::HeapObject::Instance { class_name, .. }) =
+                    self.heap.get(*consumer)
+                else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                let class_name = class_name.clone();
+                for element in elements {
+                    let dispatched = self.user_virtual_dispatch(
+                        *consumer,
+                        &class_name,
+                        "accept",
+                        "(Ljava/lang/Object;)V",
+                        &[element],
+                    )?;
+                    if let UserDispatch::Call(frame) = dispatched {
+                        self.run_nested(frame)?;
+                    }
+                }
+                return Ok(Answered::Void);
+            }
+            // The enhanced-for accessor: the element at a heap-array position.
+            // (`get` is what the `Queue`-typed for-each loop emits; a user
+            // cannot call it — `Queue` declares no `get`.)
+            ("__get" | "get", [JValue::Int(position)]) => {
+                let position = usize::try_from(*position).unwrap_or(usize::MAX);
+                let Some(element) = self.pq_heap(receiver).get(position).copied() else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
+                    )));
+                };
+                element
+            }
+            _ => {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "PriorityQueue.{method_name}{descriptor}"
+                )));
+            }
+        };
+        Ok(Answered::Value(result))
+    }
+
     /// The elements of any collection caturra can walk, in iteration order: an
     /// `ArrayList` (or its unmodifiable view), a `HashSet`, a `TreeSet`, or a
     /// map's `keySet()`/`values()` view. Backs `addAll`/`removeAll`/`retainAll`
@@ -4201,6 +4515,7 @@ impl<'run> Interpreter<'run> {
                 | HeapObject::UnmodifiableList(_),
             ) => self.list_items(reference),
             Some(HeapObject::TreeSet { values, .. }) => values.clone(),
+            Some(HeapObject::PriorityQueue { heap, .. }) => heap.clone(),
             Some(HeapObject::HashSet(entries)) => entries
                 .entries_in_order()
                 .into_iter()
@@ -4999,6 +5314,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
             Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
             Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
+            Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }

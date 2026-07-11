@@ -451,6 +451,13 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains(".sort(")
             // A user `Comparator` aliases the bundled `__Comparator` interface.
             || s.text.contains("Comparator")
+            // A comparator lambda in a sorted collection's constructor
+            // (`new PriorityQueue<>((a, b) -> ...)`) needs `__Comparator` too,
+            // without ever naming it — trigger on the pair.
+            || (s.text.contains("->")
+                && (s.text.contains("TreeSet")
+                    || s.text.contains("TreeMap")
+                    || s.text.contains("PriorityQueue")))
     }) && !units
         .iter()
         .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "__BiConsumer"))

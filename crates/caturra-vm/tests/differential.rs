@@ -6532,6 +6532,91 @@ public class DiffHashSetKeys {
 );
 
 // ---------------------------------------------------------------------------
+// java.util.PriorityQueue — a real binary min-heap, so peek/poll return the
+// least element while iteration/toString show the heap-array order. The exact
+// siftUp/siftDown/heapify is replicated so both match a JVM byte for byte.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_priority_queue_core,
+    "DiffPQCore",
+    r#"
+import java.util.PriorityQueue;
+import java.util.Queue;
+
+public class DiffPQCore {
+    public static void main(String[] args) {
+        PriorityQueue<Integer> pq = new PriorityQueue<>();
+        pq.offer(5); pq.offer(1); pq.offer(3); pq.offer(2); pq.offer(4);
+        System.out.println(pq);              // heap-array order, e.g. [1, 2, 3, 5, 4]
+        System.out.println(pq.peek() + " " + pq.size());
+
+        StringBuilder sb = new StringBuilder();
+        while (!pq.isEmpty()) {
+            sb.append(pq.poll()).append(" ");
+        }
+        System.out.println(sb.toString().trim());  // 1 2 3 4 5
+
+        // contains / remove(Object) compare with equals, not the ordering.
+        PriorityQueue<String> ws = new PriorityQueue<>();
+        ws.add("banana"); ws.add("apple"); ws.add("cherry");
+        System.out.println(ws.peek());       // apple
+        System.out.println(ws.contains("apple") + " " + ws.remove("apple"));
+        System.out.println(ws.peek() + " " + ws.size());
+
+        // As a Queue variable: empty poll/peek are null, remove() throws.
+        Queue<Integer> q = new PriorityQueue<>();
+        System.out.println(q.poll() + " " + q.peek());
+        try {
+            q.remove();
+        } catch (java.util.NoSuchElementException e) {
+            System.out.println("nse");
+        }
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_priority_queue_comparator_and_heapify,
+    "DiffPQCmp",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.PriorityQueue;
+
+public class DiffPQCmp {
+    static class Longest implements Comparator<String> {
+        public int compare(String a, String b) { return b.length() - a.length(); }
+    }
+
+    public static void main(String[] args) {
+        // A max-heap via a comparator lambda.
+        PriorityQueue<Integer> max = new PriorityQueue<>((a, b) -> b - a);
+        for (int x : new int[] {5, 1, 3, 2, 4}) {
+            max.add(x);
+        }
+        System.out.println(max);                 // heap-array order
+        System.out.println(max.poll() + " " + max.poll() + " " + max.poll());
+
+        // A comparator class.
+        PriorityQueue<String> byLen = new PriorityQueue<>(new Longest());
+        byLen.add("a"); byLen.add("ccc"); byLen.add("bb");
+        System.out.println(byLen.poll() + " " + byLen.poll());  // ccc bb
+
+        // Heapify from a collection (a different array than offering one by one).
+        List<Integer> nums = new ArrayList<>(Arrays.asList(9, 3, 7, 1, 8, 2));
+        PriorityQueue<Integer> h = new PriorityQueue<>(nums);
+        System.out.println(h);                   // heapified array order
+        System.out.println(h.poll() + " " + h.poll() + " " + h.poll()); // 1 2 3
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
 // java.util.Comparator — a user-facing alias for the bundled erased
 // `__Comparator`. A user Comparator class, a comparator variable, and a
 // comparator lambda all order sort/TreeSet/TreeMap, exactly as on a JDK.

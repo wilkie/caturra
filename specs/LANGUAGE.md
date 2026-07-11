@@ -463,6 +463,22 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     constructed. `Comparator`'s static factories (`comparing`, `naturalOrder`,
     `reversed`, …) are not modelled — write the comparison directly. Pinned
     against a real JDK by `diff_comparator_classes` and `_lambdas`.
+  - `PriorityQueue<E>` (2026-07-11) — a real **binary min-heap**, so `peek`/
+    `poll`/`element`/`remove()` return the _least_ element, but `toString`,
+    for-each, and the iterator show the **heap-array order, not sorted** — and
+    that array is replicated exactly (Java's `siftUp`/`siftDown`/`heapify`) so
+    both match a real JVM byte for byte, the same fidelity as `HashMap`'s
+    iteration order. Ordering is natural (`Comparable`) or a `Comparator` (a
+    class or a lambda): `new PriorityQueue<>()`, `(int capacity)`,
+    `(Comparator)`, `(int, Comparator)`, and `(Collection)` (which `heapify`s a
+    plain collection, or copies a `PriorityQueue`/`TreeSet` whose order is
+    already a valid heap). `add`/`offer`/`poll`/`peek`/`element`/`remove()`/
+    `remove(Object)`/`contains`/`size`/`isEmpty`/`clear`/`forEach`, and
+    for-each; `contains` and `remove(Object)` compare by `equals`, not the
+    ordering, exactly as Java's do. It **is** a `Queue`, so it reuses that
+    interface (`Queue<E> q = new PriorityQueue<>()`), differing only in the
+    heap object behind it. Pinned against a real JDK by
+    `diff_priority_queue_core` and `_comparator_and_heapify`.
   - `LinkedList<E>`, and the `Queue<E>`/`Deque<E>` interfaces it implements
     (2026-07-10). The storage is the same ordered-element vector an
     `ArrayList` uses — this VM models no node links or their cost — kept a
@@ -619,7 +635,7 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     JVM's is system-dependent, and caturra runs where a line ends with a
     newline. Pinned by `diff_system_arraycopy_and_line_separator`.
   - A real Java 11 class caturra does not model (`Stack`, `ArrayDeque`,
-    `Iterator`, `Optional`, `PriorityQueue`, `BufferedReader`, ...)
+    `Iterator`, `Optional`, `Hashtable`, `BufferedReader`, ...)
     reports an honest "java.util.Stack is not supported by caturra"
     **wherever it is written** (2026-07-09): a local or field declaration,
     a parameter, an array element, a type argument, `new`, `extends` and
@@ -638,8 +654,8 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     javac's wording; real-but-unmodeled Java classes and packages get
     an honest "not supported by caturra" instead), and using `Scanner`,
     `ArrayList`, `HashMap`, `Map`, `TreeMap`, `Set`, `HashSet`, `TreeSet`,
-    `LinkedList`, `Queue`, `Deque`, `Collection`, `File`, or `PrintWriter`
-    without the matching import
+    `LinkedList`, `Queue`, `Deque`, `PriorityQueue`, `Collection`, `File`, or
+    `PrintWriter` without the matching import
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
     imports (`IOException`, ...) are accepted for `throws` clauses;

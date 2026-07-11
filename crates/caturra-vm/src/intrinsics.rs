@@ -77,6 +77,10 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
             values: Vec::new(),
             comparator: None,
         }),
+        "java/util/PriorityQueue" => Some(HeapObject::PriorityQueue {
+            heap: Vec::new(),
+            comparator: None,
+        }),
         "java/util/TreeMap" => Some(HeapObject::TreeMap {
             entries: Vec::new(),
             comparator: None,

@@ -592,20 +592,21 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             args,
             ..
         } => {
-            // A comparator lambda argument to a `TreeSet`/`TreeMap` constructor:
-            // its parameters are the set's element / the map's key type, read
-            // from the `new`'s own type arguments or, for a diamond, the
-            // declaration target it initializes.
-            if matches!(class.as_str(), "TreeSet" | "TreeMap")
-                && args.len() == 1
-                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 2)
+            // A comparator lambda argument to a sorted collection's constructor
+            // (`TreeSet`/`TreeMap`/`PriorityQueue`): its parameters are the
+            // element / key type, read from the `new`'s own type arguments or,
+            // for a diamond, the declaration target it initializes. For a
+            // `PriorityQueue(capacity, cmp)` the lambda is the last argument.
+            if matches!(class.as_str(), "TreeSet" | "TreeMap" | "PriorityQueue")
+                && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
                 && let Some(elem) = type_args
                     .first()
                     .cloned()
                     .or_else(|| expected.and_then(sorted_ctor_elem))
             {
-                args[0] = build_erased_lambda(
-                    &mut args[0],
+                let last = args.len() - 1;
+                args[last] = build_erased_lambda(
+                    &mut args[last],
                     "__Comparator",
                     "compare",
                     &TypeRef::Int,
@@ -826,7 +827,13 @@ fn sorted_ctor_elem(target: &TypeRef) -> Option<TypeRef> {
     };
     matches!(
         base.as_str(),
-        "TreeSet" | "SortedSet" | "NavigableSet" | "TreeMap" | "SortedMap" | "NavigableMap"
+        "TreeSet"
+            | "SortedSet"
+            | "NavigableSet"
+            | "TreeMap"
+            | "SortedMap"
+            | "NavigableMap"
+            | "PriorityQueue"
     )
     .then(|| args.first().cloned())
     .flatten()
@@ -892,6 +899,7 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             | "LinkedList"
             | "Queue"
             | "Deque"
+            | "PriorityQueue"
             | "Collection"
     );
     (is_collection && args.len() == 1).then(|| args[0].clone())

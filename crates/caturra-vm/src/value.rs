@@ -140,6 +140,15 @@ pub enum HeapObject {
     /// [`crate::map::JavaHashMap`] with each element stored as a key mapped to
     /// a placeholder value.
     HashSet(crate::map::JavaHashMap),
+    /// A `java.util.PriorityQueue` (element type erased): a binary min-heap in
+    /// an array, so `peek`/`poll` return the least element while iteration and
+    /// `toString` show the heap-array order — replicated exactly (Java's
+    /// `siftUp`/`siftDown`) so both match a real JVM. `comparator` orders the
+    /// elements, or `None` for natural (`Comparable`) ordering.
+    PriorityQueue {
+        heap: Vec<JValue>,
+        comparator: Option<HeapRef>,
+    },
     /// A `java.util.TreeSet` (element type erased): its elements kept in sorted
     /// order, so iteration, `first`/`last` and the navigation methods read
     /// straight off the vector. `comparator` is the `Comparator` instance the
