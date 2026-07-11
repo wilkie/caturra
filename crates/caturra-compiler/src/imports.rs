@@ -22,6 +22,7 @@ const JAVA_UTIL: &[&str] = &[
     "HashMap",
     "Map",
     "Set",
+    "HashSet",
     "Collection",
     "Arrays",
     "Random",
@@ -79,7 +80,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.util",
         &[
-            "HashSet",
             "TreeMap",
             "TreeSet",
             "LinkedList",
@@ -132,6 +132,7 @@ const REQUIRES_IMPORT: &[&str] = &[
     "HashMap",
     "Map",
     "Set",
+    "HashSet",
     "Collection",
     "File",
     "PrintWriter",

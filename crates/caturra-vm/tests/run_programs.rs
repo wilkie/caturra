@@ -8320,6 +8320,92 @@ fn hash_map_iterates_and_boxes_like_the_jdk() {
     );
 }
 
+/// `java.util.HashSet` iterates in a real `HashSet`'s bucket order (it reuses
+/// the map machinery), deduplicates, and supports the bulk operations. Pinned
+/// JDK-free for CI; the byte-for-byte JDK match is in `differential.rs`.
+#[test]
+fn hash_set_iterates_and_dedups_like_the_jdk() {
+    let out = run_stdout(
+        r#"
+        import java.util.ArrayList;
+        import java.util.HashSet;
+        import java.util.List;
+        import java.util.Set;
+        public class S {
+            public static void main(String[] args) {
+                Set<String> s = new HashSet<>();
+                System.out.println(s.add("apple") + " " + s.add("banana") + " " + s.add("apple"));
+                System.out.println(s.size() + " " + s.contains("banana") + " " + s.contains("cherry"));
+                System.out.println(s);                 // bucket order: [banana, apple]
+
+                HashSet<Integer> nums = new HashSet<>();
+                for (int i = 10; i >= 1; i--) {
+                    nums.add(i);
+                }
+                System.out.println(nums);              // [1, 2, ..., 10]
+                System.out.println(nums.remove(5) + " " + nums.remove(99));
+                System.out.println(nums);
+
+                List<Integer> dups = new ArrayList<>();
+                dups.add(3); dups.add(1); dups.add(3); dups.add(2); dups.add(1);
+                Set<Integer> deduped = new HashSet<>(dups);
+                System.out.println(deduped + " " + deduped.size());
+
+                int total = 0;
+                for (int x : nums) {
+                    total += x;
+                }
+                System.out.println(total);
+            }
+        }
+        "#,
+        "S",
+    );
+    assert_eq!(
+        out,
+        "true true false\n\
+         2 true false\n\
+         [banana, apple]\n\
+         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n\
+         true false\n\
+         [1, 2, 3, 4, 6, 7, 8, 9, 10]\n\
+         [1, 2, 3] 3\n\
+         50\n"
+    );
+}
+
+/// A map's `keySet()` presents the mutable `Set` interface: `add` throws
+/// `UnsupportedOperationException` (as Java's does — accepting it would be the
+/// dangerous direction), while `remove` writes through to the backing map.
+#[test]
+fn keyset_view_add_throws_but_remove_writes_through() {
+    let out = run_stdout(
+        r#"
+        import java.util.HashMap;
+        import java.util.Map;
+        import java.util.Set;
+        public class K {
+            public static void main(String[] args) {
+                Map<String, Integer> m = new HashMap<>();
+                m.put("a", 1);
+                m.put("b", 2);
+                Set<String> keys = m.keySet();
+                try {
+                    keys.add("c");
+                    System.out.println("added");
+                } catch (UnsupportedOperationException e) {
+                    System.out.println("uoe");
+                }
+                keys.remove("a");
+                System.out.println(m);
+            }
+        }
+        "#,
+        "K",
+    );
+    assert_eq!(out, "uoe\n{b=2}\n");
+}
+
 /// Java's `Map` members that caturra cannot model name a reason rather than
 /// pretending they do not exist. The reason has to win over the arguments'
 /// own errors: `map.forEach(lambda)` must blame the missing lambda support,
@@ -9708,7 +9794,7 @@ fn unmodeled_library_classes_explain_themselves_in_every_position() {
         ("implements", "class D implements Iterator {} class M {}"),
         (
             "type argument",
-            "class M { static void r() { ArrayList<HashSet> l; } }",
+            "class M { static void r() { ArrayList<TreeSet> l; } }",
         ),
         (
             "qualified",

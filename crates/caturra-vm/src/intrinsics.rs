@@ -71,6 +71,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         }),
         "java/util/ArrayList" => Some(HeapObject::ArrayList(Vec::new())),
         "java/util/HashMap" => Some(HeapObject::HashMap(JavaHashMap::new())),
+        "java/util/HashSet" => Some(HeapObject::HashSet(JavaHashMap::new())),
         "java/io/File" => Some(HeapObject::File(String::new())),
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),
@@ -148,7 +149,9 @@ pub fn invoke_special(
                 )));
             }
             match heap.get_mut(receiver) {
-                Some(HeapObject::HashMap(map)) => {
+                // `new HashSet<>(initialCapacity)` builds `new HashMap<>(cap)`,
+                // so the hint reaches the backing map identically.
+                Some(HeapObject::HashMap(map) | HeapObject::HashSet(map)) => {
                     *map = JavaHashMap::with_capacity_hint(capacity);
                     Ok(())
                 }

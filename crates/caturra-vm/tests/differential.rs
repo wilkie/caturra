@@ -5271,12 +5271,6 @@ stricter_than_javac!(
     "import java.util.*;\npublic class StrictLinkedList { static void r() { LinkedList<Integer> l; } }"
 );
 
-stricter_than_javac!(
-    strict_hash_set_is_refused_by_name,
-    "StrictHashSet",
-    "import java.util.*;\npublic class StrictHashSet { static void r() { HashSet<Integer> s; } }"
-);
-
 differential_test!(
     diff_array_default_to_string,
     "DiffArrayToString",
@@ -6397,6 +6391,141 @@ public class DiffSbType {
         DiffSbType obj = new DiffSbType();
         obj.field.append("f]");
         System.out.println(obj.field);
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
+// java.util.HashSet — the element iteration order is a real HashSet's exactly,
+// because caturra backs it with the same bucket-order machinery as HashMap.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_hash_set_core,
+    "DiffHashSetCore",
+    r#"
+import java.util.HashSet;
+import java.util.Set;
+
+public class DiffHashSetCore {
+    public static void main(String[] args) {
+        Set<String> s = new HashSet<>();
+        System.out.println(s.add("apple"));   // true
+        System.out.println(s.add("banana"));  // true
+        System.out.println(s.add("apple"));   // false (already present)
+        System.out.println(s.size());         // 2
+        System.out.println(s.isEmpty());      // false
+        System.out.println(s.contains("banana"));
+        System.out.println(s.contains("cherry"));
+        System.out.println(s);                // JDK bucket order
+        System.out.println(s.remove("apple"));
+        System.out.println(s.remove("cherry"));
+        System.out.println(s);
+        s.clear();
+        System.out.println(s.isEmpty() + " " + s.size());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_hash_set_integer_order,
+    "DiffHashSetOrder",
+    r#"
+import java.util.HashSet;
+
+public class DiffHashSetOrder {
+    public static void main(String[] args) {
+        // Insert in reverse; the set iterates in bucket order, not insertion.
+        HashSet<Integer> nums = new HashSet<>();
+        for (int i = 20; i >= 1; i--) {
+            nums.add(i * 7);
+        }
+        System.out.println(nums);
+        int sum = 0;
+        for (int x : nums) {
+            sum += x;
+        }
+        System.out.println(sum);
+        nums.forEach(x -> System.out.print(x + " "));
+        System.out.println();
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_hash_set_bulk_ops,
+    "DiffHashSetBulk",
+    r#"
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+public class DiffHashSetBulk {
+    public static void main(String[] args) {
+        List<Integer> dups = new ArrayList<>();
+        dups.add(3);
+        dups.add(1);
+        dups.add(3);
+        dups.add(2);
+        dups.add(1);
+        // Copy constructor deduplicates.
+        Set<Integer> a = new HashSet<>(dups);
+        System.out.println(a + " " + a.size());
+
+        Set<Integer> b = new HashSet<>();
+        b.add(2);
+        b.add(4);
+        System.out.println(a.addAll(b));      // true (4 was new)
+        System.out.println(a);
+        System.out.println(a.containsAll(b)); // true
+        System.out.println(a.removeAll(b));   // true
+        System.out.println(a);
+        a.add(2);
+        a.add(3);
+        a.add(9);
+        System.out.println(a.retainAll(b));   // keep only {2,4}: 2 stays
+        System.out.println(a);
+
+        // equals / hashCode do not depend on order.
+        Set<Integer> x = new HashSet<>();
+        Set<Integer> y = new HashSet<>();
+        x.add(1); x.add(2); x.add(3);
+        y.add(3); y.add(1); y.add(2);
+        System.out.println(x.equals(y));
+        System.out.println(x.hashCode() == y.hashCode());
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_hash_set_keyset_bridge,
+    "DiffHashSetKeys",
+    r#"
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+public class DiffHashSetKeys {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        m.put("c", 3);
+        // A keySet() flows into a Set variable and copies cleanly into a HashSet.
+        Set<String> keys = m.keySet();
+        Set<String> copy = new HashSet<>(keys);
+        System.out.println(copy.size());
+        System.out.println(copy.contains("b"));
+        // keySet().remove writes through to the map (Java semantics).
+        keys.remove("b");
+        System.out.println(m);
+        System.out.println(m.containsKey("b"));
     }
 }
 "#

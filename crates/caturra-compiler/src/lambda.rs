@@ -803,7 +803,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     let TypeRef::Generic { base, args } = ty else {
         return None;
     };
-    let is_collection = matches!(base.as_str(), "ArrayList" | "List" | "Set" | "Collection");
+    let is_collection = matches!(
+        base.as_str(),
+        "ArrayList" | "List" | "Set" | "HashSet" | "Collection"
+    );
     (is_collection && args.len() == 1).then(|| args[0].clone())
 }
 

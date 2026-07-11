@@ -1768,6 +1768,29 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException",
             )));
         };
+        // `new HashSet<>(collection)` copies the elements, deduplicating — which
+        // may run a user `equals`/`hashCode`, so it belongs here rather than in
+        // the heap-only intrinsic layer. Java pre-sizes the backing map to
+        // `max((int)(size/.75f)+1, 16)`, so a large source lands on a bigger
+        // table and iterates accordingly.
+        if target_class == "java/util/HashSet" && descriptor == "(Ljava/util/Collection;)V" {
+            use crate::value::HeapObject;
+            let JValue::Ref(Some(source)) = args[0] else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            let elements = self.collection_elements(source);
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let hint = std::cmp::max((elements.len() as f32 / 0.75) as i32 + 1, 16);
+            if let Some(HeapObject::HashSet(map)) = self.heap.get_mut(receiver) {
+                *map = crate::map::JavaHashMap::with_capacity_hint(hint);
+            }
+            for element in elements {
+                self.set_add(receiver, element)?;
+            }
+            return Ok(None);
+        }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
         if classes.contains_key(&target_class) {
             // A user constructor or a `super.method(...)` call; the
@@ -2140,6 +2163,11 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::ArrayList(items)) => Renderable::List(items.clone()),
             Some(HeapObject::UnmodifiableList(_)) => Renderable::List(self.list_items(reference)),
             Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
+            // A set prints as `[a, b]` — its elements are the backing map's
+            // keys, so the keys-view renderer produces exactly that.
+            Some(HeapObject::HashSet(map)) => {
+                Renderable::View(map.entries_in_order(), MapViewKind::Keys)
+            }
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
                 match self.heap.get(map) {
@@ -2972,6 +3000,7 @@ impl<'run> Interpreter<'run> {
                 HeapObject::ArrayList(_)
                     | HeapObject::UnmodifiableList(_)
                     | HeapObject::HashMap(_)
+                    | HeapObject::HashSet(_)
                     | HeapObject::MapView { .. }
                     | HeapObject::MapEntry { .. }
             )
@@ -3275,11 +3304,14 @@ impl<'run> Interpreter<'run> {
         key: JValue,
     ) -> Result<Option<usize>, VmError> {
         use crate::value::HeapObject;
-        let Some(HeapObject::HashMap(entries)) = self.heap.get(map) else {
+        let Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) = self.heap.get(map)
+        else {
             return Ok(None);
         };
         for at in entries.candidates(hash) {
-            let Some(HeapObject::HashMap(entries)) = self.heap.get(map) else {
+            let Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) =
+                self.heap.get(map)
+            else {
                 return Ok(None);
             };
             let stored = entries.key_at(at);
@@ -3318,14 +3350,20 @@ impl<'run> Interpreter<'run> {
     /// A map's entries in iteration order, detached from the heap borrow.
     fn map_entries(&self, map: HeapRef) -> Vec<(JValue, JValue)> {
         match self.heap.get(map) {
-            Some(crate::value::HeapObject::HashMap(entries)) => entries.entries_in_order(),
+            Some(
+                crate::value::HeapObject::HashMap(entries)
+                | crate::value::HeapObject::HashSet(entries),
+            ) => entries.entries_in_order(),
             _ => Vec::new(),
         }
     }
 
     fn map_len(&self, map: HeapRef) -> usize {
         match self.heap.get(map) {
-            Some(crate::value::HeapObject::HashMap(entries)) => entries.len(),
+            Some(
+                crate::value::HeapObject::HashMap(entries)
+                | crate::value::HeapObject::HashSet(entries),
+            ) => entries.len(),
             _ => 0,
         }
     }
@@ -3335,11 +3373,14 @@ impl<'run> Interpreter<'run> {
         use crate::value::HeapObject;
         let hash = self.java_hash_code(key)?;
         if let Some(at) = self.map_find_hashed(map, hash, key)?
-            && let Some(HeapObject::HashMap(entries)) = self.heap.get_mut(map)
+            && let Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) =
+                self.heap.get_mut(map)
         {
             return Ok(entries.set_value_at(at, value));
         }
-        if let Some(HeapObject::HashMap(entries)) = self.heap.get_mut(map) {
+        if let Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) =
+            self.heap.get_mut(map)
+        {
             entries.insert_new(hash, key, value);
         }
         Ok(JValue::NULL)
@@ -3359,6 +3400,9 @@ impl<'run> Interpreter<'run> {
         use crate::value::HeapObject;
         match self.heap.get(receiver) {
             Some(HeapObject::HashMap(_)) => {}
+            Some(HeapObject::HashSet(_)) => {
+                return self.set_intrinsic(receiver, method_name, descriptor, args);
+            }
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
                 return self.map_view_intrinsic(map, kind, method_name, descriptor, args);
@@ -3504,16 +3548,230 @@ impl<'run> Interpreter<'run> {
         Ok(Answered::Value(result))
     }
 
+    /// `java.util.HashSet`. Backed by a [`crate::map::JavaHashMap`] keyed on the
+    /// elements, so its iteration order is a real `HashSet`'s exactly. Element
+    /// comparison may run a user `equals`/`hashCode`, so — as with the map —
+    /// every element-touching operation lives here rather than in the intrinsic
+    /// layer.
+    #[allow(clippy::too_many_lines)] // one method table
+    fn set_intrinsic(
+        &mut self,
+        receiver: HeapRef,
+        method_name: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Answered, VmError> {
+        use crate::value::HeapObject;
+        let result = match (method_name, args) {
+            ("size", []) => JValue::Int(i32::try_from(self.map_len(receiver)).unwrap_or(i32::MAX)),
+            ("isEmpty", []) => JValue::Int(i32::from(self.map_len(receiver) == 0)),
+            ("clear", []) => {
+                if let Some(HeapObject::HashSet(entries)) = self.heap.get_mut(receiver) {
+                    entries.clear();
+                }
+                return Ok(Answered::Void);
+            }
+            ("contains", [probe]) => {
+                JValue::Int(i32::from(self.map_find(receiver, *probe)?.is_some()))
+            }
+            ("add", [element]) => JValue::Int(i32::from(self.set_add(receiver, *element)?)),
+            ("remove", [element]) => {
+                let removed = match self.map_find(receiver, *element)? {
+                    Some(at) => {
+                        self.map_remove_at(receiver, at);
+                        true
+                    }
+                    None => false,
+                };
+                JValue::Int(i32::from(removed))
+            }
+            ("addAll", [JValue::Ref(Some(source))]) => {
+                let mut changed = false;
+                for element in self.collection_elements(*source) {
+                    changed |= self.set_add(receiver, element)?;
+                }
+                JValue::Int(i32::from(changed))
+            }
+            ("containsAll", [JValue::Ref(Some(source))]) => {
+                let mut all = true;
+                for element in self.collection_elements(*source) {
+                    if self.map_find(receiver, element)?.is_none() {
+                        all = false;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(all))
+            }
+            ("removeAll", [JValue::Ref(Some(source))]) => {
+                let mut changed = false;
+                for element in self.collection_elements(*source) {
+                    if let Some(at) = self.map_find(receiver, element)? {
+                        self.map_remove_at(receiver, at);
+                        changed = true;
+                    }
+                }
+                JValue::Int(i32::from(changed))
+            }
+            ("retainAll", [JValue::Ref(Some(source))]) => {
+                let keep = self.collection_elements(*source);
+                let mut changed = false;
+                for element in self.collection_elements(receiver) {
+                    let mut found = false;
+                    for candidate in &keep {
+                        if element == *candidate || self.java_equals(element, *candidate)? {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found && let Some(at) = self.map_find(receiver, element)? {
+                        self.map_remove_at(receiver, at);
+                        changed = true;
+                    }
+                }
+                JValue::Int(i32::from(changed))
+            }
+            ("forEach", [JValue::Ref(Some(consumer))]) => {
+                self.set_for_each(receiver, *consumer)?;
+                return Ok(Answered::Void);
+            }
+            // caturra's own indexed accessor, standing in for the iterator the
+            // enhanced-for loop would otherwise need.
+            ("__get", [JValue::Int(position)]) => {
+                let position = usize::try_from(*position).unwrap_or(usize::MAX);
+                let entry = match self.heap.get(receiver) {
+                    Some(HeapObject::HashSet(entries)) => entries.entry_at(position),
+                    _ => None,
+                };
+                let Some((element, _)) = entry else {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
+                    )));
+                };
+                element
+            }
+            // `AbstractSet.equals`: another Set of the same size holding them all.
+            ("equals", [JValue::Ref(other)]) => {
+                let Some(other) = *other else {
+                    return Ok(Answered::Value(JValue::Int(0)));
+                };
+                if !matches!(self.heap.get(other), Some(HeapObject::HashSet(_)))
+                    || self.map_len(receiver) != self.map_len(other)
+                {
+                    return Ok(Answered::Value(JValue::Int(0)));
+                }
+                let mut equal = true;
+                for element in self.collection_elements(receiver) {
+                    if self.map_find(other, element)?.is_none() {
+                        equal = false;
+                        break;
+                    }
+                }
+                JValue::Int(i32::from(equal))
+            }
+            // `AbstractSet.hashCode`: the sum of the elements' hash codes.
+            ("hashCode", []) => {
+                let mut sum = 0i32;
+                for element in self.collection_elements(receiver) {
+                    sum = sum.wrapping_add(self.java_hash_code(element)?);
+                }
+                JValue::Int(sum)
+            }
+            _ => {
+                return Err(VmError::UnknownIntrinsic(format!(
+                    "HashSet.{method_name}{descriptor}"
+                )));
+            }
+        };
+        Ok(Answered::Value(result))
+    }
+
+    /// `set.add(element)`: store it as a key mapped to a placeholder if absent,
+    /// reporting whether the set changed. Java's `HashSet.add` is exactly
+    /// `map.put(e, PRESENT) == null`.
+    fn set_add(&mut self, set: HeapRef, element: JValue) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        let hash = self.java_hash_code(element)?;
+        if self.map_find_hashed(set, hash, element)?.is_some() {
+            return Ok(false);
+        }
+        if let Some(HeapObject::HashSet(entries)) = self.heap.get_mut(set) {
+            entries.insert_new(hash, element, JValue::NULL);
+        }
+        Ok(true)
+    }
+
+    /// `set.forEach(consumer)`: call `accept(element)` on each element in
+    /// iteration order, running the synthesized lambda through the nested-call
+    /// machinery (a user `accept` may itself touch the set).
+    fn set_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
+        let elements = self.collection_elements(receiver);
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        for element in elements {
+            let dispatched = self.user_virtual_dispatch(
+                consumer,
+                &class_name,
+                "accept",
+                "(Ljava/lang/Object;)V",
+                &[element],
+            )?;
+            if let UserDispatch::Call(frame) = dispatched {
+                self.run_nested(frame)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The elements of any collection caturra can walk, in iteration order: an
+    /// `ArrayList` (or its unmodifiable view), a `HashSet`, or a map's
+    /// `keySet()`/`values()` view. Backs `addAll`/`removeAll`/`retainAll` and
+    /// the collection-copy constructor.
+    fn collection_elements(&self, reference: HeapRef) -> Vec<JValue> {
+        use crate::value::HeapObject;
+        match self.heap.get(reference) {
+            Some(HeapObject::ArrayList(_) | HeapObject::UnmodifiableList(_)) => {
+                self.list_items(reference)
+            }
+            Some(HeapObject::HashSet(entries)) => entries
+                .entries_in_order()
+                .into_iter()
+                .map(|(element, _)| element)
+                .collect(),
+            Some(HeapObject::MapView { map, kind }) => {
+                let (map, kind) = (*map, *kind);
+                self.map_entries(map)
+                    .into_iter()
+                    .map(move |(key, value)| match kind {
+                        MapViewKind::Values => value,
+                        _ => key,
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn map_value_at(&self, map: HeapRef, at: usize) -> JValue {
         match self.heap.get(map) {
-            Some(crate::value::HeapObject::HashMap(entries)) => entries.value_at(at),
+            Some(
+                crate::value::HeapObject::HashMap(entries)
+                | crate::value::HeapObject::HashSet(entries),
+            ) => entries.value_at(at),
             _ => JValue::NULL,
         }
     }
 
     fn map_remove_at(&mut self, map: HeapRef, at: usize) -> JValue {
         match self.heap.get_mut(map) {
-            Some(crate::value::HeapObject::HashMap(entries)) => entries.remove_at(at),
+            Some(
+                crate::value::HeapObject::HashMap(entries)
+                | crate::value::HeapObject::HashSet(entries),
+            ) => entries.remove_at(at),
             _ => JValue::NULL,
         }
     }
@@ -3532,6 +3790,7 @@ impl<'run> Interpreter<'run> {
     /// index loop over it, because caturra has no iterators. Mutating the map
     /// inside such a loop silently sees the new contents, where a real JDK
     /// would throw `ConcurrentModificationException`.
+    #[allow(clippy::too_many_lines)] // one method table
     fn map_view_intrinsic(
         &mut self,
         map: HeapRef,
@@ -3577,6 +3836,79 @@ impl<'run> Interpreter<'run> {
                         JValue::Ref(Some(self.heap.alloc(HeapObject::MapEntry { map, key })))
                     }
                 }
+            }
+            // A map's views do not support `add` — Java throws here, so must we
+            // (accepting it silently would be the dangerous direction).
+            ("add" | "addAll", [_]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.UnsupportedOperationException",
+                )));
+            }
+            // `remove`/`clear` on a view DO write through to the map, as Java's.
+            ("clear", []) => {
+                if let Some(HeapObject::HashMap(entries)) = self.heap.get_mut(map) {
+                    entries.clear();
+                }
+                return Ok(Answered::Void);
+            }
+            ("remove", [element]) => {
+                let removed = match kind {
+                    MapViewKind::Keys => match self.map_find(map, *element)? {
+                        Some(at) => {
+                            self.map_remove_at(map, at);
+                            true
+                        }
+                        None => false,
+                    },
+                    // `values().remove(o)` drops the first entry mapping to `o`.
+                    MapViewKind::Values => {
+                        let mut removed = false;
+                        for (key, value) in self.map_entries(map) {
+                            if self.java_equals(*element, value)? {
+                                if let Some(at) = self.map_find(map, key)? {
+                                    self.map_remove_at(map, at);
+                                }
+                                removed = true;
+                                break;
+                            }
+                        }
+                        removed
+                    }
+                    MapViewKind::Entries => {
+                        return Err(VmError::UnknownIntrinsic(format!(
+                            "Map view.{method_name}{descriptor}"
+                        )));
+                    }
+                };
+                JValue::Int(i32::from(removed))
+            }
+            ("removeAll", [JValue::Ref(Some(source))]) if kind == MapViewKind::Keys => {
+                let mut changed = false;
+                for element in self.collection_elements(*source) {
+                    if let Some(at) = self.map_find(map, element)? {
+                        self.map_remove_at(map, at);
+                        changed = true;
+                    }
+                }
+                JValue::Int(i32::from(changed))
+            }
+            ("retainAll", [JValue::Ref(Some(source))]) if kind == MapViewKind::Keys => {
+                let keep = self.collection_elements(*source);
+                let mut changed = false;
+                for (key, _) in self.map_entries(map) {
+                    let mut found = false;
+                    for candidate in &keep {
+                        if key == *candidate || self.java_equals(key, *candidate)? {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found && let Some(at) = self.map_find(map, key)? {
+                        self.map_remove_at(map, at);
+                        changed = true;
+                    }
+                }
+                JValue::Int(i32::from(changed))
             }
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
@@ -4141,6 +4473,7 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
             Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
+            Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }

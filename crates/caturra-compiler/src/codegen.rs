@@ -1109,6 +1109,10 @@ impl MethodTable {
                 if simple == "Map" && !self.has_class("Map") {
                     simple = "HashMap";
                 }
+                // `HashSet<E>` is the concrete form of the Set caturra models.
+                if simple == "HashSet" && !self.has_class("HashSet") {
+                    simple = "Set";
+                }
                 if simple == "ArrayList" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::List)
                 } else if simple == "HashMap" && args.len() == 2 && !self.has_class(simple) {
@@ -2511,6 +2515,9 @@ fn method_descriptor(
                 if simple == "Map" && !table.has_class("Map") {
                     simple = "HashMap";
                 }
+                if simple == "HashSet" && !table.has_class("HashSet") {
+                    simple = "Set";
+                }
                 if simple == "ArrayList" {
                     out.push_str("Ljava/util/ArrayList;");
                 } else if simple == "HashMap" {
@@ -2718,6 +2725,9 @@ enum BParam {
     CharArray,
     /// The receiver's own list type (`addAll(otherList)`).
     SelfList,
+    /// Any collection whose element type is assignable to the receiver's
+    /// (`set.addAll(aList)`, `set.retainAll(anotherSet)`).
+    SelfCollection,
     /// The list's element type (autoboxed at the boundary).
     Elem,
     /// `java.lang.Class` (`Class.isAssignableFrom(Class)`).
@@ -3203,10 +3213,7 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("HashMap", "ofEntries", "varargs are not supported by caturra"),
     ("Set", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Set", "stream", "streams are not supported by caturra"),
-    ("Set", "removeIf", "lambdas are not supported by caturra"),
-    ("Set", "add", "a map's keySet() does not support add — Java throws UnsupportedOperationException"),
-    ("Set", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
-    ("Set", "clear", "clearing through a map's view is not supported by caturra (clear the map itself)"),
+    ("Set", "removeIf", "Set.removeIf is not supported by caturra"),
     ("Collection", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Collection", "stream", "streams are not supported by caturra"),
     ("Collection", "removeIf", "lambdas are not supported by caturra"),
@@ -4550,6 +4557,73 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
+/// `java.util.Set<E>` — a standalone `HashSet`, or a map's `keySet()`. Both
+/// present the mutable `Set` interface; at runtime a `keySet()` view throws
+/// `UnsupportedOperationException` on `add` and writes through to its map on
+/// `remove`/`clear`, exactly as Java's does. `__get` (the enhanced-for
+/// accessor) is synthesized by `for_each`, not listed here.
+const SET_METHODS: &[BuiltinMethod] = &[
+    bm("size", &[], BRet::Int, "()I"),
+    bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "add",
+        &[BParam::Key],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "remove",
+        &[BParam::Key],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "contains",
+        &[BParam::Key],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "addAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "containsAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
 /// `Set<Map.Entry<K, V>>` — a map's `entrySet()` view.
 const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
     bm("size", &[], BRet::Int, "()I"),
@@ -4587,7 +4661,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::Map { .. } => Some(("java/util/HashMap", MAP_METHODS)),
-        JType::Set(_) => Some(("java/util/Set", VIEW_METHODS)),
+        JType::Set(_) => Some(("java/util/Set", SET_METHODS)),
         JType::Collection(_) => Some(("java/util/Collection", VIEW_METHODS)),
         JType::EntrySet { .. } => Some(("java/util/Set", ENTRY_SET_METHODS)),
         JType::MapEntry { .. } => Some(("java/util/Map$Entry", ENTRY_METHODS)),
@@ -4746,6 +4820,7 @@ fn bparam_type(param: BParam, args: TypeArgs) -> JType {
             dims: 1,
         },
         BParam::SelfList => args.first.map_or(JType::Error, JType::List),
+        BParam::SelfCollection => args.first.map_or(JType::Error, JType::Collection),
         BParam::Elem => args.first.map_or(JType::Error, ElemType::base_type),
         BParam::Class => JType::Class,
         BParam::RefArray => JType::Error,
@@ -4793,6 +4868,16 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
             (arg, table.class_id("__Comparator")),
             (JType::Object(id), Some(target)) if table.is_subtype(id, target)
         ),
+        // A collection whose elements are assignable to the receiver's — a
+        // `List`, `Set` or `Collection` of a widening element type. `null`
+        // is a Collection too.
+        BParam::SelfCollection => match (arg, args.first) {
+            (JType::Null, _) => true,
+            (JType::List(elem) | JType::Set(elem) | JType::Collection(elem), Some(want)) => {
+                widens(elem.base_type(), want.base_type(), table)
+            }
+            _ => false,
+        },
         other => widens(arg, bparam_type(other, args), table),
     }
 }
@@ -6549,6 +6634,12 @@ impl BodyGen<'_> {
                 },
                 _ => JType::Null,
             },
+            "HashSet" | "Set" => match type_args {
+                // A diamond `new HashSet<>(...)` gets its element from context —
+                // `Null` (assignable to any Set), matching `new_hash_set`.
+                [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Set),
+                _ => JType::Null,
+            },
             _ => JType::Error,
         }
     }
@@ -6619,6 +6710,7 @@ impl BodyGen<'_> {
                 "Scanner" => return self.new_scanner(args, span),
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "HashMap" => return self.new_hash_map(type_args, args, span),
+                "HashSet" => return self.new_hash_set(type_args, args, span),
                 "File" => return self.new_file(args, span),
                 "PrintWriter" => return self.new_writer(args, span),
                 "Integer" | "Double" | "Long" | "Float" | "Short" | "Byte" | "Character"
@@ -7088,6 +7180,78 @@ impl BodyGen<'_> {
         }
         match entry {
             Some((key, value)) => JType::Map { key, value },
+            None => JType::Null,
+        }
+    }
+
+    /// `new HashSet<>()` / `new HashSet<>(int)` / `new HashSet<>(collection)`.
+    /// Emits `new java.util.HashSet` so the VM builds a set backed by a map of
+    /// the elements; the copy constructor deduplicates at runtime.
+    fn new_hash_set(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
+        if args.len() > 1 {
+            self.error(span, "HashSet takes at most one constructor argument");
+            return JType::Error;
+        }
+        let mut elem = match type_args {
+            // Diamond `new HashSet<>()`: the element type comes from the
+            // assignment context (or the copy source below).
+            [] => None,
+            [arg] => {
+                let Some(elem) = elem_from_type_arg(arg, self.table) else {
+                    self.error(
+                        span,
+                        "HashSet element type must be Integer, Double, Boolean, \
+                         Character, String, or a class",
+                    );
+                    return JType::Error;
+                };
+                Some(elem)
+            }
+            _ => {
+                self.error(span, "HashSet takes one type argument");
+                return JType::Error;
+            }
+        };
+        let set_class = intern_class(self.pool, "java/util/HashSet");
+        self.code.push_op_u16(op::NEW, set_class, 1);
+        self.code.push_op(op::DUP, 1);
+        match args {
+            [] => {
+                let init_ref = intern_method_ref(self.pool, "java/util/HashSet", "<init>", "()V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(1);
+            }
+            [source] => {
+                let source_ty = self.expr(source);
+                // `new HashSet<>(c)` copies a collection; `new HashSet<>(16)` sizes.
+                let descriptor = match source_ty {
+                    JType::List(source_elem)
+                    | JType::Set(source_elem)
+                    | JType::Collection(source_elem) => {
+                        if elem.is_none() {
+                            elem = Some(source_elem);
+                        }
+                        "(Ljava/util/Collection;)V"
+                    }
+                    _ => {
+                        if !widens(source_ty, JType::Int, self.table) {
+                            self.error(
+                                span,
+                                "new HashSet(...) takes a Collection or an int capacity",
+                            );
+                        }
+                        "(I)V"
+                    }
+                };
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/HashSet", "<init>", descriptor);
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2); // the dup'd receiver + the argument
+            }
+            _ => unreachable!("arg count checked above"),
+        }
+        match elem {
+            Some(elem) => JType::Set(elem),
             None => JType::Null,
         }
     }

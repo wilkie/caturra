@@ -119,6 +119,12 @@ pub enum HeapObject {
     /// A `java.util.HashMap` (key/value types erased), carrying the JDK's
     /// iteration order. See [`crate::map`].
     HashMap(crate::map::JavaHashMap),
+    /// A `java.util.HashSet` (element type erased). The JDK backs a `HashSet`
+    /// with a `HashMap` whose keys are the elements, so a set's iteration
+    /// order is exactly that map's key order — modelled by reusing
+    /// [`crate::map::JavaHashMap`] with each element stored as a key mapped to
+    /// a placeholder value.
+    HashSet(crate::map::JavaHashMap),
     /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
     /// Java's are views too, so a later `put` shows through.
     MapView { map: HeapRef, kind: MapViewKind },

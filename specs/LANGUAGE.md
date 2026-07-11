@@ -390,10 +390,31 @@ null` is the way to test for absence, and unboxing an absent value
     other target type in caturra is instantiated from its receiver — and
     the VM walks the entries in the map's own iteration order. A receiver
     with no declaration to read (`getMap().forEach(...)`) is refused, as
-    is `merge`/`compute*`/`replaceAll`, `Map.of`, and mutation through a
-    view; all report honest reasons. `keySet`/`values`/`entrySet` and the core methods are
+    is `merge`/`compute*`/`replaceAll` and `Map.of`; all report honest
+    reasons. `keySet`/`values`/`entrySet` and the core methods are
     pinned against a real JDK by `diff_hash_map_iteration_order`,
     `_core_methods`, `_null_and_unboxing` and `_views`.
+  - `HashSet<E>` / `Set<E>` (2026-07-10), **with the JDK's own iteration
+    order** — which comes for free, because a real `HashSet` is backed by a
+    `HashMap` whose keys are the elements, and caturra reuses exactly that
+    bucket-order machinery. `new HashSet<>()`, `new HashSet<>(capacity)`, and
+    `new HashSet<>(collection)` (which deduplicates and pre-sizes its table to
+    `max((int)(c.size()/.75f)+1, 16)`, as Java's does, so a large source
+    lands on a bigger table and iterates accordingly). Methods:
+    `add/remove/contains/size/isEmpty/clear/addAll/removeAll/retainAll/
+containsAll/forEach/equals/hashCode/toString`, and for-each (the same
+    synthetic index-loop accessor the map views use). Elements hash and
+    compare with **their own `hashCode`/`equals`**, so a user type governs
+    both membership and order exactly as on a JVM; `equals`/`hashCode` are
+    `AbstractSet`'s (order-independent). `Set<E>` is the mutable interface
+    for both a standalone `HashSet` and a map's `keySet()`: at runtime a
+    `keySet()` view throws `UnsupportedOperationException` on `add` (Java's
+    behaviour — accepting it silently would be the dangerous direction) and
+    writes through to its map on `remove`/`clear`, while a real `HashSet`
+    performs them. `iterator`/`stream`/`removeIf` on a `Set` report honest
+    reasons. `TreeSet` stays unsupported (a sorted set is a different
+    structure). Pinned against a real JDK by `diff_hash_set_core`,
+    `_integer_order`, `_bulk_ops` and `_keyset_bridge`.
   - **`toString` is honoured wherever a value becomes text** (2026-07-09).
     A container renders its elements by calling their `toString()`, as
     `AbstractCollection` and `AbstractMap` do — `println(list)`,
@@ -547,8 +568,8 @@ null` is the way to test for absence, and unboxing an absent value
     validated (unknown class in a known package / unknown package get
     javac's wording; real-but-unmodeled Java classes and packages get
     an honest "not supported by caturra" instead), and using `Scanner`,
-    `ArrayList`, `HashMap`, `Map`, `Set`, `Collection`, `File`, or
-    `PrintWriter` without the matching import
+    `ArrayList`, `HashMap`, `Map`, `Set`, `HashSet`, `Collection`, `File`,
+    or `PrintWriter` without the matching import
     (or a `java.util.*` / `java.io.*` wildcard) is javac's "cannot find
     symbol: class Scanner". `java.lang` is implicit; exception-class
     imports (`IOException`, ...) are accepted for `throws` clauses;
