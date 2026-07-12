@@ -283,6 +283,61 @@ test.describe('playground', () => {
     expect(lengths.some((len) => len > 50000)).toBe(true); // the decoded beatbox asset
   });
 
+  test('plays a downloaded CSA level sound by name', async ({ page }) => {
+    // The level sounds are fetched, not vendored (see apps/playground/scripts/
+    // fetch-sounds.py). Skip when they have not been downloaded.
+    const response = await page.request.get('/sounds/level/manifest.json');
+    let available = false;
+    try {
+      const manifest = (await response.json()) as Record<string, string>;
+      available = typeof manifest === 'object' && 'birds.wav' in manifest;
+    } catch {
+      // No manifest (or the dev server served the SPA fallback) — assets absent.
+    }
+    test.skip(!available, 'run `pnpm sounds:fetch` to download the CSA level sounds');
+
+    await page.addInitScript(() => {
+      const created: AudioBufferSourceNode[] = [];
+      (window as unknown as { __sources: AudioBufferSourceNode[] }).__sources = created;
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- re-invoked via .call(this)
+      const original = AudioContext.prototype.createBufferSource;
+      AudioContext.prototype.createBufferSource = function patched(this: AudioContext) {
+        const source = original.call(this);
+        created.push(source);
+        return source;
+      };
+    });
+    await page.goto('/');
+    await page.getByTestId('theater-level').selectOption({ label: 'Shapes' });
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+    await setSource(
+      page,
+      [
+        'import org.code.theater.*;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Scene scene = new Scene();',
+        '        scene.drawText("Birds", 120, 200);',
+        '        scene.playSound("birds.wav");',
+        '        Theater.playScenes(scene);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    // The name resolved through the manifest, was fetched and decoded, and played.
+    await page.waitForFunction(
+      () => (window as unknown as { __sources: AudioBufferSourceNode[] }).__sources.length >= 1,
+    );
+    const played = await page.evaluate(() =>
+      (window as unknown as { __sources: AudioBufferSourceNode[] }).__sources.map(
+        (source) => source.buffer?.length ?? 0,
+      ),
+    );
+    expect(played.some((len) => len > 0)).toBe(true);
+  });
+
   test('loads a corpus theater level and draws it on the stage', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 4' });

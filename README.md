@@ -85,6 +85,7 @@ interactive console input (the playground's Vite config shows how).
 ```sh
 pnpm install            # JS dependencies (also installs the wasm-pack binary)
 pnpm build:wasm         # Rust → WASM → packages/core/src/wasm/generated/
+pnpm sounds:fetch       # optional: download the CSA levels' theater sounds (needs ffmpeg)
 pnpm build              # build:wasm + typecheck + bundle the playground
 pnpm dev                # playground dev server at http://localhost:5173
 pnpm test               # Vitest (runs the real WASM engine in Node)
@@ -96,3 +97,11 @@ pnpm lint:rust          # cargo clippy (pedantic) + cargo fmt --check
 
 `pnpm build:wasm` must run before the JS tests/builds — the generated bindings in
 `packages/core/src/wasm/generated/` are gitignored build output.
+
+`pnpm sounds:fetch` is optional. The theater levels play Code.org-hosted sounds
+(`birds.wav`, `retrobeat.wav`, …) that are too large to vendor (~104 MB) and that
+an isolated page can't fetch cross-origin, so they are downloaded and transcoded
+to MP3 (~6 MB) into the gitignored `apps/playground/public/sounds/level/`. Without
+it, everything still runs — `playNote`, generated `playSound(double[])`, and the
+bundled `beatbox.wav` work, and unknown sound names are silent. See
+[specs/EXECUTION.md](specs/EXECUTION.md).

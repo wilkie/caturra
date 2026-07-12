@@ -8,8 +8,6 @@
  * parses and draws them, holding a frame at each `pause` for animation.
  */
 
-import { soundUrl } from './theater-sounds.js';
-
 const CANVAS = 400;
 const SAMPLE_RATE = 44100;
 
@@ -289,21 +287,23 @@ export class TheaterViz {
   }
 
   /**
-   * Fetch and decode bundled assets, returning their mono samples by name (for
-   * the caller to preload into the engine's VFS so `SoundLoader.read` works).
-   * Decoded buffers are cached and reused to play `sound file <name>`.
+   * Fetch and decode named assets (`name` → URL), returning their mono samples
+   * by name so the caller can preload them into the engine's VFS for
+   * `SoundLoader.read`. Decoded buffers are cached and reused to play
+   * `sound file <name>`. Whatever the stored format, decodeAudioData resamples
+   * to the AudioContext's rate, so the program still sees 44.1 kHz samples.
    */
-  async loadAssets(names: readonly string[]): Promise<Map<string, Float32Array>> {
+  async loadAssets(assets: Map<string, string>): Promise<Map<string, Float32Array>> {
     const ctx = this.audioContext();
     const samples = new Map<string, Float32Array>();
     if (!ctx) {
       return samples;
     }
-    for (const name of names) {
+    for (const [name, url] of assets) {
       let buffer = this.#assetBuffers.get(name);
       if (!buffer) {
         try {
-          const response = await fetch(soundUrl(name));
+          const response = await fetch(url);
           buffer = await ctx.decodeAudioData(await response.arrayBuffer());
           this.#assetBuffers.set(name, buffer);
         } catch {

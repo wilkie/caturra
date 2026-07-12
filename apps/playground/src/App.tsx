@@ -44,7 +44,13 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
-import { BUNDLED_SOUNDS, decodeSamples, encodeSamples } from './theater-sounds.js';
+import {
+  decodeSamples,
+  encodeSamples,
+  referencedSounds,
+  soundManifest,
+  soundUrl,
+} from './theater-sounds.js';
 import { SwingViz } from './swing.js';
 import {
   CSA_UNITS,
@@ -2793,17 +2799,35 @@ export function App(): React.JSX.Element {
     }
   };
 
-  /** Decode bundled sounds and preload their samples so `SoundLoader.read`
-   * returns real audio. Skipped unless the program actually reads sounds. */
+  /**
+   * Decode the sounds this program names — only those, since assets are large —
+   * so `playSound(name)` can play them. When the program also reads samples,
+   * preload them into the VFS so `SoundLoader.read` returns real audio instead
+   * of silence. Names with no asset (nothing bundled, nothing fetched) are left
+   * alone and stay silent.
+   */
   const preloadSounds = async (session: JvmSessionApi): Promise<void> => {
-    if (!collectSources().some((file) => file.text.includes('SoundLoader'))) {
-      return;
-    }
+    const sources = collectSources();
+    const named = referencedSounds(sources.map((file) => file.text).join('\n'));
     const viz = theaterVizRef.current;
-    if (!viz) {
+    if (named.length === 0 || !viz) {
       return;
     }
-    const samples = await viz.loadAssets(BUNDLED_SOUNDS);
+    const available = await soundManifest();
+    const assets = new Map<string, string>();
+    for (const name of named) {
+      const path = available[name];
+      if (path !== undefined) {
+        assets.set(name, soundUrl(path));
+      }
+    }
+    if (assets.size === 0) {
+      return;
+    }
+    const samples = await viz.loadAssets(assets);
+    if (!sources.some((file) => file.text.includes('SoundLoader'))) {
+      return; // decoded for playback; no need to ship samples into the VFS
+    }
     for (const [name, floats] of samples) {
       await session.writeFile(`__caturra_sound_${name}`, encodeSamples(floats));
     }

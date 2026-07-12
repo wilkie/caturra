@@ -211,11 +211,11 @@ and plays.
   `__caturra_pcm_<id>` and logs `sound pcm <id> <len>`; the editor reads the file
   and plays it as an `AudioBuffer`. This is the from-scratch synthesis /
   array-manipulation path.
-- `playSound(String)` / `SoundLoader.read(name)` — for bundled, **same-origin**
-  assets (COEP-safe to fetch). Before a run the editor decodes the asset and
-  preloads its samples to `__caturra_sound_<name>`, so `read` returns real audio
-  to manipulate and `playSound(name)` plays the decoded buffer. Unknown names
-  fall back to indexable silence (`double[441000]`).
+- `playSound(String)` / `SoundLoader.read(name)` — named assets, served
+  **same-origin** (COEP-safe to fetch). Before a run the editor decodes the asset
+  and preloads its samples to `__caturra_sound_<name>`, so `read` returns real
+  audio to manipulate and `playSound(name)` plays the decoded buffer. Names with
+  no asset fall back to indexable silence (`double[441000]`).
 - Sample wire format (engine ↔ editor, both directions): the sample count, then
   that many space-separated signed 16-bit ints. The VM writes it with
   `PrintWriter` (it has no binary streams) and reads it with `Scanner`.
@@ -224,11 +224,25 @@ Because sample data rides ordinary VFS files (`writeFile`/`readTextFile`), sound
 works identically in worker and sandbox modes — the data crosses the RPC, the
 audio stays on the editor.
 
-**Not yet done: per-level named assets.** The corpus references ~20
-Code.org-hosted sounds (`retrobeat.wav`, …), resolvable via each level's
-`starter_assets` map at `studio.code.org/level_starter_assets/<level>/uuid/<uuid>`.
-Those responses carry no CORP/CORS headers, so a cross-origin **isolated** editor
-(`COEP: require-corp`) cannot fetch and decode them. Two options for a later pass:
-vendor the referenced assets same-origin at build time; or, since the editor need
-not be isolated in sandbox mode (the SharedArrayBuffer lives in the sandbox), drop
-the editor's COEP in that topology and fetch cross-origin directly.
+### Named sound assets
+
+The CSA levels play Code.org-hosted sounds (`birds.wav`, `retrobeat.wav`, …),
+keyed by uuid in each level's `starter_assets` map at
+`studio.code.org/level_starter_assets/<level>/uuid/<uuid>`. Those responses carry
+no CORP/CORS headers, so a cross-origin **isolated** editor (`COEP: require-corp`)
+cannot fetch them at runtime — they must be served same-origin. They are also
+large (~104 MB raw for the 18 names the levels use).
+
+So they are **downloaded as an install step, not vendored** (like `artifacts/`):
+`pnpm sounds:fetch` pulls them and transcodes to mono MP3 (~6 MB) into the
+git-ignored `apps/playground/public/sounds/level/`, writing a `manifest.json` of
+name → path. MP3 because `decodeAudioData` handles it everywhere (Ogg does not in
+Safari); it resamples to the AudioContext's rate, so the program still sees
+44.1 kHz samples.
+
+Resolution is by **name**, not by level: the editor scans a program's source for
+the `*.wav` literals it names and decodes only those (the assets are far too big
+to preload wholesale). It merges the fetched manifest over its built-in defaults
+(`beatbox.wav`, which ships with the app, so sound works with no download). A name
+that resolves to nothing simply stays silent. Note a name can map to different
+audio in different levels; the fetch keeps one representative per name.

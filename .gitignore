@@ -33,3 +33,6 @@ artifacts/
 apps/playground/src/csa-solutions.local.ts
 # Old combined overlay (validators+solutions), superseded by the split above.
 apps/playground/src/csa-overlay.local.ts
+
+# Theater sound assets downloaded from Code.org (pnpm sounds:fetch)
+/apps/playground/public/sounds/level/

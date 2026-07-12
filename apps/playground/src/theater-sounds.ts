@@ -5,23 +5,69 @@
  * the theater command log plus companion VFS files the engine and editor
  * exchange. Two flows meet here:
  *
- *   playSound(double[])   engine writes samples to `__caturra_pcm_<id>`,
- *                         the editor reads and plays them.
- *   SoundLoader.read(name) the editor decodes a bundled asset and preloads its
- *                         samples to `__caturra_sound_<name>` before the run,
- *                         so `read` returns real audio to manipulate.
+ *   playSound(double[])    engine writes samples to `__caturra_pcm_<id>`,
+ *                          the editor reads and plays them.
+ *   SoundLoader.read(name) the editor decodes a named asset and preloads its
+ *                          samples to `__caturra_sound_<name>` before the run,
+ *                          so `read` returns real audio to manipulate.
  *
  * Both use one text format, shared with the VM stdlib (theater.java): the
- * sample count, then that many space-separated signed 16-bit ints. See
- * specs/EXECUTION.md.
+ * sample count, then that many space-separated signed 16-bit ints.
+ *
+ * Named assets resolve through a manifest. `beatbox.wav` ships with the app;
+ * the CSA levels' sounds (birds.wav, retrobeat.wav, …) are downloaded by
+ * `pnpm sounds:fetch` (they are large, and Code.org serves them without
+ * CORP/CORS so an isolated editor cannot fetch them cross-origin). Names with
+ * no asset simply stay silent. See specs/EXECUTION.md.
  */
 
-/** Bundled, same-origin sound assets (COEP-safe to fetch and decode). */
-export const BUNDLED_SOUNDS = ['beatbox.wav'] as const;
+/** Sounds that ship with the app, as paths relative to the base URL. */
+const DEFAULT_SOUNDS: Record<string, string> = {
+  'beatbox.wav': 'sounds/beatbox.wav',
+};
 
-/** URL of a bundled sound, honoring the app's base path. */
-export function soundUrl(name: string): string {
-  return `${import.meta.env.BASE_URL}sounds/${name}`;
+/** Manifest written by `pnpm sounds:fetch` (absent until it is run). */
+const FETCHED_MANIFEST = 'sounds/level/manifest.json';
+
+let manifest: Record<string, string> | undefined;
+
+/** Absolute URL of a manifest path, honoring the app's base path. */
+export function soundUrl(path: string): string {
+  return `${import.meta.env.BASE_URL}${path}`;
+}
+
+/**
+ * Name → asset path for every sound this build can play: the bundled defaults
+ * plus anything `pnpm sounds:fetch` downloaded. Fetched once and cached; a
+ * missing manifest just leaves the defaults.
+ */
+export async function soundManifest(): Promise<Record<string, string>> {
+  if (manifest) {
+    return manifest;
+  }
+  let fetched: Record<string, string> = {};
+  try {
+    const response = await fetch(soundUrl(FETCHED_MANIFEST));
+    if (response.ok) {
+      fetched = (await response.json()) as Record<string, string>;
+    }
+  } catch {
+    // Not downloaded (or the dev server served index.html instead) — defaults only.
+  }
+  manifest = { ...DEFAULT_SOUNDS, ...fetched };
+  return manifest;
+}
+
+/** The `*.wav` names a program names in string literals, e.g. `playSound("birds.wav")`. */
+export function referencedSounds(source: string): string[] {
+  const names = new Set<string>();
+  for (const match of source.matchAll(/["']([\w.-]+\.wav)["']/g)) {
+    const name = match[1];
+    if (name !== undefined) {
+      names.add(name);
+    }
+  }
+  return [...names];
 }
 
 /** Serialize float samples in [-1, 1] as `count s0 s1 …` of signed 16-bit ints. */
