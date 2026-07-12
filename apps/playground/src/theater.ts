@@ -28,6 +28,12 @@ export class TheaterViz {
   #fontFamily = 'sans-serif';
   #fontStyle = '';
 
+  // Web Audio for playNote, created lazily on the first note (after the Run
+  // gesture, so autoplay policy is satisfied). Notes run through a per-run
+  // master gain, so starting a new run silences whatever is still ringing.
+  #audio: AudioContext | null = null;
+  #master: GainNode | null = null;
+
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
     if (!ctx) {
@@ -42,6 +48,7 @@ export class TheaterViz {
   /** Clear the canvas and reset drawing state to the Scene defaults. */
   reset(): void {
     this.#run += 1;
+    this.silenceAudio();
     this.#fill = 'rgb(0,0,0)';
     this.#stroke = 'rgb(0,0,0)';
     this.#strokeWidth = 1;
@@ -67,7 +74,7 @@ export class TheaterViz {
       if (command.startsWith('pause ')) {
         await new Promise((resolve) => setTimeout(resolve, hold));
       } else {
-        this.apply(command);
+        this.apply(command, true);
       }
     }
   }
@@ -77,7 +84,7 @@ export class TheaterViz {
     this.reset();
     for (const command of log.split('\n')) {
       if (command.length > 0 && !command.startsWith('pause ')) {
-        this.apply(command);
+        this.apply(command, false);
       }
     }
   }
@@ -89,7 +96,7 @@ export class TheaterViz {
     return `rgb(${tokens[0] ?? '0'},${tokens[1] ?? '0'},${tokens[2] ?? '0'})`;
   }
 
-  private apply(command: string): void {
+  private apply(command: string, audible: boolean): void {
     const ctx = this.#ctx;
     // `text "..." x y rot` needs the quoted body kept intact.
     const textMatch = /^text "(.*)" (-?\d+) (-?\d+) (-?[\d.]+)$/.exec(command);
@@ -170,8 +177,13 @@ export class TheaterViz {
       case 'image':
         this.drawImagePlaceholder(rest);
         break;
+      case 'note':
+        if (audible) {
+          this.playTone(rest);
+        }
+        break;
       default:
-        break; // note / sound: no visual
+        break; // sound: not yet audible
     }
   }
 
@@ -245,5 +257,79 @@ export class TheaterViz {
     ctx.lineWidth = 1;
     ctx.fillRect(x, y, size, size);
     ctx.strokeRect(x, y, size, size);
+  }
+
+  /** The shared AudioContext, created on first use; null where Web Audio is absent. */
+  private audioContext(): AudioContext | null {
+    if (this.#audio) {
+      return this.#audio;
+    }
+    if (typeof AudioContext === 'undefined') {
+      return null;
+    }
+    this.#audio = new AudioContext();
+    return this.#audio;
+  }
+
+  /** The current run's master gain, created lazily and rebuilt each run. */
+  private masterGain(ctx: AudioContext): GainNode {
+    if (!this.#master) {
+      const gain = ctx.createGain();
+      gain.gain.value = 1;
+      gain.connect(ctx.destination);
+      this.#master = gain;
+    }
+    return this.#master;
+  }
+
+  /** Fade out notes still ringing from the previous run; next run gets a fresh master. */
+  private silenceAudio(): void {
+    if (this.#master && this.#audio) {
+      const now = this.#audio.currentTime;
+      this.#master.gain.cancelScheduledValues(now);
+      this.#master.gain.setTargetAtTime(0, now, 0.02);
+    }
+    this.#master = null;
+  }
+
+  /**
+   * Synthesize a `note <INSTRUMENT> <midi> <seconds>` command with a single
+   * oscillator and a percussive envelope. MIDI note 69 (A4) is 440 Hz;
+   * PIANO is a triangle wave, BASS a sawtooth. The audible length is clamped
+   * because the visual timeline is compressed — a long nominal note shouldn't
+   * ring over the rest of the scene.
+   */
+  private playTone(rest: string[]): void {
+    const ctx = this.audioContext();
+    if (!ctx) {
+      return;
+    }
+    if (ctx.state === 'suspended') {
+      void ctx.resume();
+    }
+    const midi = Number(rest[1] ?? 60);
+    const seconds = Number(rest[2] ?? 0.5);
+    if (!Number.isFinite(midi)) {
+      return;
+    }
+    const bass = rest[0] === 'BASS';
+    const frequency = 440 * 2 ** ((midi - 69) / 12);
+    const duration = Math.min(Math.max(Number.isFinite(seconds) ? seconds : 0.5, 0.12), 1.5);
+
+    const osc = ctx.createOscillator();
+    osc.type = bass ? 'sawtooth' : 'triangle';
+    osc.frequency.value = frequency;
+
+    const gain = ctx.createGain();
+    const t0 = ctx.currentTime;
+    const peak = bass ? 0.3 : 0.22;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain(ctx));
+    osc.start(t0);
+    osc.stop(t0 + duration + 0.02);
   }
 }

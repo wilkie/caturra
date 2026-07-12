@@ -180,6 +180,52 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('playNote synthesizes tones through Web Audio', async ({ page }) => {
+    // Spy on oscillator creation so we can read the pitches the scene plays,
+    // without depending on real audio output in headless Chromium.
+    await page.addInitScript(() => {
+      const created: OscillatorNode[] = [];
+      (window as unknown as { __oscillators: OscillatorNode[] }).__oscillators = created;
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- re-invoked via .call(this) below
+      const original = AudioContext.prototype.createOscillator;
+      AudioContext.prototype.createOscillator = function patched(this: AudioContext) {
+        const osc = original.call(this);
+        created.push(osc);
+        return osc;
+      };
+    });
+    await page.goto('/');
+    await page.getByTestId('theater-level').selectOption({ label: 'Shapes' });
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+    await setSource(
+      page,
+      [
+        'import org.code.theater.*;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Scene scene = new Scene();',
+        '        scene.drawText("Music", 120, 200);',
+        '        scene.playNote(60, 0.3);', // middle C -> 262 Hz
+        '        scene.playNote(Instrument.BASS, 72, 0.3);', // C5 -> 523 Hz
+        '        Theater.playScenes(scene);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    await page.waitForFunction(
+      () => (window as unknown as { __oscillators: OscillatorNode[] }).__oscillators.length >= 2,
+    );
+    const frequencies = await page.evaluate(() =>
+      (window as unknown as { __oscillators: OscillatorNode[] }).__oscillators.map((osc) =>
+        Math.round(osc.frequency.value),
+      ),
+    );
+    expect(frequencies).toContain(262); // MIDI 60
+    expect(frequencies).toContain(523); // MIDI 72
+  });
+
   test('loads a corpus theater level and draws it on the stage', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 4' });
