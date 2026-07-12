@@ -2634,9 +2634,20 @@ export function App(): React.JSX.Element {
   const neighborhoodVizRef = useRef<NeighborhoodViz | null>(null);
   const theaterVizRef = useRef<TheaterViz | null>(null);
   const swingVizRef = useRef<SwingViz | null>(null);
-  const sessionRef = useRef<Promise<JvmSessionApi>>(
-    openJvmSession({ sandboxOrigin: resolveSandboxOrigin() }),
-  );
+  // Lazily opened once, then reused. Do NOT create the session in the
+  // useRef initializer: that expression runs on every render, and in
+  // sandbox mode each call appends an iframe and loads the engine — so
+  // re-renders would pile up dozens of orphaned engines.
+  const sessionRef = useRef<Promise<JvmSessionApi> | null>(null);
+  const getSession = (): Promise<JvmSessionApi> => {
+    const existing = sessionRef.current;
+    if (existing) {
+      return existing;
+    }
+    const created = openJvmSession({ sandboxOrigin: resolveSandboxOrigin() });
+    sessionRef.current = created;
+    return created;
+  };
   const inactiveFilesRef = useRef(new Map<string, EditorState>());
   const fileSquigglesRef = useRef(new Map<string, SourceSquiggle[]>());
   const activeFileRef = useRef('Main.java');
@@ -2891,7 +2902,7 @@ export function App(): React.JSX.Element {
     );
 
   const renderNeighborhood = async (): Promise<void> => {
-    const session = await sessionRef.current;
+    const session = await getSession();
     let messagesText = '';
     try {
       messagesText = await session.readTextFile('neighborhood.jsonl');
@@ -2912,7 +2923,7 @@ export function App(): React.JSX.Element {
   };
 
   const renderTheater = async (): Promise<void> => {
-    const session = await sessionRef.current;
+    const session = await getSession();
     let log = '';
     try {
       log = await session.readTextFile('theater.log');
@@ -2928,7 +2939,7 @@ export function App(): React.JSX.Element {
   };
 
   const renderSwing = async (): Promise<void> => {
-    const session = await sessionRef.current;
+    const session = await getSession();
     let json = '';
     try {
       json = await session.readTextFile('swing.json');
@@ -3108,7 +3119,7 @@ export function App(): React.JSX.Element {
     clearConsole();
     neighborhoodVizRef.current?.stop();
     try {
-      const session = await sessionRef.current;
+      const session = await getSession();
       await writeDataFiles(session);
       const neighborhood = isNeighborhoodProgram();
       const theater = !neighborhood && isTheaterProgram();
@@ -3188,10 +3199,10 @@ export function App(): React.JSX.Element {
     setDebugBar(false);
     setPaused(null);
     setPausedLine(editor(), null);
-    const session = await sessionRef.current;
+    const session = await getSession();
     session.terminate();
-    sessionRef.current = openJvmSession({ sandboxOrigin: resolveSandboxOrigin() });
-    await sessionRef.current;
+    sessionRef.current = null;
+    await getSession();
     append('\n^C program stopped\n');
     setPhase('idle');
   };
@@ -3201,7 +3212,7 @@ export function App(): React.JSX.Element {
     clearConsole();
     setTestResults([]);
     try {
-      const session = await sessionRef.current;
+      const session = await getSession();
       await writeDataFiles(session);
       const sources = [...collectSources(), ...validationFilesRef.current];
       append(`$ javac ${sources.map((source) => source.path).join(' ')}\n`);
@@ -3293,7 +3304,7 @@ export function App(): React.JSX.Element {
     setPhase('debugging');
     clearConsole();
     try {
-      const session = await sessionRef.current;
+      const session = await getSession();
       await writeDataFiles(session);
       const swing = isSwingProgram();
       if (swing) {
@@ -3410,7 +3421,7 @@ export function App(): React.JSX.Element {
     };
 
     void (async () => {
-      const session = await sessionRef.current;
+      const session = await getSession();
       setVersion(`engine v${await session.version()}`);
       setReady(true);
     })();

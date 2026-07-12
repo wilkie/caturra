@@ -12,6 +12,8 @@
     "build:wasm": "wasm-pack build crates/caturra-wasm --target web --out-dir ../../packages/core/src/wasm/generated --out-name caturra --no-pack",
     "build": "pnpm build:wasm && pnpm -r build",
     "dev": "pnpm --filter @caturra/playground dev",
+    "dev:sandbox": "pnpm --filter @caturra/sandbox dev",
+    "dev:isolated": "pnpm --parallel --filter @caturra/playground --filter @caturra/sandbox dev",
     "test": "pnpm -r test",
     "test:rust": "cargo test --workspace",
     "test:e2e": "playwright test",

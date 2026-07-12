@@ -59,6 +59,12 @@ test.describe('cross-origin sandbox mode', () => {
     const consoleOutput = page.getByTestId('console');
     await expect(consoleOutput).toContainText('$ javac Main.java');
     await expect(consoleOutput).toContainText('Hello, World!');
+
+    // Exactly one engine iframe — the session is opened once and reused, not
+    // re-created on every React render (which would pile up orphaned engines).
+    const sandboxFrames = page.frames().filter((candidate) => candidate.url().startsWith(SANDBOX));
+    expect(sandboxFrames).toHaveLength(1);
+    expect(await page.locator('iframe').count()).toBe(1);
   });
 
   test('blocking stdin round-trips across the origin boundary', async ({ page }) => {
