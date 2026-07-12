@@ -21,11 +21,12 @@ import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import {
-  JvmWorkerSession,
+  openJvmSession,
   type DebugCommandName,
   type DebugControlResponse,
   type DebugPauseSnapshot,
   type Diagnostic,
+  type JvmSessionApi,
 } from '@caturra/core';
 import type { EditorState } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
@@ -2574,6 +2575,26 @@ function formatDiagnostic(diagnostic: Diagnostic): string {
   return `${location}: ${diagnostic.severity}: ${diagnostic.message}\n`;
 }
 
+/**
+ * Where to run the engine. A configured `VITE_SANDBOX_ORIGIN` wins (the
+ * deployed choice); otherwise a `?sandbox=<origin>` query parameter is
+ * honored only for loopback origins, so local dev and e2e can drive the
+ * cross-origin iframe path without a dedicated build while a deployed
+ * bundle can't be pointed at an arbitrary host. Unset means a
+ * same-origin worker.
+ */
+function resolveSandboxOrigin(): string | undefined {
+  const configured = import.meta.env.VITE_SANDBOX_ORIGIN;
+  if (configured) {
+    return configured;
+  }
+  const param = new URLSearchParams(window.location.search).get('sandbox');
+  if (param && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(param)) {
+    return param;
+  }
+  return undefined;
+}
+
 export function App(): React.JSX.Element {
   // ----- Reactive UI state -----
   const [version, setVersion] = useState('');
@@ -2613,7 +2634,9 @@ export function App(): React.JSX.Element {
   const neighborhoodVizRef = useRef<NeighborhoodViz | null>(null);
   const theaterVizRef = useRef<TheaterViz | null>(null);
   const swingVizRef = useRef<SwingViz | null>(null);
-  const sessionRef = useRef<Promise<JvmWorkerSession>>(JvmWorkerSession.create());
+  const sessionRef = useRef<Promise<JvmSessionApi>>(
+    openJvmSession({ sandboxOrigin: resolveSandboxOrigin() }),
+  );
   const inactiveFilesRef = useRef(new Map<string, EditorState>());
   const fileSquigglesRef = useRef(new Map<string, SourceSquiggle[]>());
   const activeFileRef = useRef('Main.java');
@@ -2750,7 +2773,7 @@ export function App(): React.JSX.Element {
 
   /** Write the non-Java tabs (data files) into the VFS so the program can
    * read them via File/Scanner, reflecting any edits the student made. */
-  const writeDataFiles = async (session: JvmWorkerSession): Promise<void> => {
+  const writeDataFiles = async (session: JvmSessionApi): Promise<void> => {
     for (const file of allOpenFiles()) {
       if (!file.path.endsWith('.java')) {
         await session.writeFile(file.path, file.text);
@@ -3167,7 +3190,7 @@ export function App(): React.JSX.Element {
     setPausedLine(editor(), null);
     const session = await sessionRef.current;
     session.terminate();
-    sessionRef.current = JvmWorkerSession.create();
+    sessionRef.current = openJvmSession({ sandboxOrigin: resolveSandboxOrigin() });
     await sessionRef.current;
     append('\n^C program stopped\n');
     setPhase('idle');

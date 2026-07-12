@@ -20,18 +20,24 @@ Worker, and blocking stdin is implemented with `SharedArrayBuffer` + `Atomics`.*
   Rust's point of view. In the worker, the JavaScript stdin callback performs
   `Atomics.wait` on a `SharedArrayBuffer` until the main thread supplies a line
   (or EOF), so the "block" happens in worker JS, never on the main thread.
-- `@caturra/core` ships two API layers:
+- `@caturra/core` ships a synchronous in-process wrapper plus two async drivers
+  behind a shared `JvmSessionApi`, selected at runtime by `openJvmSession`:
   - `JvmSession` — the direct, synchronous wrapper around the WASM module. Used
     in Node (Vitest), in the worker itself, and by advanced embedders.
-  - `JvmWorkerSession` — the **primary browser API**: async, spawns the worker,
-    streams stdout/stderr as events, forwards stdin requests to a host-supplied
-    source (array of lines or an async function).
+  - `JvmWorkerSession` — the **default browser API**: async, spawns a same-origin
+    worker, streams stdout/stderr as events, forwards stdin requests to a
+    host-supplied source (array of lines or an async function).
+  - `RemoteJvmSession` — runs the engine in a cross-origin sandbox iframe so the
+    editor origin's session data stays isolated; see Cross-origin sandbox mode
+    below. Same `JvmSessionApi`, so callers are identical either way.
 - Serving requirement: `SharedArrayBuffer` needs cross-origin isolation, so any
   page embedding the worker session must send
   `Cross-Origin-Opener-Policy: same-origin` and
   `Cross-Origin-Embedder-Policy: require-corp`. The playground's Vite config
   does this for dev and preview. If a page is not isolated, the worker session
-  still works but stdin reads return EOF (with a console warning).
+  still works but stdin reads return EOF (with a console warning). Running the
+  engine on a _separate_ origin to isolate session data is a further option —
+  see Cross-origin sandbox mode below.
 - Runaway-program protection stays in the engine: the interpreter enforces
   `VmOptions::max_instructions` per run. The worker can additionally be
   terminated from the main thread (`session.terminate()`) as a hard stop.
@@ -54,6 +60,85 @@ Worker, and blocking stdin is implemented with `SharedArrayBuffer` + `Atomics`.*
 - stdout/stderr arrive on the main thread as message events, so output ordering
   relative to program completion is preserved by the protocol (result message
   is sent after all output messages).
+
+## Cross-origin sandbox mode (2026-07-12)
+
+To run the editor on one domain while keeping the engine — which executes
+arbitrary student Java and owns the WASM heap — from ever touching the editor
+origin's cookies or storage, the engine can run inside a **hidden iframe on a
+separate origin**. Browsers partition storage and cookies per origin, so a bug
+(or hostile program) in the sandbox cannot read the editor's session data.
+
+- **Why an iframe, not a cross-origin worker.** A `Worker` always inherits the
+  spawning document's origin — there is no such thing as a cross-origin worker.
+  Only a document can hold a different origin, so a real `JvmWorkerSession` runs
+  _inside_ the iframe (`sandbox-host.ts`), same-origin with its own worker; all
+  existing SAB machinery works there unchanged.
+- **Why the SharedArrayBuffer never leaves the sandbox.** A `SharedArrayBuffer`
+  cannot cross a cross-site boundary — different registrable domains are separate
+  agent clusters, and `postMessage` throws `DataCloneError`. So nothing
+  SAB-shaped crosses. The editor holds a thin RPC proxy (`remote-session.ts`) and
+  exchanges only plain, structured-cloneable values with the sandbox over a
+  private `MessagePort` (`sandbox-rpc.ts`). The engine's stdin/Swing/pause
+  callbacks are already async, so the inner worker just parks on its SAB until
+  the editor's answer returns over the port — the worker protocol is unchanged,
+  and blocking stdin/Swing/debug keep working across the boundary.
+- **Handshake & trust.** The editor embeds the iframe with
+  `allow="cross-origin-isolated"` and _no_ `sandbox` attribute (an opaque origin
+  would lose cross-origin isolation and storage partitioning — the whole point),
+  then posts an init message targeted at the exact sandbox origin, transferring
+  one end of a `MessageChannel`. The sandbox (`startSandboxHost`) validates
+  `event.origin` against an allowlist before adopting the port; the port itself
+  is then a private capability needing no further origin checks.
+
+### Deployment runbook
+
+Two supported topologies:
+
+**A — Single origin (default).** The engine runs in a same-origin worker; the
+page sends `Cross-Origin-Opener-Policy: same-origin` +
+`Cross-Origin-Embedder-Policy: require-corp` for SAB (see the serving requirement
+above). This is the current playground / GitHub Pages setup — static hosts use
+`coi-serviceworker.js` to fake the headers same-origin. Leave
+`VITE_SANDBOX_ORIGIN` unset.
+
+**B — Two origins (isolated).** The engine runs in an iframe on a _different
+registrable domain_ from the editor. GitHub Pages cannot send the headers below,
+so the sandbox needs a header-capable host (Cloudflare, Netlify, S3+CloudFront,
+…). Configure both origins:
+
+- **Editor origin** (`apps/playground`) — response headers:
+  - `Cross-Origin-Opener-Policy: same-origin`
+  - `Cross-Origin-Embedder-Policy: require-corp`
+
+  so the page is cross-origin isolated and can delegate isolation into the frame.
+  Build with `VITE_SANDBOX_ORIGIN=https://sandbox.example`. The
+  `allow="cross-origin-isolated"` attribute on the iframe is set automatically by
+  `RemoteJvmSession`.
+
+- **Sandbox origin** (`apps/sandbox`) — response headers on the document **and
+  its worker/wasm/assets**:
+  - `Cross-Origin-Opener-Policy: same-origin`
+  - `Cross-Origin-Embedder-Policy: require-corp` — so the frame is isolated → SAB
+  - `Cross-Origin-Resource-Policy: cross-origin` — so the editor's `require-corp`
+    may embed it
+  - `Content-Security-Policy: frame-ancestors https://editor.example` — so only
+    the editor may frame it
+
+  Build with `VITE_EDITOR_ORIGINS=https://editor.example` (comma-separated for
+  more than one editor). `apps/sandbox/vite.config.ts` already emits the first
+  three headers for `dev`/`preview`; production hosting must replicate all four.
+
+Verification checklist: editor page reports `crossOriginIsolated === true`; the
+sandbox document is reachable and reports `crossOriginIsolated === true` inside
+the frame; the sandbox origin differs from the editor origin (a different
+registrable domain, not merely a different port, so cookies partition too). The
+two-origin path is exercised by `e2e/sandbox.spec.ts` (editor on `localhost`,
+sandbox on `127.0.0.1`) — compile/run, blocking stdin across the boundary, and
+storage isolation. For local or manual testing, a **loopback-only**
+`?sandbox=<origin>` query parameter flips a single editor build into iframe mode;
+it is ignored for non-loopback origins, so a deployed build cannot be redirected
+at an arbitrary host.
 
 ## Debugging
 

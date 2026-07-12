@@ -293,4 +293,15 @@ export async function createJvmSession(wasm?: WasmSource): Promise<JvmSession> {
 // stdin support (see specs/EXECUTION.md). The synchronous JvmSession
 // above remains for Node, tests, and the worker's own internals.
 export { JvmWorkerSession } from './worker-session.js';
-export type { StdinSource, WorkerDebugRunOptions, WorkerRunOptions } from './worker-session.js';
+export { RemoteJvmSession } from './remote-session.js';
+export type { RemoteJvmSessionOptions } from './remote-session.js';
+export { startSandboxHost } from './sandbox-host.js';
+export type { SandboxHostOptions } from './sandbox-host.js';
+export { openJvmSession } from './open-session.js';
+export type { OpenJvmSessionOptions } from './open-session.js';
+export type {
+  JvmSessionApi,
+  StdinSource,
+  WorkerDebugRunOptions,
+  WorkerRunOptions,
+} from './session-api.js';

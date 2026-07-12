@@ -10,66 +10,20 @@
  */
 import type {
   CompileResult,
-  DebugBreakpoint,
   DebugControlResponse,
   DebugPauseSnapshot,
   JavaSourceFile,
   RunResult,
 } from './index.js';
 import type { ResultValueByType, WorkerRequest, WorkerResponse } from './protocol.js';
+import type { JvmSessionApi, WorkerDebugRunOptions, WorkerRunOptions } from './session-api.js';
+import { normalizeStdin } from './session-api.js';
 import {
   createInterruptFlag,
   createStdinBuffer,
   requestInterrupt,
   supplyLine,
 } from './stdin-channel.js';
-
-/** Where a run's standard input comes from. */
-export type StdinSource = string[] | (() => string | null | Promise<string | null>);
-
-/** Options for {@link JvmWorkerSession.run}. */
-export interface WorkerRunOptions {
-  /** Command-line arguments passed to `main(String[] args)`. */
-  args?: string[];
-  /** Receives chunks of standard output as the program writes them. */
-  onStdout?: (text: string) => void;
-  /** Receives chunks of standard error as the program writes them. */
-  onStderr?: (text: string) => void;
-  /**
-   * Standard input: either lines to serve in order (EOF after the
-   * last), or a function called per read returning a line or `null`
-   * for EOF. Needs a cross-origin isolated page.
-   */
-  stdin?: StdinSource;
-  /**
-   * Swing event pump for an interactive `JFrame`. Called with the current
-   * component tree (JSON) each time the program needs the next UI event:
-   * render the tree, then resolve with the next event's payload (the
-   * activated component's id, then newline-separated `id=value` field
-   * states) or `null` to close the window. May be async — the engine
-   * stays parked until it resolves. Needs a cross-origin isolated page.
-   */
-  onSwingEvent?: (tree: string) => Promise<string | null>;
-  /**
-   * Blocking JOptionPane dialog. Called with `(kind, message)`; show a modal
-   * and resolve with the response (option code / typed text) or `null` when
-   * dismissed. May be async. Needs a cross-origin isolated page.
-   */
-  onSwingDialog?: (kind: string, message: string) => Promise<string | null>;
-}
-
-/** Options for {@link JvmWorkerSession.runDebug}. */
-export interface WorkerDebugRunOptions extends WorkerRunOptions {
-  breakpoints?: DebugBreakpoint[];
-  /** Watch expressions evaluated at every pause. */
-  watches?: string[];
-  /**
-   * Called at every pause. May be async: the engine stays parked until
-   * the returned promise resolves with a command (e.g. after the user
-   * clicks a step button).
-   */
-  onPause: (snapshot: DebugPauseSnapshot) => DebugControlResponse | Promise<DebugControlResponse>;
-}
 
 interface Pending {
   resolve: (value: unknown) => void;
@@ -87,17 +41,6 @@ interface Pending {
   swingBuffer?: SharedArrayBuffer | undefined;
 }
 
-function normalizeStdin(source: StdinSource | undefined): () => Promise<string | null> {
-  if (source === undefined) {
-    return () => Promise.resolve(null);
-  }
-  if (Array.isArray(source)) {
-    let next = 0;
-    return () => Promise.resolve(next < source.length ? (source[next++] ?? null) : null);
-  }
-  return async () => source();
-}
-
 /**
  * An isolated JVM sandbox running in a Web Worker.
  *
@@ -110,7 +53,7 @@ function normalizeStdin(source: StdinSource | undefined): () => Promise<string |
  * session.terminate();
  * ```
  */
-export class JvmWorkerSession {
+export class JvmWorkerSession implements JvmSessionApi {
   readonly #worker: Worker;
   readonly #pending = new Map<number, Pending>();
   #nextId = 1;
