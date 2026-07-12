@@ -180,6 +180,24 @@ test.describe('playground', () => {
     expect(value.circle).toEqual([255, 255, 0]); // yellow ellipse
   });
 
+  test('a theater level keeps its stage when the program draws nothing', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 5' });
+    await page
+      .getByTestId('level-select')
+      .selectOption({ label: 'Predict and Run: Image Filters' });
+    await waitLevel(page);
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+
+    // This starter's main() is still a TO DO body: it plays no scenes, so no
+    // theater.log is written. The stage used to collapse the moment Run was
+    // pressed, taking the level's stage away before any code had been written.
+    await page.getByTestId('run').click();
+    await expect(page.getByTestId('console')).toContainText('$ java Main');
+    await expect(page.getByTestId('run')).toBeEnabled();
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+  });
+
   test('playNote synthesizes tones through Web Audio', async ({ page }) => {
     // Spy on oscillator creation so we can read the pitches the scene plays,
     // without depending on real audio output in headless Chromium.

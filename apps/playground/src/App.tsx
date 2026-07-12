@@ -2643,6 +2643,10 @@ export function App(): React.JSX.Element {
   const editorRef = useRef<EditorView | null>(null);
   const neighborhoodVizRef = useRef<NeighborhoodViz | null>(null);
   const theaterVizRef = useRef<TheaterViz | null>(null);
+  // Whether the selected level/example is a theater one, so its stage should
+  // stay up across a run even when the program draws nothing (a starter whose
+  // main() is still a TO DO body writes no theater.log).
+  const theaterStageRef = useRef(false);
   const swingVizRef = useRef<SwingViz | null>(null);
   // Lazily opened once, then reused. Do NOT create the session in the
   // useRef initializer: that expression runs on every render, and in
@@ -2901,6 +2905,7 @@ export function App(): React.JSX.Element {
       validationFilesRef.current = level.validationFiles;
       solutionFilesRef.current = level.solutionFiles;
       dataFilesRef.current = level.dataFiles;
+      theaterStageRef.current = level.view === 'theater';
       if (level.view === 'neighborhood') {
         currentGridRef.current = level.grid;
         setView('neighborhood');
@@ -2925,6 +2930,7 @@ export function App(): React.JSX.Element {
     solutionFilesRef.current = [];
     setHasSolution(false);
     setTestResults([]);
+    theaterStageRef.current = true;
     setView('theater');
     theaterVizRef.current?.reset();
   };
@@ -2987,7 +2993,10 @@ export function App(): React.JSX.Element {
       // No scene was played — nothing to draw.
     }
     if (log.trim() === '') {
-      setView('none');
+      // The program played no scenes — the usual case for a level whose starter
+      // main() is still a TO DO body. Leave a theater level's (cleared) stage up
+      // instead of collapsing the view out from under the student.
+      setView(theaterStageRef.current ? 'theater' : 'none');
       return;
     }
     // Read the buffers behind each playSound(double[]) and drawImage(Image, …)
@@ -3215,7 +3224,14 @@ export function App(): React.JSX.Element {
       } else if (theater) {
         await session.remove('theater.log').catch(() => undefined);
         await preloadAssets(session);
-        setView('none');
+        // Clear the stage for the new run, but keep a theater level's stage on
+        // screen rather than making it vanish the moment Run is pressed.
+        if (theaterStageRef.current) {
+          theaterVizRef.current?.reset();
+          setView('theater');
+        } else {
+          setView('none');
+        }
       } else if (swing) {
         await session.remove('swing.json').catch(() => undefined);
         setView('none');
