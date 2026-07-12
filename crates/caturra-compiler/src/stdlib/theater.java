@@ -93,17 +93,33 @@ class Color {
 
 class Pixel {
   Image image; int x, y;
-  Pixel(Image image, int x, int y) { this.image = image; this.x = x; this.y = y; }
+  // The image's packed-pixel array and this pixel's index into it, cached at
+  // construction. The filter lessons build a Pixel for every pixel of a 400x400
+  // image and then touch all three channels, so resolving `image.px[y * width +
+  // x]` on each access — five field reads plus a call into Image — dominated the
+  // run. `px` is only ever mutated in place, never replaced, so this stays valid.
+  int[] __px; int __i;
+  Pixel(Image image, int x, int y) {
+    this.image = image; this.x = x; this.y = y;
+    this.__px = image.px; this.__i = y * image.width + x;
+  }
   public int getX() { return x; }
   public int getY() { return y; }
   public Color getColor() { return image.__get(x, y); }
   public void setColor(Color c) { image.__set(x, y, c); }
-  public int getRed() { return getColor().getRed(); }
-  public int getGreen() { return getColor().getGreen(); }
-  public int getBlue() { return getColor().getBlue(); }
-  public void setRed(int v) { Color c = getColor(); image.__set(x, y, new Color(v, c.green, c.blue)); }
-  public void setGreen(int v) { Color c = getColor(); image.__set(x, y, new Color(c.red, v, c.blue)); }
-  public void setBlue(int v) { Color c = getColor(); image.__set(x, y, new Color(c.red, c.green, v)); }
+  // Read/write a single channel straight through the image's packed pixel, with
+  // no Color object in between. The filter lessons walk every pixel of a 400x400
+  // image (160k) and touch all three channels, so going via getColor()/new
+  // Color() allocated ~1.4M objects on a heap that never collects. Same result,
+  // including the (unclamped) wrap-around of an out-of-range channel.
+  public int getRed() { return (__px[__i] >> 16) & 255; }
+  public int getGreen() { return (__px[__i] >> 8) & 255; }
+  public int getBlue() { return __px[__i] & 255; }
+  // Masking matches what `__set(new Color(...))` did, including the wrap-around
+  // of an out-of-range channel (Color does not clamp).
+  public void setRed(int v) { __px[__i] = (v << 16) | (__px[__i] & 0x0000FFFF); }
+  public void setGreen(int v) { int p = __px[__i]; __px[__i] = (p & 0x00FF0000) | (v << 8) | (p & 0x000000FF); }
+  public void setBlue(int v) { __px[__i] = (__px[__i] & 0x00FFFF00) | v; }
 }
 
 class Image {
@@ -137,9 +153,12 @@ class Image {
   public int getHeight() { return height; }
   public Pixel getPixel(int x, int y) { return new Pixel(this, x, y); }
   public void setPixel(int x, int y, Color c) { __set(x, y, c); }
-  public void clear(Color c) { for (int i=0;i<width;i++) for(int j=0;j<height;j++) __set(i,j,c); }
+  public void clear(Color c) { int p = (c.red << 16) | (c.green << 8) | c.blue; for (int i = 0; i < px.length; i++) px[i] = p; }
   Color __get(int x, int y) { int p = px[y * width + x]; return new Color((p >> 16) & 255, (p >> 8) & 255, p & 255); }
-  void __set(int x, int y, Color c) { px[y * width + x] = (c.red << 16) | (c.green << 8) | c.blue; }
+  void __set(int x, int y, Color c) { __setRgb(x, y, c.red, c.green, c.blue); }
+  // Packed-pixel accessors, so Pixel can touch one channel without a Color.
+  int __raw(int x, int y) { return px[y * width + x]; }
+  void __setRgb(int x, int y, int r, int g, int b) { px[y * width + x] = (r << 16) | (g << 8) | b; }
 }
 
 class Scene {

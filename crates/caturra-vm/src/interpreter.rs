@@ -35,6 +35,13 @@ pub(crate) struct Interpreter<'run> {
     rng: intrinsics::JavaRng,
     /// Static field values per user class, created on first use.
     statics: HashMap<String, HashMap<String, JValue>>,
+    /// Resolved instance-field keys, memoized per call site — the class holding
+    /// the code plus the constant-pool index of its field ref. Field access is
+    /// the hottest operation in object-heavy programs (a 400x400 image filter
+    /// does millions), and resolving a key from scratch allocates several
+    /// Strings and walks the superclass chain every time. `classes` is immutable
+    /// for the run, so a `ClassFile`'s address is a stable id.
+    field_keys: HashMap<(usize, u16), String>,
     /// Classes whose initialization has started (JVMS §5.5: recursive
     /// initialization by the same thread proceeds).
     init_started: std::collections::HashSet<String>,
@@ -124,6 +131,7 @@ impl<'run> Interpreter<'run> {
             string_pool: HashMap::new(),
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
+            field_keys: HashMap::new(),
             init_started: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
             max_call_depth,
@@ -363,7 +371,7 @@ impl<'run> Interpreter<'run> {
             .collect();
         DebugFrameSnapshot {
             class_name: frame.class.class_name().unwrap_or("<unknown>").to_owned(),
-            method_name: frame.method_name.clone(),
+            method_name: frame.method_name.to_owned(),
             source_file: frame.code.source_file.clone(),
             line: frame.current_line.map(u32::from),
             locals,
@@ -497,8 +505,7 @@ impl<'run> Interpreter<'run> {
         let method_name = class
             .constant_pool
             .get_utf8(method.name_index)
-            .unwrap_or("<unknown>")
-            .to_owned();
+            .unwrap_or("<unknown>");
         Ok(Frame {
             class,
             method_name,
@@ -522,7 +529,7 @@ impl<'run> Interpreter<'run> {
             let class_name = class.class_name().unwrap_or("<unknown>").to_owned();
             self.current_location = Some(CurrentLocation {
                 class_name: class_name.clone(),
-                method_name: frame.method_name.clone(),
+                method_name: frame.method_name.to_owned(),
                 source_file: frame.code.source_file.clone(),
                 line: frame.current_line,
             });
@@ -1709,17 +1716,32 @@ impl<'run> Interpreter<'run> {
         index: u16,
         malformed: &impl Fn(String) -> VmError,
     ) -> Result<(), VmError> {
+        let site = (std::ptr::from_ref(class) as usize, index);
+        let reference = frame.pop_ref()?.ok_or_else(|| {
+            let name = class
+                .constant_pool
+                .get_member_ref(index)
+                .map_or("?", |(_, name, _)| name);
+            VmError::UncaughtException(format!(
+                "java.lang.NullPointerException: cannot read field \"{name}\" \
+                 because the object is null"
+            ))
+        })?;
+        // Memoized key for this call site. A different receiver shape falls
+        // through to the full resolution below, so semantics are unchanged.
+        if let Some(key) = self.field_keys.get(&site)
+            && let Some(crate::value::HeapObject::Instance { fields, .. }) =
+                self.heap.get(reference)
+            && let Some(value) = fields.get(key.as_str())
+        {
+            frame.stack.push(*value);
+            return Ok(());
+        }
         let (owner, field_name, _) = class
             .constant_pool
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
         let (owner, field_name) = (owner.to_owned(), field_name.to_owned());
-        let reference = frame.pop_ref()?.ok_or_else(|| {
-            VmError::UncaughtException(format!(
-                "java.lang.NullPointerException: cannot read field \"{field_name}\" \
-                 because the object is null"
-            ))
-        })?;
         let key = self
             .resolve_field_key(&owner, &field_name, reference)
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
@@ -1730,6 +1752,7 @@ impl<'run> Interpreter<'run> {
         let value = *fields
             .get(&key)
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
+        self.field_keys.insert(site, key);
         frame.stack.push(value);
         Ok(())
     }
@@ -1742,18 +1765,33 @@ impl<'run> Interpreter<'run> {
         index: u16,
         malformed: &impl Fn(String) -> VmError,
     ) -> Result<(), VmError> {
+        let site = (std::ptr::from_ref(class) as usize, index);
+        let value = frame.pop()?;
+        let reference = frame.pop_ref()?.ok_or_else(|| {
+            let name = class
+                .constant_pool
+                .get_member_ref(index)
+                .map_or("?", |(_, name, _)| name);
+            VmError::UncaughtException(format!(
+                "java.lang.NullPointerException: cannot assign field \"{name}\" \
+                 because the object is null"
+            ))
+        })?;
+        // Memoized key for this call site; assigning in place also avoids
+        // re-allocating the key on every write.
+        if let Some(key) = self.field_keys.get(&site)
+            && let Some(crate::value::HeapObject::Instance { fields, .. }) =
+                self.heap.get_mut(reference)
+            && let Some(slot) = fields.get_mut(key.as_str())
+        {
+            *slot = value;
+            return Ok(());
+        }
         let (owner, field_name, _) = class
             .constant_pool
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
         let (owner, field_name) = (owner.to_owned(), field_name.to_owned());
-        let value = frame.pop()?;
-        let reference = frame.pop_ref()?.ok_or_else(|| {
-            VmError::UncaughtException(format!(
-                "java.lang.NullPointerException: cannot assign field \"{field_name}\" \
-                 because the object is null"
-            ))
-        })?;
         let key = self
             .resolve_field_key(&owner, &field_name, reference)
             .unwrap_or_else(|| instance_field_key(&owner, &field_name));
@@ -1761,7 +1799,8 @@ impl<'run> Interpreter<'run> {
         else {
             return Err(malformed(String::from("putfield on a non-object")));
         };
-        fields.insert(key, value);
+        fields.insert(key.clone(), value);
+        self.field_keys.insert(site, key);
         Ok(())
     }
 
@@ -7778,7 +7817,9 @@ enum UserDispatch<'run> {
 /// counter, locals, operand stack).
 struct Frame<'run> {
     class: &'run ClassFile,
-    method_name: String,
+    /// Borrowed from the class's constant pool: allocating this per call showed
+    /// up as pure overhead in call-heavy programs (an image filter makes millions).
+    method_name: &'run str,
     code: Rc<MethodCode>,
     pc: usize,
     /// The last source line crossed (1-based), from `LineNumberTable`.
