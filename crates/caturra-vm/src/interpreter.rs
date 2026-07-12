@@ -41,7 +41,9 @@ pub(crate) struct Interpreter<'run> {
     /// does millions), and resolving a key from scratch allocates several
     /// Strings and walks the superclass chain every time. `classes` is immutable
     /// for the run, so a `ClassFile`'s address is a stable id.
-    field_keys: HashMap<(usize, u16), String>,
+    field_keys: HashMap<(usize, u16), Rc<str>>,
+    /// Defaulted instance-field map per class, cloned on each `new`.
+    field_templates: HashMap<String, HashMap<Rc<str>, JValue>>,
     /// Classes whose initialization has started (JVMS §5.5: recursive
     /// initialization by the same thread proceeds).
     init_started: std::collections::HashSet<String>,
@@ -132,6 +134,7 @@ impl<'run> Interpreter<'run> {
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
             field_keys: HashMap::new(),
+            field_templates: HashMap::new(),
             init_started: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
             max_call_depth,
@@ -422,11 +425,12 @@ impl<'run> Interpreter<'run> {
                     }
                     // Sorted for stable display (fields live in a map);
                     // reserved names (the throwable message) hidden.
-                    let mut keys: Vec<&String> = fields
+                    let mut keys: Vec<&str> = fields
                         .keys()
+                        .map(|k| &**k)
                         .filter(|k| !split_field_key(k).1.starts_with("__"))
                         .collect();
-                    keys.sort();
+                    keys.sort_unstable();
                     // A hidden field shares its simple name with the one it
                     // hides, so name both by their declaring class; otherwise
                     // the simple name reads as the student wrote it.
@@ -1697,7 +1701,7 @@ impl<'run> Interpreter<'run> {
                 break; // cycle guard
             }
             let key = instance_field_key(&class_name, name);
-            if fields.contains_key(&key) {
+            if fields.contains_key(key.as_str()) {
                 return Some(key);
             }
             current = self
@@ -1732,7 +1736,7 @@ impl<'run> Interpreter<'run> {
         if let Some(key) = self.field_keys.get(&site)
             && let Some(crate::value::HeapObject::Instance { fields, .. }) =
                 self.heap.get(reference)
-            && let Some(value) = fields.get(key.as_str())
+            && let Some(value) = fields.get(&**key)
         {
             frame.stack.push(*value);
             return Ok(());
@@ -1750,9 +1754,9 @@ impl<'run> Interpreter<'run> {
             return Err(malformed(String::from("getfield on a non-object")));
         };
         let value = *fields
-            .get(&key)
+            .get(key.as_str())
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
-        self.field_keys.insert(site, key);
+        self.field_keys.insert(site, Rc::from(key.as_str()));
         frame.stack.push(value);
         Ok(())
     }
@@ -1782,7 +1786,7 @@ impl<'run> Interpreter<'run> {
         if let Some(key) = self.field_keys.get(&site)
             && let Some(crate::value::HeapObject::Instance { fields, .. }) =
                 self.heap.get_mut(reference)
-            && let Some(slot) = fields.get_mut(key.as_str())
+            && let Some(slot) = fields.get_mut(&**key)
         {
             *slot = value;
             return Ok(());
@@ -1799,7 +1803,8 @@ impl<'run> Interpreter<'run> {
         else {
             return Err(malformed(String::from("putfield on a non-object")));
         };
-        fields.insert(key.clone(), value);
+        let key: Rc<str> = Rc::from(key.as_str());
+        fields.insert(Rc::clone(&key), value);
         self.field_keys.insert(site, key);
         Ok(())
     }
@@ -2155,9 +2160,22 @@ impl<'run> Interpreter<'run> {
 
     /// Allocate an instance of a user class with defaulted fields,
     /// including fields inherited from superclasses.
+    ///
+    /// The defaulted field map is built once per class and cached: rebuilding it
+    /// meant walking the superclass chain and formatting a `Declaring.name` key
+    /// for every field on *every* `new`, which made allocation the most expensive
+    /// operation in the VM. Cloning the template instead copies `Rc` keys, so a
+    /// pixel-filter program allocating hundreds of thousands of objects pays a
+    /// refcount bump per field rather than a string allocation.
     fn new_instance(&mut self, class_name: &str) -> crate::value::HeapObject {
+        if let Some(template) = self.field_templates.get(class_name) {
+            return crate::value::HeapObject::Instance {
+                class_name: class_name.to_owned(),
+                fields: template.clone(),
+            };
+        }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let mut fields = HashMap::new();
+        let mut fields: HashMap<Rc<str>, JValue> = HashMap::new();
         let mut current = classes.get(class_name);
         let mut steps = 0usize;
         while let Some(class) = current {
@@ -2175,8 +2193,7 @@ impl<'run> Interpreter<'run> {
                 let name = class
                     .constant_pool
                     .get_utf8(field.name_index)
-                    .unwrap_or_default()
-                    .to_owned();
+                    .unwrap_or_default();
                 let descriptor = class
                     .constant_pool
                     .get_utf8(field.descriptor_index)
@@ -2184,14 +2201,16 @@ impl<'run> Interpreter<'run> {
                 // Keyed by the DECLARING class: a subclass may hide a
                 // superclass field of the same name, and the two are
                 // distinct slots. `or_insert` would have collapsed them.
-                let key = instance_field_key(class_name_of(class), &name);
-                fields.insert(key, default_for_descriptor(descriptor));
+                let key = instance_field_key(class_name_of(class), name);
+                fields.insert(Rc::from(key.as_str()), default_for_descriptor(descriptor));
             }
             current = class
                 .constant_pool
                 .get_class_name(class.super_class)
                 .and_then(|super_name| classes.get(super_name));
         }
+        self.field_templates
+            .insert(class_name.to_owned(), fields.clone());
         crate::value::HeapObject::Instance {
             class_name: class_name.to_owned(),
             fields,
@@ -7433,7 +7452,7 @@ impl<'run> Interpreter<'run> {
         let key = instance_field_key(declaring, name);
         match self.heap.get(*reference) {
             Some(crate::value::HeapObject::Instance { fields, .. }) => {
-                fields.get(&key).copied().ok_or_else(|| {
+                fields.get(key.as_str()).copied().ok_or_else(|| {
                     VmError::UncaughtException(format!("java.lang.NoSuchFieldException: {name}"))
                 })
             }
@@ -7488,7 +7507,7 @@ impl<'run> Interpreter<'run> {
         let key = instance_field_key(declaring, name);
         match self.heap.get_mut(*reference) {
             Some(crate::value::HeapObject::Instance { fields, .. }) => {
-                fields.insert(key, value);
+                fields.insert(Rc::from(key.as_str()), value);
                 Ok(())
             }
             _ => Err(VmError::UncaughtException(format!(

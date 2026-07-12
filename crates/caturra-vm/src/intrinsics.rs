@@ -218,7 +218,7 @@ pub fn invoke_special(
                 {
                     let reference = heap.alloc_string(&text);
                     if let Some(HeapObject::Instance { fields, .. }) = heap.get_mut(receiver) {
-                        fields.insert(String::from("__message"), JValue::Ref(Some(reference)));
+                        fields.insert(std::rc::Rc::from("__message"), JValue::Ref(Some(reference)));
                     }
                     Ok(())
                 }

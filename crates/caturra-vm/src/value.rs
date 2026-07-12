@@ -141,10 +141,13 @@ pub enum HeapObject {
     /// only thing that still knows it. Primitive arrays derive theirs
     /// from the variant instead.
     RefArray(String, Vec<JValue>),
-    /// An instance of a user-defined class.
+    /// An instance of a user-defined class. Field keys are `Declaring.name`
+    /// (a subclass may hide a superclass field, so the two are distinct slots).
+    /// They are `Rc<str>` so allocating an object can clone a cached per-class
+    /// template — cloning the keys is then a refcount bump, not a string copy.
     Instance {
         class_name: String,
-        fields: std::collections::HashMap<String, JValue>,
+        fields: std::collections::HashMap<std::rc::Rc<str>, JValue>,
     },
     /// A `java.util.Scanner` over standard input: buffered text pulled
     /// from the console line by line.
