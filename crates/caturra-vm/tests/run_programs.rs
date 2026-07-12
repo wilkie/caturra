@@ -470,7 +470,37 @@ fn sound_loader_returns_indexable_silent_buffer() {
         "SoundArt",
     );
     assert_eq!(stdout, "len=441000\nclip=132300 first=0.0\n");
-    assert_eq!(log, "sound 132300 samples\n");
+    // No asset was preloaded, so read() returned silence; playSound serializes
+    // the clip to a VFS PCM file and the log references it by id.
+    assert_eq!(log, "sound pcm 0 132300\n");
+}
+
+/// When the host preloads an asset's samples into the VFS (the text format
+/// `count s0 s1 ...` of signed 16-bit ints), `SoundLoader.read` returns the
+/// real samples rather than silence. Here the program writes the preload file
+/// itself to stand in for the host.
+#[test]
+fn sound_loader_reads_preloaded_asset_samples() {
+    let (stdout, _log) = run_theater(
+        r#"
+        import org.code.theater.*;
+        public class SoundArt extends Scene {
+            public static void main(String[] args) {
+                try {
+                    java.io.PrintWriter w =
+                        new java.io.PrintWriter(new java.io.File("__caturra_sound_beat.wav"));
+                    w.print("3 16384 -16384 0");
+                    w.close();
+                } catch (Exception e) {}
+                double[] s = SoundLoader.read("beat.wav");
+                System.out.println(s.length + " " + s[0] + " " + s[1] + " " + s[2]);
+            }
+        }
+        "#,
+        "SoundArt",
+    );
+    // 16384/32768 = 0.5, -16384/32768 = -0.5, 0/32768 = 0.0
+    assert_eq!(stdout, "3 0.5 -0.5 0.0\n");
 }
 
 /// Compile a Swing program (the bundled `javax.swing` / `java.awt` library

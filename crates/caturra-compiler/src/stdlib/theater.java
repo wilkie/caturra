@@ -130,6 +130,7 @@ class Image {
 
 class Scene {
   java.util.ArrayList<String> __cmds = new java.util.ArrayList<String>();
+  static int __soundSeq = 0;
   public Scene() {}
   public final int getWidth() { return 400; }
   public final int getHeight() { return 400; }
@@ -142,8 +143,28 @@ class Scene {
   public final void playNote(Instrument inst, int note, double seconds) { __cmds.add("note " + inst + " " + note + " " + seconds); }
   public final void playNoteAndPause(int note, double seconds) { playNote(note, seconds); pause(seconds); }
   public final void playNoteAndPause(Instrument inst, int note, double seconds) { playNote(inst, note, seconds); pause(seconds); }
-  public final void playSound(String filename) { __cmds.add("sound " + filename); }
-  public final void playSound(double[] sound) { __cmds.add("sound " + sound.length + " samples"); }
+  public final void playSound(String filename) { __cmds.add("sound file " + filename); }
+  // Serialize the samples to a VFS file the host reads back and plays; the log
+  // just references it by id. Format (shared with the host): the sample count,
+  // then that many space-separated signed 16-bit ints. See specs/EXECUTION.md.
+  public final void playSound(double[] sound) {
+    int id = __soundSeq;
+    __soundSeq = __soundSeq + 1;
+    try {
+      java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File("__caturra_pcm_" + id));
+      StringBuilder sb = new StringBuilder();
+      sb.append(sound.length);
+      for (int i = 0; i < sound.length; i++) {
+        double x = sound[i];
+        if (x > 1.0) x = 1.0;
+        if (x < -1.0) x = -1.0;
+        sb.append(' ').append((int) Math.round(x * 32767.0));
+      }
+      w.print(sb.toString());
+      w.close();
+    } catch (Exception e) {}
+    __cmds.add("sound pcm " + id + " " + sound.length);
+  }
   public final void setStrokeWidth(double width) { __cmds.add("strokeWidth " + width); }
   public final void setStrokeColor(String color) { __cmds.add("strokeColor " + __c(new Color(color))); }
   public final void setStrokeColor(Color color) { __cmds.add("strokeColor " + __c(color)); }
@@ -175,13 +196,24 @@ class Scene {
 }
 
 class SoundLoader {
-  // Real audio decoding needs the asset bytes (Phase 2), which the headless
-  // runner does not have. Return silence of a plausible length instead of an
-  // empty array: the lessons index the samples by time (`sound[start * 44100]`,
-  // e.g. `createClip(sound, 2, 5)` reads up to 5 s), so an empty buffer throws
-  // ArrayIndexOutOfBounds. 10 s at 44.1 kHz covers the corpus's clip ranges;
-  // a `double[]` is zero-initialized, which is silence.
-  public static double[] read(String filename) { return new double[44100 * 10]; }
+  // The host decodes bundled audio and preloads its samples into the VFS as
+  // `__caturra_sound_<filename>` (same text format as playSound's output) before
+  // the run, so real assets come back as real samples. When no asset was
+  // provided (unknown name, or a headless run), fall back to indexable silence:
+  // the lessons index by time (`sound[start * 44100]`, e.g. createClip(sound, 2,
+  // 5)), so an empty buffer would throw ArrayIndexOutOfBounds. See EXECUTION.md.
+  public static double[] read(String filename) {
+    try {
+      java.util.Scanner sc = new java.util.Scanner(new java.io.File("__caturra_sound_" + filename));
+      int n = sc.nextInt();
+      double[] a = new double[n];
+      for (int i = 0; i < n; i++) a[i] = sc.nextInt() / 32768.0;
+      sc.close();
+      return a;
+    } catch (Exception e) {
+      return new double[44100 * 10];
+    }
+  }
 }
 
 class Theater {

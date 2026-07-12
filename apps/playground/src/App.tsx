@@ -44,6 +44,7 @@ import {
 } from './editor.js';
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
+import { BUNDLED_SOUNDS, decodeSamples, encodeSamples } from './theater-sounds.js';
 import { SwingViz } from './swing.js';
 import {
   CSA_UNITS,
@@ -2792,6 +2793,22 @@ export function App(): React.JSX.Element {
     }
   };
 
+  /** Decode bundled sounds and preload their samples so `SoundLoader.read`
+   * returns real audio. Skipped unless the program actually reads sounds. */
+  const preloadSounds = async (session: JvmSessionApi): Promise<void> => {
+    if (!collectSources().some((file) => file.text.includes('SoundLoader'))) {
+      return;
+    }
+    const viz = theaterVizRef.current;
+    if (!viz) {
+      return;
+    }
+    const samples = await viz.loadAssets(BUNDLED_SOUNDS);
+    for (const [name, floats] of samples) {
+      await session.writeFile(`__caturra_sound_${name}`, encodeSamples(floats));
+    }
+  };
+
   const reportDiagnostics = (diagnostics: Diagnostic[]): void => {
     for (const diagnostic of diagnostics) {
       append(formatDiagnostic(diagnostic), diagnostic.severity === 'error' ? 'error' : 'normal');
@@ -2934,8 +2951,21 @@ export function App(): React.JSX.Element {
       setView('none');
       return;
     }
+    // Read the sample files behind each playSound(double[]) so the viz can play them.
+    const pcm = new Map<number, Float32Array>();
+    for (const line of log.split('\n')) {
+      const match = /^sound pcm (\d+) /.exec(line);
+      if (match) {
+        const id = Number(match[1]);
+        try {
+          pcm.set(id, decodeSamples(await session.readTextFile(`__caturra_pcm_${String(id)}`)));
+        } catch {
+          // Missing sample file — skip this clip.
+        }
+      }
+    }
     setView('theater');
-    void theaterVizRef.current?.play(log);
+    void theaterVizRef.current?.play(log, pcm);
   };
 
   const renderSwing = async (): Promise<void> => {
@@ -3129,6 +3159,7 @@ export function App(): React.JSX.Element {
         await session.remove('neighborhood.jsonl').catch(() => undefined);
       } else if (theater) {
         await session.remove('theater.log').catch(() => undefined);
+        await preloadSounds(session);
         setView('none');
       } else if (swing) {
         await session.remove('swing.json').catch(() => undefined);

@@ -226,6 +226,63 @@ test.describe('playground', () => {
     expect(frequencies).toContain(523); // MIDI 72
   });
 
+  test('plays sampled sound: SoundLoader.read, playSound(double[]) and by name', async ({
+    page,
+  }) => {
+    // Capture the buffers handed to createBufferSource so we can check what played.
+    await page.addInitScript(() => {
+      const created: AudioBufferSourceNode[] = [];
+      (window as unknown as { __sources: AudioBufferSourceNode[] }).__sources = created;
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- re-invoked via .call(this)
+      const original = AudioContext.prototype.createBufferSource;
+      AudioContext.prototype.createBufferSource = function patched(this: AudioContext) {
+        const source = original.call(this);
+        created.push(source);
+        return source;
+      };
+    });
+    await page.goto('/');
+    await page.getByTestId('theater-level').selectOption({ label: 'Shapes' });
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+    await setSource(
+      page,
+      [
+        'import org.code.theater.*;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Scene scene = new Scene();',
+        // Real samples, preloaded from the bundled asset by the editor.
+        '        double[] clip = SoundLoader.read("beatbox.wav");',
+        '        double sum = 0;',
+        '        for (int i = 0; i < clip.length; i++) sum += Math.abs(clip[i]);',
+        '        System.out.println("nonsilent=" + (sum > 0));',
+        '        scene.playSound("beatbox.wav");', // by name (bundled asset)
+        '        double[] tone = new double[2205];', // generated 50 ms tone
+        '        for (int i = 0; i < tone.length; i++)',
+        '            tone[i] = Math.sin(2 * Math.PI * 440 * i / 44100.0) * 0.5;',
+        '        scene.playSound(tone);',
+        '        Theater.playScenes(scene);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+    // SoundLoader.read returned real (non-zero) samples, not the silent stub.
+    await expect(page.getByTestId('console')).toContainText('nonsilent=true');
+    // Both the named asset and the generated clip were scheduled for playback.
+    await page.waitForFunction(
+      () => (window as unknown as { __sources: AudioBufferSourceNode[] }).__sources.length >= 2,
+    );
+    const lengths = await page.evaluate(() =>
+      (window as unknown as { __sources: AudioBufferSourceNode[] }).__sources.map(
+        (source) => source.buffer?.length ?? 0,
+      ),
+    );
+    expect(lengths).toContain(2205); // the generated tone, round-tripped through the VFS
+    expect(lengths.some((len) => len > 50000)).toBe(true); // the decoded beatbox asset
+  });
+
   test('loads a corpus theater level and draws it on the stage', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 4' });

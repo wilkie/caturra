@@ -195,3 +195,40 @@ frame's locals as typed parameters>) {{ return "" + (<expr>); }} }}`,
   `window.playground` hooks (setSource/toggleBreakpoint) rather than
   CodeMirror's contenteditable internals; one test exercises the real
   line-number click path.
+
+## Theater sound (2026-07-12)
+
+`org.code.theater` sound plays on the **editor**, never the engine: the hidden
+worker/sandbox can't drive audio (autoplay policy), and the editor is where the
+Run gesture unlocks Web Audio. The engine only records intent — into the theater
+command log and companion VFS files — and `TheaterViz` on the editor synthesizes
+and plays.
+
+- `playNote(...)` — a Web Audio oscillator per note (MIDI → Hz; PIANO triangle,
+  BASS sawtooth, percussive envelope). Nothing leaves the engine beyond the
+  `note` log line.
+- `playSound(double[])` — the engine serializes the samples to a VFS file
+  `__caturra_pcm_<id>` and logs `sound pcm <id> <len>`; the editor reads the file
+  and plays it as an `AudioBuffer`. This is the from-scratch synthesis /
+  array-manipulation path.
+- `playSound(String)` / `SoundLoader.read(name)` — for bundled, **same-origin**
+  assets (COEP-safe to fetch). Before a run the editor decodes the asset and
+  preloads its samples to `__caturra_sound_<name>`, so `read` returns real audio
+  to manipulate and `playSound(name)` plays the decoded buffer. Unknown names
+  fall back to indexable silence (`double[441000]`).
+- Sample wire format (engine ↔ editor, both directions): the sample count, then
+  that many space-separated signed 16-bit ints. The VM writes it with
+  `PrintWriter` (it has no binary streams) and reads it with `Scanner`.
+
+Because sample data rides ordinary VFS files (`writeFile`/`readTextFile`), sound
+works identically in worker and sandbox modes — the data crosses the RPC, the
+audio stays on the editor.
+
+**Not yet done: per-level named assets.** The corpus references ~20
+Code.org-hosted sounds (`retrobeat.wav`, …), resolvable via each level's
+`starter_assets` map at `studio.code.org/level_starter_assets/<level>/uuid/<uuid>`.
+Those responses carry no CORP/CORS headers, so a cross-origin **isolated** editor
+(`COEP: require-corp`) cannot fetch and decode them. Two options for a later pass:
+vendor the referenced assets same-origin at build time; or, since the editor need
+not be isolated in sandbox mode (the SharedArrayBuffer lives in the sandbox), drop
+the editor's COEP in that topology and fetch cross-origin directly.

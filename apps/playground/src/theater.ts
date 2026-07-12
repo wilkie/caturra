@@ -8,7 +8,10 @@
  * parses and draws them, holding a frame at each `pause` for animation.
  */
 
+import { soundUrl } from './theater-sounds.js';
+
 const CANVAS = 400;
+const SAMPLE_RATE = 44100;
 
 /** Milliseconds a single `pause` frame holds, scaled to keep runs short. */
 function stepMillis(pauseCount: number): number {
@@ -33,6 +36,10 @@ export class TheaterViz {
   // master gain, so starting a new run silences whatever is still ringing.
   #audio: AudioContext | null = null;
   #master: GainNode | null = null;
+  // Decoded bundled assets for playSound(name), and the current run's
+  // playSound(double[]) sample buffers keyed by the log's pcm id.
+  #assetBuffers = new Map<string, AudioBuffer>();
+  #pcm = new Map<number, Float32Array>();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -60,9 +67,14 @@ export class TheaterViz {
     this.#ctx.fillRect(0, 0, CANVAS, CANVAS);
   }
 
-  /** Replay a command log, animating pauses. Cancels any prior run. */
-  async play(log: string): Promise<void> {
+  /**
+   * Replay a command log, animating pauses and playing sound. Cancels any
+   * prior run. `pcm` maps each `sound pcm <id>` command to its samples (read
+   * from the engine's VFS by the caller).
+   */
+  async play(log: string, pcm = new Map<number, Float32Array>()): Promise<void> {
     this.reset();
+    this.#pcm = pcm;
     const run = this.#run;
     const commands = log.split('\n').filter((line) => line.length > 0);
     const pauseCount = commands.filter((c) => c.startsWith('pause ')).length;
@@ -182,8 +194,13 @@ export class TheaterViz {
           this.playTone(rest);
         }
         break;
+      case 'sound':
+        if (audible) {
+          this.playSample(rest);
+        }
+        break;
       default:
-        break; // sound: not yet audible
+        break;
     }
   }
 
@@ -269,6 +286,62 @@ export class TheaterViz {
     }
     this.#audio = new AudioContext();
     return this.#audio;
+  }
+
+  /**
+   * Fetch and decode bundled assets, returning their mono samples by name (for
+   * the caller to preload into the engine's VFS so `SoundLoader.read` works).
+   * Decoded buffers are cached and reused to play `sound file <name>`.
+   */
+  async loadAssets(names: readonly string[]): Promise<Map<string, Float32Array>> {
+    const ctx = this.audioContext();
+    const samples = new Map<string, Float32Array>();
+    if (!ctx) {
+      return samples;
+    }
+    for (const name of names) {
+      let buffer = this.#assetBuffers.get(name);
+      if (!buffer) {
+        try {
+          const response = await fetch(soundUrl(name));
+          buffer = await ctx.decodeAudioData(await response.arrayBuffer());
+          this.#assetBuffers.set(name, buffer);
+        } catch {
+          continue; // asset unavailable — SoundLoader.read falls back to silence
+        }
+      }
+      samples.set(name, buffer.getChannelData(0));
+    }
+    return samples;
+  }
+
+  /** Play a `sound file <name>` (bundled asset) or `sound pcm <id> <len>` command. */
+  private playSample(rest: string[]): void {
+    const ctx = this.audioContext();
+    if (!ctx) {
+      return;
+    }
+    if (ctx.state === 'suspended') {
+      void ctx.resume();
+    }
+    let buffer: AudioBuffer | undefined;
+    if (rest[0] === 'file') {
+      buffer = this.#assetBuffers.get(rest[1] ?? '');
+    } else if (rest[0] === 'pcm') {
+      const samples = this.#pcm.get(Number(rest[1]));
+      if (samples && samples.length > 0) {
+        buffer = ctx.createBuffer(1, samples.length, SAMPLE_RATE);
+        // Copy into a fresh ArrayBuffer-backed view (createBuffer's channel type).
+        buffer.copyToChannel(new Float32Array(samples), 0);
+      }
+    }
+    if (!buffer) {
+      return;
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.masterGain(ctx));
+    source.start(ctx.currentTime);
   }
 
   /** The current run's master gain, created lazily and rebuilt each run. */
