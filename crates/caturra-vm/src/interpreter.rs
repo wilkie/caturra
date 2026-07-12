@@ -5710,102 +5710,7 @@ impl<'run> Interpreter<'run> {
                 reason: String::from("instance of an unloaded class"),
             });
         }
-        // Virtual dispatch: search the instance's class, then up the
-        // superclass chain (skipping abstract declarations).
-        let mut found: Option<(&'run ClassFile, &'run MethodInfo)> = None;
-        let mut current = classes.get(instance_class);
-        let mut steps = 0usize;
-        while let Some(candidate) = current {
-            steps += 1;
-            if steps > classes.len() + 1 {
-                break;
-            }
-            if let Some(method) = candidate.methods.iter().find(|m| {
-                !m.access_flags
-                    .contains(caturra_classfile::MethodAccessFlags::STATIC)
-                    && !m
-                        .access_flags
-                        .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
-                    && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
-                    && candidate.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
-            }) {
-                found = Some((candidate, method));
-                break;
-            }
-            current = candidate
-                .constant_pool
-                .get_class_name(candidate.super_class)
-                .and_then(|super_name| classes.get(super_name));
-        }
-        // No override on the superclass chain: fall back to an
-        // inherited interface default method (JLS §9.4). Search the
-        // implemented interfaces breadth-first, including
-        // super-interfaces.
-        if found.is_none() {
-            let mut queue: Vec<&'run ClassFile> = collect_interfaces(classes, instance_class);
-            let mut seen = 0usize;
-            while let Some(iface) = queue.pop() {
-                seen += 1;
-                if seen > classes.len() * 2 + 2 {
-                    break;
-                }
-                if let Some(method) = iface.methods.iter().find(|m| {
-                    !m.access_flags
-                        .contains(caturra_classfile::MethodAccessFlags::STATIC)
-                        && !m
-                            .access_flags
-                            .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
-                        && iface.constant_pool.get_utf8(m.name_index) == Some(method_name)
-                        && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
-                }) {
-                    found = Some((iface, method));
-                    break;
-                }
-                // Enqueue super-interfaces of this interface.
-                for index in &iface.interfaces {
-                    if let Some(name) = iface.constant_pool.get_class_name(*index)
-                        && let Some(parent) = classes.get(name)
-                    {
-                        queue.push(parent);
-                    }
-                }
-            }
-        }
-        // Erasure bridge: a call through a generic interface uses the
-        // erased descriptor (`compareTo(Object)`), but the class holds
-        // the specific one (`compareTo(Card)`). Match by name and
-        // argument count when the exact descriptor is not present.
-        if found.is_none() {
-            let want_args = descriptor_arg_count(descriptor);
-            let mut current = classes.get(instance_class);
-            let mut steps = 0usize;
-            while let Some(candidate) = current {
-                steps += 1;
-                if steps > classes.len() + 1 {
-                    break;
-                }
-                if let Some(method) = candidate.methods.iter().find(|m| {
-                    !m.access_flags
-                        .contains(caturra_classfile::MethodAccessFlags::STATIC)
-                        && !m
-                            .access_flags
-                            .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
-                        && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
-                        && candidate
-                            .constant_pool
-                            .get_utf8(m.descriptor_index)
-                            .and_then(descriptor_arg_count)
-                            == want_args
-                }) {
-                    found = Some((candidate, method));
-                    break;
-                }
-                current = candidate
-                    .constant_pool
-                    .get_class_name(candidate.super_class)
-                    .and_then(|super_name| classes.get(super_name));
-            }
-        }
+        let found = resolve_virtual(classes, instance_class, method_name, descriptor);
         let Some((class, method)) = found else {
             // Throwable-descended classes inherit getMessage/toString.
             if self.instance_is_throwable(instance_class)
@@ -6066,18 +5971,19 @@ impl<'run> Interpreter<'run> {
     #[allow(clippy::too_many_lines)] // one dispatch path with several fast-paths
     fn invoke_virtual_op(
         &mut self,
-        class: &ClassFile,
+        class: &'run ClassFile,
         frame: &mut Frame<'run>,
         index: u16,
         malformed: &impl Fn(String) -> VmError,
     ) -> Result<Option<Frame<'run>>, VmError> {
+        // Borrowed from the class's constant pool, which outlives the run. These
+        // were three String allocations on every single virtual call.
         let (target_class, method_name, descriptor) = class
             .constant_pool
             .get_member_ref(index)
-            .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
             .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
 
-        let arg_count = descriptor_arg_count(&descriptor)
+        let arg_count = descriptor_arg_count(descriptor)
             .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
         let mut args = Vec::with_capacity(arg_count);
         for _ in 0..arg_count {
@@ -6103,7 +6009,7 @@ impl<'run> Interpreter<'run> {
         // An unmodifiable view refuses every mutator and forwards the rest to
         // the list it wraps, so `size`, `get` and `toString` read through.
         let receiver = if self.is_unmodifiable_list(receiver) {
-            if LIST_MUTATORS.contains(&method_name.as_str()) {
+            if LIST_MUTATORS.contains(&method_name) {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.UnsupportedOperationException",
                 )));
@@ -6119,6 +6025,28 @@ impl<'run> Interpreter<'run> {
             Some(crate::value::HeapObject::Instance { class_name, .. }) => Some(class_name.clone()),
             _ => None,
         };
+
+        // No intrinsic can own a user instance, so skip the whole intrinsic
+        // gauntlet below (reflection, arrays, collections, streams, maps, the
+        // object-argument rewrite) — each of which re-reads the heap and compares
+        // strings. Calls into user classes are the hot path in object-heavy
+        // programs, and they used to pay for every one of those checks.
+        if let Some(instance_class) = instance_class {
+            let result = match self.user_virtual_dispatch(
+                receiver,
+                &instance_class,
+                method_name,
+                descriptor,
+                &args,
+            )? {
+                UserDispatch::Call(callee) => return Ok(Some(callee)),
+                UserDispatch::Value(value) => value,
+            };
+            if let Some(value) = result {
+                frame.stack.push(value);
+            }
+            return Ok(None);
+        }
         let is_reflect = matches!(
             self.heap.get(receiver),
             Some(
@@ -6159,7 +6087,7 @@ impl<'run> Interpreter<'run> {
         // `Object` methods on an array (arrays don't override them): identity
         // equals/hashCode and a default toString.
         if is_array_object(self.heap.get(receiver)) {
-            match method_name.as_str() {
+            match method_name {
                 "equals" => {
                     let equal =
                         matches!(args.first(), Some(JValue::Ref(Some(r))) if *r == receiver);
@@ -6184,17 +6112,15 @@ impl<'run> Interpreter<'run> {
         }
         // Turning a value into text can call a user `toString()`, which needs
         // the interpreter; the intrinsic layer holds only the heap.
-        if self.container_to_string(frame, receiver, &method_name, &descriptor)? {
+        if self.container_to_string(frame, receiver, method_name, descriptor)? {
             return Ok(None);
         }
         // Likewise for comparing elements or keys, which may call a user
         // `equals` and `hashCode`.
-        let compared = match self.stream_dispatch(receiver, &method_name, &descriptor, &args)? {
+        let compared = match self.stream_dispatch(receiver, method_name, descriptor, &args)? {
             Answered::No => {
-                match self.list_equality_intrinsic(receiver, &method_name, &descriptor, &args)? {
-                    Answered::No => {
-                        self.map_intrinsic(receiver, &method_name, &descriptor, &args)?
-                    }
+                match self.list_equality_intrinsic(receiver, method_name, descriptor, &args)? {
+                    Answered::No => self.map_intrinsic(receiver, method_name, descriptor, &args)?,
                     answered => answered,
                 }
             }
@@ -6208,35 +6134,28 @@ impl<'run> Interpreter<'run> {
                 return Ok(None);
             }
         }
-        let rendered = self.render_object_argument(receiver, &method_name, &descriptor, &args)?;
-        let (descriptor, args) = match rendered {
-            Some((string_form, text)) => (String::from(string_form), vec![text]),
-            None => (descriptor, args),
+        let rendered = self.render_object_argument(receiver, method_name, descriptor, &args)?;
+        // `render_object_argument` may rewrite the call to a String-taking form.
+        let (descriptor, args): (std::borrow::Cow<'_, str>, Vec<JValue>) = match rendered {
+            Some((string_form, text)) => {
+                (std::borrow::Cow::Owned(string_form.to_owned()), vec![text])
+            }
+            None => (std::borrow::Cow::Borrowed(descriptor), args),
         };
 
-        let result = if let Some(instance_class) = instance_class {
-            match self.user_virtual_dispatch(
-                receiver,
-                &instance_class,
-                &method_name,
-                &descriptor,
-                &args,
-            )? {
-                UserDispatch::Call(callee) => return Ok(Some(callee)),
-                UserDispatch::Value(value) => value,
-            }
-        } else if is_reflect {
+        // User instances already returned above; only intrinsics reach here.
+        let result = if is_reflect {
             // Class/Field methods need the class table (superclass,
             // declared fields), which the intrinsic layer lacks.
-            self.reflect_virtual(receiver, &method_name, &args)?
+            self.reflect_virtual(receiver, method_name, &args)?
         } else {
             intrinsics::invoke_virtual(
                 &mut self.heap,
                 self.console,
                 self.vfs,
                 receiver,
-                &target_class,
-                &method_name,
+                target_class,
+                method_name,
                 &descriptor,
                 &args,
             )?
@@ -8529,6 +8448,116 @@ fn stream_count_arg(value: JValue) -> usize {
         _ => 0,
     };
     usize::try_from(raw).unwrap_or(0)
+}
+
+/// Resolve a virtual call against a receiver's class: the superclass chain by
+/// exact descriptor, then inherited interface default methods (JLS 9.4), then a
+/// retry by argument count for generic erasure bridges (a call through
+/// `Comparable` uses `compareTo(Object)` while the class declares
+/// `compareTo(Card)`). `None` means no user method matched.
+fn resolve_virtual<'run>(
+    classes: &'run HashMap<String, ClassFile>,
+    instance_class: &str,
+    method_name: &str,
+    descriptor: &str,
+) -> Option<(&'run ClassFile, &'run MethodInfo)> {
+    // Virtual dispatch: search the instance's class, then up the
+    // superclass chain (skipping abstract declarations).
+    let mut found: Option<(&'run ClassFile, &'run MethodInfo)> = None;
+    let mut current = classes.get(instance_class);
+    let mut steps = 0usize;
+    while let Some(candidate) = current {
+        steps += 1;
+        if steps > classes.len() + 1 {
+            break;
+        }
+        if let Some(method) = candidate.methods.iter().find(|m| {
+            !m.access_flags
+                .contains(caturra_classfile::MethodAccessFlags::STATIC)
+                && !m
+                    .access_flags
+                    .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
+                && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                && candidate.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+        }) {
+            found = Some((candidate, method));
+            break;
+        }
+        current = candidate
+            .constant_pool
+            .get_class_name(candidate.super_class)
+            .and_then(|super_name| classes.get(super_name));
+    }
+    // No override on the superclass chain: fall back to an
+    // inherited interface default method (JLS §9.4). Search the
+    // implemented interfaces breadth-first, including
+    // super-interfaces.
+    if found.is_none() {
+        let mut queue: Vec<&'run ClassFile> = collect_interfaces(classes, instance_class);
+        let mut seen = 0usize;
+        while let Some(iface) = queue.pop() {
+            seen += 1;
+            if seen > classes.len() * 2 + 2 {
+                break;
+            }
+            if let Some(method) = iface.methods.iter().find(|m| {
+                !m.access_flags
+                    .contains(caturra_classfile::MethodAccessFlags::STATIC)
+                    && !m
+                        .access_flags
+                        .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
+                    && iface.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                    && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+            }) {
+                found = Some((iface, method));
+                break;
+            }
+            // Enqueue super-interfaces of this interface.
+            for index in &iface.interfaces {
+                if let Some(name) = iface.constant_pool.get_class_name(*index)
+                    && let Some(parent) = classes.get(name)
+                {
+                    queue.push(parent);
+                }
+            }
+        }
+    }
+    // Erasure bridge: a call through a generic interface uses the
+    // erased descriptor (`compareTo(Object)`), but the class holds
+    // the specific one (`compareTo(Card)`). Match by name and
+    // argument count when the exact descriptor is not present.
+    if found.is_none() {
+        let want_args = descriptor_arg_count(descriptor);
+        let mut current = classes.get(instance_class);
+        let mut steps = 0usize;
+        while let Some(candidate) = current {
+            steps += 1;
+            if steps > classes.len() + 1 {
+                break;
+            }
+            if let Some(method) = candidate.methods.iter().find(|m| {
+                !m.access_flags
+                    .contains(caturra_classfile::MethodAccessFlags::STATIC)
+                    && !m
+                        .access_flags
+                        .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
+                    && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                    && candidate
+                        .constant_pool
+                        .get_utf8(m.descriptor_index)
+                        .and_then(descriptor_arg_count)
+                        == want_args
+            }) {
+                found = Some((candidate, method));
+                break;
+            }
+            current = candidate
+                .constant_pool
+                .get_class_name(candidate.super_class)
+                .and_then(|super_name| classes.get(super_name));
+        }
+    }
+    found
 }
 
 #[cfg(test)]
