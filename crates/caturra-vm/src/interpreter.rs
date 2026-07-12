@@ -5971,6 +5971,7 @@ impl<'run> Interpreter<'run> {
                 &mut self.heap,
                 &mut self.rng,
                 self.console,
+                self.vfs,
                 class_name,
                 method_name,
                 descriptor,

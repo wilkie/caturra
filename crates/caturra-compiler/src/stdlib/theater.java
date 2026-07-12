@@ -107,30 +107,45 @@ class Pixel {
 }
 
 class Image {
+  // Pixels are packed 0xRRGGBB, row-major. The host preloads a named asset's
+  // pixels into the VFS and the VM hands us the whole buffer in one native call
+  // (System.__imagePixels): a 400x400 image is 160k pixels, so a per-pixel
+  // decode loop in the interpreter would take a minute. See specs/EXECUTION.md.
   int width, height;
-  int[][] r; int[][] g; int[][] b;
+  int[] px;
   public Image(int width, int height) {
     this.width = width; this.height = height;
-    r = new int[width][height]; g = new int[width][height]; b = new int[width][height];
+    px = new int[width * height];
   }
-  public Image(String filename) { this(100, 100); }
+  public Image(String filename) {
+    int[] dims = System.__imageDims("__caturra_image_" + filename);
+    if (dims.length == 2 && dims[0] > 0 && dims[1] > 0) {
+      width = dims[0]; height = dims[1];
+      px = System.__imagePixels("__caturra_image_" + filename);
+    } else {
+      // No asset for this name: a blank image, as before.
+      width = 100; height = 100;
+      px = new int[width * height];
+    }
+  }
   public Image(Image src) {
     this.width = src.width; this.height = src.height;
-    r = new int[width][height]; g = new int[width][height]; b = new int[width][height];
-    for (int i = 0; i < width; i++) for (int j = 0; j < height; j++) { r[i][j]=src.r[i][j]; g[i][j]=src.g[i][j]; b[i][j]=src.b[i][j]; }
+    px = new int[width * height];
+    System.arraycopy(src.px, 0, px, 0, px.length);
   }
   public int getWidth() { return width; }
   public int getHeight() { return height; }
   public Pixel getPixel(int x, int y) { return new Pixel(this, x, y); }
   public void setPixel(int x, int y, Color c) { __set(x, y, c); }
   public void clear(Color c) { for (int i=0;i<width;i++) for(int j=0;j<height;j++) __set(i,j,c); }
-  Color __get(int x, int y) { return new Color(r[x][y], g[x][y], b[x][y]); }
-  void __set(int x, int y, Color c) { r[x][y]=c.red; g[x][y]=c.green; b[x][y]=c.blue; }
+  Color __get(int x, int y) { int p = px[y * width + x]; return new Color((p >> 16) & 255, (p >> 8) & 255, p & 255); }
+  void __set(int x, int y, Color c) { px[y * width + x] = (c.red << 16) | (c.green << 8) | c.blue; }
 }
 
 class Scene {
   java.util.ArrayList<String> __cmds = new java.util.ArrayList<String>();
   static int __soundSeq = 0;
+  static int __imgSeq = 0;
   public Scene() {}
   public final int getWidth() { return 400; }
   public final int getHeight() { return 400; }
@@ -187,9 +202,17 @@ class Scene {
     for (int p : points) s += " " + p;
     __cmds.add(s + " " + close);
   }
-  public final void drawImage(Image image, int x, int y, int size) { __cmds.add("image " + image.getWidth() + "x" + image.getHeight() + " " + x + " " + y + " " + size); }
-  public final void drawImage(Image image, int x, int y, int size, double rotation) { __cmds.add("image " + image.getWidth() + "x" + image.getHeight() + " " + x + " " + y + " " + size + " " + rotation); }
-  public final void drawImage(Image image, int x, int y, int width, int height, double rotation) { __cmds.add("image " + image.getWidth() + "x" + image.getHeight() + " " + x + " " + y + " " + width + " " + height + " " + rotation); }
+  // An in-engine Image (possibly pixel-edited) is handed to the host as a VFS
+  // pixel buffer; the log references it by id so the host can draw the real thing.
+  private int __writeImage(Image image) {
+    int id = __imgSeq;
+    __imgSeq = __imgSeq + 1;
+    System.__writeImage("__caturra_img_" + id, image.width, image.height, image.px);
+    return id;
+  }
+  public final void drawImage(Image image, int x, int y, int size) { __cmds.add("image obj " + __writeImage(image) + " " + x + " " + y + " " + size); }
+  public final void drawImage(Image image, int x, int y, int size, double rotation) { __cmds.add("image obj " + __writeImage(image) + " " + x + " " + y + " " + size + " " + rotation); }
+  public final void drawImage(Image image, int x, int y, int width, int height, double rotation) { __cmds.add("image obj " + __writeImage(image) + " " + x + " " + y + " " + width + " " + height + " " + rotation); }
   public final void drawImage(String filename, int x, int y, int size) { __cmds.add("image " + filename + " " + x + " " + y + " " + size); }
   public final void drawImage(String filename, int x, int y, int size, double rotation) { __cmds.add("image " + filename + " " + x + " " + y + " " + size + " " + rotation); }
   public final void drawImage(String filename, int x, int y, int width, int height, double rotation) { __cmds.add("image " + filename + " " + x + " " + y + " " + width + " " + height + " " + rotation); }

@@ -2513,10 +2513,114 @@ fn values_bit_equal(a: JValue, b: JValue) -> bool {
     }
 }
 
+/// Read an image pixel file written by the host: width and height as
+/// little-endian u32, then `width * height` RGB triples. `None` when the file is
+/// absent or truncated — the caller then reports "no image".
+fn image_bytes<'a>(
+    heap: &Heap,
+    vfs: &'a VirtualFileSystem,
+    args: &[JValue],
+) -> Option<(u32, u32, &'a [u8])> {
+    let Some(JValue::Ref(Some(reference))) = args.first() else {
+        return None;
+    };
+    let path = heap.string_text(*reference)?;
+    let bytes = vfs.read_file(&path).ok()?;
+    if bytes.len() < 8 {
+        return None;
+    }
+    let width = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
+    let height = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
+    let count = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(3)?;
+    let rgb = bytes.get(8..8 + count)?;
+    Some((width, height, rgb))
+}
+
+/// Image pixels, natively (`org.code.media.Image`). A 400x400 image is 160k
+/// pixels; ferrying that through `PrintWriter`/`Scanner` text costs about a
+/// minute in the interpreter, so the whole buffer crosses the VFS as bytes and is
+/// packed/unpacked here in one call. `__imageDims`/`__imagePixels` read what the
+/// host preloaded; `__writeImage` sends an edited image back out to be drawn.
+fn system_image(
+    heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let ints = |heap: &mut Heap, values: Vec<i32>| {
+        Ok(Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::IntArray(IntKind::Int, values)),
+        ))))
+    };
+    match method {
+        "__imageDims" => {
+            let dims = match image_bytes(heap, vfs, args) {
+                Some((width, height, _)) => vec![
+                    i32::try_from(width).unwrap_or(0),
+                    i32::try_from(height).unwrap_or(0),
+                ],
+                None => Vec::new(),
+            };
+            ints(heap, dims)
+        }
+        "__imagePixels" => {
+            let pixels = match image_bytes(heap, vfs, args) {
+                Some((width, height, rgb)) => (0..(width as usize).saturating_mul(height as usize))
+                    .map(|i| {
+                        let (r, g, b) = (rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]);
+                        (i32::from(r) << 16) | (i32::from(g) << 8) | i32::from(b)
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            ints(heap, pixels)
+        }
+        // __writeImage(path, width, height, packed[])
+        _ => {
+            let Some(JValue::Ref(Some(reference))) = args.first() else {
+                return Ok(None);
+            };
+            let Some(path) = heap.string_text(*reference) else {
+                return Ok(None);
+            };
+            let (Some(JValue::Int(width)), Some(JValue::Int(height))) = (args.get(1), args.get(2))
+            else {
+                return Ok(None);
+            };
+            let Some(JValue::Ref(Some(array))) = args.get(3) else {
+                return Ok(None);
+            };
+            let Some(HeapObject::IntArray(_, packed)) = heap.get(*array) else {
+                return Ok(None);
+            };
+            let (width, height) = (
+                u32::try_from(*width).unwrap_or(0),
+                u32::try_from(*height).unwrap_or(0),
+            );
+            let count = (width as usize).saturating_mul(height as usize);
+            let mut bytes = Vec::with_capacity(8 + count * 3);
+            bytes.extend_from_slice(&width.to_le_bytes());
+            bytes.extend_from_slice(&height.to_le_bytes());
+            for i in 0..count {
+                let value = packed.get(i).copied().unwrap_or(0);
+                bytes.push(u8::try_from((value >> 16) & 0xff).unwrap_or(0));
+                bytes.push(u8::try_from((value >> 8) & 0xff).unwrap_or(0));
+                bytes.push(u8::try_from(value & 0xff).unwrap_or(0));
+            }
+            let _ = vfs.write_file(&path, bytes);
+            Ok(None)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn invoke_static(
     heap: &mut Heap,
     rng: &mut JavaRng,
     console: &mut dyn ConsoleIo,
+    vfs: &mut VirtualFileSystem,
     class: &str,
     method: &str,
     descriptor: &str,
@@ -2609,6 +2713,9 @@ pub fn invoke_static(
                     Some(response) => Ok(Some(JValue::Ref(Some(heap.alloc_string(&response))))),
                     None => Ok(Some(JValue::Ref(None))),
                 }
+            }
+            "__imageDims" | "__imagePixels" | "__writeImage" => {
+                system_image(heap, vfs, method, args)
             }
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },

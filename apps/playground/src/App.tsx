@@ -47,7 +47,9 @@ import { TheaterViz } from './theater.js';
 import {
   assetManifest,
   assetUrl,
+  decodePixels,
   decodeSamples,
+  encodePixels,
   encodeSamples,
   isSound,
   referencedAssets,
@@ -2825,6 +2827,15 @@ export function App(): React.JSX.Element {
       }
     }
     await viz.loadImages(images);
+    // Ship the pixels into the VFS so `new Image(name)` sees the real thing.
+    if (sources.some((file) => file.text.includes('Image'))) {
+      for (const name of images.keys()) {
+        const pixels = viz.pixelsOf(name);
+        if (pixels) {
+          await session.writeFile(`__caturra_image_${name}`, encodePixels(pixels));
+        }
+      }
+    }
     if (sounds.size === 0) {
       return;
     }
@@ -2979,19 +2990,35 @@ export function App(): React.JSX.Element {
       setView('none');
       return;
     }
-    // Read the sample files behind each playSound(double[]) so the viz can play them.
+    // Read the buffers behind each playSound(double[]) and drawImage(Image, …)
+    // so the viz can play / draw what the program actually produced.
     const pcm = new Map<number, Float32Array>();
+    const engineImages = new Map<number, ImageData>();
     for (const line of log.split('\n')) {
-      const match = /^sound pcm (\d+) /.exec(line);
-      if (match) {
-        const id = Number(match[1]);
+      const sound = /^sound pcm (\d+) /.exec(line);
+      if (sound) {
+        const id = Number(sound[1]);
         try {
           pcm.set(id, decodeSamples(await session.readTextFile(`__caturra_pcm_${String(id)}`)));
         } catch {
           // Missing sample file — skip this clip.
         }
+        continue;
+      }
+      const image = /^image obj (\d+) /.exec(line);
+      if (image) {
+        const id = Number(image[1]);
+        try {
+          const pixels = decodePixels(await session.readFile(`__caturra_img_${String(id)}`));
+          if (pixels) {
+            engineImages.set(id, pixels);
+          }
+        } catch {
+          // Missing pixel file — falls back to the placeholder box.
+        }
       }
     }
+    await theaterVizRef.current?.setEngineImages(engineImages);
     setView('theater');
     void theaterVizRef.current?.play(log, pcm);
   };

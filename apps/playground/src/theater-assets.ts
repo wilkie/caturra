@@ -80,6 +80,47 @@ export function referencedAssets(source: string): string[] {
   return [...names];
 }
 
+/**
+ * The pixel-buffer format the engine and editor exchange for `org.code.media.Image`
+ * (shared with the VM's native `System.__imageDims`/`__imagePixels`/`__writeImage`):
+ * width and height as little-endian u32, then RGB triples, row-major. Binary
+ * rather than text because a 400x400 image is 160k pixels — far too many to
+ * ferry through the interpreter a token at a time.
+ */
+export function encodePixels(image: ImageData): Uint8Array {
+  const { width, height, data } = image;
+  const bytes = new Uint8Array(8 + width * height * 3);
+  new DataView(bytes.buffer).setUint32(0, width, true);
+  new DataView(bytes.buffer).setUint32(4, height, true);
+  for (let i = 0, o = 8; i < width * height; i++, o += 3) {
+    bytes[o] = data[i * 4] ?? 0;
+    bytes[o + 1] = data[i * 4 + 1] ?? 0;
+    bytes[o + 2] = data[i * 4 + 2] ?? 0;
+  }
+  return bytes;
+}
+
+/** Parse a pixel buffer the engine wrote back out (a drawn, possibly edited Image). */
+export function decodePixels(bytes: Uint8Array): ImageData | undefined {
+  if (bytes.byteLength < 8) {
+    return undefined;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const width = view.getUint32(0, true);
+  const height = view.getUint32(4, true);
+  if (width === 0 || height === 0 || bytes.byteLength < 8 + width * height * 3) {
+    return undefined;
+  }
+  const image = new ImageData(width, height);
+  for (let i = 0, o = 8; i < width * height; i++, o += 3) {
+    image.data[i * 4] = bytes[o] ?? 0;
+    image.data[i * 4 + 1] = bytes[o + 1] ?? 0;
+    image.data[i * 4 + 2] = bytes[o + 2] ?? 0;
+    image.data[i * 4 + 3] = 255;
+  }
+  return image;
+}
+
 /** Serialize float samples in [-1, 1] as `count s0 s1 …` of signed 16-bit ints. */
 export function encodeSamples(samples: Float32Array): string {
   const parts = new Array<string>(samples.length + 1);

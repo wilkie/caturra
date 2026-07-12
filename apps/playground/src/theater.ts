@@ -41,6 +41,8 @@ export class TheaterViz {
   // Decoded starter images for drawImage(name, …); names with no asset fall
   // back to the placeholder box.
   #images = new Map<string, ImageBitmap>();
+  // Images the engine wrote out for drawImage(Image, …), keyed by the log's id.
+  #engineImages = new Map<number, ImageBitmap>();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -265,18 +267,20 @@ export class TheaterViz {
   }
 
   /**
-   * `image <name|WxH> x y size [rot]` or `image <name|WxH> x y w h rot`. A named
-   * starter asset draws for real; an in-engine `Image` object (logged as its
-   * dimensions, with no pixels) still draws the placeholder box.
+   * `image <name> x y size [rot]`, `image <name> x y w h rot`, or
+   * `image obj <id> …` for an in-engine `Image` whose pixels the engine wrote
+   * out. Either draws for real; an unresolved name draws the placeholder box.
    */
   private drawImage(rest: string[]): void {
+    const engine = rest[0] === 'obj';
     const key = rest[0] ?? '';
-    const bitmap = this.#images.get(key);
+    const bitmap = engine ? this.#engineImages.get(Number(rest[1])) : this.#images.get(key);
     if (!bitmap) {
-      this.drawImagePlaceholder(rest);
+      this.drawImagePlaceholder(engine ? rest.slice(1) : rest);
       return;
     }
-    const nums = rest.slice(1).map(Number);
+    // `obj <id> x y …` carries one extra leading token before the numbers.
+    const nums = rest.slice(engine ? 2 : 1).map(Number);
     const [x, y] = [nums[0] ?? 0, nums[1] ?? 0];
     let width: number;
     let height: number;
@@ -368,6 +372,31 @@ export class TheaterViz {
       } catch {
         // Unavailable — drawImage falls back to the placeholder box.
       }
+    }
+  }
+
+  /** The raw pixels of a loaded image, for preloading into the engine's VFS. */
+  pixelsOf(name: string): ImageData | undefined {
+    const bitmap = this.#images.get(name);
+    if (!bitmap) {
+      return undefined;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return undefined;
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    return ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  }
+
+  /** Adopt the images the engine wrote out for `drawImage(Image, …)`, keyed by log id. */
+  async setEngineImages(images: Map<number, ImageData>): Promise<void> {
+    this.#engineImages.clear();
+    for (const [id, pixels] of images) {
+      this.#engineImages.set(id, await createImageBitmap(pixels));
     }
   }
 

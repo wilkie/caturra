@@ -395,6 +395,67 @@ test.describe('playground', () => {
     expect(result.placeholder).toBe(0); // and not the placeholder grey
   });
 
+  test('Image gives real pixels, and a pixel-edited Image draws', async ({ page }) => {
+    const response = await page.request.get('/level-assets/manifest.json');
+    let available = false;
+    try {
+      const manifest = (await response.json()) as Record<string, string>;
+      available = typeof manifest === 'object' && 'house.png' in manifest;
+    } catch {
+      // No manifest (or the dev server served the SPA fallback) — assets absent.
+    }
+    test.skip(!available, 'run `pnpm assets:fetch` to download the CSA level assets');
+
+    await page.goto('/');
+    await page.getByTestId('theater-level').selectOption({ label: 'Shapes' });
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+    await setSource(
+      page,
+      [
+        'import org.code.theater.*;',
+        'import org.code.media.*;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Image img = new Image("house.png");',
+        // Real pixels, not the old blank 100x100 stub.
+        '        System.out.println("size=" + img.getWidth() + "x" + img.getHeight());',
+        '        int sum = 0;',
+        '        for (int y = 0; y < img.getHeight(); y++)',
+        '            for (int x = 0; x < img.getWidth(); x++)',
+        '                sum += img.getPixel(x, y).getRed();',
+        '        System.out.println("hasPixels=" + (sum > 0));',
+        // Edit every pixel to pure red, then draw the edited Image.
+        '        for (int y = 0; y < img.getHeight(); y++)',
+        '            for (int x = 0; x < img.getWidth(); x++)',
+        '                img.setPixel(x, y, new Color(255, 0, 0));',
+        '        Scene scene = new Scene();',
+        '        scene.clear("white");',
+        '        scene.drawImage(img, 0, 0, 200);',
+        '        Theater.playScenes(scene);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+
+    // The asset's real dimensions and non-zero pixels reached the program.
+    await expect(page.getByTestId('console')).toContainText('hasPixels=true');
+    await expect(page.getByTestId('console')).not.toContainText('size=100x100');
+
+    // The edited Image round-tripped back out and drew as solid red.
+    const painted = await page.waitForFunction(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="theater-canvas"]');
+      const ctx = canvas?.getContext('2d');
+      if (!ctx) {
+        return null;
+      }
+      const [r, g, b] = ctx.getImageData(50, 50, 1, 1).data;
+      return r === 255 && g === 0 && b === 0 ? { r, g, b } : null;
+    });
+    expect(await painted.jsonValue()).toEqual({ r: 255, g: 0, b: 0 });
+  });
+
   test('loads a corpus theater level and draws it on the stage', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('unit-select').selectOption({ label: 'CSA 2025 Unit 4' });

@@ -258,10 +258,27 @@ download). A name that resolves to nothing stays silent, or draws the placeholde
 box for an image. Note a name can map to different content in different levels;
 the fetch keeps one representative per name.
 
-**Still stubbed: in-engine image pixels.** `new Image(name)` is a blank 100×100
-(`this(100, 100)`), and `drawImage(Image, …)` logs only the object's dimensions,
-so a manipulated `Image` still draws the placeholder. These are the exact
-analogues of the old `SoundLoader.read` silence stub and `playSound(double[])`,
-and would be fixed the same way: preload the decoded pixels into the VFS for
-`Image(name)`/`getPixel`, and have the engine write modified pixels back out to a
-VFS file for `drawImage(Image, …)` to render.
+### Image pixels
+
+`org.code.media.Image` carries real pixels, the mirror of the sound path — but it
+**cannot** use the same text-over-`Scanner` transport. A 400×400 image is 160k
+pixels; a probe pushing that many ints through `PrintWriter`/`Scanner` took **65
+seconds** in the interpreter (the audio path only just gets away with ~100k
+samples). So pixels cross natively:
+
+- The VFS carries a **binary** pixel buffer: width and height as little-endian
+  `u32`, then RGB triples, row-major.
+- Three intrinsics (`System.__imageDims`, `__imagePixels`, `__writeImage`) pack
+  and unpack it in Rust, so an image loads or stores in **one** native call
+  instead of 160k interpreted ones. `invoke_static` takes the VFS for this.
+- `Image` holds its pixels **packed** (`int[] px`, `0xRRGGBB`, row-major) rather
+  than three `int[][]`, so construction is a direct assignment from the intrinsic
+  with no per-pixel decode loop. `getPixel`/`setPixel` unpack on demand, which is
+  the student's own loop cost and unavoidable.
+
+Flow: before a run the editor decodes each named image the program mentions and
+writes its pixels to `__caturra_image_<name>`, so `new Image(name)` returns the
+real thing (an unresolved name still yields the blank 100×100). `drawImage(Image,
+…)` writes the (possibly edited) buffer to `__caturra_img_<id>` and logs `image
+obj <id> …`; the editor reads it back and draws it. So pixel-editing lessons —
+filters, greyscale, channel swaps — run and show their result.

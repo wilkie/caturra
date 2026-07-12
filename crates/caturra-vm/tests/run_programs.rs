@@ -394,7 +394,7 @@ fn theater_scene_draw_commands() {
          ellipse 150 150 80 80\n\
          textStyle SANS BOLD\n\
          text \"Hello\" 200 300 0.0\n\
-         image 64x48 5 5 64\n\
+         image obj 0 5 5 64\n\
          note PIANO 60 1.0\n"
     );
 }
@@ -12139,4 +12139,65 @@ fn string_builder_works_as_a_type_everywhere() {
         "M",
     );
     assert_eq!(out, "xx\nab\nf\n");
+}
+
+/// `org.code.media.Image` pixels are real: the host preloads a named asset's
+/// pixel buffer into the VFS (little-endian u32 width/height, then RGB triples)
+/// and `new Image(name)` picks it up through the native `System.__imageDims` /
+/// `__imagePixels` intrinsics — a per-pixel Scanner loop would take a minute for
+/// a 400x400 image. Editing pixels and drawing the Image writes the buffer back
+/// out for the host to render (`image obj <id> ...`).
+#[test]
+fn image_reads_real_pixels_and_writes_edits_back() {
+    let mut vfs = VirtualFileSystem::new();
+    // A 2x1 image: red pixel, then green.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&2u32.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&[255, 0, 0, 0, 255, 0]);
+    vfs.write_file("__caturra_image_photo.jpg", bytes).unwrap();
+
+    let source = r#"
+        import org.code.theater.*;
+        import org.code.media.*;
+        public class ArtScene extends Scene {
+            public static void main(String[] args) {
+                Image img = new Image("photo.jpg");
+                System.out.println(img.getWidth() + "x" + img.getHeight());
+                Pixel p = img.getPixel(0, 0);
+                System.out.println("r=" + p.getRed() + " g=" + p.getGreen() + " b=" + p.getBlue());
+                // Edit: make the second pixel blue.
+                img.setPixel(1, 0, new Color(0, 0, 255));
+                ArtScene s = new ArtScene();
+                s.drawImage(img, 10, 20, 50);
+                Theater.playScenes(s);
+            }
+        }
+        "#;
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("ArtScene.java"),
+        text: source.to_owned(),
+    }]);
+    assert!(
+        compilation.success(),
+        "compile failed: {:?}",
+        compilation.diagnostics
+    );
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    assert!(matches!(
+        vm.run_main("ArtScene", &[]),
+        Ok(ExitStatus::Completed)
+    ));
+    assert_eq!(console.stdout_text(), "2x1\nr=255 g=0 b=0\n");
+
+    let log = String::from_utf8(vfs.read_file("theater.log").unwrap().to_vec()).unwrap();
+    assert_eq!(log, "image obj 0 10 20 50\n");
+    // The edited buffer went back out: red, then the new blue.
+    let written = vfs.read_file("__caturra_img_0").unwrap();
+    assert_eq!(&written[0..8], &[2, 0, 0, 0, 1, 0, 0, 0]);
+    assert_eq!(&written[8..14], &[255, 0, 0, 0, 0, 255]);
 }

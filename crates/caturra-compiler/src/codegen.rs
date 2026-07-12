@@ -5082,6 +5082,30 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
     ),
+    // Internal image-pixel bridge, used only by the bundled org.code.media.Image:
+    // the host preloads a named asset's pixels into the VFS as bytes (u32 width,
+    // u32 height, then RGB triples) and these hand the whole buffer across in one
+    // native call — a 400x400 image is 160k pixels, far too many to ferry through
+    // the interpreter a token at a time. `__writeImage` sends an edited image back
+    // out for the host to draw.
+    bm(
+        "__imageDims",
+        &[S],
+        BRet::IntArray,
+        "(Ljava/lang/String;)[I",
+    ),
+    bm(
+        "__imagePixels",
+        &[S],
+        BRet::IntArray,
+        "(Ljava/lang/String;)[I",
+    ),
+    bm(
+        "__writeImage",
+        &[S, I, I, BParam::RefArray],
+        BRet::Void,
+        "(Ljava/lang/String;II[I)V",
+    ),
 ];
 
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[
