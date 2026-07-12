@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build:wasm": "wasm-pack build crates/caturra-wasm --target web --out-dir ../../packages/core/src/wasm/generated --out-name caturra --no-pack",
-    "sounds:fetch": "python3 apps/playground/scripts/fetch-sounds.py",
+    "assets:fetch": "python3 apps/playground/scripts/fetch-assets.py",
     "build": "pnpm build:wasm && pnpm -r build",
     "dev": "pnpm --filter @caturra/playground dev",
     "dev:sandbox": "pnpm --filter @caturra/sandbox dev",

@@ -286,7 +286,7 @@ test.describe('playground', () => {
   test('plays a downloaded CSA level sound by name', async ({ page }) => {
     // The level sounds are fetched, not vendored (see apps/playground/scripts/
     // fetch-sounds.py). Skip when they have not been downloaded.
-    const response = await page.request.get('/sounds/level/manifest.json');
+    const response = await page.request.get('/level-assets/manifest.json');
     let available = false;
     try {
       const manifest = (await response.json()) as Record<string, string>;
@@ -294,7 +294,7 @@ test.describe('playground', () => {
     } catch {
       // No manifest (or the dev server served the SPA fallback) — assets absent.
     }
-    test.skip(!available, 'run `pnpm sounds:fetch` to download the CSA level sounds');
+    test.skip(!available, 'run `pnpm assets:fetch` to download the CSA level assets');
 
     await page.addInitScript(() => {
       const created: AudioBufferSourceNode[] = [];
@@ -336,6 +336,63 @@ test.describe('playground', () => {
       ),
     );
     expect(played.some((len) => len > 0)).toBe(true);
+  });
+
+  test('drawImage renders a downloaded starter image, not the placeholder', async ({ page }) => {
+    const response = await page.request.get('/level-assets/manifest.json');
+    let available = false;
+    try {
+      const manifest = (await response.json()) as Record<string, string>;
+      available = typeof manifest === 'object' && 'house.png' in manifest;
+    } catch {
+      // No manifest (or the dev server served the SPA fallback) — assets absent.
+    }
+    test.skip(!available, 'run `pnpm assets:fetch` to download the CSA level assets');
+
+    await page.goto('/');
+    await page.getByTestId('theater-level').selectOption({ label: 'Shapes' });
+    await expect(page.getByTestId('theater-viz')).toBeVisible();
+    await setSource(
+      page,
+      [
+        'import org.code.theater.*;',
+        '',
+        'public class Main {',
+        '    public static void main(String[] args) {',
+        '        Scene scene = new Scene();',
+        '        scene.clear("white");',
+        '        scene.drawImage("house.png", 100, 100, 200);',
+        '        Theater.playScenes(scene);',
+        '    }',
+        '}',
+      ].join('\n'),
+    );
+    await page.getByTestId('run').click();
+
+    // Sample the drawn region: the real image has varied color, unlike the flat
+    // grey placeholder (#dcdce4) it used to draw.
+    const drawn = await page.waitForFunction(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="theater-canvas"]');
+      const ctx = canvas?.getContext('2d');
+      if (!ctx) {
+        return null;
+      }
+      const { data } = ctx.getImageData(100, 100, 200, 200);
+      const colors = new Set<string>();
+      let placeholder = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+        colors.add(`${String(r)},${String(g)},${String(b)}`);
+        if (r === 220 && g === 220 && b === 228) {
+          placeholder++;
+        }
+      }
+      // Wait until something other than the initial white has been painted.
+      return colors.size > 2 ? { distinct: colors.size, placeholder } : null;
+    });
+    const result = (await drawn.jsonValue()) as { distinct: number; placeholder: number };
+    expect(result.distinct).toBeGreaterThan(2); // a real image, not one flat fill
+    expect(result.placeholder).toBe(0); // and not the placeholder grey
   });
 
   test('loads a corpus theater level and draws it on the stage', async ({ page }) => {

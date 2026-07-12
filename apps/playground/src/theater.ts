@@ -38,6 +38,9 @@ export class TheaterViz {
   // playSound(double[]) sample buffers keyed by the log's pcm id.
   #assetBuffers = new Map<string, AudioBuffer>();
   #pcm = new Map<number, Float32Array>();
+  // Decoded starter images for drawImage(name, …); names with no asset fall
+  // back to the placeholder box.
+  #images = new Map<string, ImageBitmap>();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -185,7 +188,7 @@ export class TheaterViz {
         this.drawShape(rest);
         break;
       case 'image':
-        this.drawImagePlaceholder(rest);
+        this.drawImage(rest);
         break;
       case 'note':
         if (audible) {
@@ -261,10 +264,48 @@ export class TheaterViz {
     }
   }
 
-  /** Phase-1 images are blank; draw a labelled placeholder box. */
+  /**
+   * `image <name|WxH> x y size [rot]` or `image <name|WxH> x y w h rot`. A named
+   * starter asset draws for real; an in-engine `Image` object (logged as its
+   * dimensions, with no pixels) still draws the placeholder box.
+   */
+  private drawImage(rest: string[]): void {
+    const key = rest[0] ?? '';
+    const bitmap = this.#images.get(key);
+    if (!bitmap) {
+      this.drawImagePlaceholder(rest);
+      return;
+    }
+    const nums = rest.slice(1).map(Number);
+    const [x, y] = [nums[0] ?? 0, nums[1] ?? 0];
+    let width: number;
+    let height: number;
+    let rotation: number;
+    if (nums.length >= 5) {
+      // x y w h rot
+      width = nums[2] ?? bitmap.width;
+      height = nums[3] ?? bitmap.height;
+      rotation = nums[4] ?? 0;
+    } else {
+      // x y size [rot] — `size` is the width; the height keeps the aspect ratio.
+      width = nums[2] ?? bitmap.width;
+      height = bitmap.width === 0 ? width : (width * bitmap.height) / bitmap.width;
+      rotation = nums[3] ?? 0;
+    }
+    const ctx = this.#ctx;
+    ctx.save();
+    if (rotation !== 0) {
+      ctx.translate(x, y);
+      ctx.rotate((rotation * Math.PI) / 180);
+      ctx.translate(-x, -y);
+    }
+    ctx.drawImage(bitmap, x, y, width, height);
+    ctx.restore();
+  }
+
+  /** No asset for this name (or an in-engine Image): a labelled placeholder box. */
   private drawImagePlaceholder(rest: string[]): void {
-    const dims = /^\d+x\d+$/.test(rest[0] ?? '');
-    const nums = (dims ? rest.slice(1) : rest.slice(1)).map(Number);
+    const nums = rest.slice(1).map(Number);
     const [x, y, size] = [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 40];
     const ctx = this.#ctx;
     ctx.fillStyle = '#dcdce4';
@@ -313,6 +354,21 @@ export class TheaterViz {
       samples.set(name, buffer.getChannelData(0));
     }
     return samples;
+  }
+
+  /** Fetch and decode named images (`name` → URL) for `drawImage(name, …)`. */
+  async loadImages(assets: Map<string, string>): Promise<void> {
+    for (const [name, url] of assets) {
+      if (this.#images.has(name)) {
+        continue;
+      }
+      try {
+        const response = await fetch(url);
+        this.#images.set(name, await createImageBitmap(await response.blob()));
+      } catch {
+        // Unavailable — drawImage falls back to the placeholder box.
+      }
+    }
   }
 
   /** Play a `sound file <name>` (bundled asset) or `sound pcm <id> <len>` command. */

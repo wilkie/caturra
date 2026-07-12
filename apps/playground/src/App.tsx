@@ -45,12 +45,13 @@ import {
 import { NeighborhoodViz, type NeighborhoodState } from './neighborhood.js';
 import { TheaterViz } from './theater.js';
 import {
+  assetManifest,
+  assetUrl,
   decodeSamples,
   encodeSamples,
-  referencedSounds,
-  soundManifest,
-  soundUrl,
-} from './theater-sounds.js';
+  isSound,
+  referencedAssets,
+} from './theater-assets.js';
 import { SwingViz } from './swing.js';
 import {
   CSA_UNITS,
@@ -2800,31 +2801,34 @@ export function App(): React.JSX.Element {
   };
 
   /**
-   * Decode the sounds this program names — only those, since assets are large —
-   * so `playSound(name)` can play them. When the program also reads samples,
-   * preload them into the VFS so `SoundLoader.read` returns real audio instead
-   * of silence. Names with no asset (nothing bundled, nothing fetched) are left
-   * alone and stay silent.
+   * Load the starter assets this program names — only those, since there are
+   * hundreds — so `playSound(name)` and `drawImage(name, …)` use the real thing.
+   * When the program also reads samples, preload them into the VFS so
+   * `SoundLoader.read` returns real audio instead of silence. Names with no
+   * asset (nothing bundled, nothing fetched) are left alone: they stay silent
+   * or draw the placeholder box.
    */
-  const preloadSounds = async (session: JvmSessionApi): Promise<void> => {
+  const preloadAssets = async (session: JvmSessionApi): Promise<void> => {
     const sources = collectSources();
-    const named = referencedSounds(sources.map((file) => file.text).join('\n'));
+    const named = referencedAssets(sources.map((file) => file.text).join('\n'));
     const viz = theaterVizRef.current;
     if (named.length === 0 || !viz) {
       return;
     }
-    const available = await soundManifest();
-    const assets = new Map<string, string>();
+    const available = await assetManifest();
+    const sounds = new Map<string, string>();
+    const images = new Map<string, string>();
     for (const name of named) {
       const path = available[name];
       if (path !== undefined) {
-        assets.set(name, soundUrl(path));
+        (isSound(name) ? sounds : images).set(name, assetUrl(path));
       }
     }
-    if (assets.size === 0) {
+    await viz.loadImages(images);
+    if (sounds.size === 0) {
       return;
     }
-    const samples = await viz.loadAssets(assets);
+    const samples = await viz.loadAssets(sounds);
     if (!sources.some((file) => file.text.includes('SoundLoader'))) {
       return; // decoded for playback; no need to ship samples into the VFS
     }
@@ -3183,7 +3187,7 @@ export function App(): React.JSX.Element {
         await session.remove('neighborhood.jsonl').catch(() => undefined);
       } else if (theater) {
         await session.remove('theater.log').catch(() => undefined);
-        await preloadSounds(session);
+        await preloadAssets(session);
         setView('none');
       } else if (swing) {
         await session.remove('swing.json').catch(() => undefined);

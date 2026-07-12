@@ -224,25 +224,44 @@ Because sample data rides ordinary VFS files (`writeFile`/`readTextFile`), sound
 works identically in worker and sandbox modes — the data crosses the RPC, the
 audio stays on the editor.
 
-### Named sound assets
+### Named starter assets (sounds and images)
 
-The CSA levels play Code.org-hosted sounds (`birds.wav`, `retrobeat.wav`, …),
-keyed by uuid in each level's `starter_assets` map at
+The CSA levels play Code.org-hosted sounds (`birds.wav`, `retrobeat.wav`, …) and
+draw hosted images (`house.png`, `motivation.jpg`, …), keyed by uuid in each
+level's `starter_assets` map at
 `studio.code.org/level_starter_assets/<level>/uuid/<uuid>`. Those responses carry
 no CORP/CORS headers, so a cross-origin **isolated** editor (`COEP: require-corp`)
-cannot fetch them at runtime — they must be served same-origin. They are also
-large (~104 MB raw for the 18 names the levels use).
+cannot fetch them at runtime — they must be served same-origin. They are also far
+too large to vendor (~177 MB of audio, ~117 MB of images).
 
 So they are **downloaded as an install step, not vendored** (like `artifacts/`):
-`pnpm sounds:fetch` pulls them and transcodes to mono MP3 (~6 MB) into the
-git-ignored `apps/playground/public/sounds/level/`, writing a `manifest.json` of
-name → path. MP3 because `decodeAudioData` handles it everywhere (Ogg does not in
-Safari); it resamples to the AudioContext's rate, so the program still sees
-44.1 kHz samples.
+`pnpm assets:fetch` pulls them and transcodes for transport into the git-ignored
+`apps/playground/public/level-assets/`, writing a `manifest.json` of name → path.
+Sounds become mono MP3 — `decodeAudioData` handles MP3 everywhere (Ogg does not in
+Safari) and resamples to the AudioContext's rate, so the program still sees
+44.1 kHz samples. Images are downscaled to fit the 400×400 stage, keeping PNG so
+alpha survives.
+
+The name → (level, uuid) map is `apps/playground/scripts/level-assets.json`,
+generated from every level's `starter_assets`. That is the authoritative list and
+**must not** be derived by scanning starter code: a level often provides an asset
+the student is expected to name themselves (e.g. `cheerful.wav` in
+`CSA U4L1-L6d_pilot_oo2025` appears only in the solution). When the git-ignored
+`artifacts/` tree is present the script reads it directly, so the list cannot go
+stale; `--regen` rewrites the JSON from it.
 
 Resolution is by **name**, not by level: the editor scans a program's source for
-the `*.wav` literals it names and decodes only those (the assets are far too big
-to preload wholesale). It merges the fetched manifest over its built-in defaults
-(`beatbox.wav`, which ships with the app, so sound works with no download). A name
-that resolves to nothing simply stays silent. Note a name can map to different
-audio in different levels; the fetch keeps one representative per name.
+the asset literals it names and loads only those (there are ~674 assets — far too
+many to preload wholesale). It merges the fetched manifest over its built-in
+defaults (`beatbox.wav`, which ships with the app, so sound works with no
+download). A name that resolves to nothing stays silent, or draws the placeholder
+box for an image. Note a name can map to different content in different levels;
+the fetch keeps one representative per name.
+
+**Still stubbed: in-engine image pixels.** `new Image(name)` is a blank 100×100
+(`this(100, 100)`), and `drawImage(Image, …)` logs only the object's dimensions,
+so a manipulated `Image` still draws the placeholder. These are the exact
+analogues of the old `SoundLoader.read` silence stub and `playSound(double[])`,
+and would be fixed the same way: preload the decoded pixels into the VFS for
+`Image(name)`/`getPixel`, and have the engine write modified pixels back out to a
+VFS file for `drawImage(Image, …)` to render.
