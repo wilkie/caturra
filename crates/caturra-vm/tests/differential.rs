@@ -8371,3 +8371,105 @@ public class DiffCtors {
 }
 "#
 );
+
+// A nested class names its enclosing class's STATIC members without
+// qualifying them (JLS §6.5.6.1). caturra hoists nested classes to the top
+// level, which lost sight of who enclosed them, so `counter++` inside a nested
+// class was "cannot find variable" — a program that compiles on any JDK and
+// was rejected here. (Codegen already had the fallback; nested classes were
+// simply never told their enclosing class.)
+differential_test!(
+    diff_nested_class_sees_enclosing_statics,
+    "DiffNested",
+    r#"
+import java.util.ArrayList;
+
+public class DiffNested {
+    static int counter = 10;
+    static String label = "n=";
+    static final ArrayList<String> LOG = new ArrayList<String>();
+
+    static int bump() {
+        counter++;
+        return counter;
+    }
+
+    static class Counter {
+        int mine;
+
+        Counter() {
+            // The enclosing class's static field, and its static method.
+            mine = counter;
+            LOG.add("built " + mine);
+            bump();
+        }
+
+        String describe() {
+            return label + mine;
+        }
+
+        static int shared() {
+            return counter * 2;
+        }
+    }
+
+    // A nested class of a nested class reaches the outermost statics too.
+    static class Outer {
+        static class Deep {
+            String reach() {
+                return label + counter;
+            }
+        }
+    }
+
+    interface Named {
+        String name();
+    }
+
+    // ... and so does an anonymous class, which already worked.
+    static Named anon() {
+        return new Named() {
+            public String name() {
+                return label + counter;
+            }
+        };
+    }
+
+    public static void main(String[] args) {
+        Counter a = new Counter();
+        Counter b = new Counter();
+        System.out.println(a.describe() + " " + b.describe());
+        System.out.println(Counter.shared());
+        System.out.println(counter);
+        System.out.println(new Outer.Deep().reach());
+        System.out.println(anon().name());
+        System.out.println(LOG);
+    }
+}
+"#
+);
+
+// But only the STATIC members. An instance field of the enclosing class needs
+// an enclosing `this`, which a static nested class has not got — javac calls
+// it "non-static variable ... cannot be referenced from a static context", and
+// caturra must not have become more permissive by learning about enclosing
+// classes.
+differential_reject!(
+    reject_nested_class_reading_an_enclosing_instance_field,
+    "RejectNested",
+    r"
+public class RejectNested {
+    int instanceField = 3;
+
+    static class Inner {
+        int read() {
+            return instanceField;
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Inner().read());
+    }
+}
+"
+);

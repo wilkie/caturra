@@ -3209,12 +3209,22 @@ fn desugar_enum(
 /// namespace and rejects duplicate simple names).
 fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
     let nested = std::mem::take(&mut class.nested);
+    let outer = class.name.clone();
     out.push(class);
     for mut inner in nested {
         // Hoisting loses the fact that it was nested; the file-name rule
         // needs it, because only a TOP-LEVEL public type is bound to the
         // file name.
         inner.is_nested = true;
+        // It also loses sight of the enclosing class, whose STATIC members a
+        // nested class names without qualifying (JLS §6.5.6.1) — `counter++`
+        // inside `class Outer { static int counter; static class Inner {...} }`.
+        // Codegen already falls back to an enclosing class's statics for the
+        // anonymous classes it synthesizes; a nested class declared in source
+        // is the same situation and was simply never told who enclosed it.
+        // Only the *static* fallback opens up: the instance one needs a
+        // captured `this`, which a nested class has not got.
+        inner.enclosing.get_or_insert_with(|| outer.clone());
         flatten_nested(inner, out);
     }
 }

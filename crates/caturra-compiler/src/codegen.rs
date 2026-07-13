@@ -6515,18 +6515,50 @@ impl BodyGen<'_> {
         Some(short)
     }
 
-    /// A STATIC field of the class that enclosed this synthesized anonymous
-    /// or lambda class. Hoisting the body to the top level lost the name, but
-    /// Java resolves it through the enclosing class, so we do too. Instance
-    /// fields would need the enclosing `this` captured, which caturra does
-    /// not do — they still report "cannot find variable".
-    fn enclosing_static_field(&self, name: &str) -> Option<(ClassId, FieldSig)> {
-        let enclosing = self
+    /// The classes that lexically enclose this one, innermost first: the class
+    /// that declared an anonymous or lambda body, or the class a nested class
+    /// was declared in. Hoisting flattened all of them to the top level, but
+    /// Java resolves an unqualified name up the whole nesting chain — a
+    /// `class Deep` inside `class Outer` inside `class Top` sees `Top`'s
+    /// statics — so this walks it rather than looking one level up.
+    fn enclosing_chain(&self) -> Vec<String> {
+        let mut chain = Vec::new();
+        let mut next = self
             .table
             .info_by_id(self.current_class_id)
-            .and_then(|info| info.enclosing.clone())?;
-        let (owner, field) = self.table.field(&enclosing, name)?;
-        field.is_static.then(|| (owner, field.clone()))
+            .and_then(|info| info.enclosing.clone());
+        // Nesting is finite and acyclic; the bound is belt and braces against
+        // a malformed table rather than a real shape.
+        while let Some(name) = next {
+            next = self
+                .table
+                .classes
+                .get(&name)
+                .and_then(|info| info.enclosing.clone());
+            chain.push(name);
+            if chain.len() > 64 {
+                break;
+            }
+        }
+        chain
+    }
+
+    /// A STATIC field of a class that lexically encloses this one — the class
+    /// that declared a synthesized anonymous/lambda body, or the class a
+    /// nested class was declared in. Hoisting to the top level lost the name,
+    /// but Java resolves it through the enclosing class, so we do too.
+    /// Instance fields would need the enclosing `this` captured, which caturra
+    /// only does for lambdas — from a nested class they still report "cannot
+    /// find variable", exactly as javac refuses them.
+    fn enclosing_static_field(&self, name: &str) -> Option<(ClassId, FieldSig)> {
+        for enclosing in self.enclosing_chain() {
+            if let Some((owner, field)) = self.table.field(&enclosing, name)
+                && field.is_static
+            {
+                return Some((owner, field.clone()));
+            }
+        }
+        None
     }
 
     /// The `__caturraOuter` field, if this is a lambda that captured its
@@ -10431,6 +10463,21 @@ impl BodyGen<'_> {
         // `assertTrue(...)` → `Assertions.assertTrue(...)`).
         if !matches!(own, Resolution::Found(_)) {
             for class in self.table.static_imports.clone() {
+                if matches!(
+                    self.table.resolve(&class, method, &arg_types),
+                    Resolution::Found(sig) if sig.is_static
+                ) {
+                    return self.static_call(&class, method, args, span);
+                }
+            }
+        }
+        // A nested class calls its enclosing class's STATIC methods unqualified,
+        // exactly as it names their static fields (JLS §15.12.1) — and up the
+        // whole nesting chain, not just one level. An enclosing *instance*
+        // method is not reachable: it would need an enclosing `this`, and javac
+        // rejects it too.
+        if !matches!(own, Resolution::Found(_)) {
+            for class in self.enclosing_chain() {
                 if matches!(
                     self.table.resolve(&class, method, &arg_types),
                     Resolution::Found(sig) if sig.is_static
