@@ -161,12 +161,12 @@ class Image {
       width = dims[0]; height = dims[1];
       px = System.__imagePixels("__caturra_image_" + filename);
     } else {
-      // No asset for this name: a blank image, as before. (The real library
-      // throws FILE_NOT_FOUND; a level whose asset the host did not preload
-      // is our problem, not the student's, so it still gets a canvas.)
-      width = 100; height = 100;
-      px = new int[width * height];
-      __fill(0x00FFFFFF);
+      // The real Image(String) throws FILE_NOT_FOUND for an asset it cannot
+      // load. We used to hand back a blank 100x100 canvas instead — which is
+      // how three lessons came to draw an empty box for months: the manifest
+      // was missing their picture and the fallback swallowed it. A missing
+      // asset is a real failure and now says so.
+      throw new RuntimeException("FILE_NOT_FOUND");
     }
   }
   public Image(Image src) {
@@ -269,9 +269,18 @@ class Scene {
   public final void drawImage(Image image, int x, int y, int size) { __cmds.add("image obj " + __writeImage(image) + " " + x + " " + y + " " + size); }
   public final void drawImage(Image image, int x, int y, int size, double rotation) { __cmds.add("image obj " + __writeImage(image) + " " + x + " " + y + " " + size + " " + rotation); }
   public final void drawImage(Image image, int x, int y, int width, int height, double rotation) { __cmds.add("image obj " + __writeImage(image) + " " + x + " " + y + " " + width + " " + height + " " + rotation); }
-  public final void drawImage(String filename, int x, int y, int size) { __cmds.add("image " + filename + " " + x + " " + y + " " + size); }
-  public final void drawImage(String filename, int x, int y, int size, double rotation) { __cmds.add("image " + filename + " " + x + " " + y + " " + size + " " + rotation); }
-  public final void drawImage(String filename, int x, int y, int width, int height, double rotation) { __cmds.add("image " + filename + " " + x + " " + y + " " + width + " " + height + " " + rotation); }
+  // Drawing an asset by name hands the file to the host renderer rather than
+  // decoding 160k pixels into the VM — but the real Scene routes these through
+  // `new Image(filename)`, so a name it cannot load throws. Check that the host
+  // preloaded it (dimensions only, not the pixels) so a missing asset fails
+  // here too instead of silently drawing nothing.
+  private void __requireAsset(String filename) {
+    int[] dims = System.__imageDims("__caturra_image_" + filename);
+    if (dims.length != 2 || dims[0] <= 0 || dims[1] <= 0) throw new RuntimeException("FILE_NOT_FOUND");
+  }
+  public final void drawImage(String filename, int x, int y, int size) { __requireAsset(filename); __cmds.add("image " + filename + " " + x + " " + y + " " + size); }
+  public final void drawImage(String filename, int x, int y, int size, double rotation) { __requireAsset(filename); __cmds.add("image " + filename + " " + x + " " + y + " " + size + " " + rotation); }
+  public final void drawImage(String filename, int x, int y, int width, int height, double rotation) { __requireAsset(filename); __cmds.add("image " + filename + " " + x + " " + y + " " + width + " " + height + " " + rotation); }
 }
 
 class SoundLoader {

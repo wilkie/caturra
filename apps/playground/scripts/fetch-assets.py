@@ -38,7 +38,8 @@ starter code). When the git-ignored artifacts/ tree is present it is read
 directly, so the list cannot go stale; `--regen` rewrites the JSON from it.
 
 Usage:  python3 apps/playground/scripts/fetch-assets.py [--force] [--regen]
-Requires: ffmpeg on PATH.
+Requires: ffmpeg on PATH, and Pillow for the handful of palette PNGs ffmpeg's
+decoder rejects (see transcode_image).
 """
 
 import argparse
@@ -113,13 +114,41 @@ def transcode_sound(src: str, dest: str) -> None:
     )
 
 
-def transcode_image(src: str, dest: str) -> None:
+def scale_image(src: str, dest: str) -> None:
     # Downscale to fit the stage, never upscale; keep PNG so alpha survives.
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", src,
          "-vf", f"scale='min({STAGE},iw)':-1", dest],
         check=True,
     )
+
+
+def transcode_image(src: str, dest: str) -> None:
+    try:
+        scale_image(src, dest)
+        return
+    except subprocess.CalledProcessError:
+        pass
+    # ffmpeg's PNG decoder rejects a few of Code.org's palette PNGs (youtube,
+    # egypt, russia, earth) that every other decoder reads happily. They used
+    # to be dropped from the manifest, which the engine then papered over with
+    # a blank image — so three lessons quietly drew an empty box. Re-encode to
+    # RGBA with Pillow and hand ffmpeg something it will read.
+    try:
+        from PIL import Image  # noqa: PLC0415 - only needed on this rare path
+    except ImportError as error:
+        raise RuntimeError(
+            f"ffmpeg cannot decode {os.path.basename(src)}; install Pillow "
+            "(pip install pillow) so it can be normalized first"
+        ) from error
+    normalized = src + ".rgba.png"
+    try:
+        with Image.open(src) as image:
+            image.convert("RGBA").save(normalized)
+        scale_image(normalized, dest)
+    finally:
+        if os.path.exists(normalized):
+            os.unlink(normalized)
 
 
 def main() -> int:

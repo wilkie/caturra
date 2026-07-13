@@ -556,3 +556,30 @@ public class MediaNames {
 }
 "##
 );
+
+// An asset the host could not load is a FILE_NOT_FOUND, not a blank canvas.
+// caturra used to hand back an empty 100x100 image, which is exactly how three
+// lessons came to draw an empty box for months: their picture was missing from
+// the asset manifest and the fallback swallowed it. (The real exception is a
+// package-qualified MediaRuntimeException, which caturra's flat namespace
+// cannot name; the message — the key both libraries throw — is what is
+// compared.)
+media_differential_test!(
+    media_missing_asset_throws,
+    "MediaMissing",
+    r#"
+import org.code.media.*;
+
+public class MediaMissing {
+    public static void main(String[] args) {
+        try {
+            Image img = new Image("no-such-asset-anywhere.png");
+            System.out.println("no throw: " + img.getWidth() + "x" + img.getHeight());
+        } catch (RuntimeException e) {
+            System.out.println("threw " + e.getMessage());
+        }
+        System.out.println("still running");
+    }
+}
+"#
+);
