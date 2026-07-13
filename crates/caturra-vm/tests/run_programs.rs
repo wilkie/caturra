@@ -12360,3 +12360,55 @@ fn fault_inside_a_warm_constructor_keeps_its_frame_in_the_trace() {
     assert!(ctor_at < main_at, "{stderr}");
     assert_eq!(console.stdout_text(), "482\n");
 }
+
+/// `JUnit`'s delta overloads: `assertEquals(expected, actual, delta)` passes
+/// when the two are within `delta` of each other. The money and measurement
+/// levels use them to avoid asserting on exact binary fractions
+/// (`assertEquals(0.02, cost, 0.0001, "...")`), and caturra's `JUnit` model
+/// simply did not have them — the level would not compile. Found by running
+/// every corpus validator against its own level's solution.
+#[test]
+fn junit_assert_equals_honours_a_delta() {
+    let out = run_stdout(
+        r#"
+        import org.junit.jupiter.api.Test;
+        import static org.junit.jupiter.api.Assertions.*;
+
+        public class DeltaTest {
+            @Test
+            public void withinDelta() {
+                assertEquals(0.02, 0.02000001, 0.0001);
+                assertEquals(0.02, 0.0201, 0.001, "close enough");
+                assertEquals(1.0f, 1.0001f, 0.001f);
+                assertArrayEquals(new double[] {1.0, 2.0}, new double[] {1.0001, 1.9999}, 0.001);
+            }
+
+            public static void main(String[] args) {
+                // Exactly equal passes whatever the delta.
+                Assertions.assertEquals(5.0, 5.0, 0.0);
+                System.out.println("exact ok");
+
+                // Outside the delta fails, and says so.
+                try {
+                    Assertions.assertEquals(0.02, 0.03, 0.0001, "too far apart");
+                    System.out.println("no throw");
+                } catch (RuntimeException e) {
+                    System.out.println("threw: " + e.getMessage());
+                }
+                try {
+                    Assertions.assertArrayEquals(
+                        new double[] {1.0, 2.0}, new double[] {1.0, 2.5}, 0.001, "array");
+                    System.out.println("no throw");
+                } catch (RuntimeException e) {
+                    System.out.println("threw: " + e.getMessage());
+                }
+            }
+        }
+        "#,
+        "DeltaTest",
+    );
+    assert_eq!(
+        out,
+        "exact ok\nthrew: too far apart\nthrew: array ==> arrays first differed at element [1]\n"
+    );
+}

@@ -25,6 +25,26 @@ class Assertions {
   public static void assertEquals(double expected, double actual) {
     if (expected != actual) throw new RuntimeException("expected " + expected + " but was " + actual);
   }
+  // Comparing doubles within a tolerance: JUnit's delta overloads, which the
+  // money/measurement levels use to avoid asserting on exact binary fractions
+  // (`assertEquals(0.02, cost, 0.0001, "...")`). Equal within delta passes;
+  // JUnit treats a NaN delta, or a negative one, as a failure of the assertion
+  // itself, and exactly equal values pass whatever the delta.
+  public static void assertEquals(double expected, double actual, double delta) {
+    assertEquals(expected, actual, delta, "expected " + expected + " but was " + actual);
+  }
+  public static void assertEquals(double expected, double actual, double delta, String message) {
+    if (expected == actual) return;
+    double difference = expected - actual;
+    if (difference < 0) difference = -difference;
+    if (!(difference <= delta)) throw new RuntimeException(message);
+  }
+  public static void assertEquals(float expected, float actual, float delta) {
+    assertEquals((double) expected, (double) actual, (double) delta);
+  }
+  public static void assertEquals(float expected, float actual, float delta, String message) {
+    assertEquals((double) expected, (double) actual, (double) delta, message);
+  }
   public static void assertEquals(boolean expected, boolean actual) {
     if (expected != actual) throw new RuntimeException("expected " + expected + " but was " + actual);
   }
@@ -132,6 +152,16 @@ class Assertions {
   public static void assertArrayEquals(double[] expected, double[] actual, String message) {
     if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
     for (int i = 0; i < expected.length; i++) if (expected[i] != actual[i]) throw new RuntimeException(message + " ==> arrays first differed at element [" + i + "]");
+  }
+  // The same tolerance, elementwise: the sound levels compare sample arrays.
+  public static void assertArrayEquals(double[] expected, double[] actual, double delta) {
+    assertArrayEquals(expected, actual, delta, "array contents differ");
+  }
+  public static void assertArrayEquals(double[] expected, double[] actual, double delta, String message) {
+    if (expected.length != actual.length) throw new RuntimeException(message + " ==> array lengths differ");
+    for (int i = 0; i < expected.length; i++) {
+      assertEquals(expected[i], actual[i], delta, message + " ==> arrays first differed at element [" + i + "]");
+    }
   }
   public static void assertArrayEquals(long[] expected, long[] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
   public static void assertArrayEquals(long[] expected, long[] actual, String message) {
