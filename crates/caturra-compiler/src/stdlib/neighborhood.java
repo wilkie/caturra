@@ -23,6 +23,44 @@ enum __NbhdDir {
   }
 }
 
+// The colours org.code.neighborhood accepts: the 139 web-colour names its
+// ColorHelpers holds, plus a #rgb or #rrggbb hex literal. A name is matched
+// case-insensitively; anything else is an INVALID_COLOR.
+class __NbhdColors {
+  private static final String WEB =
+        " white silver gray black red maroon yellow olive lime green aqua teal blue navy fuchsia "
+      + "purple mediumvioletred deeppink palevioletred hotpink lightpink pink darkred firebrick "
+      + "crimson indianred lightcoral salmon darksalmon lightsalmon orangered tomato darkorange coral "
+      + "orange darkkhaki gold khaki peachpuff palegoldenrod moccasin papayawhip lightgoldenrodyellow "
+      + "lemonchiffon lightyellow brown saddlebrown sienna chocolate darkgoldenrod peru rosybrown "
+      + "goldenrod sandybrown tan burlywood wheat navajowhite bisque blanchedalmond cornsilk "
+      + "darkgreen darkolivegreen forestgreen seagreen olivedrab mediumseagreen limegreen springgreen "
+      + "mediumspringgreen darkseagreen mediumaquamarine yellowgreen lawngreen chartreuse lightgreen "
+      + "greenyellow palegreen darkcyan lightseagreen cadetblue darkturquoise mediumturquoise "
+      + "turquoise cyan aquamarine paleturquoise lightcyan darkblue mediumblue midnightblue royalblue "
+      + "steelblue dodgerblue deepskyblue cornflowerblue skyblue lightskyblue lightsteelblue "
+      + "lightblue powderblue indigo darkmagenta darkviolet darkslateblue blueviolet darkorchid "
+      + "magenta slateblue mediumslateblue mediumorchid mediumpurple orchid violet plum thistle "
+      + "lavender mistyrose antiquewhite linen beige whitesmoke lavenderblush oldlace aliceblue "
+      + "seashell ghostwhite honeydew floralwhite azure mintcream snow ivory darkslategray dimgray "
+      + "slategray lightslategray darkgray lightgray ";
+  static boolean isColor(String c) {
+    if (c == null) return false;
+    if (c.length() == 7 || c.length() == 4) {
+      if (c.charAt(0) == '#') {
+        boolean hex = true;
+        for (int i = 1; i < c.length(); i++) {
+          char d = c.charAt(i);
+          boolean digit = (d >= '0' && d <= '9') || (d >= 'a' && d <= 'f') || (d >= 'A' && d <= 'F');
+          if (!digit) hex = false;
+        }
+        if (hex) return true;
+      }
+    }
+    return WEB.contains(" " + c.toLowerCase() + " ");
+  }
+}
+
 class __NbhdSquare {
   String color;
   boolean passable;
@@ -31,8 +69,13 @@ class __NbhdSquare {
     this.passable = (tileType == 1 || tileType == 2 || tileType == 3 || tileType == 5);
     this.paintCount = value;
   }
+  // The real GridSquare.setColor rejects a colour it does not know BEFORE it
+  // touches the square, so `paint("banana")` throws and the painter keeps its
+  // paint. We used to paint the square with the bad name and spend the paint,
+  // which meant a typo silently "worked" here and failed on Code.org.
   void setColor(String c) {
-    if (containsPaint()) throw new RuntimeException("Invalid paint location");
+    if (!__NbhdColors.isColor(c)) throw new RuntimeException("INVALID_COLOR");
+    if (containsPaint()) throw new RuntimeException("INVALID_PAINT_LOCATION");
     if (passable && paintCount == 0) color = c;
   }
   boolean isPassable() { return passable; }
@@ -162,7 +205,7 @@ class Painter {
     this.grid = __NbhdWorld.getGrid();
     int gridSize = grid.getSize();
     this.hasInfinitePaint = couldBeInfinite ? gridSize >= 20 : false;
-    if (x < 0 || y < 0 || x >= gridSize || y >= gridSize) throw new RuntimeException("Invalid location");
+    if (x < 0 || y < 0 || x >= gridSize || y >= gridSize) throw new RuntimeException("INVALID_LOCATION");
     this.id = "painter-" + lastId; lastId++;
     __NbhdWorld.emit("INITIALIZE_PAINTER", "{" + __idf() + ",\"direction\":\"" + this.direction.getDirectionString()
         + "\",\"x\":\"" + x + "\",\"y\":\"" + y + "\",\"paint\":\"" + remainingPaint + "\"}");
@@ -184,7 +227,7 @@ class Painter {
       else if (direction.isEast()) x++;
       else x--;
     } else {
-      throw new RuntimeException("Invalid move");
+      throw new RuntimeException("INVALID_MOVE");
     }
     __NbhdWorld.emit("MOVE", "{" + __idf() + ",\"direction\":\"" + direction.getDirectionString() + "\"}");
     __log("MOVE", null);

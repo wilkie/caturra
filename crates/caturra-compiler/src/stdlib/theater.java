@@ -30,11 +30,14 @@ class Color {
   public static Color copyWithBlue(Color c, int v) { return new Color(c.red, c.green, v); }
   public String toString() { return red + " " + green + " " + blue; }
   static int __clamp(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+  // Names only, exactly the 27 the real ColorConstantMap holds. NOT hex: the
+  // real Color(String) looks the name up in that map and throws for anything
+  // else, so `new Color("#40E0D0")` is an IllegalArgumentException on Code.org.
+  // We used to accept it, which is the dangerous direction — a program that
+  // runs here and dies there. (org.code.neighborhood's painter colours are a
+  // different set and DO take hex; see __NbhdColors.)
   static int[] __resolve(String s) {
     String n = s.toUpperCase();
-    if (n.length() == 7 && n.charAt(0) == '#') {
-      return new int[]{ __hex(n.substring(1, 3)), __hex(n.substring(3, 5)), __hex(n.substring(5, 7)) };
-    }
     if (n.equals("WHITE")) return new int[]{255,255,255};
     if (n.equals("SILVER")) return new int[]{192,192,192};
     if (n.equals("GRAY")) return new int[]{128,128,128};
@@ -65,9 +68,6 @@ class Color {
     if (n.equals("BEIGE")) return new int[]{245,245,220};
     if (n.equals("IVORY")) return new int[]{255,255,240};
     return null;
-  }
-  static int __hex(String h) {
-    return Integer.parseInt(h, 16);
   }
   public static final Color WHITE = new Color(255,255,255);
   public static final Color SILVER = new Color(192,192,192);

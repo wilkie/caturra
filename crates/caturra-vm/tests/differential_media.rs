@@ -505,3 +505,54 @@ public class MediaSharpen {
 }
 "#
 );
+
+// Color(String): the 27 names the real ColorConstantMap holds, the hex form,
+// case-insensitivity, and what a name it does not know throws. This is also the
+// whole of `Scene`'s observable colour surface — clear(String),
+// setFillColor(String), setStrokeColor(String) and setTextColor(String) all
+// funnel through this constructor — so theater's colour handling is pinned
+// here rather than behind its own shim (see the note in the neighborhood
+// suite's commit).
+media_differential_test!(
+    media_named_and_hex_colors,
+    "MediaNames",
+    r##"
+import org.code.media.*;
+
+public class MediaNames {
+    static void show(String name) {
+        Color c = new Color(name);
+        System.out.println(name + " = " + c.getRed() + "," + c.getGreen() + "," + c.getBlue());
+    }
+
+    public static void main(String[] args) {
+        String[] names = {
+            "white", "silver", "gray", "black", "red", "maroon", "yellow", "olive",
+            "lime", "green", "aqua", "teal", "blue", "navy", "fuchsia", "purple",
+            "pink", "orange", "gold", "brown", "chocolate", "tan", "turquoise",
+            "indigo", "violet", "beige", "ivory",
+        };
+        for (int i = 0; i < names.length; i++) {
+            show(names[i]);
+        }
+
+        // Case-insensitive.
+        show("ReD");
+
+        // A name it does not know. A hex string is NOT a name: the real
+        // Color(String) is a lookup in the constant map above and nothing
+        // else, so it throws for hex too — even though the *neighborhood*
+        // painter's colours (a different set entirely) do accept hex.
+        String[] rejected = {"banana", "#40E0D0", "#fff"};
+        for (int i = 0; i < rejected.length; i++) {
+            try {
+                new Color(rejected[i]);
+                System.out.println("no throw for " + rejected[i]);
+            } catch (IllegalArgumentException e) {
+                System.out.println("threw: " + e.getMessage());
+            }
+        }
+    }
+}
+"##
+);

@@ -421,8 +421,16 @@ fn theater_image_pixel_manipulation() {
                 System.out.println("corner=" + c.getRed() + "," + c.getGreen() + "," + c.getBlue());
                 Color orange = new Color("orange");
                 System.out.println("orange=" + orange.getRed() + "," + orange.getGreen() + "," + orange.getBlue());
-                Color hex = new Color("#40E0D0");
-                System.out.println("hex=" + hex.getRed() + "," + hex.getGreen() + "," + hex.getBlue());
+                // A hex string is NOT an org.code.media colour: the real
+                // Color(String) looks the name up in its constant map and
+                // throws for anything it does not hold. (The neighborhood
+                // painter's colours are a different set, and do take hex.)
+                try {
+                    Color hex = new Color("#40E0D0");
+                    System.out.println("hex=" + hex.getRed());
+                } catch (IllegalArgumentException e) {
+                    System.out.println(e.getMessage());
+                }
             }
         }
         "##,
@@ -430,7 +438,7 @@ fn theater_image_pixel_manipulation() {
     );
     assert_eq!(
         stdout,
-        "corner=245,235,225\norange=255,165,0\nhex=64,224,208\n"
+        "corner=245,235,225\norange=255,165,0\nInvalid color #40E0D0\n"
     );
 }
 
