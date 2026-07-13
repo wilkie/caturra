@@ -102,6 +102,48 @@ pub enum StdStream {
     Err,
 }
 
+/// Where each of a class's instance fields lives in an object.
+///
+/// Fields are keyed `Declaring.name`: a subclass may hide a superclass field of
+/// the same name (JLS 8.3), and the two are distinct storage. Inherited fields
+/// come first, so a class's layout is a prefix of every subclass's — which is
+/// what lets a `getfield` site cache the slot it resolved once and index
+/// straight into any later receiver, whatever its exact runtime class.
+#[derive(Debug, Default)]
+pub struct ClassLayout {
+    /// Slot → key. Enumerating an object's fields (`toString`, the debugger)
+    /// reads names from here rather than from the object itself.
+    names: Vec<std::rc::Rc<str>>,
+    /// Key → slot.
+    index: std::collections::HashMap<std::rc::Rc<str>, usize>,
+}
+
+impl ClassLayout {
+    /// Append a field, or return the slot it already has (a class re-declaring
+    /// an inherited name shadows it, and that is a *different* key).
+    pub fn push(&mut self, key: std::rc::Rc<str>) -> usize {
+        if let Some(&slot) = self.index.get(&key) {
+            return slot;
+        }
+        let slot = self.names.len();
+        self.index.insert(std::rc::Rc::clone(&key), slot);
+        self.names.push(key);
+        slot
+    }
+
+    /// The slot holding `key`, if this class has such a field.
+    #[must_use]
+    pub fn slot(&self, key: &str) -> Option<usize> {
+        self.index.get(key).copied()
+    }
+
+    /// The field keys, in slot order.
+    #[must_use]
+    pub fn names(&self) -> &[std::rc::Rc<str>] {
+        &self.names
+    }
+}
+
 /// An object on the heap.
 ///
 /// Deliberately not `PartialEq`: Java equality is heap-aware (two `Integer`
@@ -144,13 +186,15 @@ pub enum HeapObject {
     /// only thing that still knows it. Primitive arrays derive theirs
     /// from the variant instead.
     RefArray(String, Vec<JValue>),
-    /// An instance of a user-defined class. Field keys are `Declaring.name`
-    /// (a subclass may hide a superclass field, so the two are distinct slots).
-    /// They are `Rc<str>` so allocating an object can clone a cached per-class
-    /// template — cloning the keys is then a refcount bump, not a string copy.
+    /// An instance of a user-defined class: its fields laid out flat, one per
+    /// slot, in the order its [`ClassLayout`] fixes. The layout is shared by
+    /// every instance of the class, so allocating an object copies a vector of
+    /// defaults — no hashing, no per-field allocation — and reading a field is
+    /// an index rather than a map probe.
     Instance {
         class_name: std::rc::Rc<str>,
-        fields: std::collections::HashMap<std::rc::Rc<str>, JValue>,
+        layout: std::rc::Rc<ClassLayout>,
+        fields: Vec<JValue>,
     },
     /// A `java.util.Scanner` over standard input: buffered text pulled
     /// from the console line by line.
@@ -314,6 +358,32 @@ pub enum HeapObject {
         /// Raw `MethodAccessFlags` bits.
         access: u16,
     },
+}
+
+impl HeapObject {
+    /// Read an instance field by its `Declaring.name` key. `None` if this is
+    /// not an instance, or its class has no such field.
+    ///
+    /// The interpreter's hot paths index a memoized slot instead; this is for
+    /// the cold ones (reflection, the throwable message) that only have a name.
+    #[must_use]
+    pub fn field(&self, key: &str) -> Option<JValue> {
+        match self {
+            HeapObject::Instance { layout, fields, .. } => fields.get(layout.slot(key)?).copied(),
+            _ => None,
+        }
+    }
+
+    /// A handle on an instance field, to assign through.
+    pub fn field_mut(&mut self, key: &str) -> Option<&mut JValue> {
+        match self {
+            HeapObject::Instance { layout, fields, .. } => {
+                let slot = layout.slot(key)?;
+                fields.get_mut(slot)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The per-run object heap.

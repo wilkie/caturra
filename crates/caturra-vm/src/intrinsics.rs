@@ -57,7 +57,8 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // that `equals` distinguishes an unrelated instance).
         "java/lang/Object" => Some(HeapObject::Instance {
             class_name: std::rc::Rc::from("java/lang/Object"),
-            fields: std::collections::HashMap::new(),
+            layout: std::rc::Rc::new(crate::value::ClassLayout::default()),
+            fields: Vec::new(),
         }),
         "java/lang/String" => Some(HeapObject::JavaString(Vec::new())),
         "java/lang/StringBuilder" => Some(HeapObject::StringBuilder(Vec::new())),
@@ -212,13 +213,16 @@ pub fn invoke_special(
                 }
                 // A user exception class chaining `super("message")`
                 // into its library throwable parent: stash the message
-                // in a reserved field.
+                // in the slot its layout reserved for it.
                 Some(HeapObject::Instance { .. })
                     if caturra_classfile::exceptions::is_exception_class(class) =>
                 {
                     let reference = heap.alloc_string(&text);
-                    if let Some(HeapObject::Instance { fields, .. }) = heap.get_mut(receiver) {
-                        fields.insert(std::rc::Rc::from("__message"), JValue::Ref(Some(reference)));
+                    if let Some(field) = heap
+                        .get_mut(receiver)
+                        .and_then(|object| object.field_mut("__message"))
+                    {
+                        *field = JValue::Ref(Some(reference));
                     }
                     Ok(())
                 }

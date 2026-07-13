@@ -5,6 +5,7 @@
 //! with the compiler (`specs/LANGUAGE.md`); an opcode the VM doesn't
 //! know yet is a `VmError`, never undefined behavior.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -35,13 +36,18 @@ pub(crate) struct Interpreter<'run> {
     rng: intrinsics::JavaRng,
     /// Static field values per user class, created on first use.
     statics: HashMap<String, HashMap<String, JValue>>,
-    /// Resolved instance-field keys, memoized per call site — the class holding
+    /// Resolved instance-field slots, memoized per call site — the class holding
     /// the code plus the constant-pool index of its field ref. Field access is
     /// the hottest operation in object-heavy programs (a 400x400 image filter
-    /// does millions), and resolving a key from scratch allocates several
+    /// does millions), and resolving a field from scratch allocates several
     /// Strings and walks the superclass chain every time. `classes` is immutable
     /// for the run, so a `ClassFile`'s address is a stable id.
-    field_keys: HashMap<(usize, u16), Rc<str>>,
+    ///
+    /// A slot, not a key: the field ref's owner is fixed, every receiver that
+    /// reaches the site is that class or a subclass, and a class's layout is a
+    /// prefix of its subclasses' — so one resolved slot indexes them all, and
+    /// the access itself never hashes.
+    field_slots: HashMap<(usize, u16), usize>,
     /// Per invokestatic call site: the parsed argument widths, and whether the
     /// target class's initialization has already run. Both were recomputed on
     /// every call — the descriptor was re-parsed into a fresh Vec, and the init
@@ -155,7 +161,7 @@ impl<'run> Interpreter<'run> {
             string_pool: HashMap::new(),
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
-            field_keys: HashMap::new(),
+            field_slots: HashMap::new(),
             vec_pool: Vec::new(),
             widths_cache: HashMap::new(),
             virtual_sites: HashMap::new(),
@@ -447,35 +453,41 @@ impl<'run> Interpreter<'run> {
                     | crate::value::HeapObject::ArrayDeque(values)
                     | crate::value::HeapObject::Stack(values),
                 ) => render_array(values.iter().map(|v| self.render_shallow(*v))),
-                Some(crate::value::HeapObject::Instance { class_name, fields }) => {
+                Some(crate::value::HeapObject::Instance {
+                    class_name,
+                    layout,
+                    fields,
+                }) => {
                     if depth > 0 || fields.is_empty() {
                         return format!("{class_name}@{reference:x}");
                     }
-                    // Sorted for stable display (fields live in a map);
-                    // reserved names (the throwable message) hidden.
-                    let mut keys: Vec<&str> = fields
-                        .keys()
-                        .map(|k| &**k)
-                        .filter(|k| !split_field_key(k).1.starts_with("__"))
+                    // Sorted by key, so the display order does not depend on
+                    // the layout; reserved names (the throwable message) hidden.
+                    let mut shown: Vec<(&str, JValue)> = layout
+                        .names()
+                        .iter()
+                        .zip(fields)
+                        .map(|(key, value)| (&**key, *value))
+                        .filter(|(key, _)| !split_field_key(key).1.starts_with("__"))
                         .collect();
-                    keys.sort_unstable();
+                    shown.sort_unstable_by_key(|(key, _)| *key);
                     // A hidden field shares its simple name with the one it
                     // hides, so name both by their declaring class; otherwise
                     // the simple name reads as the student wrote it.
                     let mut seen: HashMap<&str, usize> = HashMap::new();
-                    for key in &keys {
+                    for (key, _) in &shown {
                         *seen.entry(split_field_key(key).1).or_default() += 1;
                     }
-                    let rendered: Vec<String> = keys
+                    let rendered: Vec<String> = shown
                         .into_iter()
-                        .map(|key| {
+                        .map(|(key, value)| {
                             let (owner, simple) = split_field_key(key);
                             let label = if seen[simple] > 1 {
                                 format!("{owner}.{simple}")
                             } else {
                                 simple.to_owned()
                             };
-                            format!("{label}={}", self.render_shallow(fields[key]))
+                            format!("{label}={}", self.render_shallow(value))
                         })
                         .collect();
                     format!("{class_name}@{reference:x}{{{}}}", rendered.join(", "))
@@ -729,31 +741,37 @@ impl<'run> Interpreter<'run> {
                     // taken here; a cold site, a null receiver or an unresolved
                     // field falls through so the byte path can resolve it or raise
                     // the NullPointerException exactly as before.
-                    Some(&Inst::GetField { index, next }) => {
-                        let site = (std::ptr::from_ref(class) as usize, index);
-                        if let Some(key) = self.field_keys.get(&site)
+                    Some(Inst::GetField { index, next, slot }) => {
+                        if slot.get() == UNRESOLVED {
+                            self.prime_field_site(class, *index, slot);
+                        }
+                        if slot.get() != UNRESOLVED
                             && let Some(JValue::Ref(Some(reference))) = frame.stack.last().copied()
                             && let Some(crate::value::HeapObject::Instance { fields, .. }) =
                                 self.heap.get(reference)
-                            && let Some(&value) = fields.get(&**key)
+                            && let Some(&value) = fields.get(slot.get() as usize)
                         {
+                            let next = *next;
                             frame.stack.pop();
                             frame.stack.push(value);
                             pc = next as usize;
                             continue;
                         }
                     }
-                    Some(&Inst::PutField { index, next }) => {
-                        let site = (std::ptr::from_ref(class) as usize, index);
+                    Some(Inst::PutField { index, next, slot }) => {
+                        if slot.get() == UNRESOLVED {
+                            self.prime_field_site(class, *index, slot);
+                        }
                         let depth = frame.stack.len();
-                        if depth >= 2
-                            && let Some(key) = self.field_keys.get(&site)
+                        if slot.get() != UNRESOLVED
+                            && depth >= 2
                             && let JValue::Ref(Some(reference)) = frame.stack[depth - 2]
                             && let Some(crate::value::HeapObject::Instance { fields, .. }) =
                                 self.heap.get_mut(reference)
-                            && let Some(slot) = fields.get_mut(&**key)
+                            && let Some(field) = fields.get_mut(slot.get() as usize)
                         {
-                            *slot = frame.stack[depth - 1];
+                            *field = frame.stack[depth - 1];
+                            let next = *next;
                             frame.stack.truncate(depth - 2);
                             pc = next as usize;
                             continue;
@@ -1301,12 +1319,14 @@ impl<'run> Interpreter<'run> {
                                         None => class_name.clone(),
                                     }));
                                 }
-                                Some(crate::value::HeapObject::Instance { class_name, fields })
-                                    if self.instance_is_throwable(class_name) =>
-                                {
+                                Some(
+                                    object @ crate::value::HeapObject::Instance {
+                                        class_name, ..
+                                    },
+                                ) if self.instance_is_throwable(class_name) => {
                                     let message =
-                                        fields.get("__message").and_then(|value| match value {
-                                            JValue::Ref(Some(text)) => self.heap.string_text(*text),
+                                        object.field("__message").and_then(|value| match value {
+                                            JValue::Ref(Some(text)) => self.heap.string_text(text),
                                             _ => None,
                                         });
                                     return Err(VmError::UncaughtException(match message {
@@ -1895,34 +1915,50 @@ impl<'run> Interpreter<'run> {
         Ok(())
     }
 
+    /// Copy a field site's resolved slot into the instruction, once, so that
+    /// every later execution of it indexes the object directly.
+    ///
+    /// The slow path (`getfield_op`/`putfield_op`) is what resolves the field —
+    /// it still owns every check and every error message — and records the
+    /// answer under the site's `(class, pool index)`. This just hands that
+    /// answer to the instruction the next time it runs, which costs one probe
+    /// per site for the life of the program.
+    fn prime_field_site(&self, class: &ClassFile, index: u16, slot: &Cell<u32>) {
+        let site = (std::ptr::from_ref(class) as usize, index);
+        if let Some(&resolved) = self.field_slots.get(&site)
+            && let Ok(resolved) = u32::try_from(resolved)
+            && resolved != UNRESOLVED
+        {
+            slot.set(resolved);
+        }
+    }
+
     #[inline(never)]
-    /// The heap key for `owner.name`, as JVMS field resolution finds it:
-    /// the owner itself, then its superclasses. The compiler always names the
-    /// declaring class, so the first probe normally hits. A bare name is the
-    /// fallback for the VM's own instances (a throwable's `__message`).
-    fn resolve_field_key(&self, owner: &str, name: &str, reference: HeapRef) -> Option<String> {
-        let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get(reference)
+    /// The slot holding `owner.name` in `reference`, as JVMS field resolution
+    /// finds it: the owner itself, then its superclasses. The compiler always
+    /// names the declaring class, so the first probe normally hits. A bare name
+    /// is the fallback for the VM's own fields (a throwable's `__message`).
+    fn resolve_field_slot(&self, owner: &str, name: &str, reference: HeapRef) -> Option<usize> {
+        let Some(crate::value::HeapObject::Instance { layout, .. }) = self.heap.get(reference)
         else {
             return None;
         };
-        let mut current = Some(owner.to_owned());
+        let mut current = Some(owner);
         let mut steps = 0usize;
         while let Some(class_name) = current {
             steps += 1;
             if steps > self.classes.len() + 1 {
                 break; // cycle guard
             }
-            let key = instance_field_key(&class_name, name);
-            if fields.contains_key(key.as_str()) {
-                return Some(key);
+            if let Some(slot) = layout.slot(&instance_field_key(class_name, name)) {
+                return Some(slot);
             }
             current = self
                 .classes
-                .get(&class_name)
-                .and_then(|class| class.constant_pool.get_class_name(class.super_class))
-                .map(str::to_owned);
+                .get(class_name)
+                .and_then(|class| class.constant_pool.get_class_name(class.super_class));
         }
-        fields.contains_key(name).then(|| name.to_owned())
+        layout.slot(name)
     }
 
     fn getfield_op(
@@ -1943,14 +1979,14 @@ impl<'run> Interpreter<'run> {
                  because the object is null"
             ))
         })?;
-        // Memoized key for this call site. A different receiver shape falls
+        // Memoized slot for this call site. A different receiver shape falls
         // through to the full resolution below, so semantics are unchanged.
-        if let Some(key) = self.field_keys.get(&site)
+        if let Some(&slot) = self.field_slots.get(&site)
             && let Some(crate::value::HeapObject::Instance { fields, .. }) =
                 self.heap.get(reference)
-            && let Some(value) = fields.get(&**key)
+            && let Some(&value) = fields.get(slot)
         {
-            frame.stack.push(*value);
+            frame.stack.push(value);
             return Ok(());
         }
         let (owner, field_name, _) = class
@@ -1958,17 +1994,17 @@ impl<'run> Interpreter<'run> {
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
         let (owner, field_name) = (owner.to_owned(), field_name.to_owned());
-        let key = self
-            .resolve_field_key(&owner, &field_name, reference)
+        let slot = self
+            .resolve_field_slot(&owner, &field_name, reference)
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
         let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get(reference)
         else {
             return Err(malformed(String::from("getfield on a non-object")));
         };
         let value = *fields
-            .get(key.as_str())
+            .get(slot)
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
-        self.field_keys.insert(site, Rc::from(key.as_str()));
+        self.field_slots.insert(site, slot);
         frame.stack.push(value);
         Ok(())
     }
@@ -1993,14 +2029,13 @@ impl<'run> Interpreter<'run> {
                  because the object is null"
             ))
         })?;
-        // Memoized key for this call site; assigning in place also avoids
-        // re-allocating the key on every write.
-        if let Some(key) = self.field_keys.get(&site)
+        // Memoized slot for this call site.
+        if let Some(&slot) = self.field_slots.get(&site)
             && let Some(crate::value::HeapObject::Instance { fields, .. }) =
                 self.heap.get_mut(reference)
-            && let Some(slot) = fields.get_mut(&**key)
+            && let Some(field) = fields.get_mut(slot)
         {
-            *slot = value;
+            *field = value;
             return Ok(());
         }
         let (owner, field_name, _) = class
@@ -2008,16 +2043,17 @@ impl<'run> Interpreter<'run> {
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad field ref at pool {index}")))?;
         let (owner, field_name) = (owner.to_owned(), field_name.to_owned());
-        let key = self
-            .resolve_field_key(&owner, &field_name, reference)
-            .unwrap_or_else(|| instance_field_key(&owner, &field_name));
+        let slot = self
+            .resolve_field_slot(&owner, &field_name, reference)
+            .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
         let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get_mut(reference)
         else {
             return Err(malformed(String::from("putfield on a non-object")));
         };
-        let key: Rc<str> = Rc::from(key.as_str());
-        fields.insert(Rc::clone(&key), value);
-        self.field_keys.insert(site, key);
+        *fields
+            .get_mut(slot)
+            .ok_or_else(|| malformed(format!("unknown field {field_name}")))? = value;
+        self.field_slots.insert(site, slot);
         Ok(())
     }
 
@@ -2374,28 +2410,63 @@ impl<'run> Interpreter<'run> {
     /// Allocate an instance of a user class with defaulted fields,
     /// including fields inherited from superclasses.
     ///
-    /// The defaulted field map is built once per class and cached: rebuilding it
-    /// meant walking the superclass chain and formatting a `Declaring.name` key
-    /// for every field on *every* `new`, which made allocation the most expensive
-    /// operation in the VM. Cloning the template instead copies `Rc` keys, so a
-    /// pixel-filter program allocating hundreds of thousands of objects pays a
-    /// refcount bump per field rather than a string allocation.
+    /// The layout and the defaults are built once per class and cached, so a
+    /// `new` copies a vector of `JValue`s — one allocation, no hashing, no
+    /// per-field work. Rebuilding the map on every `new` (walking the
+    /// superclass chain and formatting a `Declaring.name` key per field) once
+    /// made allocation the most expensive operation in the VM; a pixel filter
+    /// allocating hundreds of thousands of objects felt all of it.
     fn new_instance(&mut self, class_name: &str) -> crate::value::HeapObject {
-        if let Some((name, template)) = self.field_templates.get(class_name) {
+        if let Some((name, layout, defaults)) = self.field_templates.get(class_name) {
             return crate::value::HeapObject::Instance {
                 class_name: Rc::clone(name),
-                fields: template.clone(),
+                layout: Rc::clone(layout),
+                fields: defaults.clone(),
             };
         }
+        let template = self.build_layout(class_name);
+        self.field_templates
+            .insert(class_name.to_owned(), template.clone());
+        let (name, layout, defaults) = template;
+        crate::value::HeapObject::Instance {
+            class_name: name,
+            layout,
+            fields: defaults,
+        }
+    }
+
+    /// The field layout of a user class: inherited fields first, then its own.
+    ///
+    /// Ancestor-first is not cosmetic. It makes a superclass's layout a prefix
+    /// of every subclass's, so the slot a `getfield` site resolves against the
+    /// declaring class names the same field in every receiver that reaches the
+    /// site — which is what makes caching a slot per site sound.
+    fn build_layout(&self, class_name: &str) -> InstanceTemplate {
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let mut fields: HashMap<Rc<str>, JValue> = HashMap::new();
+        // Walk up to the root, then lay the chain out downwards.
+        let mut chain: Vec<&ClassFile> = Vec::new();
+        let mut throwable = false;
         let mut current = classes.get(class_name);
-        let mut steps = 0usize;
         while let Some(class) = current {
-            steps += 1;
-            if steps > classes.len() + 1 {
-                break; // cycle guard (compiler rejects these anyway)
+            if chain.len() > classes.len() {
+                break; // cycle guard (the compiler rejects these anyway)
             }
+            chain.push(class);
+            let super_name = class.constant_pool.get_class_name(class.super_class);
+            throwable |= super_name.is_some_and(caturra_classfile::exceptions::is_exception_class);
+            current = super_name.and_then(|name| classes.get(name));
+        }
+
+        let mut layout = crate::value::ClassLayout::default();
+        let mut defaults: Vec<JValue> = Vec::new();
+        // A user class extending a library throwable carries the message its
+        // `super(...)` passed up, in a slot no source field can name. Reserved
+        // first so it stays at the same slot in every subclass.
+        if throwable {
+            layout.push(Rc::from("__message"));
+            defaults.push(JValue::NULL);
+        }
+        for class in chain.into_iter().rev() {
             for field in &class.fields {
                 if field
                     .access_flags
@@ -2412,23 +2483,16 @@ impl<'run> Interpreter<'run> {
                     .get_utf8(field.descriptor_index)
                     .unwrap_or_default();
                 // Keyed by the DECLARING class: a subclass may hide a
-                // superclass field of the same name, and the two are
-                // distinct slots. `or_insert` would have collapsed them.
+                // superclass field of the same name, and the two are distinct
+                // slots. Keying by name alone would have collapsed them.
                 let key = instance_field_key(class_name_of(class), name);
-                fields.insert(Rc::from(key.as_str()), default_for_descriptor(descriptor));
+                let slot = layout.push(Rc::from(key.as_str()));
+                if slot == defaults.len() {
+                    defaults.push(default_for_descriptor(descriptor));
+                }
             }
-            current = class
-                .constant_pool
-                .get_class_name(class.super_class)
-                .and_then(|super_name| classes.get(super_name));
         }
-        let name: Rc<str> = Rc::from(class_name);
-        self.field_templates
-            .insert(class_name.to_owned(), (Rc::clone(&name), fields.clone()));
-        crate::value::HeapObject::Instance {
-            class_name: name,
-            fields,
-        }
+        (Rc::from(class_name), Rc::new(layout), defaults)
     }
 
     /// Find a handler in `frame`'s exception table covering `pc` for
@@ -5931,15 +5995,14 @@ impl<'run> Interpreter<'run> {
                 && (method_name == "getMessage" || method_name == "toString")
                 && descriptor == "()Ljava/lang/String;"
             {
-                let message = match self.heap.get(receiver) {
-                    Some(crate::value::HeapObject::Instance { fields, .. }) => {
-                        fields.get("__message").and_then(|value| match value {
-                            JValue::Ref(Some(text)) => self.heap.string_text(*text),
-                            _ => None,
-                        })
-                    }
-                    _ => None,
-                };
+                let message = self
+                    .heap
+                    .get(receiver)
+                    .and_then(|object| object.field("__message"))
+                    .and_then(|value| match value {
+                        JValue::Ref(Some(text)) => self.heap.string_text(text),
+                        _ => None,
+                    });
                 if method_name == "getMessage" {
                     return Ok(UserDispatch::Value(Some(match message {
                         Some(text) => JValue::Ref(Some(self.heap.alloc_string(&text))),
@@ -7654,8 +7717,8 @@ impl<'run> Interpreter<'run> {
         };
         let key = instance_field_key(declaring, name);
         match self.heap.get(*reference) {
-            Some(crate::value::HeapObject::Instance { fields, .. }) => {
-                fields.get(key.as_str()).copied().ok_or_else(|| {
+            Some(object @ crate::value::HeapObject::Instance { .. }) => {
+                object.field(&key).ok_or_else(|| {
                     VmError::UncaughtException(format!("java.lang.NoSuchFieldException: {name}"))
                 })
             }
@@ -7709,8 +7772,10 @@ impl<'run> Interpreter<'run> {
         };
         let key = instance_field_key(declaring, name);
         match self.heap.get_mut(*reference) {
-            Some(crate::value::HeapObject::Instance { fields, .. }) => {
-                fields.insert(Rc::from(key.as_str()), value);
+            Some(object @ crate::value::HeapObject::Instance { .. }) => {
+                *object.field_mut(&key).ok_or_else(|| {
+                    VmError::UncaughtException(format!("java.lang.NoSuchFieldException: {name}"))
+                })? = value;
                 Ok(())
             }
             _ => Err(VmError::UncaughtException(format!(
@@ -8053,7 +8118,9 @@ struct VirtualSite<'run> {
 type ReceiverHit<'run> = (Rc<str>, &'run ClassFile, &'run MethodInfo);
 
 /// A class's interned name plus its defaulted field map, cloned on each `new`.
-type InstanceTemplate = (Rc<str>, HashMap<Rc<str>, JValue>);
+/// A class's identity, its field layout, and one defaulted object's worth of
+/// field values — everything `new` needs, prepared once per class.
+type InstanceTemplate = (Rc<str>, Rc<crate::value::ClassLayout>, Vec<JValue>);
 
 /// The resolved target of an `invokestatic` site: a user method, or one of the
 /// intrinsic statics (`Math.*`, `Integer.parseInt`, ...).
@@ -8086,7 +8153,7 @@ struct Frame<'run> {
 /// `next` is the fall-through pc. Only the hot opcodes get a variant; everything
 /// else is `Legacy` and runs through the byte-decoding match, which keeps this
 /// an incremental optimization rather than a rewrite of all 176 opcodes.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Inst {
     /// Decode this one from the bytes (the cold path).
     Legacy,
@@ -8129,17 +8196,24 @@ enum Inst {
     Pop {
         next: u32,
     },
-    /// `getfield`/`putfield`, carrying the constant-pool index so the resolved
-    /// key memo can be consulted without re-reading the operand bytes.
+    /// `getfield`/`putfield`. `slot` is this site's own memo of the field slot
+    /// it resolved to, [`UNRESOLVED`] until the site first runs — an instruction
+    /// belongs to exactly one method of one class, so the site's identity *is*
+    /// its address here, and the access needs no lookup at all once warm.
     GetField {
         index: u16,
         next: u32,
+        slot: Cell<u32>,
     },
     PutField {
         index: u16,
         next: u32,
+        slot: Cell<u32>,
     },
 }
+
+/// A field site that has not resolved yet.
+const UNRESOLVED: u32 = u32::MAX;
 
 #[derive(Clone, Copy)]
 enum IntOp {
@@ -8335,10 +8409,12 @@ fn decode_insts(bytes: &[u8]) -> Vec<Inst> {
             op_::GETFIELD => Inst::GetField {
                 index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
                 next,
+                slot: Cell::new(UNRESOLVED),
             },
             op_::PUTFIELD => Inst::PutField {
                 index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
                 next,
+                slot: Cell::new(UNRESOLVED),
             },
             op_::DUP => Inst::Dup { next },
             op_::POP => Inst::Pop { next },
