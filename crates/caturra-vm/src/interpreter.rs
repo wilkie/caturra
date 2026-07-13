@@ -49,6 +49,11 @@ pub(crate) struct Interpreter<'run> {
     /// Recycled locals/operand-stack buffers. With the per-call String churn
     /// gone these were the last allocations on the call path.
     vec_pool: Vec<Vec<JValue>>,
+    /// Argument widths by descriptor. There are only a handful of distinct
+    /// descriptors in a program, but the widths were re-parsed into a fresh Vec
+    /// on every call that had arguments.
+    widths_cache: HashMap<String, Rc<[u16]>>,
+    virtual_sites: HashMap<(usize, u16), VirtualSite<'run>>,
     static_widths: HashMap<(usize, u16), Rc<[u16]>>,
     /// What an invokestatic site resolves to. Resolution otherwise hashed the
     /// class name and then walked the superclass chain scanning every method and
@@ -56,7 +61,7 @@ pub(crate) struct Interpreter<'run> {
     static_targets: HashMap<(usize, u16), StaticTarget<'run>>,
     static_inited: std::collections::HashSet<(usize, u16)>,
     /// Defaulted instance-field map per class, cloned on each `new`.
-    field_templates: HashMap<String, HashMap<Rc<str>, JValue>>,
+    field_templates: HashMap<String, InstanceTemplate>,
     /// Classes whose initialization has started (JVMS §5.5: recursive
     /// initialization by the same thread proceeds).
     init_started: std::collections::HashSet<String>,
@@ -152,6 +157,8 @@ impl<'run> Interpreter<'run> {
             statics: HashMap::new(),
             field_keys: HashMap::new(),
             vec_pool: Vec::new(),
+            widths_cache: HashMap::new(),
+            virtual_sites: HashMap::new(),
             static_widths: HashMap::new(),
             static_targets: HashMap::new(),
             static_inited: std::collections::HashSet::new(),
@@ -505,6 +512,17 @@ impl<'run> Interpreter<'run> {
 
     /// Build a frame for a call: depth check, cached `Code` lookup,
     /// locals sized to `max_locals`.
+    /// Argument widths for a descriptor, parsed once.
+    fn arg_widths(&mut self, descriptor: &str) -> Option<Rc<[u16]>> {
+        if let Some(cached) = self.widths_cache.get(descriptor) {
+            return Some(Rc::clone(cached));
+        }
+        let parsed: Rc<[u16]> = descriptor_arg_widths(descriptor)?.into();
+        self.widths_cache
+            .insert(descriptor.to_owned(), Rc::clone(&parsed));
+        Some(parsed)
+    }
+
     /// A cleared buffer from the pool, or a fresh one.
     fn take_vec(&mut self, capacity: usize) -> Vec<JValue> {
         match self.vec_pool.pop() {
@@ -1413,12 +1431,12 @@ impl<'run> Interpreter<'run> {
                                 self.static_widths.insert(site, Rc::clone(&parsed));
                                 parsed
                             };
-                            let mut args = Vec::with_capacity(widths.len());
+                            let mut args = self.take_vec(widths.len());
                             for _ in widths.iter() {
                                 args.push(frame.pop()?);
                             }
                             args.reverse();
-                            if let Some(callee) = self.invoke_static(
+                            let callee = self.invoke_static(
                                 site,
                                 target_class,
                                 method_name,
@@ -1426,7 +1444,9 @@ impl<'run> Interpreter<'run> {
                                 &widths,
                                 &args,
                                 &mut frame,
-                            )? {
+                            )?;
+                            self.recycle_vec(args);
+                            if let Some(callee) = callee {
                                 frame.pc = pc;
                                 return Ok(Flow::Call(callee));
                             }
@@ -2013,15 +2033,17 @@ impl<'run> Interpreter<'run> {
         index: u16,
         malformed: &impl Fn(String) -> VmError,
     ) -> Result<Option<Frame<'run>>, VmError> {
+        // Borrowed from the constant pool, which outlives the run: this was three
+        // String allocations on every constructor and super call.
         let (target_class, method_name, descriptor) = class
             .constant_pool
             .get_member_ref(index)
-            .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
             .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
-        let widths = descriptor_arg_widths(&descriptor)
+        let widths = self
+            .arg_widths(descriptor)
             .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
-        let mut args = Vec::with_capacity(widths.len());
-        for _ in &widths {
+        let mut args = self.take_vec(widths.len());
+        for _ in widths.iter() {
             args.push(frame.pop()?);
         }
         args.reverse();
@@ -2227,12 +2249,12 @@ impl<'run> Interpreter<'run> {
             }
         }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        if classes.contains_key(&target_class) {
+        if classes.contains_key(target_class) {
             // A user constructor or a `super.method(...)` call; the
             // method may be inherited, so walk the chain from the
             // named class.
             let mut found: Option<(&'run ClassFile, &'run MethodInfo)> = None;
-            let mut current = classes.get(&target_class);
+            let mut current = classes.get(target_class);
             let mut steps = 0usize;
             while let Some(candidate) = current {
                 steps += 1;
@@ -2242,10 +2264,8 @@ impl<'run> Interpreter<'run> {
                 if let Some(method) = candidate.methods.iter().find(|m| {
                     !m.access_flags
                         .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
-                        && candidate.constant_pool.get_utf8(m.name_index)
-                            == Some(method_name.as_str())
-                        && candidate.constant_pool.get_utf8(m.descriptor_index)
-                            == Some(descriptor.as_str())
+                        && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                        && candidate.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
                 }) {
                     found = Some((candidate, method));
                     break;
@@ -2262,12 +2282,13 @@ impl<'run> Interpreter<'run> {
             })?;
             let mut locals = self.take_vec(1 + args.len());
             locals.push(JValue::Ref(Some(receiver)));
-            for (value, width) in args.iter().zip(&widths) {
+            for (value, width) in args.iter().zip(widths.iter()) {
                 locals.push(*value);
                 if *width == 2 {
                     locals.push(JValue::Int(0));
                 }
             }
+            self.recycle_vec(args);
             // Constructors and `super.method(...)` calls both come
             // through here; any return value flows back through the
             // return opcodes when the pushed frame pops.
@@ -2277,9 +2298,9 @@ impl<'run> Interpreter<'run> {
             &mut self.heap,
             self.vfs,
             receiver,
-            &target_class,
-            &method_name,
-            &descriptor,
+            target_class,
+            method_name,
+            descriptor,
             &args,
         )?;
         Ok(None)
@@ -2360,9 +2381,9 @@ impl<'run> Interpreter<'run> {
     /// pixel-filter program allocating hundreds of thousands of objects pays a
     /// refcount bump per field rather than a string allocation.
     fn new_instance(&mut self, class_name: &str) -> crate::value::HeapObject {
-        if let Some(template) = self.field_templates.get(class_name) {
+        if let Some((name, template)) = self.field_templates.get(class_name) {
             return crate::value::HeapObject::Instance {
-                class_name: Rc::from(class_name),
+                class_name: Rc::clone(name),
                 fields: template.clone(),
             };
         }
@@ -2401,10 +2422,11 @@ impl<'run> Interpreter<'run> {
                 .get_class_name(class.super_class)
                 .and_then(|super_name| classes.get(super_name));
         }
+        let name: Rc<str> = Rc::from(class_name);
         self.field_templates
-            .insert(class_name.to_owned(), fields.clone());
+            .insert(class_name.to_owned(), (Rc::clone(&name), fields.clone()));
         crate::value::HeapObject::Instance {
-            class_name: Rc::from(class_name),
+            class_name: name,
             fields,
         }
     }
@@ -5962,13 +5984,15 @@ impl<'run> Interpreter<'run> {
 
         // The instance's class chain was initialized when the object
         // was constructed (`new` runs <clinit> first).
-        let widths = descriptor_arg_widths(descriptor).ok_or_else(|| VmError::MalformedClass {
-            name: instance_class.to_owned(),
-            reason: format!("bad descriptor {descriptor}"),
-        })?;
+        let widths = self
+            .arg_widths(descriptor)
+            .ok_or_else(|| VmError::MalformedClass {
+                name: instance_class.to_owned(),
+                reason: format!("bad descriptor {descriptor}"),
+            })?;
         let mut locals = self.take_vec(1 + args.len());
         locals.push(JValue::Ref(Some(receiver)));
-        for (value, width) in args.iter().zip(&widths) {
+        for (value, width) in args.iter().zip(widths.iter()) {
             locals.push(*value);
             if *width == 2 {
                 locals.push(JValue::Int(0));
@@ -6193,9 +6217,28 @@ impl<'run> Interpreter<'run> {
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
 
-        let arg_count = descriptor_arg_count(descriptor)
-            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
-        let mut args = Vec::with_capacity(arg_count);
+        // One hash on the hot path: everything this call needs comes from a single
+        // site lookup — the descriptor's shape and the cached target.
+        let site = (std::ptr::from_ref(class) as usize, index);
+        let (arg_count, widths, cached) = if let Some(entry) = self.virtual_sites.get(&site) {
+            (entry.argc, Rc::clone(&entry.widths), entry.hit.clone())
+        } else {
+            let argc = descriptor_arg_count(descriptor)
+                .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+            let widths = self
+                .arg_widths(descriptor)
+                .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+            self.virtual_sites.insert(
+                site,
+                VirtualSite {
+                    argc,
+                    widths: Rc::clone(&widths),
+                    hit: None,
+                },
+            );
+            (argc, widths, None)
+        };
+        let mut args = self.take_vec(arg_count);
         for _ in 0..arg_count {
             args.push(frame.pop()?);
         }
@@ -6242,13 +6285,44 @@ impl<'run> Interpreter<'run> {
         // strings. Calls into user classes are the hot path in object-heavy
         // programs, and they used to pay for every one of those checks.
         if let Some(instance_class) = instance_class {
-            let result = match self.user_virtual_dispatch(
+            // Monomorphic inline cache: same receiver class as last time at this
+            // site means the target is already known, so skip the descriptor
+            // scan, the class-name hash and the superclass walk entirely.
+            let cached = cached
+                .as_ref()
+                .filter(|(name, _, _)| Rc::ptr_eq(name, &instance_class))
+                .map(|(_, class, method)| (*class, *method));
+            let resolved = cached.or_else(|| {
+                let found = resolve_virtual(self.classes, &instance_class, method_name, descriptor);
+                if let Some((class, method)) = found
+                    && let Some(entry) = self.virtual_sites.get_mut(&site)
+                {
+                    entry.hit = Some((Rc::clone(&instance_class), class, method));
+                }
+                found
+            });
+            if let Some((target, method)) = resolved {
+                let mut locals = self.take_vec(1 + args.len());
+                locals.push(JValue::Ref(Some(receiver)));
+                for (value, width) in args.iter().zip(widths.iter()) {
+                    locals.push(*value);
+                    if *width == 2 {
+                        locals.push(JValue::Int(0));
+                    }
+                }
+                self.recycle_vec(args);
+                return Ok(Some(self.make_frame(target, method, locals)?));
+            }
+            // No user method: the Object / throwable defaults handle it.
+            let dispatched = self.user_virtual_dispatch(
                 receiver,
                 &instance_class,
                 method_name,
                 descriptor,
                 &args,
-            )? {
+            )?;
+            self.recycle_vec(args);
+            let result = match dispatched {
                 UserDispatch::Call(callee) => return Ok(Some(callee)),
                 UserDispatch::Value(value) => value,
             };
@@ -7963,6 +8037,24 @@ enum UserDispatch<'run> {
 /// One Java method activation, as plain data: everything a debugger
 /// would need to show a paused call (owner class, method name, program
 /// counter, locals, operand stack).
+/// A monomorphic inline cache for one `invokevirtual` site: the descriptor's
+/// shape (fixed per site), plus the last receiver class seen and what it
+/// resolved to. Receiver classes share one `Rc<str>` name per class, so the
+/// guard is a pointer comparison. Without this, every call re-scanned the
+/// descriptor, hashed it, hashed the receiver's class name, and walked the
+/// superclass chain comparing method names.
+struct VirtualSite<'run> {
+    argc: usize,
+    widths: Rc<[u16]>,
+    hit: Option<ReceiverHit<'run>>,
+}
+
+/// The receiver class a site last saw, and the method it resolved to.
+type ReceiverHit<'run> = (Rc<str>, &'run ClassFile, &'run MethodInfo);
+
+/// A class's interned name plus its defaulted field map, cloned on each `new`.
+type InstanceTemplate = (Rc<str>, HashMap<Rc<str>, JValue>);
+
 /// The resolved target of an `invokestatic` site: a user method, or one of the
 /// intrinsic statics (`Math.*`, `Integer.parseInt`, ...).
 #[derive(Clone, Copy)]
@@ -8949,9 +9041,35 @@ fn descriptor_arg_widths(descriptor: &str) -> Option<Vec<u16>> {
 }
 
 /// Number of arguments in a method descriptor (each argument is one
-/// operand-stack entry in this VM regardless of JVMS slot width).
+/// operand-stack entry in this VM regardless of JVMS slot width). Counts in
+/// place: this used to build a whole Vec of widths and throw it away, on every
+/// call with arguments.
 fn descriptor_arg_count(descriptor: &str) -> Option<usize> {
-    descriptor_arg_widths(descriptor).map(|w| w.len())
+    let inner = descriptor.strip_prefix('(')?;
+    let (args, _return_type) = inner.split_once(')')?;
+    let mut count = 0usize;
+    let mut chars = args.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            'B' | 'C' | 'F' | 'I' | 'S' | 'Z' | 'D' | 'J' => count += 1,
+            'L' => {
+                chars.by_ref().find(|&c| c == ';')?;
+                count += 1;
+            }
+            '[' => {
+                let mut element = chars.next()?;
+                while element == '[' {
+                    element = chars.next()?;
+                }
+                if element == 'L' {
+                    chars.by_ref().find(|&c| c == ';')?;
+                }
+                count += 1;
+            }
+            _ => return None,
+        }
+    }
+    Some(count)
 }
 
 /// A `Stream.limit`/`skip` count (a `long`, but occasionally passed as an int),

@@ -11,9 +11,18 @@
 const CANVAS = 400;
 const SAMPLE_RATE = 44100;
 
-/** Milliseconds a single `pause` frame holds, scaled to keep runs short. */
-function stepMillis(pauseCount: number): number {
-  return Math.min(400, Math.max(30, Math.floor(12_000 / Math.max(pauseCount, 1))));
+/**
+ * How long the pauses in a scene may take in total. `pause(seconds)` holds for
+ * the time the program actually asked for — a lone `pause(2)` really does wait
+ * two seconds — and durations are only scaled down when a scene's pauses would
+ * together run past this budget (which the old fixed-step timing did to every
+ * scene, collapsing a 2-second pause to 400ms).
+ */
+const PAUSE_BUDGET_MS = 12_000;
+
+/** The seconds a `pause <seconds>` command asks for. */
+function pauseSeconds(command: string): number {
+  return Math.max(0, Number(command.slice('pause '.length)) || 0);
 }
 
 export class TheaterViz {
@@ -80,13 +89,17 @@ export class TheaterViz {
     this.#pcm = pcm;
     const run = this.#run;
     const commands = log.split('\n').filter((line) => line.length > 0);
-    const pauseCount = commands.filter((c) => c.startsWith('pause ')).length;
-    const hold = stepMillis(pauseCount);
+    const requested =
+      commands
+        .filter((c) => c.startsWith('pause '))
+        .reduce((total, c) => total + pauseSeconds(c), 0) * 1000;
+    const scale = requested > PAUSE_BUDGET_MS ? PAUSE_BUDGET_MS / requested : 1;
     for (const command of commands) {
       if (this.#run !== run) {
         return; // superseded by a newer run
       }
       if (command.startsWith('pause ')) {
+        const hold = Math.max(30, pauseSeconds(command) * 1000 * scale);
         await new Promise((resolve) => setTimeout(resolve, hold));
       } else {
         this.apply(command, true);
