@@ -11,7 +11,11 @@ enum Instrument { PIANO, BASS }
 
 class Color {
   int red, green, blue;
-  public Color(int red, int green, int blue) { this.red = red; this.green = green; this.blue = blue; }
+  // The real library routes every constructor through sanitizeValue, which
+  // clamps each channel to 0..255 ("Values below 0 will be set to 0, and
+  // values above 255 will be set to 255"). The filter lessons rely on it:
+  // U5L8's sharpen() caps at 255 but happily hands setRed() a negative.
+  public Color(int red, int green, int blue) { this.red = __clamp(red); this.green = __clamp(green); this.blue = __clamp(blue); }
   public Color(Color c) { this.red = c.red; this.green = c.green; this.blue = c.blue; }
   public Color(String name) {
     int[] rgb = __resolve(name);
@@ -25,6 +29,7 @@ class Color {
   public static Color copyWithGreen(Color c, int v) { return new Color(c.red, v, c.blue); }
   public static Color copyWithBlue(Color c, int v) { return new Color(c.red, c.green, v); }
   public String toString() { return red + " " + green + " " + blue; }
+  static int __clamp(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
   static int[] __resolve(String s) {
     String n = s.toUpperCase();
     if (n.length() == 7 && n.charAt(0) == '#') {
@@ -38,7 +43,9 @@ class Color {
     if (n.equals("MAROON")) return new int[]{128,0,0};
     if (n.equals("YELLOW")) return new int[]{255,255,0};
     if (n.equals("OLIVE")) return new int[]{128,128,0};
-    if (n.equals("LIME")) return new int[]{0,256,0};
+    // The upstream source literally writes `new Color(0, 256, 0)` for LIME;
+    // sanitizeValue clamps it, so the observable green is 255.
+    if (n.equals("LIME")) return new int[]{0,255,0};
     if (n.equals("GREEN")) return new int[]{0,128,0};
     if (n.equals("AQUA")) return new int[]{0,255,255};
     if (n.equals("TEAL")) return new int[]{0,128,128};
@@ -110,16 +117,20 @@ class Pixel {
   // Read/write a single channel straight through the image's packed pixel, with
   // no Color object in between. The filter lessons walk every pixel of a 400x400
   // image (160k) and touch all three channels, so going via getColor()/new
-  // Color() allocated ~1.4M objects on a heap that never collects. Same result,
-  // including the (unclamped) wrap-around of an out-of-range channel.
+  // Color() allocated ~1.4M objects on a heap that never collects.
   public int getRed() { return (__px[__i] >> 16) & 255; }
   public int getGreen() { return (__px[__i] >> 8) & 255; }
   public int getBlue() { return __px[__i] & 255; }
-  // Masking matches what `__set(new Color(...))` did, including the wrap-around
-  // of an out-of-range channel (Color does not clamp).
-  public void setRed(int v) { __px[__i] = (v << 16) | (__px[__i] & 0x0000FFFF); }
-  public void setGreen(int v) { int p = __px[__i]; __px[__i] = (p & 0x00FF0000) | (v << 8) | (p & 0x000000FF); }
-  public void setBlue(int v) { __px[__i] = (__px[__i] & 0x00FFFF00) | v; }
+  // The real setters go through `Color.copyWithRed(...)`, whose constructor
+  // clamps each channel to 0..255 — so an out-of-range value must clamp, not
+  // wrap: U5L8's sharpen() caps at 255 but hands setRed() negatives, and a
+  // negative shifted into the packed pixel would smear across the other
+  // channels (red/yellow streaks over the whole image). The clamp is spelled
+  // out as a ternary instead of calling Color.__clamp: a call would knock
+  // these hottest-of-all methods off the VM's frameless fast path.
+  public void setRed(int v) { v = v < 0 ? 0 : (v > 255 ? 255 : v); __px[__i] = (v << 16) | (__px[__i] & 0x0000FFFF); }
+  public void setGreen(int v) { v = v < 0 ? 0 : (v > 255 ? 255 : v); int p = __px[__i]; __px[__i] = (p & 0x00FF0000) | (v << 8) | (p & 0x000000FF); }
+  public void setBlue(int v) { v = v < 0 ? 0 : (v > 255 ? 255 : v); __px[__i] = (__px[__i] & 0x00FFFF00) | v; }
 }
 
 class Image {

@@ -434,6 +434,52 @@ fn theater_image_pixel_manipulation() {
     );
 }
 
+/// The real `Color` routes every channel through `sanitizeValue`, which
+/// clamps to 0..255 (javabuilder `org.code.media.Color`), and `Pixel`'s
+/// channel setters go through `Color.copyWithRed(...)` and inherit it. The
+/// values below are the real library's: an out-of-range channel clamps —
+/// it must not wrap around into the neighbouring channels of the packed
+/// pixel. U5L8's sharpen() relies on this: it caps at 255 but hands
+/// setRed() negatives, which used to smear red/yellow streaks across the
+/// whole image. (LIME really is written `new Color(0, 256, 0)` upstream;
+/// the observable green is the clamped 255.)
+#[test]
+fn theater_color_channels_clamp_like_the_real_library() {
+    let (stdout, _log) = run_theater(
+        r##"
+        import org.code.theater.*;
+        import org.code.media.*;
+        public class ClampScene extends Scene {
+            public static void main(String[] args) {
+                Color c = new Color(300, -5, 128);
+                System.out.println(c.getRed() + "," + c.getGreen() + "," + c.getBlue());
+                Color viaCopy = Color.copyWithBlue(Color.copyWithRed(c, -1), 999);
+                System.out.println(viaCopy.getRed() + "," + viaCopy.getGreen() + "," + viaCopy.getBlue());
+                System.out.println(new Color("lime").getGreen());
+
+                Image img = new Image(2, 1);
+                img.clear(new Color(10, 20, 30));
+                Pixel p = img.getPixel(0, 0);
+                p.setRed(-40);
+                p.setGreen(300);
+                System.out.println(p.getRed() + "," + p.getGreen() + "," + p.getBlue());
+                p.setBlue(-1);
+                p.setGreen(-256);
+                System.out.println(p.getRed() + "," + p.getGreen() + "," + p.getBlue());
+                // The neighbouring pixel is untouched by any of it.
+                Pixel q = img.getPixel(1, 0);
+                System.out.println(q.getRed() + "," + q.getGreen() + "," + q.getBlue());
+            }
+        }
+        "##,
+        "ClampScene",
+    );
+    assert_eq!(
+        stdout,
+        "255,0,128\n0,0,255\n255\n0,255,30\n0,0,0\n10,20,30\n"
+    );
+}
+
 /// `SoundLoader.read` returns a non-empty **silent** buffer (10 s at 44.1 kHz)
 /// rather than `double[0]`, so the Code.org sound lessons' time-indexed clip
 /// extraction (`sound[start * 44100]`, e.g. `createClip(sound, 2, 5)`) runs
