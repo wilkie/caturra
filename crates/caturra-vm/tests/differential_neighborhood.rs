@@ -15,6 +15,14 @@
 //! uses. `ClientMessageDetailKeys` is dependency-free, so the real one is
 //! compiled rather than faked.
 //!
+//! The `org.json` shim is the one hand-written link in the chain, so it was
+//! checked against the genuine article: the real package was built twice, once
+//! against this shim and once against `org.json:json:20180813`, and both
+//! produced identical grids — for the fixtures below and for a ragged grid, a
+//! non-JSON file and an empty array, the malformed cases where two parsers are
+//! likeliest to part company. (Real jars are not a dependency of this repo, so
+//! the shim is what ships.)
+//!
 //! **The grid is expressed twice, on purpose.** `grid.txt` is written by the
 //! host, never by a student: Code.org's is JSON, caturra's is rows of
 //! `tileType,paintCount`. That is an internal contract on each side, not a
