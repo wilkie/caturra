@@ -7632,6 +7632,48 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NoSuchMethodException: {declaring}.{name}"
                 ))
             })?;
+        // Real `Method.invoke` checks the receiver and the arguments before it
+        // runs anything, and throws rather than run a method with the wrong
+        // ones. We used to just `zip` the arguments against the parameters,
+        // which silently truncates on a mismatch, and push the receiver as
+        // `this` whatever it was. A validator that invokes a two-parameter
+        // method with one argument (the corpus does exactly that — passing the
+        // ClubMember as the receiver instead of the ClubSponsor) then ran the
+        // body with `this` bound to the wrong class and a parameter bound to a
+        // boxed int, and died deep inside on a call the student never wrote.
+        // Java raises an IllegalArgumentException, the validator catches it,
+        // and the test simply fails.
+        if !is_static {
+            let JValue::Ref(receiver_ref) = args.first().copied().unwrap_or(JValue::NULL) else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.IllegalArgumentException: object is not an instance of \
+                     declaring class",
+                )));
+            };
+            let Some(receiver_ref) = receiver_ref else {
+                return Err(VmError::UncaughtException(format!(
+                    "java.lang.NullPointerException: cannot invoke \"{declaring}.{name}\" \
+                     because the receiver is null"
+                )));
+            };
+            let belongs = matches!(
+                self.heap.get(receiver_ref),
+                Some(HeapObject::Instance { class_name, .. })
+                    if self.is_runtime_subtype(class_name, &declaring)
+            );
+            if !belongs {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.IllegalArgumentException: object is not an instance of \
+                     declaring class",
+                )));
+            }
+        }
+        if call_args.len() != param_descs.len() {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.IllegalArgumentException: wrong number of arguments",
+            )));
+        }
+
         let mut locals = Vec::new();
         if !is_static {
             locals.push(args.first().copied().unwrap_or(JValue::NULL));

@@ -243,9 +243,20 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
                 "      System.out.println(\"__VTEST\\tPASS\\t{name}\\t\");"
             );
             src.push_str("    } catch (Throwable __e) {\n");
+            // One line per test, so the message has to survive being put on
+            // one. The corpus's failure messages are the HINT a student reads,
+            // and they are written across several lines — printed raw, the line
+            // ended at the first newline and the rest of the guidance was lost.
+            // A null message (a bare `throw new IllegalStateException()`) is
+            // empty, not the text "null".
+            src.push_str("      String __m = __e.getMessage();\n");
+            src.push_str("      if (__m == null) { __m = \"\"; }\n");
+            src.push_str(
+                "      __m = __m.replace('\\t', ' ').replace('\\r', ' ').replace('\\n', ' ');\n",
+            );
             let _ = writeln!(
                 src,
-                "      System.out.println(\"__VTEST\\tFAIL\\t{name}\\t\" + __e.getMessage());"
+                "      System.out.println(\"__VTEST\\tFAIL\\t{name}\\t\" + __m);"
             );
             src.push_str("    }\n");
         }

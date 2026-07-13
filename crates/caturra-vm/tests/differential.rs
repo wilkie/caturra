@@ -8473,3 +8473,103 @@ public class RejectNested {
 }
 "
 );
+
+// `Method.invoke` checks the receiver and the arguments BEFORE it runs
+// anything: a receiver that is not an instance of the declaring class, or the
+// wrong number of arguments, is an IllegalArgumentException, not a call. caturra
+// used to just bind whatever it was given — zipping the arguments against the
+// parameters, which silently truncates — and run the method with `this` bound to
+// the wrong class and a parameter bound to a boxed int. A corpus validator does
+// exactly that (invoking ClubSponsor.addServiceHours(ClubMember, int) with the
+// ClubMember as the receiver and one argument), and the body then died on a call
+// the student never wrote, taking the rest of the validation run with it.
+differential_test!(
+    diff_reflect_invoke_checks_receiver_and_arity,
+    "DiffInvoke",
+    r#"
+import java.lang.reflect.Method;
+
+class Member {
+    private int hours;
+
+    Member(int hours) {
+        this.hours = hours;
+    }
+
+    public int getHours() {
+        return hours;
+    }
+
+    public void addHours(int extra) {
+        hours = hours + extra;
+    }
+}
+
+class Sponsor {
+    public void addServiceHours(Member member, int extra) {
+        member.addHours(extra);
+    }
+}
+
+public class DiffInvoke {
+    static Method find(Class type, String name) {
+        Method[] all = type.getDeclaredMethods();
+        for (Method method : all) {
+            if (method.getName().equals(name)) {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    static void report(String what, Member member) {
+        System.out.println(what + " -> hours " + member.getHours());
+    }
+
+    public static void main(String[] args) {
+        Member member = new Member(10);
+        Sponsor sponsor = new Sponsor();
+
+        // The right receiver and the right arity: the call happens.
+        Method addHours = find(Member.class, "addHours");
+        try {
+            addHours.invoke(member, 5);
+            report("addHours(5)", member);
+        } catch (Exception e) {
+            System.out.println("threw " + e.getMessage());
+        }
+
+        // A receiver that is not an instance of the declaring class.
+        Method addServiceHours = find(Sponsor.class, "addServiceHours");
+        try {
+            addServiceHours.invoke(member, 7);
+            System.out.println("no throw");
+        } catch (IllegalArgumentException e) {
+            System.out.println("bad receiver rejected");
+        } catch (Exception e) {
+            System.out.println("other: " + e.getMessage());
+        }
+        report("after the bad receiver", member);
+
+        // The right receiver, the wrong number of arguments.
+        try {
+            addServiceHours.invoke(sponsor, member);
+            System.out.println("no throw");
+        } catch (IllegalArgumentException e) {
+            System.out.println("bad arity rejected");
+        } catch (Exception e) {
+            System.out.println("other: " + e.getMessage());
+        }
+        report("after the bad arity", member);
+
+        // And with both right, it runs.
+        try {
+            addServiceHours.invoke(sponsor, member, 3);
+            report("addServiceHours(member, 3)", member);
+        } catch (Exception e) {
+            System.out.println("threw " + e.getMessage());
+        }
+    }
+}
+"#
+);
