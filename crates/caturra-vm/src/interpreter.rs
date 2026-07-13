@@ -42,6 +42,19 @@ pub(crate) struct Interpreter<'run> {
     /// Strings and walks the superclass chain every time. `classes` is immutable
     /// for the run, so a `ClassFile`'s address is a stable id.
     field_keys: HashMap<(usize, u16), Rc<str>>,
+    /// Per invokestatic call site: the parsed argument widths, and whether the
+    /// target class's initialization has already run. Both were recomputed on
+    /// every call — the descriptor was re-parsed into a fresh Vec, and the init
+    /// check hashed the class name twice.
+    /// Recycled locals/operand-stack buffers. With the per-call String churn
+    /// gone these were the last allocations on the call path.
+    vec_pool: Vec<Vec<JValue>>,
+    static_widths: HashMap<(usize, u16), Rc<[u16]>>,
+    /// What an invokestatic site resolves to. Resolution otherwise hashed the
+    /// class name and then walked the superclass chain scanning every method and
+    /// comparing names — on every call.
+    static_targets: HashMap<(usize, u16), StaticTarget<'run>>,
+    static_inited: std::collections::HashSet<(usize, u16)>,
     /// Defaulted instance-field map per class, cloned on each `new`.
     field_templates: HashMap<String, HashMap<Rc<str>, JValue>>,
     /// Classes whose initialization has started (JVMS §5.5: recursive
@@ -53,7 +66,7 @@ pub(crate) struct Interpreter<'run> {
     /// [`Interpreter::run_nested`]), innermost run last: the caller's
     /// location, then the frames below it. Kept here rather than on the host
     /// stack so that call depth and stack traces still see them.
-    suspended_runs: Vec<(Option<CurrentLocation>, Vec<Frame<'run>>)>,
+    suspended_runs: Vec<(Option<CurrentLocation<'run>>, Vec<Frame<'run>>)>,
     /// The number of frames in `suspended_runs`, plus one native caller per
     /// nested run. Call depth counts them: a `toString()` reached from a
     /// container's must still see the recursion it is already inside.
@@ -67,7 +80,7 @@ pub(crate) struct Interpreter<'run> {
     /// The active frame's (class, method, file, line) for stack traces;
     /// class/method/file update on frame switches, line at each
     /// line-table boundary.
-    current_location: Option<CurrentLocation>,
+    current_location: Option<CurrentLocation<'run>>,
     /// Parsed `Code` attributes with their debug tables, keyed by
     /// `MethodInfo` address (stable for the run — `classes` is borrowed
     /// for `'run`). Parsing once per method instead of once per call.
@@ -84,10 +97,14 @@ pub(crate) struct Interpreter<'run> {
 }
 
 /// Where the active frame is, for stack traces and snapshots.
-struct CurrentLocation {
-    class_name: String,
-    method_name: String,
-    source_file: String,
+/// Where execution currently is, for stack traces. Only ever *read* when an
+/// exception is built, so it holds borrows and a refcount rather than four
+/// freshly allocated Strings — it is rebuilt on every frame entry and return,
+/// which made it eight allocations per call on the hot path.
+struct CurrentLocation<'run> {
+    class_name: &'run str,
+    method_name: &'run str,
+    code: Rc<MethodCode>,
     line: Option<u16>,
 }
 
@@ -134,6 +151,10 @@ impl<'run> Interpreter<'run> {
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
             field_keys: HashMap::new(),
+            vec_pool: Vec::new(),
+            static_widths: HashMap::new(),
+            static_targets: HashMap::new(),
+            static_inited: std::collections::HashSet::new(),
             field_templates: HashMap::new(),
             init_started: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
@@ -220,7 +241,7 @@ impl<'run> Interpreter<'run> {
                 "\n\tat {}.{}({})",
                 current.class_name,
                 current.method_name,
-                location(&current.source_file, current.line)
+                location(&current.code.source_file, current.line)
             );
         }
         let trace_frames = |frames: &[Frame<'run>], full: &mut String| {
@@ -244,7 +265,7 @@ impl<'run> Interpreter<'run> {
                     "\n\tat {}.{}({})",
                     caller.class_name,
                     caller.method_name,
-                    location(&caller.source_file, caller.line)
+                    location(&caller.code.source_file, caller.line)
                 );
             }
             trace_frames(frames, &mut full);
@@ -484,6 +505,27 @@ impl<'run> Interpreter<'run> {
 
     /// Build a frame for a call: depth check, cached `Code` lookup,
     /// locals sized to `max_locals`.
+    /// A cleared buffer from the pool, or a fresh one.
+    fn take_vec(&mut self, capacity: usize) -> Vec<JValue> {
+        match self.vec_pool.pop() {
+            Some(mut buffer) => {
+                buffer.clear();
+                buffer.reserve(capacity);
+                buffer
+            }
+            None => Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Return a finished frame's buffer to the pool (bounded, so a deep call
+    /// tree cannot pin memory).
+    fn recycle_vec(&mut self, mut buffer: Vec<JValue>) {
+        if self.vec_pool.len() < 64 {
+            buffer.clear();
+            self.vec_pool.push(buffer);
+        }
+    }
+
     fn make_frame(
         &mut self,
         class: &'run ClassFile,
@@ -510,6 +552,7 @@ impl<'run> Interpreter<'run> {
             .constant_pool
             .get_utf8(method.name_index)
             .unwrap_or("<unknown>");
+        let stack = self.take_vec(usize::from(code.attr.max_stack));
         Ok(Frame {
             class,
             method_name,
@@ -517,7 +560,7 @@ impl<'run> Interpreter<'run> {
             pc: 0,
             current_line: None,
             locals,
-            stack: Vec::new(),
+            stack,
             box_return_as: None,
         })
     }
@@ -530,15 +573,15 @@ impl<'run> Interpreter<'run> {
     fn run_loop(&mut self, mut frame: Frame<'run>) -> Result<Option<JValue>, VmError> {
         'frames: loop {
             let class = frame.class;
-            let class_name = class.class_name().unwrap_or("<unknown>").to_owned();
+            let class_name = class.class_name().unwrap_or("<unknown>");
             self.current_location = Some(CurrentLocation {
-                class_name: class_name.clone(),
-                method_name: frame.method_name.to_owned(),
-                source_file: frame.code.source_file.clone(),
+                class_name,
+                method_name: frame.method_name,
+                code: Rc::clone(&frame.code),
                 line: frame.current_line,
             });
             let malformed = |reason: String| VmError::MalformedClass {
-                name: class_name.clone(),
+                name: class_name.to_owned(),
                 reason,
             };
             let code = Rc::clone(&frame.code);
@@ -1338,32 +1381,48 @@ impl<'run> Interpreter<'run> {
                         }
                         op::INVOKESTATIC => {
                             let index = read_u16(bytes, &mut pc, &malformed)?;
-                            let (target_class, method_name, descriptor) = class
-                                .constant_pool
-                                .get_member_ref(index)
-                                .map(|(c, m, d)| (c.to_owned(), m.to_owned(), d.to_owned()))
-                                .ok_or_else(|| {
+                            let site = (std::ptr::from_ref(class) as usize, index);
+                            // Borrowed from the constant pool, which outlives the
+                            // run: this was three String allocations per call.
+                            let (target_class, method_name, descriptor) =
+                                class.constant_pool.get_member_ref(index).ok_or_else(|| {
                                     malformed(format!("bad method ref at pool {index}"))
                                 })?;
                             // Initialization retry happens before arguments are
-                            // popped so the re-executed instruction sees them.
-                            if let Some(chain) = self.begin_initialization(&target_class)?
-                                && !chain.is_empty()
-                            {
-                                frame.pc = addr;
-                                return Ok(Flow::InitChain(chain));
+                            // popped so the re-executed instruction sees them. It
+                            // only ever fires once per site; after that the check
+                            // was hashing the class name twice for nothing.
+                            if !self.static_inited.contains(&site) {
+                                if let Some(chain) = self.begin_initialization(target_class)?
+                                    && !chain.is_empty()
+                                {
+                                    frame.pc = addr;
+                                    return Ok(Flow::InitChain(chain));
+                                }
+                                self.static_inited.insert(site);
                             }
-                            let widths = descriptor_arg_widths(&descriptor)
-                                .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+                            // The descriptor was re-parsed into a fresh Vec every call.
+                            let widths = if let Some(cached) = self.static_widths.get(&site) {
+                                Rc::clone(cached)
+                            } else {
+                                let parsed: Rc<[u16]> = descriptor_arg_widths(descriptor)
+                                    .ok_or_else(|| {
+                                        malformed(format!("bad descriptor {descriptor}"))
+                                    })?
+                                    .into();
+                                self.static_widths.insert(site, Rc::clone(&parsed));
+                                parsed
+                            };
                             let mut args = Vec::with_capacity(widths.len());
-                            for _ in &widths {
+                            for _ in widths.iter() {
                                 args.push(frame.pop()?);
                             }
                             args.reverse();
                             if let Some(callee) = self.invoke_static(
-                                &target_class,
-                                &method_name,
-                                &descriptor,
+                                site,
+                                target_class,
+                                method_name,
+                                descriptor,
                                 &widths,
                                 &args,
                                 &mut frame,
@@ -1646,10 +1705,14 @@ impl<'run> Interpreter<'run> {
                     }
                     Ok(Flow::Return(value)) => {
                         let box_return_as = frame.box_return_as.take();
+                        let spent_locals = std::mem::take(&mut frame.locals);
+                        let spent_stack = std::mem::take(&mut frame.stack);
                         match self.frames.pop() {
                             None => return Ok(value),
                             Some(caller) => {
                                 frame = caller;
+                                self.recycle_vec(spent_locals);
+                                self.recycle_vec(spent_stack);
                                 if let Some(mut value) = value {
                                     if let Some(wrapper) = box_return_as {
                                         value = self.box_if_primitive(value, &wrapper);
@@ -2197,7 +2260,7 @@ impl<'run> Interpreter<'run> {
                     "no method {method_name}{descriptor} in {target_class} or its superclasses"
                 ))
             })?;
-            let mut locals = Vec::with_capacity(1 + args.len());
+            let mut locals = self.take_vec(1 + args.len());
             locals.push(JValue::Ref(Some(receiver)));
             for (value, width) in args.iter().zip(&widths) {
                 locals.push(*value);
@@ -5903,7 +5966,7 @@ impl<'run> Interpreter<'run> {
             name: instance_class.to_owned(),
             reason: format!("bad descriptor {descriptor}"),
         })?;
-        let mut locals = Vec::with_capacity(1 + args.len());
+        let mut locals = self.take_vec(1 + args.len());
         locals.push(JValue::Ref(Some(receiver)));
         for (value, width) in args.iter().zip(&widths) {
             locals.push(*value);
@@ -5965,8 +6028,12 @@ impl<'run> Interpreter<'run> {
     /// push (locals built from the popped arguments — doubles occupy
     /// two slots, JVMS §2.6.1); intrinsic statics run inline and push
     /// their result onto the caller's stack.
+    // The call site plus the resolved member ref; the body covers the intrinsic
+    // statics as well as user methods.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn invoke_static(
         &mut self,
+        site: (usize, u16),
         class_name: &str,
         method_name: &str,
         descriptor: &str,
@@ -6057,7 +6124,30 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         }
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let Some(class) = classes.get(class_name) else {
+        // Resolution is fixed for a call site, so do it once. The caller ran the
+        // initialization check before popping args. JVMS 5.4.3.3: resolution
+        // searches the named class, then its superclasses — `Derived.who()` and
+        // `derived.who()` both name `Derived` while `who` is declared in `Base`.
+        let target = if let Some(&hit) = self.static_targets.get(&site) {
+            hit
+        } else {
+            let hit = match classes.get(class_name) {
+                None => StaticTarget::Intrinsic,
+                Some(named) => {
+                    let (class, method) =
+                        resolve_static_method(classes, named, method_name, descriptor).ok_or_else(
+                            || VmError::MalformedClass {
+                                name: class_name.to_owned(),
+                                reason: format!("no static method {method_name}{descriptor}"),
+                            },
+                        )?;
+                    StaticTarget::User(class, method)
+                }
+            };
+            self.static_targets.insert(site, hit);
+            hit
+        };
+        let StaticTarget::User(class, method) = target else {
             // Intrinsic statics: Math.*, Integer.parseInt, ...
             let result = intrinsics::invoke_static(
                 &mut self.heap,
@@ -6074,17 +6164,8 @@ impl<'run> Interpreter<'run> {
             }
             return Ok(None);
         };
-        // The caller ran the initialization check before popping args.
-        // JVMS 5.4.3.3: resolution searches the named class, then its
-        // superclasses. `Derived.who()` and `derived.who()` both name
-        // `Derived` while `who` is declared in `Base`.
-        let (class, method) = resolve_static_method(classes, class, method_name, descriptor)
-            .ok_or_else(|| VmError::MalformedClass {
-                name: class_name.to_owned(),
-                reason: format!("no static method {method_name}{descriptor}"),
-            })?;
 
-        let mut locals = Vec::with_capacity(args.len());
+        let mut locals = self.take_vec(args.len());
         for (value, width) in args.iter().zip(widths) {
             locals.push(*value);
             if *width == 2 {
@@ -7882,6 +7963,14 @@ enum UserDispatch<'run> {
 /// One Java method activation, as plain data: everything a debugger
 /// would need to show a paused call (owner class, method name, program
 /// counter, locals, operand stack).
+/// The resolved target of an `invokestatic` site: a user method, or one of the
+/// intrinsic statics (`Math.*`, `Integer.parseInt`, ...).
+#[derive(Clone, Copy)]
+enum StaticTarget<'run> {
+    User(&'run ClassFile, &'run MethodInfo),
+    Intrinsic,
+}
+
 struct Frame<'run> {
     class: &'run ClassFile,
     /// Borrowed from the class's constant pool: allocating this per call showed
