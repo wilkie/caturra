@@ -128,7 +128,10 @@ pub enum HeapObject {
     FloatArray(Vec<f32>),
     /// A boxed primitive wrapper (`Integer`, `Double`, ...). Holds the
     /// wrapper's internal class name and the primitive value.
-    Boxed { class_name: String, value: JValue },
+    Boxed {
+        class_name: std::rc::Rc<str>,
+        value: JValue,
+    },
     /// A `short[]`.
     ShortArray(Vec<i16>),
     /// A `byte[]` (distinct from boolean arrays, which reuse
@@ -146,7 +149,7 @@ pub enum HeapObject {
     /// They are `Rc<str>` so allocating an object can clone a cached per-class
     /// template — cloning the keys is then a refcount bump, not a string copy.
     Instance {
-        class_name: String,
+        class_name: std::rc::Rc<str>,
         fields: std::collections::HashMap<std::rc::Rc<str>, JValue>,
     },
     /// A `java.util.Scanner` over standard input: buffered text pulled

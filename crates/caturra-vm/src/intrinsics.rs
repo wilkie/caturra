@@ -56,7 +56,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // A bare `new Object()` — an identity-only object (used e.g. to test
         // that `equals` distinguishes an unrelated instance).
         "java/lang/Object" => Some(HeapObject::Instance {
-            class_name: String::from("java/lang/Object"),
+            class_name: std::rc::Rc::from("java/lang/Object"),
             fields: std::collections::HashMap::new(),
         }),
         "java/lang/String" => Some(HeapObject::JavaString(Vec::new())),
@@ -2464,7 +2464,7 @@ fn boxed_virtual(
                     Some(HeapObject::Boxed {
                         class_name: other_class,
                         value: other_value,
-                    }) => other_class == class_name && values_bit_equal(value, *other_value),
+                    }) => &**other_class == class_name && values_bit_equal(value, *other_value),
                     _ => false,
                 },
                 Some(
@@ -2636,7 +2636,7 @@ pub fn invoke_static(
         && !matches!(args[0], JValue::Ref(_))
     {
         let reference = heap.alloc(HeapObject::Boxed {
-            class_name: class.to_owned(),
+            class_name: std::rc::Rc::from(class),
             value: args[0],
         });
         return Ok(Some(JValue::Ref(Some(reference))));

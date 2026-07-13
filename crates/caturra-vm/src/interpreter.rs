@@ -572,6 +572,135 @@ impl<'run> Interpreter<'run> {
                     }
                 }
 
+                // Fast path: pre-decoded hot instructions, dispatched without
+                // re-reading operand bytes and without constructing a
+                // Result<Flow, VmError> (120 bytes) per instruction. Anything
+                // unusual — a bad slot, an empty stack, a non-int on the stack —
+                // falls through to the byte path below, which is left to produce
+                // exactly the behaviour it always did. So this can only be faster,
+                // never different.
+                match code.insts.get(addr) {
+                    Some(&Inst::IConst { value, next }) => {
+                        frame.stack.push(JValue::Int(value));
+                        pc = next as usize;
+                        continue;
+                    }
+                    Some(&Inst::Load { slot, next }) => {
+                        if let Some(&value) = frame.locals.get(usize::from(slot)) {
+                            frame.stack.push(value);
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::Store { slot, next }) => {
+                        if usize::from(slot) < frame.locals.len()
+                            && let Some(value) = frame.stack.pop()
+                        {
+                            frame.locals[usize::from(slot)] = value;
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::IntOp { op, next }) => {
+                        let depth = frame.stack.len();
+                        if depth >= 2
+                            && let (JValue::Int(a), JValue::Int(b)) =
+                                (frame.stack[depth - 2], frame.stack[depth - 1])
+                        {
+                            let value = match op {
+                                IntOp::Add => a.wrapping_add(b),
+                                IntOp::Sub => a.wrapping_sub(b),
+                                IntOp::Mul => a.wrapping_mul(b),
+                                IntOp::And => a & b,
+                                IntOp::Or => a | b,
+                                IntOp::Xor => a ^ b,
+                            };
+                            frame.stack.truncate(depth - 2);
+                            frame.stack.push(JValue::Int(value));
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::Goto { target }) => {
+                        pc = target as usize;
+                        continue;
+                    }
+                    Some(&Inst::IfICmp { cmp, target, next }) => {
+                        let depth = frame.stack.len();
+                        if depth >= 2
+                            && let (JValue::Int(a), JValue::Int(b)) =
+                                (frame.stack[depth - 2], frame.stack[depth - 1])
+                        {
+                            frame.stack.truncate(depth - 2);
+                            pc = if cmp.holds(a, b) {
+                                target as usize
+                            } else {
+                                next as usize
+                            };
+                            continue;
+                        }
+                    }
+                    Some(&Inst::IfInt { cmp, target, next }) => {
+                        if let Some(&JValue::Int(value)) = frame.stack.last() {
+                            frame.stack.pop();
+                            pc = if cmp.holds(value, 0) {
+                                target as usize
+                            } else {
+                                next as usize
+                            };
+                            continue;
+                        }
+                    }
+                    Some(&Inst::Dup { next }) => {
+                        if let Some(&top) = frame.stack.last() {
+                            frame.stack.push(top);
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::Pop { next }) => {
+                        if frame.stack.pop().is_some() {
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    // Only the already-memoized, non-null, present-field case is
+                    // taken here; a cold site, a null receiver or an unresolved
+                    // field falls through so the byte path can resolve it or raise
+                    // the NullPointerException exactly as before.
+                    Some(&Inst::GetField { index, next }) => {
+                        let site = (std::ptr::from_ref(class) as usize, index);
+                        if let Some(key) = self.field_keys.get(&site)
+                            && let Some(JValue::Ref(Some(reference))) = frame.stack.last().copied()
+                            && let Some(crate::value::HeapObject::Instance { fields, .. }) =
+                                self.heap.get(reference)
+                            && let Some(&value) = fields.get(&**key)
+                        {
+                            frame.stack.pop();
+                            frame.stack.push(value);
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::PutField { index, next }) => {
+                        let site = (std::ptr::from_ref(class) as usize, index);
+                        let depth = frame.stack.len();
+                        if depth >= 2
+                            && let Some(key) = self.field_keys.get(&site)
+                            && let JValue::Ref(Some(reference)) = frame.stack[depth - 2]
+                            && let Some(crate::value::HeapObject::Instance { fields, .. }) =
+                                self.heap.get_mut(reference)
+                            && let Some(slot) = fields.get_mut(&**key)
+                        {
+                            *slot = frame.stack[depth - 1];
+                            frame.stack.truncate(depth - 2);
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::Legacy) | None => {}
+                }
+
                 let opcode = *bytes.get(addr).ok_or_else(|| {
                     malformed(format!(
                         "execution ran off the end of bytecode at pc {addr}"
@@ -1051,7 +1180,7 @@ impl<'run> Interpreter<'run> {
                                     // Boxed wrapper: `x instanceof Integer`.
                                     Some(crate::value::HeapObject::Boxed {
                                         class_name, ..
-                                    }) => *class_name == target,
+                                    }) => **class_name == target,
                                     // A reflect Type: it is a ParameterizedType
                                     // only when it carries type arguments.
                                     Some(crate::value::HeapObject::ReflectType {
@@ -1076,7 +1205,7 @@ impl<'run> Interpreter<'run> {
                                                     Some(crate::value::HeapObject::Instance {
                                                         class_name,
                                                         ..
-                                                    }) => Some(class_name.clone()),
+                                                    }) => Some(class_name.to_string()),
                                                     Some(crate::value::HeapObject::JavaString(
                                                         _,
                                                     )) => Some(String::from("java/lang/String")),
@@ -1121,7 +1250,7 @@ impl<'run> Interpreter<'run> {
                                         });
                                     return Err(VmError::UncaughtException(match message {
                                         Some(message) => format!("{class_name}: {message}"),
-                                        None => class_name.clone(),
+                                        None => class_name.to_string(),
                                     }));
                                 }
                                 _ => {
@@ -2170,7 +2299,7 @@ impl<'run> Interpreter<'run> {
     fn new_instance(&mut self, class_name: &str) -> crate::value::HeapObject {
         if let Some(template) = self.field_templates.get(class_name) {
             return crate::value::HeapObject::Instance {
-                class_name: class_name.to_owned(),
+                class_name: Rc::from(class_name),
                 fields: template.clone(),
             };
         }
@@ -2212,7 +2341,7 @@ impl<'run> Interpreter<'run> {
         self.field_templates
             .insert(class_name.to_owned(), fields.clone());
         crate::value::HeapObject::Instance {
-            class_name: class_name.to_owned(),
+            class_name: Rc::from(class_name),
             fields,
         }
     }
@@ -2422,7 +2551,7 @@ impl<'run> Interpreter<'run> {
         // allocate and so cannot hold a borrow of the heap.
         let renderable = match self.heap.get(reference) {
             Some(HeapObject::Instance { class_name, .. }) => {
-                Renderable::Instance(class_name.clone())
+                Renderable::Instance(class_name.to_string())
             }
             Some(
                 HeapObject::ArrayList(items)
@@ -6175,7 +6304,7 @@ impl<'run> Interpreter<'run> {
         match self.heap.get(receiver) {
             Some(
                 HeapObject::Instance { class_name, .. } | HeapObject::Boxed { class_name, .. },
-            ) => class_name.clone(),
+            ) => class_name.to_string(),
             Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
             Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
@@ -6353,7 +6482,7 @@ impl<'run> Interpreter<'run> {
             _ => "java/lang/Integer",
         };
         self.heap.alloc(crate::value::HeapObject::Boxed {
-            class_name: String::from(class_name),
+            class_name: Rc::from(class_name),
             value,
         })
     }
@@ -7396,7 +7525,7 @@ impl<'run> Interpreter<'run> {
             _ => return value,
         };
         let reference = self.heap.alloc(crate::value::HeapObject::Boxed {
-            class_name: wrapper.to_owned(),
+            class_name: Rc::from(wrapper),
             value,
         });
         JValue::Ref(Some(reference))
@@ -7771,8 +7900,303 @@ struct Frame<'run> {
 }
 
 /// A parsed `Code` attribute plus its debug tables, cached per method.
+/// A pre-decoded instruction: the operands are parsed once when a method is
+/// first executed rather than re-read from the byte stream on every pass, and
+/// `next` is the fall-through pc. Only the hot opcodes get a variant; everything
+/// else is `Legacy` and runs through the byte-decoding match, which keeps this
+/// an incremental optimization rather than a rewrite of all 176 opcodes.
+#[derive(Clone, Copy)]
+enum Inst {
+    /// Decode this one from the bytes (the cold path).
+    Legacy,
+    IConst {
+        value: i32,
+        next: u32,
+    },
+    /// Push `locals[slot]` (typeless: the value carries its own tag).
+    Load {
+        slot: u16,
+        next: u32,
+    },
+    /// Pop into `locals[slot]`.
+    Store {
+        slot: u16,
+        next: u32,
+    },
+    IntOp {
+        op: IntOp,
+        next: u32,
+    },
+    Goto {
+        target: u32,
+    },
+    /// Compare the top two ints and branch.
+    IfICmp {
+        cmp: Cmp,
+        target: u32,
+        next: u32,
+    },
+    /// Compare the top int against zero and branch.
+    IfInt {
+        cmp: Cmp,
+        target: u32,
+        next: u32,
+    },
+    Dup {
+        next: u32,
+    },
+    Pop {
+        next: u32,
+    },
+    /// `getfield`/`putfield`, carrying the constant-pool index so the resolved
+    /// key memo can be consulted without re-reading the operand bytes.
+    GetField {
+        index: u16,
+        next: u32,
+    },
+    PutField {
+        index: u16,
+        next: u32,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum IntOp {
+    Add,
+    Sub,
+    Mul,
+    And,
+    Or,
+    Xor,
+}
+
+#[derive(Clone, Copy)]
+enum Cmp {
+    Eq,
+    Ne,
+    Lt,
+    Ge,
+    Gt,
+    Le,
+}
+
+impl Cmp {
+    fn holds(self, a: i32, b: i32) -> bool {
+        match self {
+            Cmp::Eq => a == b,
+            Cmp::Ne => a != b,
+            Cmp::Lt => a < b,
+            Cmp::Ge => a >= b,
+            Cmp::Gt => a > b,
+            Cmp::Le => a <= b,
+        }
+    }
+}
+
+/// Total length of the instruction at `op`, in bytes. caturra's compiler emits a
+/// bounded instruction set with no `wide`, `tableswitch`, `lookupswitch` or
+/// `jsr`, so length depends only on the opcode. `None` for anything unknown,
+/// which makes the whole method fall back to byte decoding.
+fn inst_len(op: u8) -> Option<usize> {
+    use caturra_classfile::opcodes as op_;
+    Some(match op {
+        op_::BIPUSH
+        | op_::LDC
+        | op_::ILOAD
+        | op_::LLOAD
+        | op_::FLOAD
+        | op_::DLOAD
+        | op_::ALOAD
+        | op_::ISTORE
+        | op_::LSTORE
+        | op_::FSTORE
+        | op_::DSTORE
+        | op_::ASTORE
+        | op_::NEWARRAY => 2,
+        op_::SIPUSH
+        | op_::LDC_W
+        | op_::LDC2_W
+        | op_::IFEQ..=op_::IF_ACMPNE
+        | op_::GOTO
+        | op_::GETSTATIC..=op_::INVOKESTATIC
+        | op_::NEW
+        | op_::ANEWARRAY
+        | op_::CHECKCAST
+        | op_::INSTANCEOF
+        | op_::IFNULL
+        | op_::IFNONNULL => 3,
+        op_::MULTIANEWARRAY => 4,
+        // Everything else in the emitted set is a bare opcode.
+        0x00..=0x0f
+        | 0x1a..=0x35
+        | 0x3b..=0x56
+        | 0x57..=0x5f
+        | 0x60..=0x98
+        | op_::IRETURN..=op_::RETURN
+        | op_::ATHROW
+        | op_::ARRAYLENGTH => 1,
+        _ => return None,
+    })
+}
+
+/// Pre-decode a method's bytecode. Returns an empty table if the walk does not
+/// land exactly on the end of the code (an opcode we do not know the length of),
+/// in which case the caller keeps decoding bytes as it goes.
+#[allow(clippy::too_many_lines)] // one decode table, clearer read straight through
+fn decode_insts(bytes: &[u8]) -> Vec<Inst> {
+    use caturra_classfile::opcodes as op_;
+    let mut insts = vec![Inst::Legacy; bytes.len()];
+    let mut pc = 0usize;
+    while pc < bytes.len() {
+        let op = bytes[pc];
+        let Some(len) = inst_len(op) else {
+            return Vec::new();
+        };
+        let Some(next_pc) = pc.checked_add(len).filter(|end| *end <= bytes.len()) else {
+            return Vec::new();
+        };
+        let next = next_pc as u32;
+        // 16-bit branch offsets are relative to the instruction's own pc.
+        let branch = || -> Option<u32> {
+            let offset = i32::from(
+                u16::from_be_bytes([*bytes.get(pc + 1)?, *bytes.get(pc + 2)?]).cast_signed(),
+            );
+            let target = i64::try_from(pc).ok()? + i64::from(offset);
+            u32::try_from(target)
+                .ok()
+                .filter(|t| (*t as usize) < bytes.len())
+        };
+        insts[pc] = match op {
+            op_::ICONST_M1..=op_::ICONST_5 => Inst::IConst {
+                value: i32::from(op) - i32::from(op_::ICONST_0),
+                next,
+            },
+            op_::BIPUSH => Inst::IConst {
+                value: i32::from(bytes[pc + 1].cast_signed()),
+                next,
+            },
+            op_::SIPUSH => Inst::IConst {
+                value: i32::from(u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]).cast_signed()),
+                next,
+            },
+            op_::ILOAD | op_::LLOAD | op_::FLOAD | op_::DLOAD | op_::ALOAD => Inst::Load {
+                slot: u16::from(bytes[pc + 1]),
+                next,
+            },
+            op_::ILOAD_0..=op_::ILOAD_3 => Inst::Load {
+                slot: u16::from(op - op_::ILOAD_0),
+                next,
+            },
+            op_::LLOAD_0..=op_::LLOAD_3 => Inst::Load {
+                slot: u16::from(op - op_::LLOAD_0),
+                next,
+            },
+            op_::FLOAD_0..=op_::FLOAD_3 => Inst::Load {
+                slot: u16::from(op - op_::FLOAD_0),
+                next,
+            },
+            op_::DLOAD_0..=op_::DLOAD_3 => Inst::Load {
+                slot: u16::from(op - op_::DLOAD_0),
+                next,
+            },
+            op_::ALOAD_0..=op_::ALOAD_3 => Inst::Load {
+                slot: u16::from(op - op_::ALOAD_0),
+                next,
+            },
+            op_::ISTORE | op_::LSTORE | op_::FSTORE | op_::DSTORE | op_::ASTORE => Inst::Store {
+                slot: u16::from(bytes[pc + 1]),
+                next,
+            },
+            op_::ISTORE_0..=op_::ISTORE_3 => Inst::Store {
+                slot: u16::from(op - op_::ISTORE_0),
+                next,
+            },
+            op_::LSTORE_0..=op_::LSTORE_3 => Inst::Store {
+                slot: u16::from(op - op_::LSTORE_0),
+                next,
+            },
+            op_::FSTORE_0..=op_::FSTORE_3 => Inst::Store {
+                slot: u16::from(op - op_::FSTORE_0),
+                next,
+            },
+            op_::DSTORE_0..=op_::DSTORE_3 => Inst::Store {
+                slot: u16::from(op - op_::DSTORE_0),
+                next,
+            },
+            op_::ASTORE_0..=op_::ASTORE_3 => Inst::Store {
+                slot: u16::from(op - op_::ASTORE_0),
+                next,
+            },
+            op_::IADD => Inst::IntOp {
+                op: IntOp::Add,
+                next,
+            },
+            op_::ISUB => Inst::IntOp {
+                op: IntOp::Sub,
+                next,
+            },
+            op_::IMUL => Inst::IntOp {
+                op: IntOp::Mul,
+                next,
+            },
+            op_::IAND => Inst::IntOp {
+                op: IntOp::And,
+                next,
+            },
+            op_::IOR => Inst::IntOp {
+                op: IntOp::Or,
+                next,
+            },
+            op_::IXOR => Inst::IntOp {
+                op: IntOp::Xor,
+                next,
+            },
+            op_::GETFIELD => Inst::GetField {
+                index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
+                next,
+            },
+            op_::PUTFIELD => Inst::PutField {
+                index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
+                next,
+            },
+            op_::DUP => Inst::Dup { next },
+            op_::POP => Inst::Pop { next },
+            op_::GOTO => match branch() {
+                Some(target) => Inst::Goto { target },
+                None => Inst::Legacy,
+            },
+            op_::IF_ICMPEQ..=op_::IF_ICMPLE => match branch() {
+                Some(target) => Inst::IfICmp {
+                    cmp: [Cmp::Eq, Cmp::Ne, Cmp::Lt, Cmp::Ge, Cmp::Gt, Cmp::Le]
+                        [usize::from(op - op_::IF_ICMPEQ)],
+                    target,
+                    next,
+                },
+                None => Inst::Legacy,
+            },
+            op_::IFEQ..=op_::IFLE => match branch() {
+                Some(target) => Inst::IfInt {
+                    cmp: [Cmp::Eq, Cmp::Ne, Cmp::Lt, Cmp::Ge, Cmp::Gt, Cmp::Le]
+                        [usize::from(op - op_::IFEQ)],
+                    target,
+                    next,
+                },
+                None => Inst::Legacy,
+            },
+            _ => Inst::Legacy,
+        };
+        pc = next_pc;
+    }
+    insts
+}
+
 struct MethodCode {
     attr: CodeAttribute,
+    /// Pre-decoded instructions, indexed by pc (entries only at instruction
+    /// boundaries). Empty when the method could not be walked cleanly, in which
+    /// case dispatch falls back entirely to decoding bytes as it goes — so this
+    /// is a pure optimization and can never change behaviour.
+    insts: Vec<Inst>,
     /// `boundary_lines[pc]` is the source line starting at `pc`, or 0 —
     /// O(1) per-instruction lookup in the dispatch loop.
     boundary_lines: Vec<u16>,
@@ -7929,8 +8353,10 @@ fn parse_method_code(class: &ClassFile, method: &MethodInfo) -> Result<MethodCod
         .and_then(|index| class.constant_pool.get_utf8(index))
         .map_or_else(|| format!("{class_name}.java"), str::to_owned);
 
+    let insts = decode_insts(&attr.code);
     Ok(MethodCode {
         attr,
+        insts,
         boundary_lines,
         local_vars,
         source_file,
