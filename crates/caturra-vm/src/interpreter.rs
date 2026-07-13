@@ -59,7 +59,13 @@ pub(crate) struct Interpreter<'run> {
     /// descriptors in a program, but the widths were re-parsed into a fresh Vec
     /// on every call that had arguments.
     widths_cache: HashMap<String, Rc<[u16]>>,
-    virtual_sites: HashMap<(usize, u16), VirtualSite<'run>>,
+    /// Inline caches for `invokevirtual` sites, in an arena: a pre-decoded
+    /// instruction holds its own index into this, so a warm call reaches its
+    /// cache by indexing rather than by hashing.
+    virtual_sites: Vec<VirtualSite<'run>>,
+    /// `(class, pool index)` -> arena index, for the cold path and for methods
+    /// that could not be pre-decoded.
+    virtual_site_ids: HashMap<(usize, u16), u32>,
     static_widths: HashMap<(usize, u16), Rc<[u16]>>,
     /// What an invokestatic site resolves to. Resolution otherwise hashed the
     /// class name and then walked the superclass chain scanning every method and
@@ -164,7 +170,8 @@ impl<'run> Interpreter<'run> {
             field_slots: HashMap::new(),
             vec_pool: Vec::new(),
             widths_cache: HashMap::new(),
-            virtual_sites: HashMap::new(),
+            virtual_sites: Vec::new(),
+            virtual_site_ids: HashMap::new(),
             static_widths: HashMap::new(),
             static_targets: HashMap::new(),
             static_inited: std::collections::HashSet::new(),
@@ -556,10 +563,42 @@ impl<'run> Interpreter<'run> {
         }
     }
 
+    /// A method's parsed `Code`, cached by the method's address.
+    fn method_code(
+        &mut self,
+        class: &'run ClassFile,
+        method: &'run MethodInfo,
+    ) -> Result<Rc<MethodCode>, VmError> {
+        let key = std::ptr::from_ref(method) as usize;
+        if let Some(cached) = self.code_cache.get(&key) {
+            return Ok(Rc::clone(cached));
+        }
+        let parsed = Rc::new(parse_method_code(class, method)?);
+        self.code_cache.insert(key, Rc::clone(&parsed));
+        Ok(parsed)
+    }
+
     fn make_frame(
         &mut self,
         class: &'run ClassFile,
         method: &'run MethodInfo,
+        locals: Vec<JValue>,
+    ) -> Result<Frame<'run>, VmError> {
+        let code = self.method_code(class, method)?;
+        let method_name = class
+            .constant_pool
+            .get_utf8(method.name_index)
+            .unwrap_or("<unknown>");
+        self.frame_for(class, method_name, code, locals)
+    }
+
+    /// The frame itself, once the target's `Code` is in hand. A warm call site
+    /// already has all of this cached, so it comes straight here.
+    fn frame_for(
+        &mut self,
+        class: &'run ClassFile,
+        method_name: &'run str,
+        code: Rc<MethodCode>,
         mut locals: Vec<JValue>,
     ) -> Result<Frame<'run>, VmError> {
         if self.call_depth() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
@@ -567,21 +606,9 @@ impl<'run> Interpreter<'run> {
                 "java.lang.StackOverflowError",
             )));
         }
-        let key = std::ptr::from_ref(method) as usize;
-        let code = if let Some(cached) = self.code_cache.get(&key) {
-            Rc::clone(cached)
-        } else {
-            let parsed = Rc::new(parse_method_code(class, method)?);
-            self.code_cache.insert(key, Rc::clone(&parsed));
-            parsed
-        };
         if locals.len() < usize::from(code.attr.max_locals) {
             locals.resize(usize::from(code.attr.max_locals), JValue::Int(0));
         }
-        let method_name = class
-            .constant_pool
-            .get_utf8(method.name_index)
-            .unwrap_or("<unknown>");
         let stack = self.take_vec(usize::from(code.attr.max_stack));
         Ok(Frame {
             class,
@@ -775,6 +802,22 @@ impl<'run> Interpreter<'run> {
                             frame.stack.truncate(depth - 2);
                             pc = next as usize;
                             continue;
+                        }
+                    }
+                    // A warm monomorphic call into a user class, pushed without
+                    // ever building the `Result<Flow, VmError>` the byte path
+                    // returns. Anything else declines and falls through to it.
+                    Some(Inst::InvokeVirtual { index, next, site }) => {
+                        if site.get() == UNRESOLVED {
+                            self.prime_virtual_site(class, *index, site);
+                        }
+                        if site.get() != UNRESOLVED
+                            && let Some(callee) =
+                                self.fast_virtual_call(site.get() as usize, &mut frame)
+                        {
+                            frame.pc = *next as usize;
+                            self.frames.push(std::mem::replace(&mut frame, callee));
+                            continue 'frames;
                         }
                     }
                     Some(&Inst::Legacy) | None => {}
@@ -6266,6 +6309,98 @@ impl<'run> Interpreter<'run> {
     /// receiver, and dispatch — user methods become a frame to push,
     /// intrinsics run inline.
     #[allow(clippy::too_many_lines)] // one dispatch path with several fast-paths
+    /// The arena index of an `invokevirtual` site, allocating its entry (the
+    /// descriptor's shape, which is fixed per site) the first time it runs.
+    fn virtual_site_id(
+        &mut self,
+        class: &'run ClassFile,
+        index: u16,
+        descriptor: &str,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<usize, VmError> {
+        let site = (std::ptr::from_ref(class) as usize, index);
+        if let Some(&id) = self.virtual_site_ids.get(&site) {
+            return Ok(id as usize);
+        }
+        let argc = descriptor_arg_count(descriptor)
+            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+        let widths = self
+            .arg_widths(descriptor)
+            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+        let id = self.virtual_sites.len();
+        self.virtual_sites.push(VirtualSite {
+            argc,
+            widths,
+            hit: None,
+        });
+        let id = u32::try_from(id).map_err(|_| malformed(String::from("too many call sites")))?;
+        self.virtual_site_ids.insert(site, id);
+        Ok(id as usize)
+    }
+
+    /// A warm `invokevirtual` whose receiver is the same user class as last
+    /// time: the arguments are already sitting in order on the operand stack,
+    /// so the callee's locals are filled straight from it — no argument buffer,
+    /// no reversal, and nothing hashed, because the site's hit carries the
+    /// target's parsed code and name too.
+    ///
+    /// Declines (leaving the stack untouched) on anything else at all: a cold
+    /// site, a null or primitive receiver, an unmodifiable-list view, an
+    /// intrinsic, a receiver of a class this site has not seen, or a call that
+    /// would overflow the stack. Every one of those falls back to the general
+    /// path, which behaves exactly as it always did — so this can only be
+    /// faster, never different.
+    fn fast_virtual_call(&mut self, id: usize, frame: &mut Frame<'run>) -> Option<Frame<'run>> {
+        let entry = self.virtual_sites.get(id)?;
+        let hit = entry.hit.as_ref()?;
+        let base = frame.stack.len().checked_sub(entry.argc + 1)?;
+        let JValue::Ref(Some(receiver)) = frame.stack[base] else {
+            return None;
+        };
+        if !matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Instance { class_name, .. })
+                if Rc::ptr_eq(class_name, &hit.receiver_class)
+        ) {
+            return None;
+        }
+        if self.call_depth() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
+            return None; // let the general path raise the StackOverflowError
+        }
+        let hit = hit.clone();
+        let widths = Rc::clone(&entry.widths);
+        let mut locals = self.take_vec(usize::from(hit.code.attr.max_locals));
+        locals.push(JValue::Ref(Some(receiver)));
+        for (value, width) in frame.stack[base + 1..].iter().zip(widths.iter()) {
+            locals.push(*value);
+            if *width == 2 {
+                // A long or double occupies two local slots (JVMS 2.6.1).
+                locals.push(JValue::Int(0));
+            }
+        }
+        // Build the frame before disturbing the caller's stack, so that a
+        // decline here leaves it exactly as the general path expects to find it.
+        let callee = self
+            .frame_for(hit.class, hit.method_name, hit.code, locals)
+            .ok()?;
+        frame.stack.truncate(base);
+        Some(callee)
+    }
+
+    /// Copy a virtual site's arena index into the instruction, once, so that
+    /// every later execution of it reaches its inline cache without a lookup.
+    fn prime_virtual_site(&self, class: &ClassFile, index: u16, site: &Cell<u32>) {
+        let key = (std::ptr::from_ref(class) as usize, index);
+        if let Some(&id) = self.virtual_site_ids.get(&key)
+            && id != UNRESOLVED
+        {
+            site.set(id);
+        }
+    }
+
+    // The user-instance path, then the intrinsic gauntlet (reflection, arrays,
+    // collections, streams, maps); splitting them would only hide the order.
+    #[allow(clippy::too_many_lines)]
     fn invoke_virtual_op(
         &mut self,
         class: &'run ClassFile,
@@ -6280,27 +6415,16 @@ impl<'run> Interpreter<'run> {
             .get_member_ref(index)
             .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
 
-        // One hash on the hot path: everything this call needs comes from a single
-        // site lookup — the descriptor's shape and the cached target.
-        let site = (std::ptr::from_ref(class) as usize, index);
-        let (arg_count, widths, cached) = if let Some(entry) = self.virtual_sites.get(&site) {
-            (entry.argc, Rc::clone(&entry.widths), entry.hit.clone())
-        } else {
-            let argc = descriptor_arg_count(descriptor)
-                .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
-            let widths = self
-                .arg_widths(descriptor)
-                .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
-            self.virtual_sites.insert(
-                site,
-                VirtualSite {
-                    argc,
-                    widths: Rc::clone(&widths),
-                    hit: None,
-                },
-            );
-            (argc, widths, None)
-        };
+        // The site's entry in the arena: one hash, and only because this path
+        // does not know its index. The pre-decoded instruction does, and calls
+        // `fast_virtual_call` directly.
+        let id = self.virtual_site_id(class, index, descriptor, malformed)?;
+        if let Some(callee) = self.fast_virtual_call(id, frame) {
+            return Ok(Some(callee));
+        }
+        let entry = &self.virtual_sites[id];
+        let (arg_count, widths, cached) = (entry.argc, Rc::clone(&entry.widths), entry.hit.clone());
+
         let mut args = self.take_vec(arg_count);
         for _ in 0..arg_count {
             args.push(frame.pop()?);
@@ -6350,20 +6474,32 @@ impl<'run> Interpreter<'run> {
         if let Some(instance_class) = instance_class {
             // Monomorphic inline cache: same receiver class as last time at this
             // site means the target is already known, so skip the descriptor
-            // scan, the class-name hash and the superclass walk entirely.
-            let cached = cached
-                .as_ref()
-                .filter(|(name, _, _)| Rc::ptr_eq(name, &instance_class))
-                .map(|(_, class, method)| (*class, *method));
-            let resolved = cached.or_else(|| {
+            // scan, the class-name hash and the superclass walk entirely. (The
+            // fast path above took the common case; this catches the receivers
+            // it declined — a boxed primitive, a list view read through.)
+            let hit = cached.filter(|hit| Rc::ptr_eq(&hit.receiver_class, &instance_class));
+            let resolved = if let Some(hit) = &hit {
+                Some((hit.class, hit.method))
+            } else {
                 let found = resolve_virtual(self.classes, &instance_class, method_name, descriptor);
-                if let Some((class, method)) = found
-                    && let Some(entry) = self.virtual_sites.get_mut(&site)
-                {
-                    entry.hit = Some((Rc::clone(&instance_class), class, method));
+                if let Some((target, method)) = found {
+                    // Resolve everything the callee's frame needs now, so that
+                    // every later call through this site needs nothing.
+                    let code = self.method_code(target, method)?;
+                    let target_name = target
+                        .constant_pool
+                        .get_utf8(method.name_index)
+                        .unwrap_or("<unknown>");
+                    self.virtual_sites[id].hit = Some(ReceiverHit {
+                        receiver_class: Rc::clone(&instance_class),
+                        class: target,
+                        method,
+                        method_name: target_name,
+                        code,
+                    });
                 }
                 found
-            });
+            };
             if let Some((target, method)) = resolved {
                 let mut locals = self.take_vec(1 + args.len());
                 locals.push(JValue::Ref(Some(receiver)));
@@ -8114,8 +8250,18 @@ struct VirtualSite<'run> {
     hit: Option<ReceiverHit<'run>>,
 }
 
-/// The receiver class a site last saw, and the method it resolved to.
-type ReceiverHit<'run> = (Rc<str>, &'run ClassFile, &'run MethodInfo);
+/// The receiver class a site last saw, and everything building the callee's
+/// frame then needs. Carrying the parsed `Code` and the method's name — not
+/// just the method — is what lets a warm call skip the code cache's hash and
+/// the constant-pool read for the name, so it hashes nothing at all.
+#[derive(Clone)]
+struct ReceiverHit<'run> {
+    receiver_class: Rc<str>,
+    class: &'run ClassFile,
+    method: &'run MethodInfo,
+    method_name: &'run str,
+    code: Rc<MethodCode>,
+}
 
 /// A class's interned name plus its defaulted field map, cloned on each `new`.
 /// A class's identity, its field layout, and one defaulted object's worth of
@@ -8209,6 +8355,14 @@ enum Inst {
         index: u16,
         next: u32,
         slot: Cell<u32>,
+    },
+    /// `invokevirtual`. `site` is this site's own index into the inline-cache
+    /// arena, [`UNRESOLVED`] until it first runs — so a warm call reaches its
+    /// cache without hashing anything.
+    InvokeVirtual {
+        index: u16,
+        next: u32,
+        site: Cell<u32>,
     },
 }
 
@@ -8415,6 +8569,11 @@ fn decode_insts(bytes: &[u8]) -> Vec<Inst> {
                 index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
                 next,
                 slot: Cell::new(UNRESOLVED),
+            },
+            op_::INVOKEVIRTUAL => Inst::InvokeVirtual {
+                index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
+                next,
+                site: Cell::new(UNRESOLVED),
             },
             op_::DUP => Inst::Dup { next },
             op_::POP => Inst::Pop { next },
