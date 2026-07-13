@@ -196,10 +196,32 @@ fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
 /// Generate a runner `main` that instantiates each test class, runs its
 /// `@BeforeEach` setup and each `@Test`, and prints one
 /// `__VTEST\t<PASS|FAIL>\t<name>\t<message>` line per test.
+///
+/// It announces the whole roster first, one `__VPLAN\t<name>` line per test,
+/// **before running any of them**. A test that a host sees planned but never
+/// gets a verdict for did not run, and must be reported as a failure rather
+/// than passed over — otherwise a run that dies part-way silently reports only
+/// the tests that happened to finish, and a student is told everything passed.
+///
+/// That is not hypothetical. `catch (Throwable)` catches every Java throwable,
+/// but a VM error is not one: an unsupported intrinsic, an exhausted
+/// instruction budget, an interrupt — none of them can be caught by generated
+/// Java, and each one used to take the rest of the roster down with it. The
+/// plan lines make the roster known before anything can go wrong, so the count
+/// a host reports cannot shrink.
 fn validation_runner_source(classes: &[TestClass]) -> String {
     let mut src = String::from(
         "public class __ValidationRunner {\n  public static void main(String[] args) {\n",
     );
+    for class in classes {
+        for test in &class.tests {
+            let _ = writeln!(
+                src,
+                "    System.out.println(\"__VPLAN\\t{}\");",
+                escape_for_java(&test.display)
+            );
+        }
+    }
     for class in classes {
         // `@BeforeAll` runs once (static); tolerate failure so per-test
         // errors are still reported individually.
@@ -209,11 +231,7 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
             src.push_str("    } catch (Throwable __e) {}\n");
         }
         for test in &class.tests {
-            let name = test
-                .display
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace(['\t', '\n', '\r'], " ");
+            let name = escape_for_java(&test.display);
             src.push_str("    try {\n");
             let _ = writeln!(src, "      {0} __t = new {0}();", class.name);
             for setup in &class.before_each {
@@ -234,6 +252,15 @@ fn validation_runner_source(classes: &[TestClass]) -> String {
     }
     src.push_str("  }\n}\n");
     src
+}
+
+/// A test's display name, safe to sit inside a Java string literal and inside
+/// one tab-separated field of the runner's output.
+fn escape_for_java(display: &str) -> String {
+    display
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace(['\t', '\n', '\r'], " ")
 }
 
 /// The student's class names: classes in the original (non-injected) sources

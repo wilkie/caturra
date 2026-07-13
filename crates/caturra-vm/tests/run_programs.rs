@@ -4613,9 +4613,14 @@ fn junit_validation_runner_reports_pass_and_fail() {
         vm.load_class(class.class_file).expect("load");
     }
     vm.run_main(&entry, &[]).expect("run");
+    // The roster comes first — every test named before any of them runs, so a
+    // run that dies part-way cannot report fewer tests than it has. See
+    // `a_validation_run_that_dies_still_accounts_for_every_test`.
     assert_eq!(
         console.stdout_text(),
-        "__VTEST\tPASS\tstarts at zero\t\n\
+        "__VPLAN\tstarts at zero\n\
+         __VPLAN\tincrements by one\n\
+         __VTEST\tPASS\tstarts at zero\t\n\
          __VTEST\tFAIL\tincrements by one\texpected 1 but was 2\n"
     );
 }
@@ -12415,5 +12420,96 @@ fn junit_assert_equals_honours_a_delta() {
         "exact ok\n\
          threw: too far apart ==> expected: <0.02> but was: <0.03>\n\
          threw: array ==> arrays first differed at element [1] ==> expected: <2.0> but was: <2.5>\n"
+    );
+}
+
+/// A validation run that DIES part-way must still account for every test.
+///
+/// `catch (Throwable)` in the generated runner catches every Java throwable —
+/// but a VM error is not one. An unsupported intrinsic, an exhausted
+/// instruction budget, an interrupt: none can be caught by generated Java, and
+/// each kills the run where it stands. The tests after it then printed nothing
+/// at all, so a host counting `__VTEST` lines saw only the ones that finished
+/// and told the student every test passed. A grader may do many things; quietly
+/// reporting fewer tests than it has is not one of them.
+///
+/// So the runner announces its whole roster up front (`__VPLAN`), before
+/// anything can go wrong. Here the budget is exhausted inside the second of
+/// four tests; the roster still names all four, and the two that never ran are
+/// identifiable as planned-but-unreported.
+#[test]
+fn a_validation_run_that_dies_still_accounts_for_every_test() {
+    let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: String::from("SpinTest.java"),
+        text: String::from(
+            r#"
+            import org.junit.jupiter.api.*;
+            import static org.junit.jupiter.api.Assertions.*;
+
+            @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+            public class SpinTest {
+                @Test @Order(1) @DisplayName("first")
+                public void first() { assertTrue(true); }
+
+                @Test @Order(2) @DisplayName("spins forever")
+                public void spins() { while (true) { } }
+
+                @Test @Order(3) @DisplayName("third")
+                public void third() { assertTrue(true); }
+
+                @Test @Order(4) @DisplayName("fourth")
+                public void fourth() { assertTrue(true); }
+            }
+            "#,
+        ),
+    }]);
+    assert!(compilation.success(), "{:?}", compilation.diagnostics);
+    let entry = compilation
+        .validation_entry
+        .clone()
+        .expect("a validation entry");
+
+    let mut vfs = VirtualFileSystem::new();
+    let mut console = BufferedConsole::new();
+    let mut vm = Vm::new(
+        VmOptions {
+            // Enough for the first test, not for an infinite loop.
+            max_instructions: 200_000,
+            ..VmOptions::default()
+        },
+        &mut vfs,
+        &mut console,
+    );
+    for class in compilation.classes {
+        vm.load_class(class.class_file).expect("load");
+    }
+    let result = vm.run_main(&entry, &[]);
+    drop(vm);
+
+    // The run really did die: no Java exception could have caught this.
+    assert!(
+        matches!(result, Err(VmError::InstructionBudgetExceeded)),
+        "{result:?}"
+    );
+
+    let out = console.stdout_text();
+    let planned: Vec<&str> = out
+        .lines()
+        .filter_map(|line| line.strip_prefix("__VPLAN\t"))
+        .collect();
+    let reported: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with("__VTEST\t"))
+        .filter_map(|line| line.split('\t').nth(2))
+        .collect();
+
+    // Every test is named before any of them runs...
+    assert_eq!(planned, ["first", "spins forever", "third", "fourth"]);
+    // ...and only the one that finished got a verdict, so the three that did
+    // not are visible as planned-but-unreported rather than simply absent.
+    assert_eq!(reported, ["first"]);
+    assert!(
+        out.contains("__VTEST\tPASS\tfirst\t"),
+        "the first test should have passed: {out}"
     );
 }

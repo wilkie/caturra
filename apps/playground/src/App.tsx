@@ -2555,15 +2555,41 @@ interface ConsoleLine {
 
 type Phase = 'idle' | 'running' | 'debugging' | 'testing';
 
-/** Parse the runner's `__VTEST\t<PASS|FAIL>\t<name>\t<message>` lines. */
+/**
+ * Parse the runner's `__VTEST\t<PASS|FAIL>\t<name>\t<message>` lines.
+ *
+ * The runner announces its whole roster first, one `__VPLAN\t<name>` per test,
+ * before running any. That matters because a VM error is not a Java throwable:
+ * an unsupported intrinsic or an exhausted instruction budget kills the run
+ * outright, and the generated runner's `catch (Throwable)` cannot see it. So a
+ * planned test with no verdict did not run — and must be shown as a failure,
+ * not quietly left out. Dropping it is how a run that died after two of four
+ * tests came to tell a student "2 / 2 tests passed".
+ */
 function parseTestResults(output: string): TestResult[] {
   const results: TestResult[] = [];
+  const planned: string[] = [];
+  const reported = new Set<string>();
   for (const line of output.split('\n')) {
+    if (line.startsWith('__VPLAN\t')) {
+      planned.push(line.slice('__VPLAN\t'.length));
+      continue;
+    }
     if (!line.startsWith('__VTEST\t')) {
       continue;
     }
     const [, status, name, message] = line.split('\t');
+    reported.add(name ?? '');
     results.push({ passed: status === 'PASS', name: name ?? '', message: message ?? '' });
+  }
+  for (const name of planned) {
+    if (!reported.has(name)) {
+      results.push({
+        passed: false,
+        name,
+        message: 'the engine stopped before this test could run',
+      });
+    }
   }
   return results;
 }

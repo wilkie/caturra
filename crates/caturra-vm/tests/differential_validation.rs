@@ -90,13 +90,40 @@ public class RefRunner {
 }
 "#;
 
-/// The `__VTEST` lines out of a run's stdout — one per test, in the order the
-/// engine ran them. Both engines print the same format, so this is the whole
+/// The verdicts out of a run's stdout, one per test, in the order the engine ran
+/// them. Both engines print the same `__VTEST` format, so this is the whole
 /// comparison.
+///
+/// caturra also announces its roster up front (`__VPLAN`), because a VM error is
+/// not a Java throwable and so cannot be caught by the generated runner: an
+/// unsupported intrinsic or an exhausted budget kills the run where it stands.
+/// A planned test with no verdict therefore did not run, and is reported here as
+/// a failure. Silently dropping it is the one thing a grader must never do —
+/// that is how a run that died after two of four tests came to say "2/2 passed".
 fn verdicts(stdout: &str) -> String {
+    let mut planned: Vec<&str> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    let mut reported: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for line in stdout.lines() {
+        if let Some(name) = line.strip_prefix("__VPLAN\t") {
+            planned.push(name);
+        } else if line.starts_with("__VTEST\t") {
+            if let Some(name) = line.split('\t').nth(2) {
+                reported.insert(name);
+            }
+            lines.push(line.to_owned());
+        }
+    }
+    for name in planned {
+        if !reported.contains(name) {
+            lines.push(format!(
+                "__VTEST\tFAIL\t{name}\tthe engine stopped before this test ran"
+            ));
+        }
+    }
     let mut out = String::new();
-    for line in stdout.lines().filter(|l| l.starts_with("__VTEST\t")) {
-        out.push_str(line);
+    for line in lines {
+        out.push_str(&line);
         out.push('\n');
     }
     out
