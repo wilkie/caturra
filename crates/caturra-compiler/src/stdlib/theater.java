@@ -140,9 +140,20 @@ class Image {
   // decode loop in the interpreter would take a minute. See specs/EXECUTION.md.
   int width, height;
   int[] px;
+  // The image's Pixel objects, built on first use. The real Image holds a
+  // Pixel[][] and hands the SAME object back from every getPixel(x, y) — so
+  // `img.getPixel(0, 0) == img.getPixel(0, 0)` is true, and an out-of-range
+  // coordinate is an ArrayIndexOutOfBoundsException off this array rather
+  // than a Pixel aliasing some other row. Built lazily, as the real one is
+  // for a loaded image: a 400x400 image is 160k Pixels, and a program that
+  // never asks for one should not pay for them.
+  Pixel[][] __pixels;
   public Image(int width, int height) {
     this.width = width; this.height = height;
     px = new int[width * height];
+    // The real Image(int, int) fills with DEFAULT_BACKGROUND_COLOR, which is
+    // Color.WHITE. Java's own zero-fill would leave it black.
+    __fill(0x00FFFFFF);
   }
   public Image(String filename) {
     int[] dims = System.__imageDims("__caturra_image_" + filename);
@@ -150,9 +161,12 @@ class Image {
       width = dims[0]; height = dims[1];
       px = System.__imagePixels("__caturra_image_" + filename);
     } else {
-      // No asset for this name: a blank image, as before.
+      // No asset for this name: a blank image, as before. (The real library
+      // throws FILE_NOT_FOUND; a level whose asset the host did not preload
+      // is our problem, not the student's, so it still gets a canvas.)
       width = 100; height = 100;
       px = new int[width * height];
+      __fill(0x00FFFFFF);
     }
   }
   public Image(Image src) {
@@ -160,11 +174,23 @@ class Image {
     px = new int[width * height];
     System.arraycopy(src.px, 0, px, 0, px.length);
   }
+  void __fill(int packed) {
+    for (int i = 0; i < px.length; i++) { px[i] = packed; }
+  }
   public int getWidth() { return width; }
   public int getHeight() { return height; }
-  public Pixel getPixel(int x, int y) { return new Pixel(this, x, y); }
+  public Pixel getPixel(int x, int y) {
+    if (__pixels == null) { __makePixels(); }
+    return __pixels[x][y];
+  }
+  void __makePixels() {
+    __pixels = new Pixel[width][height];
+    for (int i = 0; i < width; i++) {
+      for (int j = 0; j < height; j++) { __pixels[i][j] = new Pixel(this, i, j); }
+    }
+  }
   public void setPixel(int x, int y, Color c) { __set(x, y, c); }
-  public void clear(Color c) { int p = (c.red << 16) | (c.green << 8) | c.blue; for (int i = 0; i < px.length; i++) px[i] = p; }
+  public void clear(Color c) { __fill((c.red << 16) | (c.green << 8) | c.blue); }
   Color __get(int x, int y) { int p = px[y * width + x]; return new Color((p >> 16) & 255, (p >> 8) & 255, p & 255); }
   void __set(int x, int y, Color c) { __setRgb(x, y, c.red, c.green, c.blue); }
   // Packed-pixel accessors, so Pixel can touch one channel without a Color.
