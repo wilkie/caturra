@@ -66,6 +66,16 @@ pub(crate) struct Interpreter<'run> {
     /// `(class, pool index)` -> arena index, for the cold path and for methods
     /// that could not be pre-decoded.
     virtual_site_ids: HashMap<(usize, u16), u32>,
+    /// Inline caches for `invokespecial` sites (constructors and `super.m()`),
+    /// arena'd exactly like the virtual ones. A special call is statically
+    /// bound, so a warm site needs no receiver guard at all — just its
+    /// resolved target. See [`SpecialSite`].
+    special_sites: Vec<SpecialSite<'run>>,
+    special_site_ids: HashMap<(usize, u16), u32>,
+    /// Resolved `new` sites: the class's instance template, so `new` neither
+    /// allocates a `String` for the class name nor hashes it.
+    new_sites: Vec<InstanceTemplate>,
+    new_site_ids: HashMap<(usize, u16), u32>,
     static_widths: HashMap<(usize, u16), Rc<[u16]>>,
     /// What an invokestatic site resolves to. Resolution otherwise hashed the
     /// class name and then walked the superclass chain scanning every method and
@@ -172,6 +182,10 @@ impl<'run> Interpreter<'run> {
             widths_cache: HashMap::new(),
             virtual_sites: Vec::new(),
             virtual_site_ids: HashMap::new(),
+            special_sites: Vec::new(),
+            special_site_ids: HashMap::new(),
+            new_sites: Vec::new(),
+            new_site_ids: HashMap::new(),
             static_widths: HashMap::new(),
             static_targets: HashMap::new(),
             static_inited: std::collections::HashSet::new(),
@@ -861,6 +875,70 @@ impl<'run> Interpreter<'run> {
                                 self.frames.push(std::mem::replace(&mut frame, callee));
                                 continue 'frames;
                             }
+                        }
+                    }
+                    // A constructor or `super.method(...)` into user code. The
+                    // implicit `super()` of a base class — `Object.<init>` — is
+                    // the commonest instruction of its kind in any program and
+                    // does nothing at all, so it is answered here with a pop.
+                    Some(Inst::InvokeSpecial { index, next, site }) => {
+                        if site.get() == UNRESOLVED
+                            && let Ok(id) = self.special_site_id(class, *index, &malformed)
+                            && let Ok(id) = u32::try_from(id)
+                        {
+                            site.set(id);
+                        }
+                        self.track_line(&code, addr, &mut frame);
+                        if site.get() != UNRESOLVED {
+                            let id = site.get() as usize;
+                            if matches!(self.special_sites[id].target, SpecialTarget::ObjectInit)
+                                && matches!(frame.stack.last(), Some(JValue::Ref(Some(_))))
+                            {
+                                frame.stack.pop();
+                                pc = *next as usize;
+                                continue;
+                            }
+                            match self.frameless_special_call(id, &mut frame) {
+                                Frameless::Done => {
+                                    pc = *next as usize;
+                                    continue;
+                                }
+                                Frameless::Suspended(callee) => {
+                                    frame.pc = *next as usize;
+                                    self.frames.push(std::mem::replace(&mut frame, callee));
+                                    continue 'frames;
+                                }
+                                Frameless::Declined => {}
+                            }
+                            if let Some(callee) = self.fast_special_call(id, &mut frame) {
+                                frame.pc = *next as usize;
+                                self.frames.push(std::mem::replace(&mut frame, callee));
+                                continue 'frames;
+                            }
+                        }
+                    }
+                    // `new` of a user class already initialized: its instance
+                    // template is memoized in the site, so this neither hashes
+                    // the class name nor allocates a String for it. A cold site
+                    // (or an intrinsic, or a pending <clinit>) falls through.
+                    Some(Inst::New { index, next, site }) => {
+                        if site.get() == UNRESOLVED
+                            && let Some(id) = self.new_site_id(class, *index)
+                            && let Ok(id) = u32::try_from(id)
+                        {
+                            site.set(id);
+                        }
+                        if site.get() != UNRESOLVED {
+                            let (name, layout, defaults) = &self.new_sites[site.get() as usize];
+                            let object = crate::value::HeapObject::Instance {
+                                class_name: Rc::clone(name),
+                                layout: Rc::clone(layout),
+                                fields: defaults.clone(),
+                            };
+                            let reference = self.heap.alloc(object);
+                            frame.stack.push(JValue::Ref(Some(reference)));
+                            pc = *next as usize;
+                            continue;
                         }
                     }
                     // Array access, in bounds. An out-of-range index, a null
@@ -6448,6 +6526,160 @@ impl<'run> Interpreter<'run> {
         Ok(id as usize)
     }
 
+    /// Resolve an `invokespecial` site once. A special call is statically
+    /// bound, so unlike a virtual site this needs no receiver class and can
+    /// never go polymorphic: what it resolves to now is what it is forever.
+    fn special_site_id(
+        &mut self,
+        class: &'run ClassFile,
+        index: u16,
+        malformed: &impl Fn(String) -> VmError,
+    ) -> Result<usize, VmError> {
+        let site = (std::ptr::from_ref(class) as usize, index);
+        if let Some(&id) = self.special_site_ids.get(&site) {
+            return Ok(id as usize);
+        }
+        let (target_class, method_name, descriptor) = class
+            .constant_pool
+            .get_member_ref(index)
+            .ok_or_else(|| malformed(format!("bad method ref at pool {index}")))?;
+        let argc = descriptor_arg_count(descriptor)
+            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+        let widths = self
+            .arg_widths(descriptor)
+            .ok_or_else(|| malformed(format!("bad descriptor {descriptor}")))?;
+
+        let target = if target_class == "java/lang/Object"
+            && method_name == "<init>"
+            && descriptor == "()V"
+        {
+            SpecialTarget::ObjectInit
+        } else if let Some(found) = self.resolve_special(target_class, method_name, descriptor) {
+            let (class, method) = found;
+            let code = self.method_code(class, method)?;
+            let method_name = class
+                .constant_pool
+                .get_utf8(method.name_index)
+                .unwrap_or("<unknown>");
+            SpecialTarget::User {
+                class,
+                method_name,
+                code,
+            }
+        } else {
+            SpecialTarget::Intrinsic
+        };
+
+        let id = self.special_sites.len();
+        self.special_sites.push(SpecialSite {
+            argc,
+            widths,
+            target,
+        });
+        let id = u32::try_from(id).map_err(|_| malformed(String::from("too many call sites")))?;
+        self.special_site_ids.insert(site, id);
+        Ok(id as usize)
+    }
+
+    /// The user method an `invokespecial` names, walking up from the named
+    /// class as the byte path does (a constructor is declared, but a
+    /// `super.method(...)` may be inherited). `None` for anything that is not a
+    /// user class — an intrinsic, which stays on the byte path.
+    fn resolve_special(
+        &self,
+        target_class: &str,
+        method_name: &str,
+        descriptor: &str,
+    ) -> Option<(&'run ClassFile, &'run MethodInfo)> {
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        let mut current = classes.get(target_class)?;
+        for _ in 0..=classes.len() {
+            if let Some(method) = current.methods.iter().find(|m| {
+                !m.access_flags
+                    .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
+                    && current.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                    && current.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+            }) {
+                return Some((current, method));
+            }
+            current = current
+                .constant_pool
+                .get_class_name(current.super_class)
+                .and_then(|super_name| classes.get(super_name))?;
+        }
+        None
+    }
+
+    /// Resolve a `new` site to its class's instance template, but only once the
+    /// class is initialized: a `new` that still has to run a `<clinit>` chain
+    /// re-executes itself afterwards (JVMS §5.5), and that is the byte path's
+    /// business. `None` leaves the site cold, so it simply tries again.
+    fn new_site_id(&mut self, class: &'run ClassFile, index: u16) -> Option<usize> {
+        let site = (std::ptr::from_ref(class) as usize, index);
+        if let Some(&id) = self.new_site_ids.get(&site) {
+            return Some(id as usize);
+        }
+        let target = class.constant_pool.get_class_name(index)?;
+        if !self.classes.contains_key(target) {
+            return None; // an intrinsic to instantiate; the byte path knows how
+        }
+        if !self.init_started.contains(target) {
+            return None; // <clinit> has not run yet
+        }
+        let template = if let Some(template) = self.field_templates.get(target) {
+            template.clone()
+        } else {
+            let built = self.build_layout(target);
+            self.field_templates
+                .insert(target.to_owned(), built.clone());
+            built
+        };
+        let id = self.new_sites.len();
+        self.new_sites.push(template);
+        let id = u32::try_from(id).ok()?;
+        self.new_site_ids.insert(site, id);
+        Some(id as usize)
+    }
+
+    /// A warm `invokespecial` into user code: the arguments are already on the
+    /// operand stack in order, so the callee's locals are filled straight from
+    /// it. `java/lang/Object.<init>` is not a call at all — it is a pop.
+    ///
+    /// Declines on a cold site, a null receiver, an intrinsic target, or a call
+    /// that would overflow the stack; all of those fall through to the byte
+    /// path, which behaves exactly as it always did.
+    fn fast_special_call(&mut self, id: usize, frame: &mut Frame<'run>) -> Option<Frame<'run>> {
+        let entry = self.special_sites.get(id)?;
+        let base = frame.stack.len().checked_sub(entry.argc + 1)?;
+        let JValue::Ref(Some(_)) = frame.stack[base] else {
+            return None; // a null receiver: let the byte path raise the NPE
+        };
+        let SpecialTarget::User {
+            class,
+            method_name,
+            ref code,
+        } = entry.target
+        else {
+            return None;
+        };
+        if self.call_depth() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
+            return None; // let the general path raise the StackOverflowError
+        }
+        let (target, method_name, code) = (class, method_name, Rc::clone(code));
+        let mut locals = self.take_vec(usize::from(code.attr.max_locals));
+        locals.push(frame.stack[base]);
+        let widths = &self.special_sites[id].widths;
+        for (value, width) in frame.stack[base + 1..].iter().zip(widths.iter()) {
+            locals.push(*value);
+            if *width == 2 {
+                locals.push(JValue::Int(0));
+            }
+        }
+        let callee = self.frame_for(target, method_name, code, locals).ok()?;
+        frame.stack.truncate(base);
+        Some(callee)
+    }
+
     /// A warm `invokevirtual` whose receiver is the same user class as last
     /// time: the arguments are already sitting in order on the operand stack,
     /// so the callee's locals are filled straight from it — no argument buffer,
@@ -6582,7 +6814,79 @@ impl<'run> Interpreter<'run> {
             next_slot += usize::from(*width);
         }
         frame.stack.truncate(base);
+        self.frameless_run(target, method_name, code, locals, frame)
+    }
 
+    /// The same, for a warm `invokespecial` — a constructor, most of all. A
+    /// `new Color(r, g, b)` per pixel is what the filter lessons do, and the
+    /// constructor is exactly the shape this path exists for: a few putfields
+    /// and the `Object.<init>` that is not really a call.
+    fn frameless_special_call(&mut self, id: usize, frame: &mut Frame<'run>) -> Frameless<'run> {
+        if self.debug.is_some() {
+            return Frameless::Declined;
+        }
+        let Some(entry) = self.special_sites.get(id) else {
+            return Frameless::Declined;
+        };
+        let SpecialTarget::User {
+            class,
+            method_name,
+            ref code,
+        } = entry.target
+        else {
+            return Frameless::Declined;
+        };
+        if !code.frameless {
+            return Frameless::Declined;
+        }
+        let Some(base) = frame.stack.len().checked_sub(entry.argc + 1) else {
+            return Frameless::Declined;
+        };
+        let JValue::Ref(Some(_)) = frame.stack[base] else {
+            return Frameless::Declined; // a null receiver: the byte path raises
+        };
+        if self.call_depth() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
+            return Frameless::Declined;
+        }
+        if 1 + entry
+            .widths
+            .iter()
+            .map(|width| usize::from(*width))
+            .sum::<usize>()
+            > usize::from(code.attr.max_locals)
+        {
+            return Frameless::Declined;
+        }
+        let (target, method_name, code) = (class, method_name, Rc::clone(code));
+
+        let mut locals = [JValue::Int(0); FRAMELESS_SLOTS];
+        locals[0] = frame.stack[base];
+        let mut next_slot = 1;
+        let widths = &self.special_sites[id].widths;
+        for (value, width) in frame.stack[base + 1..].iter().zip(widths.iter()) {
+            locals[next_slot] = *value;
+            next_slot += usize::from(*width);
+        }
+        frame.stack.truncate(base);
+        self.frameless_run(target, method_name, code, locals, frame)
+    }
+
+    /// The mini-interpreter itself: the callee's pre-decoded instructions,
+    /// against two stack-local buffers. Shared by both frameless call paths —
+    /// once the locals are filled and the caller's stack consumed, a virtual
+    /// call and a special call are the same thing.
+    ///
+    /// Like `run_loop`, one long match by design: each arm mirrors its fast-arm
+    /// twin there, and splitting them apart would only hide the pairing.
+    #[allow(clippy::too_many_lines)]
+    fn frameless_run(
+        &mut self,
+        target: &'run ClassFile,
+        method_name: &'run str,
+        code: Rc<MethodCode>,
+        mut locals: [JValue; FRAMELESS_SLOTS],
+        frame: &mut Frame<'run>,
+    ) -> Frameless<'run> {
         let mut stack = [JValue::Int(0); FRAMELESS_SLOTS];
         let mut sp = 0usize;
         let mut pc = 0usize;
@@ -6798,6 +7102,59 @@ impl<'run> Interpreter<'run> {
                     {
                         stack[sp] = constant;
                         sp += 1;
+                        pc = *next as usize;
+                        continue 'mini;
+                    }
+                }
+                // Eligibility only admits `new` of a user class, so the site
+                // resolves as soon as that class is initialized. Until then
+                // (and it can only be the first time round) suspend, and the
+                // general path — which knows how to run a <clinit> chain —
+                // re-executes this instruction.
+                Some(Inst::New { index, next, site }) => {
+                    if site.get() == UNRESOLVED
+                        && let Some(id) = self.new_site_id(target, *index)
+                        && let Ok(id) = u32::try_from(id)
+                    {
+                        site.set(id);
+                    }
+                    if site.get() != UNRESOLVED && sp < FRAMELESS_SLOTS {
+                        let (name, layout, defaults) = &self.new_sites[site.get() as usize];
+                        let object = crate::value::HeapObject::Instance {
+                            class_name: Rc::clone(name),
+                            layout: Rc::clone(layout),
+                            fields: defaults.clone(),
+                        };
+                        stack[sp] = JValue::Ref(Some(self.heap.alloc(object)));
+                        sp += 1;
+                        pc = *next as usize;
+                        continue 'mini;
+                    }
+                }
+                // Eligibility only admits the `Object.<init>` flavour, which
+                // does nothing — so this is a pop, not a call, and a
+                // constructor stays frameless all the way through.
+                Some(Inst::InvokeSpecial { index, next, site }) => {
+                    if site.get() == UNRESOLVED {
+                        let malformed = |reason: String| VmError::MalformedClass {
+                            name: target.class_name().unwrap_or("<unknown>").to_owned(),
+                            reason,
+                        };
+                        if let Ok(id) = self.special_site_id(target, *index, &malformed)
+                            && let Ok(id) = u32::try_from(id)
+                        {
+                            site.set(id);
+                        }
+                    }
+                    if site.get() != UNRESOLVED
+                        && matches!(
+                            self.special_sites[site.get() as usize].target,
+                            SpecialTarget::ObjectInit
+                        )
+                        && sp > 0
+                        && matches!(stack[sp - 1], JValue::Ref(Some(_)))
+                    {
+                        sp -= 1;
                         pc = *next as usize;
                         continue 'mini;
                     }
@@ -8756,6 +9113,33 @@ enum MiniExit {
     Suspend { at: usize, refund: bool },
 }
 
+/// A resolved `invokespecial` site. Unlike a virtual call there is nothing to
+/// guard on: the target is fixed by the constant pool, so once resolved it is
+/// right for every execution of the site.
+struct SpecialSite<'run> {
+    argc: usize,
+    widths: Rc<[u16]>,
+    target: SpecialTarget<'run>,
+}
+
+enum SpecialTarget<'run> {
+    /// `java/lang/Object.<init>()V` — the implicit `super()` every constructor
+    /// of a base class emits. It does nothing, and there is nothing for it to
+    /// do: the receiver's fields are already defaulted by `new`. So it is not a
+    /// call at all, just a pop. Every `new` in a program runs one.
+    ObjectInit,
+    /// A user constructor, or a `super.method(...)`. Carries what the callee's
+    /// frame needs, so a warm site hashes nothing.
+    User {
+        class: &'run ClassFile,
+        method_name: &'run str,
+        code: Rc<MethodCode>,
+    },
+    /// An intrinsic (a library constructor, a `super` into one): left to the
+    /// byte path, which is where all of that lives.
+    Intrinsic,
+}
+
 /// A class's interned name plus its defaulted field map, cloned on each `new`.
 /// A class's identity, its field layout, and one defaulted object's worth of
 /// field values — everything `new` needs, prepared once per class.
@@ -8857,6 +9241,21 @@ enum Inst {
         next: u32,
         site: Cell<u32>,
     },
+    /// `invokespecial` — a constructor, a `super.method(...)`, a private call.
+    /// Statically bound, so its site never needs a guard.
+    InvokeSpecial {
+        index: u16,
+        next: u32,
+        site: Cell<u32>,
+    },
+    /// `new` of a user class whose `<clinit>` has already run: `site` memoizes
+    /// the class's instance template, so allocating neither hashes the class
+    /// name nor allocates a `String` for it.
+    New {
+        index: u16,
+        next: u32,
+        site: Cell<u32>,
+    },
     /// `iaload` — the in-bounds case; anything else falls through so the byte
     /// path raises the same exception it always did. The image lessons walk
     /// pixels out of `int[]`s, so this is one of the hottest opcodes they run.
@@ -8898,8 +9297,16 @@ const FRAMELESS_SLOTS: usize = 8;
 /// inside it, so it must be bounded — by the method's own length), the only
 /// byte-path instructions are returns, and the frame fits the fixed buffers.
 /// The tiny accessors that dominate call-heavy programs all pass; anything
-/// that calls, allocates, loops or throws keeps its frame.
-fn frameless_eligible(attr: &CodeAttribute, insts: &[Inst]) -> bool {
+/// that loops, throws, or makes a real call keeps its frame.
+///
+/// Two instructions are admitted that *look* like calls and are not:
+/// `Object.<init>` (the implicit `super()` of a base class, which does
+/// nothing) and `new` of a user class (whose template the site memoizes). That
+/// pair is what lets a constructor — `new Color(r, g, b)`, once per pixel in
+/// the filter lessons — run without a frame. Both are checked against the
+/// constant pool here rather than at run time, so an eligible method never
+/// starts a frameless run only to discover it must suspend.
+fn frameless_eligible(class: &ClassFile, attr: &CodeAttribute, insts: &[Inst]) -> bool {
     if insts.is_empty()
         || usize::from(attr.max_locals) > FRAMELESS_SLOTS
         || usize::from(attr.max_stack) > FRAMELESS_SLOTS
@@ -8930,6 +9337,19 @@ fn frameless_eligible(attr: &CodeAttribute, insts: &[Inst]) -> bool {
                 attr.code[pc],
                 op::IRETURN | op::LRETURN | op::FRETURN | op::DRETURN | op::ARETURN | op::RETURN
             ),
+            // The implicit `super()` of a base class, and nothing else that
+            // wears the `invokespecial` opcode.
+            Inst::InvokeSpecial { index, .. } => {
+                class.constant_pool.get_member_ref(*index)
+                    == Some(("java/lang/Object", "<init>", "()V"))
+            }
+            // A user class, whose name is unqualified in caturra's single flat
+            // namespace — never a library class, whose `new` is an intrinsic
+            // the mini-interpreter has no way to run.
+            Inst::New { index, .. } => class
+                .constant_pool
+                .get_class_name(*index)
+                .is_some_and(|name| !name.contains('/')),
             Inst::InvokeVirtual { .. } => false,
         };
         if !safe {
@@ -9182,6 +9602,16 @@ fn decode_insts(bytes: &[u8]) -> Vec<Inst> {
                 next,
                 site: Cell::new(UNRESOLVED),
             },
+            op_::INVOKESPECIAL => Inst::InvokeSpecial {
+                index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
+                next,
+                site: Cell::new(UNRESOLVED),
+            },
+            op_::NEW => Inst::New {
+                index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
+                next,
+                site: Cell::new(UNRESOLVED),
+            },
             op_::DUP => Inst::Dup { next },
             op_::POP => Inst::Pop { next },
             op_::GOTO => match branch() {
@@ -9398,7 +9828,7 @@ fn parse_method_code(class: &ClassFile, method: &MethodInfo) -> Result<MethodCod
 
     let insts = decode_insts(&attr.code);
     Ok(MethodCode {
-        frameless: frameless_eligible(&attr, &insts),
+        frameless: frameless_eligible(class, &attr, &insts),
         attr,
         insts,
         lines,

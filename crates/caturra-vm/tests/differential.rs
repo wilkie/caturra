@@ -8253,3 +8253,121 @@ public class DiffFramelessFlip {
 }
 "
 );
+
+// The VM runs a warm `invokespecial` from a site cache and a `new` from a
+// memoized instance template, and a constructor whose body is putfields plus
+// the implicit `Object.<init>` runs with no frame at all. That is a lot of
+// machinery under Java's most ordinary syntax, so pin the whole of it against
+// the JDK: constructor chains (`this(...)`, `super(...)`), a `super.method()`
+// call, a private method (also an invokespecial), class initialization order,
+// and a constructor that throws part-way through — which the frameless path
+// must suspend out of, leaving the object exactly as far along as the JDK does.
+differential_test!(
+    diff_constructors_and_special_calls,
+    "DiffCtors",
+    r#"
+class Log {
+    static StringBuilder text = new StringBuilder();
+}
+
+class Base {
+    int a;
+    int b;
+
+    Base() {
+        this(7);
+        Log.text.append("Base() ");
+    }
+
+    Base(int a) {
+        this.a = a < 0 ? 0 : (a > 255 ? 255 : a);
+        this.b = a * 2;
+        Log.text.append("Base(int) ");
+    }
+
+    String describe() {
+        return "Base(" + a + "," + b + ")";
+    }
+}
+
+class Derived extends Base {
+    int c;
+
+    Derived(int a, int c) {
+        super(a);
+        this.c = c;
+        Log.text.append("Derived ");
+    }
+
+    // A private call is an invokespecial too.
+    private int secret() {
+        return this.c * 3;
+    }
+
+    public String describe() {
+        return "Derived[" + super.describe() + ",c=" + c + ",secret=" + secret() + "]";
+    }
+}
+
+class Counted {
+    static int counter;
+    static {
+        counter = 100;
+        Log.text.append("clinit ");
+    }
+    int id;
+
+    Counted() {
+        this.id = counter;
+        counter = counter + 1;
+    }
+}
+
+class Fragile {
+    int good;
+    int never;
+
+    Fragile(int divisor) {
+        this.good = 5;
+        // Throws for divisor 0, part-way through the constructor.
+        this.never = 10 / divisor;
+    }
+}
+
+public class DiffCtors {
+    public static void main(String[] args) {
+        // A plain constructor, run many times so its site goes warm.
+        int total = 0;
+        for (int i = 0; i < 200; i++) {
+            Base b = new Base(i);
+            total += b.a + b.b;
+        }
+        System.out.println(total);
+
+        System.out.println(new Base().describe());
+        System.out.println(new Base(300).describe());
+        System.out.println(new Base(-4).describe());
+        System.out.println(new Derived(9, 4).describe());
+
+        // Class initialization runs once, on first use, before any instance.
+        System.out.println(new Counted().id + " " + new Counted().id);
+        System.out.println(Counted.counter);
+
+        System.out.println(Log.text.toString().trim());
+
+        // A constructor that throws leaves nothing behind, and the program
+        // carries on.
+        for (int i = 0; i < 50; i++) {
+            new Fragile(2);
+        }
+        try {
+            new Fragile(0);
+            System.out.println("no throw");
+        } catch (ArithmeticException e) {
+            System.out.println("ctor threw: " + e.getMessage());
+        }
+        System.out.println(new Fragile(5).good + " " + new Fragile(5).never);
+    }
+}
+"#
+);

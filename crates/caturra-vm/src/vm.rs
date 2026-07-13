@@ -49,6 +49,11 @@ pub enum VmError {
 pub struct VmOptions {
     /// Upper bound on interpreted instructions per `run` call, so a
     /// student's `while (true) {}` can't hang the browser tab.
+    ///
+    /// A backstop, not the primary guard: the playground's Stop button
+    /// terminates the worker outright, so a runaway program is already
+    /// answerable. The number therefore has to be big enough for the heaviest
+    /// thing a student can legitimately write — see [`VmOptions::default`].
     pub max_instructions: u64,
     /// Maximum method-call depth; exceeding it raises Java's
     /// `StackOverflowError`. Frames live on an explicit heap-allocated
@@ -64,7 +69,16 @@ pub struct VmOptions {
 impl Default for VmOptions {
     fn default() -> Self {
         Self {
-            max_instructions: 500_000_000,
+            // Set from the corpus, not from a guess. Sweeping every CSA level
+            // against the real Code.org library turned up one that legitimately
+            // needs 2.1 BILLION instructions: `CSA U5L10-L4d`, whose
+            // `makeShift(100)` walks 400 rows x 100 shifts x 400 pixels, each
+            // one a `getColor`/`setColor` round trip. Real Java runs the same
+            // bytecode count — an instruction budget cannot be met by making
+            // the interpreter faster, only by not counting so low. At 500M that
+            // level failed here and worked on Code.org; 4B clears it with
+            // headroom to spare.
+            max_instructions: 4_000_000_000,
             max_call_depth: 4096,
             random_seed: None,
         }

@@ -12314,3 +12314,49 @@ fn fault_inside_a_warm_accessor_keeps_its_frame_in_the_trace() {
     // The successful warm calls came through first.
     assert_eq!(console.stdout_text(), "800\n");
 }
+
+#[test]
+fn fault_inside_a_warm_constructor_keeps_its_frame_in_the_trace() {
+    // A constructor whose body is putfields plus the implicit `Object.<init>`
+    // runs with no frame at all. A fault inside one must still produce the
+    // constructor's own frame and line: the mini-interpreter suspends its exact
+    // state into a real frame and lets the general path raise. Warm the site
+    // first so the faulting `new` is the frameless one.
+    let (result, console) = compile_and_run(
+        r"
+        class Box {
+            int value;
+
+            Box(int divisor) {
+                this.value = 100 / divisor;
+            }
+        }
+
+        public class WarmCtor {
+            public static void main(String[] args) {
+                int sum = 0;
+                for (int i = 1; i <= 100; i++) {
+                    sum += new Box(i).value;
+                }
+                System.out.println(sum);
+                System.out.println(new Box(0).value);
+            }
+        }
+        ",
+        "WarmCtor",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    let stderr = console.stderr_text();
+    assert!(
+        stderr.contains("java.lang.ArithmeticException: / by zero"),
+        "{stderr}"
+    );
+    // The constructor's own frame, at the line that divides, below main's.
+    let ctor_at = stderr.find("\tat Box.<init>(WarmCtor.java:6)").unwrap();
+    let main_at = stderr.find("\tat WarmCtor.main(WarmCtor.java:17)").unwrap();
+    assert!(ctor_at < main_at, "{stderr}");
+    assert_eq!(console.stdout_text(), "482\n");
+}

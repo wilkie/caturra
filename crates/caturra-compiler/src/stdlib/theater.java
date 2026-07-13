@@ -15,7 +15,16 @@ class Color {
   // clamps each channel to 0..255 ("Values below 0 will be set to 0, and
   // values above 255 will be set to 255"). The filter lessons rely on it:
   // U5L8's sharpen() caps at 255 but happily hands setRed() a negative.
-  public Color(int red, int green, int blue) { this.red = __clamp(red); this.green = __clamp(green); this.blue = __clamp(blue); }
+  //
+  // Spelled out rather than calling __clamp, exactly as Pixel's setters are:
+  // a `Color` is built once per pixel by the filter lessons — 16M times in
+  // U5L10-L4d — and three static calls per construction is 48M calls of pure
+  // overhead. Keep this body call-free.
+  public Color(int red, int green, int blue) {
+    this.red = red < 0 ? 0 : (red > 255 ? 255 : red);
+    this.green = green < 0 ? 0 : (green > 255 ? 255 : green);
+    this.blue = blue < 0 ? 0 : (blue > 255 ? 255 : blue);
+  }
   public Color(Color c) { this.red = c.red; this.green = c.green; this.blue = c.blue; }
   public Color(String name) {
     int[] rgb = __resolve(name);
@@ -112,8 +121,11 @@ class Pixel {
   }
   public int getX() { return x; }
   public int getY() { return y; }
-  public Color getColor() { return image.__get(x, y); }
-  public void setColor(Color c) { image.__set(x, y, c); }
+  // Straight through the packed pixel, with no hop into Image. `setColor` is
+  // then call-free, which is what the VM's frameless fast path requires — and
+  // the shift lesson (U5L10-L4d) runs 16M of these, one per pixel per shift.
+  public Color getColor() { return new Color((__px[__i] >> 16) & 255, (__px[__i] >> 8) & 255, __px[__i] & 255); }
+  public void setColor(Color c) { __px[__i] = (c.red << 16) | (c.green << 8) | c.blue; }
   // Read/write a single channel straight through the image's packed pixel, with
   // no Color object in between. The filter lessons walk every pixel of a 400x400
   // image (160k) and touch all three channels, so going via getColor()/new
