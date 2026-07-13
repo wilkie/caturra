@@ -9507,6 +9507,22 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        // The reflective lookups take `Class<?>...`, and everybody writes them
+        // that way: `getDeclaredConstructor()`, `getDeclaredConstructor(String.class,
+        // int.class)`, `getMethod("addHours", int.class)`. Our tables describe
+        // them by the array the varargs collapse to, so a call written in the
+        // ordinary style matched no overload at all. Pack the trailing `Class`
+        // arguments into the `Class[]` the descriptor asks for, exactly as javac
+        // does — an explicit array is still passed straight through.
+        if receiver_ty == JType::Class
+            && matches!(
+                method,
+                "getConstructor" | "getDeclaredConstructor" | "getMethod" | "getDeclaredMethod"
+            )
+            && let Some(result) = self.reflective_varargs_call(method, args, span)
+        {
+            return result;
+        }
         if receiver_ty == JType::Writer && matches!(method, "printf" | "format") {
             let (tags, width) = self.emit_format_varargs(args, span)?;
             // `printf` returns void; `format` returns the writer (for chaining).
@@ -9527,6 +9543,11 @@ impl BodyGen<'_> {
         // varargs into an Object[] (autoboxing primitives).
         if receiver_ty == JType::Method && method == "invoke" {
             return self.emit_method_invoke(args, span);
+        }
+        // Constructor.newInstance(Object... initargs): the same, without a
+        // receiver object to pass.
+        if receiver_ty == JType::Constructor && method == "newInstance" {
+            return Some(Some(self.emit_new_instance(args, span)));
         }
         // `collection.stream()` → a Stream of the receiver's element type. Works
         // on any collection (list, set, tree, queue, or a map view); the VM
@@ -9645,6 +9666,114 @@ impl BodyGen<'_> {
     /// `format`/`printf` call, returning the argument portion of the
     /// synthesized descriptor (which carries each argument's type tag
     /// to the VM) and the pushed stack width.
+    /// `Class.getConstructor` / `getDeclaredConstructor` / `getMethod` /
+    /// `getDeclaredMethod`, called the way Java is written: with the parameter
+    /// types loose, not already in an array. The receiver is on the stack.
+    ///
+    /// `Some(..)` when this took the call. `None` leaves it to the fixed-arity
+    /// tables — which is what an explicit `Class[]` argument wants, and what a
+    /// bare `getMethod(name)` wants (an overload of its own).
+    #[allow(clippy::option_option)]
+    fn reflective_varargs_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<Option<JType>>> {
+        let named = matches!(method, "getMethod" | "getDeclaredMethod");
+        // The method lookups take the name first; the constructor lookups take
+        // nothing but parameter types.
+        let (name_arg, types) = if named {
+            let (first, rest) = args.split_first()?;
+            (Some(first), rest)
+        } else {
+            (None, args)
+        };
+        // An explicit array is already the shape the descriptor wants, and a
+        // name on its own has a fixed overload. Neither is ours.
+        if types.len() == 1
+            && matches!(
+                self.type_of(&types[0]),
+                JType::Array {
+                    elem: ElemType::Class,
+                    dims: 1
+                }
+            )
+        {
+            return None;
+        }
+        if named && types.is_empty() {
+            return None;
+        }
+
+        if let Some(name_arg) = name_arg {
+            let ty = self.expr(name_arg);
+            if ty != JType::Str && ty != JType::Error {
+                self.error(name_arg.span(), "a method name must be a String");
+                return Some(None);
+            }
+        }
+
+        // The `Class[]` the descriptor asks for, built from the loose arguments.
+        let array_ty = JType::Array {
+            elem: ElemType::Class,
+            dims: 1,
+        };
+        self.emit_array_literal(types, array_ty, span);
+
+        let (descriptor, ret) = if named {
+            (
+                "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+                JType::Method,
+            )
+        } else {
+            (
+                "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+                JType::Constructor,
+            )
+        };
+        let method_ref = intern_method_ref(self.pool, "java/lang/Class", method, descriptor);
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+        // The receiver, the name (when there is one) and the array come off;
+        // the Method or Constructor goes on.
+        self.code.drop_stack(2 + u16::from(named));
+        Some(Some(Some(ret)))
+    }
+
+    /// `Constructor.newInstance(Object... initargs)`, called the way Java is
+    /// written. `Method.invoke` already had this treatment; its constructor
+    /// twin did not, so `ctor.newInstance(7)` matched nothing.
+    fn emit_new_instance(&mut self, args: &[Expr], span: SourceSpan) -> JType {
+        let object_ty = JType::Object(self.table.object_id);
+        // An explicit `Object[]` is already the shape the descriptor wants.
+        let already_packed = args.len() == 1
+            && matches!(
+                self.type_of(&args[0]),
+                JType::Array {
+                    elem: ElemType::Object(_),
+                    dims: 1
+                }
+            );
+        if already_packed {
+            self.expr(&args[0]);
+        } else {
+            let array_ty = JType::Array {
+                elem: ElemType::Object(self.table.object_id),
+                dims: 1,
+            };
+            self.emit_array_literal(args, array_ty, span);
+        }
+        let method_ref = intern_method_ref(
+            self.pool,
+            "java/lang/reflect/Constructor",
+            "newInstance",
+            "([Ljava/lang/Object;)Ljava/lang/Object;",
+        );
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+        self.code.drop_stack(2); // Constructor receiver + array
+        object_ty
+    }
+
     fn emit_format_varargs(&mut self, args: &[Expr], span: SourceSpan) -> Option<(String, u16)> {
         let [template, rest @ ..] = args else {
             self.error(span, "format needs a format string");

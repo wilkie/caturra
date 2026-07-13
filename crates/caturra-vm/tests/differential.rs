@@ -8573,3 +8573,82 @@ public class DiffInvoke {
 }
 "#
 );
+
+// The reflective lookups are varargs — `Class<?>...` for the parameter types,
+// `Object...` for the constructor arguments — and that is how everyone writes
+// them. caturra described them only by the array the varargs collapse to, so
+// `getDeclaredConstructor()`, `getDeclaredConstructor(String.class, int.class)`
+// and `ctor.newInstance(7)` matched no overload at all and would not compile.
+// (`Method.invoke` already had the treatment; its constructor twin did not.)
+// An explicit array still passes straight through, as it does in Java.
+differential_test!(
+    diff_reflective_lookups_are_varargs,
+    "DiffReflectVarargs",
+    r#"
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+
+class Member {
+    private String name;
+    private int hours;
+
+    public Member() {
+        this("nobody", 0);
+    }
+
+    public Member(String name, int hours) {
+        this.name = name;
+        this.hours = hours;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public int getHours() {
+        return hours;
+    }
+
+    public void addHours(int extra) {
+        hours = hours + extra;
+    }
+}
+
+public class DiffReflectVarargs {
+    public static void main(String[] args) throws Exception {
+        // Loose parameter types, the way it is written.
+        Constructor two = Member.class.getDeclaredConstructor(String.class, int.class);
+        Constructor none = Member.class.getDeclaredConstructor();
+        // The explicit array still works.
+        Constructor same = Member.class.getDeclaredConstructor(new Class[] {String.class, int.class});
+        System.out.println((two != null) + " " + (none != null) + " " + (same != null));
+
+        Method add = Member.class.getDeclaredMethod("addHours", int.class);
+        Method get = Member.class.getDeclaredMethod("getHours");
+        System.out.println(add.getName() + " " + get.getName());
+
+        // Constructor.newInstance is varargs too.
+        Member made = (Member) two.newInstance("Ada", 7);
+        add.invoke(made, 3);
+        System.out.println(made.getName() + " " + made.getHours());
+
+        Member empty = (Member) none.newInstance();
+        System.out.println(empty.getName() + " " + empty.getHours());
+
+        // A lookup that finds nothing throws, and the throw is catchable.
+        try {
+            Member.class.getDeclaredConstructor(double.class);
+            System.out.println("no throw");
+        } catch (NoSuchMethodException e) {
+            System.out.println("no such constructor");
+        }
+        try {
+            Member.class.getDeclaredMethod("nope", int.class);
+            System.out.println("no throw");
+        } catch (NoSuchMethodException e) {
+            System.out.println("no such method");
+        }
+    }
+}
+"#
+);
