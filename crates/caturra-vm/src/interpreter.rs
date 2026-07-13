@@ -841,13 +841,26 @@ impl<'run> Interpreter<'run> {
                         // This frame is about to be suspended; a stack trace
                         // taken inside the callee names it at this line.
                         self.track_line(&code, addr, &mut frame);
-                        if site.get() != UNRESOLVED
-                            && let Some(callee) =
+                        if site.get() != UNRESOLVED {
+                            match self.frameless_virtual_call(site.get() as usize, &mut frame) {
+                                Frameless::Done => {
+                                    pc = *next as usize;
+                                    continue;
+                                }
+                                Frameless::Suspended(callee) => {
+                                    frame.pc = *next as usize;
+                                    self.frames.push(std::mem::replace(&mut frame, callee));
+                                    continue 'frames;
+                                }
+                                Frameless::Declined => {}
+                            }
+                            if let Some(callee) =
                                 self.fast_virtual_call(site.get() as usize, &mut frame)
-                        {
-                            frame.pc = *next as usize;
-                            self.frames.push(std::mem::replace(&mut frame, callee));
-                            continue 'frames;
+                            {
+                                frame.pc = *next as usize;
+                                self.frames.push(std::mem::replace(&mut frame, callee));
+                                continue 'frames;
+                            }
                         }
                     }
                     // Array access, in bounds. An out-of-range index, a null
@@ -6486,6 +6499,364 @@ impl<'run> Interpreter<'run> {
         Some(callee)
     }
 
+    /// Run a tiny callee without building it a frame at all.
+    ///
+    /// Measured on the U5L8 image lesson, half the entire run was call
+    /// machinery, and every hot callee was a `Pixel` accessor: a few
+    /// straight-line, call-free instructions. Ablation showed the per-frame
+    /// cost is diffuse (two pooled buffers, a 120-byte `Frame` moved twice)
+    /// with no lever left — so the lever is to stop paying it. A callee whose
+    /// every instruction is pre-decoded, branch-forward-only and return-
+    /// terminated ([`frameless_eligible`]) executes here against two small
+    /// stack-local buffers: no `Frame`, no pool traffic, no `'frames` round
+    /// trip.
+    ///
+    /// Semantics cannot drift, for the same reason the fast arms can't: any
+    /// instruction whose guard fails — a null field access, an out-of-bounds
+    /// index, a zero divisor, an exhausted instruction budget — *suspends*
+    /// instead of throwing: the callee's exact mid-method state moves into a
+    /// real frame, and the general path resumes it from that pc, raising
+    /// precisely what a framed run would have raised, with the same line and
+    /// the same trace. (Suspending, not re-dispatching the call, is what makes
+    /// a mid-method heap write safe: nothing re-executes.) Under the debugger
+    /// this declines entirely, so step-into still finds a frame to step into.
+    ///
+    /// Like `run_loop`, this is one long match by design: each arm mirrors its
+    /// fast-arm twin there, and splitting them apart would only hide the pairing.
+    #[allow(clippy::too_many_lines)]
+    fn frameless_virtual_call(&mut self, id: usize, frame: &mut Frame<'run>) -> Frameless<'run> {
+        if self.debug.is_some() {
+            return Frameless::Declined;
+        }
+        let Some(entry) = self.virtual_sites.get(id) else {
+            return Frameless::Declined;
+        };
+        let Some(hit) = entry.hit.as_ref() else {
+            return Frameless::Declined;
+        };
+        if !hit.code.frameless {
+            return Frameless::Declined;
+        }
+        let Some(base) = frame.stack.len().checked_sub(entry.argc + 1) else {
+            return Frameless::Declined;
+        };
+        let JValue::Ref(Some(receiver)) = frame.stack[base] else {
+            return Frameless::Declined;
+        };
+        if !matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Instance { class_name, .. })
+                if Rc::ptr_eq(class_name, &hit.receiver_class)
+        ) {
+            return Frameless::Declined;
+        }
+        // Suspending must always be possible once execution starts, so the
+        // depth check happens now (the general path raises the
+        // StackOverflowError).
+        if self.call_depth() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
+            return Frameless::Declined;
+        }
+        // Belt and braces for malformed bytecode whose args outgrow its own
+        // `max_locals`; real compilers never emit that.
+        if 1 + entry
+            .widths
+            .iter()
+            .map(|width| usize::from(*width))
+            .sum::<usize>()
+            > usize::from(hit.code.attr.max_locals)
+        {
+            return Frameless::Declined;
+        }
+        let (target, method_name, code) = (hit.class, hit.method_name, Rc::clone(&hit.code));
+
+        // From here on the call happens: fill the locals straight from the
+        // caller's stack (untouched slots are already the Int(0) filler a
+        // framed call resizes to) and consume the receiver and arguments.
+        let mut locals = [JValue::Int(0); FRAMELESS_SLOTS];
+        locals[0] = JValue::Ref(Some(receiver));
+        let mut next_slot = 1;
+        let widths = &self.virtual_sites[id].widths;
+        for (value, width) in frame.stack[base + 1..].iter().zip(widths.iter()) {
+            locals[next_slot] = *value;
+            // A long or double occupies two local slots (JVMS 2.6.1).
+            next_slot += usize::from(*width);
+        }
+        frame.stack.truncate(base);
+
+        let mut stack = [JValue::Int(0); FRAMELESS_SLOTS];
+        let mut sp = 0usize;
+        let mut pc = 0usize;
+
+        let exit = 'mini: loop {
+            if self.remaining_instructions == 0 {
+                break 'mini MiniExit::Suspend {
+                    at: pc,
+                    refund: false,
+                };
+            }
+            self.remaining_instructions -= 1;
+
+            // Each arm mirrors its fast-arm twin in `run_loop` exactly; a
+            // failed guard falls to the suspend below instead of falling to
+            // the byte path.
+            match code.insts.get(pc) {
+                Some(&Inst::IConst { value, next }) => {
+                    if sp < FRAMELESS_SLOTS {
+                        stack[sp] = JValue::Int(value);
+                        sp += 1;
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::Load { slot, next }) => {
+                    if sp < FRAMELESS_SLOTS
+                        && let Some(&value) = locals.get(usize::from(slot))
+                    {
+                        stack[sp] = value;
+                        sp += 1;
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::Store { slot, next }) => {
+                    if sp > 0 && usize::from(slot) < FRAMELESS_SLOTS {
+                        sp -= 1;
+                        locals[usize::from(slot)] = stack[sp];
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::IntOp { op, next }) => {
+                    if sp >= 2
+                        && let (JValue::Int(a), JValue::Int(b)) = (stack[sp - 2], stack[sp - 1])
+                    {
+                        let value = match op {
+                            IntOp::Add => Some(a.wrapping_add(b)),
+                            IntOp::Sub => Some(a.wrapping_sub(b)),
+                            IntOp::Mul => Some(a.wrapping_mul(b)),
+                            IntOp::Div => (b != 0).then(|| a.wrapping_div(b)),
+                            IntOp::And => Some(a & b),
+                            IntOp::Or => Some(a | b),
+                            IntOp::Xor => Some(a ^ b),
+                            IntOp::Shl => Some(a.wrapping_shl(b.cast_unsigned() & 0x1F)),
+                            IntOp::Shr => Some(a.wrapping_shr(b.cast_unsigned() & 0x1F)),
+                            IntOp::Ushr => Some(
+                                a.cast_unsigned()
+                                    .wrapping_shr(b.cast_unsigned() & 0x1F)
+                                    .cast_signed(),
+                            ),
+                        };
+                        if let Some(value) = value {
+                            sp -= 1;
+                            stack[sp - 1] = JValue::Int(value);
+                            pc = next as usize;
+                            continue 'mini;
+                        }
+                    }
+                }
+                Some(&Inst::Goto { target }) => {
+                    pc = target as usize;
+                    continue 'mini;
+                }
+                Some(&Inst::IfICmp { cmp, target, next }) => {
+                    if sp >= 2
+                        && let (JValue::Int(a), JValue::Int(b)) = (stack[sp - 2], stack[sp - 1])
+                    {
+                        sp -= 2;
+                        pc = if cmp.holds(a, b) {
+                            target as usize
+                        } else {
+                            next as usize
+                        };
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::IfInt { cmp, target, next }) => {
+                    if sp > 0
+                        && let JValue::Int(value) = stack[sp - 1]
+                    {
+                        sp -= 1;
+                        pc = if cmp.holds(value, 0) {
+                            target as usize
+                        } else {
+                            next as usize
+                        };
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::Dup { next }) => {
+                    if sp > 0 && sp < FRAMELESS_SLOTS {
+                        stack[sp] = stack[sp - 1];
+                        sp += 1;
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::Pop { next }) => {
+                    if sp > 0 {
+                        sp -= 1;
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(Inst::GetField { index, next, slot }) => {
+                    if slot.get() == UNRESOLVED {
+                        self.prime_field_site(target, *index, slot);
+                    }
+                    if slot.get() != UNRESOLVED
+                        && sp > 0
+                        && let JValue::Ref(Some(reference)) = stack[sp - 1]
+                        && let Some(crate::value::HeapObject::Instance { fields, .. }) =
+                            self.heap.get(reference)
+                        && let Some(&value) = fields.get(slot.get() as usize)
+                    {
+                        stack[sp - 1] = value;
+                        pc = *next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(Inst::PutField { index, next, slot }) => {
+                    if slot.get() == UNRESOLVED {
+                        self.prime_field_site(target, *index, slot);
+                    }
+                    if slot.get() != UNRESOLVED
+                        && sp >= 2
+                        && let JValue::Ref(Some(reference)) = stack[sp - 2]
+                        && let Some(crate::value::HeapObject::Instance { fields, .. }) =
+                            self.heap.get_mut(reference)
+                        && let Some(field) = fields.get_mut(slot.get() as usize)
+                    {
+                        *field = stack[sp - 1];
+                        sp -= 2;
+                        pc = *next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::IaLoad { next }) => {
+                    if sp >= 2
+                        && let JValue::Ref(Some(reference)) = stack[sp - 2]
+                        && let JValue::Int(index) = stack[sp - 1]
+                        && let Ok(index) = usize::try_from(index)
+                        && let Some(crate::value::HeapObject::IntArray(_, values)) =
+                            self.heap.get(reference)
+                        && let Some(&value) = values.get(index)
+                    {
+                        sp -= 1;
+                        stack[sp - 1] = JValue::Int(value);
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::AaLoad { next }) => {
+                    if sp >= 2
+                        && let JValue::Ref(Some(reference)) = stack[sp - 2]
+                        && let JValue::Int(index) = stack[sp - 1]
+                        && let Ok(index) = usize::try_from(index)
+                        && let Some(crate::value::HeapObject::RefArray(_, values)) =
+                            self.heap.get(reference)
+                        && let Some(&value) = values.get(index)
+                    {
+                        sp -= 1;
+                        stack[sp - 1] = value;
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::IaStore { next }) => {
+                    if sp >= 3
+                        && let JValue::Ref(Some(reference)) = stack[sp - 3]
+                        && let JValue::Int(index) = stack[sp - 2]
+                        && let JValue::Int(value) = stack[sp - 1]
+                        && let Ok(index) = usize::try_from(index)
+                        && let Some(crate::value::HeapObject::IntArray(_, values)) =
+                            self.heap.get_mut(reference)
+                        && let Some(element) = values.get_mut(index)
+                    {
+                        *element = value;
+                        sp -= 3;
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(&Inst::ArrayLength { next }) => {
+                    if sp > 0
+                        && let JValue::Ref(Some(reference)) = stack[sp - 1]
+                        && let Some(length) = self.heap.get(reference).and_then(array_length)
+                        && let Ok(length) = i32::try_from(length)
+                    {
+                        stack[sp - 1] = JValue::Int(length);
+                        pc = next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(Inst::Ldc { index, next, value }) => {
+                    if value.get().is_none() {
+                        value.set(constant_primitive(target, *index));
+                    }
+                    if sp < FRAMELESS_SLOTS
+                        && let Some(constant) = value.get()
+                    {
+                        stack[sp] = constant;
+                        sp += 1;
+                        pc = *next as usize;
+                        continue 'mini;
+                    }
+                }
+                Some(Inst::InvokeVirtual { .. } | Inst::Legacy) | None => {
+                    // Eligibility left only returns on the byte path.
+                    match code.attr.code.get(pc) {
+                        Some(&op::RETURN) => break 'mini MiniExit::Done(None),
+                        Some(
+                            &(op::IRETURN
+                            | op::DRETURN
+                            | op::ARETURN
+                            | op::LRETURN
+                            | op::FRETURN),
+                        ) if sp > 0 => {
+                            sp -= 1;
+                            break 'mini MiniExit::Done(Some(stack[sp]));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            break 'mini MiniExit::Suspend { at: pc, refund: true };
+        };
+
+        match exit {
+            MiniExit::Done(value) => {
+                if let Some(value) = value {
+                    frame.stack.push(value);
+                }
+                Frameless::Done
+            }
+            MiniExit::Suspend { at, refund } => {
+                if refund {
+                    // The general path re-charges the instruction it re-runs.
+                    self.remaining_instructions += 1;
+                }
+                let mut locals_vec = self.take_vec(usize::from(code.attr.max_locals));
+                locals_vec.extend_from_slice(&locals[..usize::from(code.attr.max_locals)]);
+                let mut stack_vec = self.take_vec(usize::from(code.attr.max_stack));
+                stack_vec.extend_from_slice(&stack[..sp]);
+                let current_line = match code.lines.get(at).copied().unwrap_or(0) {
+                    0 => None,
+                    line => Some(line),
+                };
+                Frameless::Suspended(Frame {
+                    class: target,
+                    method_name,
+                    code,
+                    pc: at,
+                    current_line,
+                    locals: locals_vec,
+                    stack: stack_vec,
+                    box_return_as: None,
+                })
+            }
+        }
+    }
+
     /// Copy a virtual site's arena index into the instruction, once, so that
     /// every later execution of it reaches its inline cache without a lookup.
     fn prime_virtual_site(&self, class: &ClassFile, index: u16, site: &Cell<u32>) {
@@ -8362,6 +8733,30 @@ struct ReceiverHit<'run> {
     code: Rc<MethodCode>,
 }
 
+/// The outcome of [`Interpreter::frameless_virtual_call`].
+enum Frameless<'run> {
+    /// The callee ran to completion; its return value, if it had one, is
+    /// already on the caller's operand stack.
+    Done,
+    /// The callee started but met something only the general path handles;
+    /// its exact mid-method state is in this frame, and resuming it framed
+    /// raises whatever a framed run would have raised.
+    Suspended(Frame<'run>),
+    /// Not attempted: the caller's stack is untouched and the call has not
+    /// begun.
+    Declined,
+}
+
+/// How a frameless mini-run ended (the two non-`Declined` outcomes, before
+/// the suspended state is packed into a frame).
+enum MiniExit {
+    /// Executed a return; the value goes to the caller's stack.
+    Done(Option<JValue>),
+    /// A guard failed at `at`; `refund` says this instruction was already
+    /// charged and the general path will charge it again.
+    Suspend { at: usize, refund: bool },
+}
+
 /// A class's interned name plus its defaulted field map, cloned on each `new`.
 /// A class's identity, its field layout, and one defaulted object's worth of
 /// field values — everything `new` needs, prepared once per class.
@@ -8492,6 +8887,63 @@ enum Inst {
 
 /// A field site that has not resolved yet.
 const UNRESOLVED: u32 = u32::MAX;
+
+/// How many `JValue` slots the frameless locals and operand-stack buffers
+/// hold. A `Pixel` channel setter — the fattest of the accessors this exists
+/// for — needs three locals and five stack slots.
+const FRAMELESS_SLOTS: usize = 8;
+
+/// Whether a method can run without a frame (`frameless_virtual_call`):
+/// every instruction is one of the pre-decoded fast ops, every branch is
+/// forward (a frameless run has no debugger checkpoint or interrupt poll
+/// inside it, so it must be bounded — by the method's own length), the only
+/// byte-path instructions are returns, and the frame fits the fixed buffers.
+/// The tiny accessors that dominate call-heavy programs all pass; anything
+/// that calls, allocates, loops or throws keeps its frame.
+fn frameless_eligible(attr: &CodeAttribute, insts: &[Inst]) -> bool {
+    if insts.is_empty()
+        || usize::from(attr.max_locals) > FRAMELESS_SLOTS
+        || usize::from(attr.max_stack) > FRAMELESS_SLOTS
+    {
+        return false;
+    }
+    let mut pc = 0;
+    while pc < attr.code.len() {
+        let safe = match &insts[pc] {
+            Inst::IConst { .. }
+            | Inst::IntOp { .. }
+            | Inst::Dup { .. }
+            | Inst::Pop { .. }
+            | Inst::GetField { .. }
+            | Inst::PutField { .. }
+            | Inst::IaLoad { .. }
+            | Inst::AaLoad { .. }
+            | Inst::IaStore { .. }
+            | Inst::ArrayLength { .. }
+            | Inst::Ldc { .. } => true,
+            Inst::Load { slot, .. } | Inst::Store { slot, .. } => {
+                usize::from(*slot) < usize::from(attr.max_locals)
+            }
+            Inst::Goto { target }
+            | Inst::IfICmp { target, .. }
+            | Inst::IfInt { target, .. } => *target as usize > pc,
+            Inst::Legacy => matches!(
+                attr.code[pc],
+                op::IRETURN | op::LRETURN | op::FRETURN | op::DRETURN | op::ARETURN | op::RETURN
+            ),
+            Inst::InvokeVirtual { .. } => false,
+        };
+        if !safe {
+            return false;
+        }
+        match inst_len(attr.code[pc]) {
+            Some(len) => pc += len,
+            // Unreachable: a non-empty `insts` means the walk was clean.
+            None => return false,
+        }
+    }
+    true
+}
 
 #[derive(Clone, Copy)]
 enum IntOp {
@@ -8769,6 +9221,9 @@ struct MethodCode {
     /// case dispatch falls back entirely to decoding bytes as it goes — so this
     /// is a pure optimization and can never change behaviour.
     insts: Vec<Inst>,
+    /// Small and simple enough for [`Interpreter::frameless_virtual_call`];
+    /// see [`frameless_eligible`].
+    frameless: bool,
     /// `lines[pc]` is the source line *in effect* at `pc` (the boundary at or
     /// before it), or 0. `boundary_lines` says where a line starts; this says
     /// which line you are on. A trace can be taken at any instruction, not only
@@ -8944,6 +9399,7 @@ fn parse_method_code(class: &ClassFile, method: &MethodInfo) -> Result<MethodCod
 
     let insts = decode_insts(&attr.code);
     Ok(MethodCode {
+        frameless: frameless_eligible(&attr, &insts),
         attr,
         insts,
         lines,

@@ -8078,3 +8078,178 @@ differential_reject!(
     "RejectSortObjectList",
     "import java.util.*;\npublic class RejectSortObjectList { static void r() { Collections.sort(new ArrayList<Object>()); } }"
 );
+
+// The frameless-call fast path: tiny warm accessors run without a frame, and
+// anything exceptional suspends into a real frame for the general path to
+// raise. Each program below warms its accessors with successful calls first,
+// so the interesting call is the frameless one, then compares the caught
+// exception and the values that flow afterwards against the reference JDK.
+differential_test!(
+    diff_frameless_accessor_faults,
+    "DiffFramelessFaults",
+    r#"
+public class DiffFramelessFaults {
+    private int[] data;
+    private int at;
+    private int red;
+
+    DiffFramelessFaults(int[] data, int at) {
+        this.data = data;
+        this.at = at;
+    }
+
+    int peek() {
+        return data[at];
+    }
+
+    int share(int ways) {
+        return data[at] / ways;
+    }
+
+    void bump() {
+        data[at] = data[at] + 1;
+    }
+
+    public static void main(String[] args) {
+        DiffFramelessFaults fine = new DiffFramelessFaults(new int[] {10, 20, 30}, 1);
+        int sum = 0;
+        for (int i = 0; i < 200; i++) {
+            sum += fine.peek();
+            sum += fine.share(2);
+            fine.bump();
+        }
+        System.out.println(sum);
+
+        // An index out of bounds inside the warm getter.
+        DiffFramelessFaults past = new DiffFramelessFaults(new int[] {1, 2}, 9);
+        try {
+            System.out.println(past.peek());
+        } catch (ArrayIndexOutOfBoundsException e) {
+            System.out.println("aioobe: " + e.getMessage());
+        }
+
+        // A null array inside the warm getter.
+        DiffFramelessFaults empty = new DiffFramelessFaults(null, 0);
+        try {
+            System.out.println(empty.peek());
+        } catch (NullPointerException e) {
+            System.out.println("npe caught");
+        }
+
+        // A zero divisor inside the warm method, mid-way through it.
+        try {
+            System.out.println(fine.share(0));
+        } catch (ArithmeticException e) {
+            System.out.println("arith: " + e.getMessage());
+        }
+
+        // A store past the end inside the warm setter.
+        try {
+            past.bump();
+        } catch (ArrayIndexOutOfBoundsException e) {
+            System.out.println("store aioobe: " + e.getMessage());
+        }
+
+        // The world is intact afterwards.
+        System.out.println(fine.peek() + " " + fine.share(4));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_frameless_wide_and_branching,
+    "DiffFramelessWide",
+    r#"
+public class DiffFramelessWide {
+    private long stamp;
+    private double weight;
+    private int value;
+
+    void setStamp(long stamp) {
+        this.stamp = stamp;
+    }
+
+    long getStamp() {
+        return stamp;
+    }
+
+    void setWeight(double weight) {
+        this.weight = weight;
+    }
+
+    double getWeight() {
+        return weight;
+    }
+
+    // Two two-slot arguments around a one-slot one.
+    void mix(long a, int b, double c) {
+        value = (int) (a % 1000) + b + (int) c;
+    }
+
+    int getValue() {
+        return value;
+    }
+
+    // Forward branches (a ternary) inside an eligible accessor.
+    int clamp(int v) {
+        return v > 255 ? 255 : v;
+    }
+
+    public static void main(String[] args) {
+        DiffFramelessWide w = new DiffFramelessWide();
+        long stamps = 0;
+        double weights = 0;
+        int clamped = 0;
+        for (int i = 0; i < 200; i++) {
+            w.setStamp(4000000000L + i);
+            stamps += w.getStamp() % 7;
+            w.setWeight(i * 0.5);
+            weights += w.getWeight();
+            w.mix(123456789012L, i, 2.75);
+            clamped += w.clamp(w.getValue());
+        }
+        System.out.println(stamps);
+        System.out.println(weights);
+        System.out.println(clamped);
+        System.out.println(w.clamp(300) + " " + w.clamp(-300) + " " + w.clamp(255));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_frameless_polymorphic_flip,
+    "DiffFramelessFlip",
+    r"
+public class DiffFramelessFlip {
+    static class Plain {
+        int tag() {
+            return 1;
+        }
+    }
+
+    static class Fancy extends Plain {
+        int tag() {
+            return 2;
+        }
+    }
+
+    public static void main(String[] args) {
+        Plain a = new Plain();
+        Plain b = new Fancy();
+        int sum = 0;
+        // Warm the site monomorphically on Plain, then flip the receiver:
+        // the frameless guard must decline Fancy and dispatch correctly.
+        for (int i = 0; i < 200; i++) {
+            sum += a.tag();
+        }
+        for (int i = 0; i < 5; i++) {
+            sum += b.tag();
+            sum += a.tag();
+        }
+        System.out.println(sum);
+    }
+}
+"
+);

@@ -12201,3 +12201,58 @@ fn image_reads_real_pixels_and_writes_edits_back() {
     assert_eq!(&written[0..8], &[2, 0, 0, 0, 1, 0, 0, 0]);
     assert_eq!(&written[8..14], &[255, 0, 0, 0, 0, 255]);
 }
+
+#[test]
+fn fault_inside_a_warm_accessor_keeps_its_frame_in_the_trace() {
+    // The frameless-call fast path runs tiny warm accessors without a frame.
+    // A fault inside one must still produce the accessor's own frame and
+    // line in the trace: the mini-interpreter suspends its exact state into
+    // a real frame and lets the general path raise. Warm the site first so
+    // the faulting call is the frameless one.
+    let (result, console) = compile_and_run(
+        r"
+        public class WarmTrace {
+            private int[] data;
+            private int at;
+
+            WarmTrace(int[] data, int at) {
+                this.data = data;
+                this.at = at;
+            }
+
+            int peek() {
+                return data[at];
+            }
+
+            public static void main(String[] args) {
+                WarmTrace fine = new WarmTrace(new int[] {7, 8, 9}, 1);
+                int sum = 0;
+                for (int i = 0; i < 100; i++) {
+                    sum += fine.peek();
+                }
+                System.out.println(sum);
+                WarmTrace broken = new WarmTrace(new int[] {7, 8, 9}, 5);
+                System.out.println(broken.peek());
+            }
+        }
+        ",
+        "WarmTrace",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    let stderr = console.stderr_text();
+    assert!(
+        stderr.contains(
+            "java.lang.ArrayIndexOutOfBoundsException: \
+             Index 5 out of bounds for length 3"
+        ),
+        "{stderr}"
+    );
+    let peek_at = stderr.find("\tat WarmTrace.peek(WarmTrace.java:12)").unwrap();
+    let main_at = stderr.find("\tat WarmTrace.main(WarmTrace.java:23)").unwrap();
+    assert!(peek_at < main_at, "{stderr}");
+    // The successful warm calls came through first.
+    assert_eq!(console.stdout_text(), "800\n");
+}
