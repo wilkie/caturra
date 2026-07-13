@@ -542,6 +542,24 @@ impl<'run> Interpreter<'run> {
         Some(parsed)
     }
 
+    /// Record the source line starting at `pc`, if one does — the line a stack
+    /// trace will name for this frame.
+    ///
+    /// Deliberately not called for every instruction. Only the byte path can
+    /// raise an exception (the pre-decoded fast paths decline to the byte path
+    /// instead of throwing) and only a call suspends the frame with a line worth
+    /// showing, so those are the only two places the line has to be current. The
+    /// debugger, which pauses per line, still calls it on every instruction.
+    fn track_line(&mut self, code: &MethodCode, pc: usize, frame: &mut Frame<'run>) {
+        let line = code.lines.get(pc).copied().unwrap_or(0);
+        if line != 0 {
+            frame.current_line = Some(line);
+            if let Some(location) = &mut self.current_location {
+                location.line = Some(line);
+            }
+        }
+    }
+
     /// A cleared buffer from the pool, or a fresh one.
     fn take_vec(&mut self, capacity: usize) -> Vec<JValue> {
         match self.vec_pool.pop() {
@@ -653,17 +671,16 @@ impl<'run> Interpreter<'run> {
 
                 let addr = pc;
 
-                // Source-line boundary: update the current line (for
-                // stack traces) and give the debugger a chance to
-                // pause before this line's first instruction runs.
-                let boundary_line = code.boundary_lines.get(addr).copied().unwrap_or(0);
-                if boundary_line != 0 {
-                    frame.current_line = Some(boundary_line);
-                    if let Some(location) = &mut self.current_location {
-                        location.line = Some(boundary_line);
-                    }
-                }
+                // The debugger pauses per source line, so it needs the boundary
+                // on every instruction. Nothing else does: the current line only
+                // has to be right where a stack trace can be taken, and the
+                // fast-path arms below neither throw (they decline instead) nor
+                // suspend the frame — except a call, which tracks it itself.
+                // So the byte path tracks it, and the ~45M instructions that
+                // never reach it stop touching a second array per instruction.
                 if self.debug.is_some() {
+                    let boundary_line = code.boundary_lines.get(addr).copied().unwrap_or(0);
+                    self.track_line(&code, addr, &mut frame);
                     frame.pc = addr;
                     if self.debug_checkpoint(&mut frame, boundary_line)
                         == Some(DebugCommand::Terminate)
@@ -708,17 +725,27 @@ impl<'run> Interpreter<'run> {
                                 (frame.stack[depth - 2], frame.stack[depth - 1])
                         {
                             let value = match op {
-                                IntOp::Add => a.wrapping_add(b),
-                                IntOp::Sub => a.wrapping_sub(b),
-                                IntOp::Mul => a.wrapping_mul(b),
-                                IntOp::And => a & b,
-                                IntOp::Or => a | b,
-                                IntOp::Xor => a ^ b,
+                                IntOp::Add => Some(a.wrapping_add(b)),
+                                IntOp::Sub => Some(a.wrapping_sub(b)),
+                                IntOp::Mul => Some(a.wrapping_mul(b)),
+                                IntOp::Div => (b != 0).then(|| a.wrapping_div(b)),
+                                IntOp::And => Some(a & b),
+                                IntOp::Or => Some(a | b),
+                                IntOp::Xor => Some(a ^ b),
+                                IntOp::Shl => Some(a.wrapping_shl(b.cast_unsigned() & 0x1F)),
+                                IntOp::Shr => Some(a.wrapping_shr(b.cast_unsigned() & 0x1F)),
+                                IntOp::Ushr => Some(
+                                    a.cast_unsigned()
+                                        .wrapping_shr(b.cast_unsigned() & 0x1F)
+                                        .cast_signed(),
+                                ),
                             };
-                            frame.stack.truncate(depth - 2);
-                            frame.stack.push(JValue::Int(value));
-                            pc = next as usize;
-                            continue;
+                            if let Some(value) = value {
+                                frame.stack.truncate(depth - 2);
+                                frame.stack.push(JValue::Int(value));
+                                pc = next as usize;
+                                continue;
+                            }
                         }
                     }
                     Some(&Inst::Goto { target }) => {
@@ -811,6 +838,9 @@ impl<'run> Interpreter<'run> {
                         if site.get() == UNRESOLVED {
                             self.prime_virtual_site(class, *index, site);
                         }
+                        // This frame is about to be suspended; a stack trace
+                        // taken inside the callee names it at this line.
+                        self.track_line(&code, addr, &mut frame);
                         if site.get() != UNRESOLVED
                             && let Some(callee) =
                                 self.fast_virtual_call(site.get() as usize, &mut frame)
@@ -820,9 +850,86 @@ impl<'run> Interpreter<'run> {
                             continue 'frames;
                         }
                     }
+                    // Array access, in bounds. An out-of-range index, a null
+                    // array or an unexpected element kind falls through to the
+                    // byte path, which raises exactly the exception it always
+                    // did — so none of these can change behaviour.
+                    Some(&Inst::IaLoad { next }) => {
+                        let depth = frame.stack.len();
+                        if depth >= 2
+                            && let JValue::Ref(Some(reference)) = frame.stack[depth - 2]
+                            && let JValue::Int(index) = frame.stack[depth - 1]
+                            && let Ok(index) = usize::try_from(index)
+                            && let Some(crate::value::HeapObject::IntArray(_, values)) =
+                                self.heap.get(reference)
+                            && let Some(&value) = values.get(index)
+                        {
+                            frame.stack.truncate(depth - 2);
+                            frame.stack.push(JValue::Int(value));
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::AaLoad { next }) => {
+                        let depth = frame.stack.len();
+                        if depth >= 2
+                            && let JValue::Ref(Some(reference)) = frame.stack[depth - 2]
+                            && let JValue::Int(index) = frame.stack[depth - 1]
+                            && let Ok(index) = usize::try_from(index)
+                            && let Some(crate::value::HeapObject::RefArray(_, values)) =
+                                self.heap.get(reference)
+                            && let Some(&value) = values.get(index)
+                        {
+                            frame.stack.truncate(depth - 2);
+                            frame.stack.push(value);
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::IaStore { next }) => {
+                        let depth = frame.stack.len();
+                        if depth >= 3
+                            && let JValue::Ref(Some(reference)) = frame.stack[depth - 3]
+                            && let JValue::Int(index) = frame.stack[depth - 2]
+                            && let JValue::Int(value) = frame.stack[depth - 1]
+                            && let Ok(index) = usize::try_from(index)
+                            && let Some(crate::value::HeapObject::IntArray(_, values)) =
+                                self.heap.get_mut(reference)
+                            && let Some(slot) = values.get_mut(index)
+                        {
+                            *slot = value;
+                            frame.stack.truncate(depth - 3);
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(&Inst::ArrayLength { next }) => {
+                        if let Some(JValue::Ref(Some(reference))) = frame.stack.last().copied()
+                            && let Some(length) = self.heap.get(reference).and_then(array_length)
+                            && let Ok(length) = i32::try_from(length)
+                        {
+                            frame.stack.pop();
+                            frame.stack.push(JValue::Int(length));
+                            pc = next as usize;
+                            continue;
+                        }
+                    }
+                    Some(Inst::Ldc { index, next, value }) => {
+                        // Memoized on first use, and only for primitives: a
+                        // String literal allocates, and that stays where it was.
+                        if value.get().is_none() {
+                            value.set(constant_primitive(class, *index));
+                        }
+                        if let Some(constant) = value.get() {
+                            frame.stack.push(constant);
+                            pc = *next as usize;
+                            continue;
+                        }
+                    }
                     Some(&Inst::Legacy) | None => {}
                 }
 
+                self.track_line(&code, addr, &mut frame);
                 let opcode = *bytes.get(addr).ok_or_else(|| {
                     malformed(format!(
                         "execution ran off the end of bytecode at pc {addr}"
@@ -1589,20 +1696,10 @@ impl<'run> Interpreter<'run> {
                         }
                         op::ARRAYLENGTH => {
                             let reference = frame.pop_ref()?.ok_or_else(null_array)?;
-                            let length = match self.heap.get(reference) {
-                                Some(crate::value::HeapObject::IntArray(_, v)) => v.len(),
-                                Some(crate::value::HeapObject::DoubleArray(v)) => v.len(),
-                                Some(crate::value::HeapObject::RefArray(_, v)) => v.len(),
-                                Some(crate::value::HeapObject::LongArray(v)) => v.len(),
-                                Some(crate::value::HeapObject::FloatArray(v)) => v.len(),
-                                Some(crate::value::HeapObject::ShortArray(v)) => v.len(),
-                                Some(crate::value::HeapObject::ByteArray(v)) => v.len(),
-                                _ => {
-                                    return Err(malformed(String::from(
-                                        "arraylength on a non-array",
-                                    )));
-                                }
-                            };
+                            let length =
+                                self.heap.get(reference).and_then(array_length).ok_or_else(
+                                    || malformed(String::from("arraylength on a non-array")),
+                                )?;
                             frame
                                 .stack
                                 .push(JValue::Int(i32::try_from(length).unwrap_or(i32::MAX)));
@@ -8364,6 +8461,31 @@ enum Inst {
         next: u32,
         site: Cell<u32>,
     },
+    /// `iaload` — the in-bounds case; anything else falls through so the byte
+    /// path raises the same exception it always did. The image lessons walk
+    /// pixels out of `int[]`s, so this is one of the hottest opcodes they run.
+    IaLoad {
+        next: u32,
+    },
+    /// `aaload` (a row of a `Pixel[][]`, say).
+    AaLoad {
+        next: u32,
+    },
+    /// `iastore` — the in-bounds case.
+    IaStore {
+        next: u32,
+    },
+    ArrayLength {
+        next: u32,
+    },
+    /// `ldc` of a primitive, memoized after the first run. A `String` or `Class`
+    /// literal allocates on the heap, so it is left to the byte path and `value`
+    /// stays empty.
+    Ldc {
+        index: u16,
+        next: u32,
+        value: Cell<Option<JValue>>,
+    },
 }
 
 /// A field site that has not resolved yet.
@@ -8374,9 +8496,16 @@ enum IntOp {
     Add,
     Sub,
     Mul,
+    /// Guarded: a zero divisor falls through to the byte path, which raises the
+    /// `ArithmeticException`.
+    Div,
     And,
     Or,
     Xor,
+    /// Shift counts mask to the low five bits (JVMS).
+    Shl,
+    Shr,
+    Ushr,
 }
 
 #[derive(Clone, Copy)]
@@ -8560,6 +8689,31 @@ fn decode_insts(bytes: &[u8]) -> Vec<Inst> {
                 op: IntOp::Xor,
                 next,
             },
+            op_::IDIV => Inst::IntOp {
+                op: IntOp::Div,
+                next,
+            },
+            op_::ISHL => Inst::IntOp {
+                op: IntOp::Shl,
+                next,
+            },
+            op_::ISHR => Inst::IntOp {
+                op: IntOp::Shr,
+                next,
+            },
+            op_::IUSHR => Inst::IntOp {
+                op: IntOp::Ushr,
+                next,
+            },
+            op_::IALOAD => Inst::IaLoad { next },
+            op_::AALOAD => Inst::AaLoad { next },
+            op_::IASTORE => Inst::IaStore { next },
+            op_::ARRAYLENGTH => Inst::ArrayLength { next },
+            op_::LDC => Inst::Ldc {
+                index: u16::from(bytes[pc + 1]),
+                next,
+                value: Cell::new(None),
+            },
             op_::GETFIELD => Inst::GetField {
                 index: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
                 next,
@@ -8613,6 +8767,12 @@ struct MethodCode {
     /// case dispatch falls back entirely to decoding bytes as it goes — so this
     /// is a pure optimization and can never change behaviour.
     insts: Vec<Inst>,
+    /// `lines[pc]` is the source line *in effect* at `pc` (the boundary at or
+    /// before it), or 0. `boundary_lines` says where a line starts; this says
+    /// which line you are on. A trace can be taken at any instruction, not only
+    /// at a line's first one — `1 / 0` throws at the `idiv`, several
+    /// instructions into its line — so recording the line lazily needs this.
+    lines: Vec<u16>,
     /// `boundary_lines[pc]` is the source line starting at `pc`, or 0 —
     /// O(1) per-instruction lookup in the dispatch loop.
     boundary_lines: Vec<u16>,
@@ -8769,10 +8929,22 @@ fn parse_method_code(class: &ClassFile, method: &MethodInfo) -> Result<MethodCod
         .and_then(|index| class.constant_pool.get_utf8(index))
         .map_or_else(|| format!("{class_name}.java"), str::to_owned);
 
+    // The line in effect at each pc: carry each boundary forward until the next.
+    let mut lines = boundary_lines.clone();
+    let mut current = 0u16;
+    for line in &mut lines {
+        if *line == 0 {
+            *line = current;
+        } else {
+            current = *line;
+        }
+    }
+
     let insts = decode_insts(&attr.code);
     Ok(MethodCode {
         attr,
         insts,
+        lines,
         boundary_lines,
         local_vars,
         source_file,
@@ -9085,6 +9257,35 @@ fn render_array(items: impl Iterator<Item = String>) -> String {
         parts.push(String::from("…"));
     }
     format!("[{}]", parts.join(", "))
+}
+
+/// The length of a heap array, whatever its element type; `None` if the object
+/// is not an array at all.
+fn array_length(object: &crate::value::HeapObject) -> Option<usize> {
+    use crate::value::HeapObject as H;
+    match object {
+        H::IntArray(_, values) => Some(values.len()),
+        H::RefArray(_, values) => Some(values.len()),
+        H::DoubleArray(values) => Some(values.len()),
+        H::LongArray(values) => Some(values.len()),
+        H::FloatArray(values) => Some(values.len()),
+        H::ShortArray(values) => Some(values.len()),
+        H::ByteArray(values) => Some(values.len()),
+        _ => None,
+    }
+}
+
+/// The value of an `ldc` whose constant is a primitive — the only kind a site
+/// may memoize. A `String` or `Class` literal allocates on the heap, so it is
+/// left to the byte path and its allocation behaviour is untouched.
+fn constant_primitive(class: &ClassFile, index: u16) -> Option<JValue> {
+    match class.constant_pool.get(index)? {
+        Constant::Integer(value) => Some(JValue::Int(*value)),
+        Constant::Float(value) => Some(JValue::Float(*value)),
+        Constant::Long(value) => Some(JValue::Long(*value)),
+        Constant::Double(value) => Some(JValue::Double(*value)),
+        _ => None,
+    }
 }
 
 /// The default value for a field of the given descriptor (JLS §4.12.5).
