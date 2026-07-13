@@ -6464,10 +6464,14 @@ impl<'run> Interpreter<'run> {
         if self.call_depth() >= usize::try_from(self.max_call_depth).unwrap_or(usize::MAX) {
             return None; // let the general path raise the StackOverflowError
         }
-        let hit = hit.clone();
-        let widths = Rc::clone(&entry.widths);
-        let mut locals = self.take_vec(usize::from(hit.code.attr.max_locals));
+        // Only the target's `Code` has to be cloned (the callee's frame owns it).
+        // The receiver class was needed for the guard above and the widths only
+        // for the loop below, so neither is cloned: the arena is re-borrowed
+        // once the buffer is in hand.
+        let (target, method_name, code) = (hit.class, hit.method_name, Rc::clone(&hit.code));
+        let mut locals = self.take_vec(usize::from(code.attr.max_locals));
         locals.push(JValue::Ref(Some(receiver)));
+        let widths = &self.virtual_sites[id].widths;
         for (value, width) in frame.stack[base + 1..].iter().zip(widths.iter()) {
             locals.push(*value);
             if *width == 2 {
@@ -6477,9 +6481,7 @@ impl<'run> Interpreter<'run> {
         }
         // Build the frame before disturbing the caller's stack, so that a
         // decline here leaves it exactly as the general path expects to find it.
-        let callee = self
-            .frame_for(hit.class, hit.method_name, hit.code, locals)
-            .ok()?;
+        let callee = self.frame_for(target, method_name, code, locals).ok()?;
         frame.stack.truncate(base);
         Some(callee)
     }
