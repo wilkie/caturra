@@ -35,9 +35,10 @@ import urllib.request
 BASE = "https://repo1.maven.org/maven2"
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vendor", "junit")
 
-# (group, artifact, version, sha256). The graph javabuilder's lib/ resolves:
-# jupiter 5.6.0 for the API and engine the validators are written against, and
-# the JUnit Platform at 1.8.1, which its launcher requires.
+# (group, artifact, version, sha256). The graph javabuilder resolves: jupiter
+# 5.6.0 for the API and engine the validators are written against, the JUnit
+# Platform at 1.8.1 which its launcher requires, and EasyMock 4.3 (studentlib)
+# for the validators that mock a student's Painter.
 JARS = [
     ("org.junit.jupiter", "junit-jupiter-api", "5.6.0",
      "128a9828798f978fadfcda255ba365f908e58f6c37275c9e5f671cbd660a9a33"),
@@ -53,6 +54,15 @@ JARS = [
      "58812de60898d976fb81ef3b62da05c6604c18fd4a249f5044282479fc286af2"),
     ("org.apiguardian", "apiguardian-api", "1.1.0",
      "a9aae9ff8ae3e17a2a18f79175e82b16267c246fbbd3ca9dfbbb290b08dcfdd4"),
+    # The Unit 1 validators mock a student's Painter to check which internal
+    # calls it makes. caturra models EasyMock too (stdlib/easymock.java), so the
+    # model needs the same treatment — and javabuilder's studentlib pins 4.3.
+    ("org.easymock", "easymock", "4.3",
+     "c230864c8b11636aaa6bb49eee00a4342d3e016d860b4f80b89068fd056d1404"),
+    ("org.objenesis", "objenesis", "3.2",
+     "03d960bd5aef03c653eb000413ada15eb77cdd2b8e4448886edf5692805e35f3"),
+    ("net.bytebuddy", "byte-buddy", "1.10.20",
+     "5fcad05da791e9a22811c255a4a74b7ea094b7243d9dbf3e6fc578c8c94290ac"),
 ]
 
 

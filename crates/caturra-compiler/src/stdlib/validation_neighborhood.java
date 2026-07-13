@@ -34,8 +34,15 @@ class NeighborhoodTestRunner {
       events[k++] = new PainterEvent(t, __NbhdWorld.logColor[i], __NbhdWorld.logDir[i]);
       int x = __NbhdWorld.logX[i], y = __NbhdWorld.logY[i], p = __NbhdWorld.logPaint[i];
       String d = __NbhdWorld.logDir[i];
-      if (first) { sx = x; sy = y; sd = d; sp = p; first = false; }
-      ex = x; ey = y; ed = d; ep = p;
+      if (first) { sx = x; sy = y; sd = d; sp = p; ex = x; ey = y; ed = d; first = false; }
+      // The real PainterTracker moves its `currentPosition` on a MOVE and on
+      // nothing else — every other action, TURN_LEFT included, falls through
+      // its switch's `default: break`. So a painter that turns and stops is
+      // logged still facing the way it last MOVED, and a validator asking for
+      // the ending direction is told that. We used to take the direction from
+      // whatever the last action was, and reported the turn.
+      if (t == NeighborhoodActionType.MOVE) { ex = x; ey = y; ed = d; }
+      ep = p;
     }
     return new PainterLog(id, new Position(sx, sy, sd), new Position(ex, ey, ed), sp, ep, events);
   }

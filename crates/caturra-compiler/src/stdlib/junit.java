@@ -4,17 +4,20 @@
 // validators (assertTrue / assertEquals / ...).
 
 class Assertions {
+  // JUnit puts its own account of the failure after the message, and a student
+  // reads both. The exact wording is pinned against real JUnit 5 in
+  // differential_validation_orgcode.rs.
   public static void assertTrue(boolean condition) {
-    if (!condition) throw new RuntimeException("expected condition to be true");
+    if (!condition) throw new RuntimeException("expected: <true> but was: <false>");
   }
   public static void assertTrue(boolean condition, String message) {
-    if (!condition) throw new RuntimeException(message);
+    if (!condition) throw new RuntimeException(message + " ==> expected: <true> but was: <false>");
   }
   public static void assertFalse(boolean condition) {
-    if (condition) throw new RuntimeException("expected condition to be false");
+    if (condition) throw new RuntimeException("expected: <false> but was: <true>");
   }
   public static void assertFalse(boolean condition, String message) {
-    if (condition) throw new RuntimeException(message);
+    if (condition) throw new RuntimeException(message + " ==> expected: <false> but was: <true>");
   }
   public static void assertEquals(int expected, int actual) {
     if (expected != actual) throw new RuntimeException("expected " + expected + " but was " + actual);
@@ -112,16 +115,19 @@ class Assertions {
     if (unexpected == actual) throw new RuntimeException("expected not equal to " + actual);
   }
   public static void assertNotEquals(int unexpected, int actual, String message) {
-    if (unexpected == actual) throw new RuntimeException(message);
+    if (unexpected == actual)
+      throw new RuntimeException(message + " ==> expected: not equal but was: <" + actual + ">");
   }
   public static void assertNotEquals(double unexpected, double actual) {
     if (unexpected == actual) throw new RuntimeException("expected not equal to " + actual);
   }
   public static void assertNotEquals(double unexpected, double actual, String message) {
-    if (unexpected == actual) throw new RuntimeException(message);
+    if (unexpected == actual)
+      throw new RuntimeException(message + " ==> expected: not equal but was: <" + actual + ">");
   }
   public static void assertNotEquals(boolean unexpected, boolean actual, String message) {
-    if (unexpected == actual) throw new RuntimeException(message);
+    if (unexpected == actual)
+      throw new RuntimeException(message + " ==> expected: not equal but was: <" + actual + ">");
   }
   public static void assertNotEquals(String unexpected, String actual) {
     boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
@@ -129,7 +135,7 @@ class Assertions {
   }
   public static void assertNotEquals(String unexpected, String actual, String message) {
     boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
-    if (same) throw new RuntimeException(message);
+    if (same) throw new RuntimeException(message + " ==> expected: not equal but was: <" + actual + ">");
   }
   public static void assertNotEquals(Object unexpected, Object actual) {
     boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
@@ -137,7 +143,7 @@ class Assertions {
   }
   public static void assertNotEquals(Object unexpected, Object actual, String message) {
     boolean same = unexpected == null ? actual == null : unexpected.equals(actual);
-    if (same) throw new RuntimeException(message);
+    if (same) throw new RuntimeException(message + " ==> expected: not equal but was: <" + actual + ">");
   }
   public static void assertArrayEquals(Object[] expected, Object[] actual) { assertArrayEquals(expected, actual, "array contents differ"); }
   public static void assertArrayEquals(Object[] expected, Object[] actual, String message) {
@@ -215,16 +221,16 @@ class Assertions {
     for (int i = 0; i < expected.length; i++) assertArrayEquals(expected[i], actual[i], message);
   }
   public static void assertNull(Object value) {
-    if (value != null) throw new RuntimeException("expected null but was " + value);
+    if (value != null) throw new RuntimeException("expected: <null> but was: <" + value + ">");
   }
   public static void assertNull(Object value, String message) {
-    if (value != null) throw new RuntimeException(message);
+    if (value != null) throw new RuntimeException(message + " ==> expected: <null> but was: <" + value + ">");
   }
   public static void assertNotNull(Object value) {
-    if (value == null) throw new RuntimeException("expected a non-null value");
+    if (value == null) throw new RuntimeException("expected: not <null>");
   }
   public static void assertNotNull(Object value, String message) {
-    if (value == null) throw new RuntimeException(message);
+    if (value == null) throw new RuntimeException(message + " ==> expected: not <null>");
   }
   public static void assertSame(Object expected, Object actual) {
     if (expected != actual) throw new RuntimeException("expected the same object");
