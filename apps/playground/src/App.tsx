@@ -3405,12 +3405,34 @@ export function App(): React.JSX.Element {
     setSwingDialog(null);
     setPhase('debugging');
     clearConsole();
+    neighborhoodVizRef.current?.stop();
     try {
       const session = await getSession();
       await writeDataFiles(session);
-      const swing = isSwingProgram();
-      if (swing) {
+      // The same per-view setup and post-run render as runProgram: a debugged
+      // theater or neighborhood program should end on its drawing, not on a
+      // blank stage.
+      const neighborhood = isNeighborhoodProgram();
+      const theater = !neighborhood && isTheaterProgram();
+      const swing = !neighborhood && !theater && isSwingProgram();
+      if (neighborhood) {
+        await session.writeFile('grid.txt', currentGridRef.current);
+        await session.remove('neighborhood.jsonl').catch(() => undefined);
+      } else if (theater) {
+        await session.remove('theater.log').catch(() => undefined);
+        await preloadAssets(session);
+        // Clear the stage for the new run, but keep a theater level's stage on
+        // screen rather than making it vanish the moment Debug is pressed.
+        if (theaterStageRef.current) {
+          theaterVizRef.current?.reset();
+          setView('theater');
+        } else {
+          setView('none');
+        }
+      } else if (swing) {
         await session.remove('swing.json').catch(() => undefined);
+        setView('none');
+      } else {
         setView('none');
       }
       const sources = collectSources();
@@ -3464,14 +3486,17 @@ export function App(): React.JSX.Element {
         } else if (result.status === 'exited') {
           append(`(exit code ${String(result.exitCode)})\n`);
         }
-        // A non-interactive Swing UI renders once on exit (batch), like Run.
-        if (
-          swing &&
-          !swingRenderedLive() &&
-          result.status !== 'error' &&
-          result.status !== 'stopped'
-        ) {
-          await renderSwing();
+        // Render on exit like Run does — unless the debugger terminated the
+        // program mid-way, in which case there is no finished drawing to show.
+        if (result.status !== 'error' && result.status !== 'stopped') {
+          if (neighborhood) {
+            await renderNeighborhood();
+          } else if (theater) {
+            await renderTheater();
+          } else if (swing && !swingRenderedLive()) {
+            // A non-interactive Swing UI renders once on exit (batch), like Run.
+            await renderSwing();
+          }
         }
       }
     } catch (error) {
