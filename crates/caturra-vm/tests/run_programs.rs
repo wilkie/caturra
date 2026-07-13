@@ -12407,8 +12407,13 @@ fn junit_assert_equals_honours_a_delta() {
         "#,
         "DeltaTest",
     );
+    // The failure text is JUnit's own, verified against it in
+    // differential_validation.rs: the message, then `==> expected: <x> but
+    // was: <y>`.
     assert_eq!(
         out,
-        "exact ok\nthrew: too far apart\nthrew: array ==> arrays first differed at element [1]\n"
+        "exact ok\n\
+         threw: too far apart ==> expected: <0.02> but was: <0.03>\n\
+         threw: array ==> arrays first differed at element [1] ==> expected: <2.0> but was: <2.5>\n"
     );
 }

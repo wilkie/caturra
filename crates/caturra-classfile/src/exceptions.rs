@@ -5,10 +5,51 @@
 //! supported, so this closed table is the whole catchable world.
 
 /// `(class, superclass)` pairs; `java/lang/Throwable` is the root.
+///
+/// **A class missing from this table is not merely unnamed in a `catch` — it is
+/// UNCATCHABLE, and kills the run.** The VM's unwinder consults this to decide
+/// whether a thrown class is a throwable at all, so an exception it does not
+/// know escapes even `catch (Throwable)`. The reflective exceptions below were
+/// missing, and the Unit 2 constructor/attribute validators throw them: the
+/// first one aborted the whole validation run, so the tests after it never ran
+/// and the student was told every test passed.
 pub const EXCEPTIONS: &[(&str, &str)] = &[
     ("java/lang/Exception", "java/lang/Throwable"),
     ("java/lang/Error", "java/lang/Throwable"),
     ("java/lang/RuntimeException", "java/lang/Exception"),
+    // Reflection (JLS: all checked, all under ReflectiveOperationException).
+    (
+        "java/lang/ReflectiveOperationException",
+        "java/lang/Exception",
+    ),
+    (
+        "java/lang/ClassNotFoundException",
+        "java/lang/ReflectiveOperationException",
+    ),
+    (
+        "java/lang/InstantiationException",
+        "java/lang/ReflectiveOperationException",
+    ),
+    (
+        "java/lang/NoSuchFieldException",
+        "java/lang/ReflectiveOperationException",
+    ),
+    (
+        "java/lang/NoSuchMethodException",
+        "java/lang/ReflectiveOperationException",
+    ),
+    (
+        "java/lang/IllegalAccessException",
+        "java/lang/ReflectiveOperationException",
+    ),
+    (
+        "java/lang/reflect/InvocationTargetException",
+        "java/lang/ReflectiveOperationException",
+    ),
+    // Linkage errors are Errors, not Exceptions: `catch (Exception)` must not
+    // take a VerifyError, but `catch (Throwable)` must.
+    ("java/lang/LinkageError", "java/lang/Error"),
+    ("java/lang/VerifyError", "java/lang/LinkageError"),
     (
         "java/lang/IllegalArgumentException",
         "java/lang/RuntimeException",

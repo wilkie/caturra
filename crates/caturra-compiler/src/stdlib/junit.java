@@ -31,13 +31,18 @@ class Assertions {
   // JUnit treats a NaN delta, or a negative one, as a failure of the assertion
   // itself, and exactly equal values pass whatever the delta.
   public static void assertEquals(double expected, double actual, double delta) {
-    assertEquals(expected, actual, delta, "expected " + expected + " but was " + actual);
+    if (!__within(expected, actual, delta))
+      throw new RuntimeException("expected: <" + expected + "> but was: <" + actual + ">");
   }
   public static void assertEquals(double expected, double actual, double delta, String message) {
-    if (expected == actual) return;
+    if (!__within(expected, actual, delta))
+      throw new RuntimeException(message + " ==> expected: <" + expected + "> but was: <" + actual + ">");
+  }
+  private static boolean __within(double expected, double actual, double delta) {
+    if (expected == actual) return true;
     double difference = expected - actual;
     if (difference < 0) difference = -difference;
-    if (!(difference <= delta)) throw new RuntimeException(message);
+    return difference <= delta;
   }
   public static void assertEquals(float expected, float actual, float delta) {
     assertEquals((double) expected, (double) actual, (double) delta);

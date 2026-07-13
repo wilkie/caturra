@@ -36,3 +36,4 @@ apps/playground/src/csa-overlay.local.ts
 
 # Theater starter assets downloaded from Code.org (pnpm assets:fetch)
 /apps/playground/public/level-assets/
+/vendor/

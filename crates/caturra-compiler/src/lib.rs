@@ -157,12 +157,21 @@ fn collect_tests(units: &[(String, ast::CompilationUnit)]) -> Vec<TestClass> {
                         .find(|a| a.name == "Order")
                         .and_then(|a| a.int_arg)
                         .unwrap_or(i32::MAX);
+                    // The label a student reads in the results panel, and JUnit
+                    // is fussier about it than it looks. `@DisplayName` is
+                    // TRIMMED (JUnit rejects a blank one outright), and without
+                    // the annotation the default is `name()` — the parentheses
+                    // are part of it. We printed the raw annotation and a bare
+                    // method name, so 1721 corpus levels labelled their tests
+                    // differently here than on Code.org.
                     let display = m
                         .annotations
                         .iter()
                         .find(|a| a.name == "DisplayName")
-                        .and_then(|a| a.str_arg.clone())
-                        .unwrap_or_else(|| m.name.clone());
+                        .and_then(|a| a.str_arg.as_deref())
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map_or_else(|| format!("{}()", m.name), str::to_owned);
                     TestCase {
                         method: m.name.clone(),
                         display,
