@@ -439,14 +439,14 @@ fn theater_image_pixel_manipulation() {
 /// channel setters go through `Color.copyWithRed(...)` and inherit it. The
 /// values below are the real library's: an out-of-range channel clamps —
 /// it must not wrap around into the neighbouring channels of the packed
-/// pixel. U5L8's sharpen() relies on this: it caps at 255 but hands
-/// setRed() negatives, which used to smear red/yellow streaks across the
+/// pixel. U5L8's `sharpen()` relies on this: it caps at 255 but hands
+/// `setRed()` negatives, which used to smear red/yellow streaks across the
 /// whole image. (LIME really is written `new Color(0, 256, 0)` upstream;
 /// the observable green is the clamped 255.)
 #[test]
 fn theater_color_channels_clamp_like_the_real_library() {
     let (stdout, _log) = run_theater(
-        r##"
+        r#"
         import org.code.theater.*;
         import org.code.media.*;
         public class ClampScene extends Scene {
@@ -471,7 +471,7 @@ fn theater_color_channels_clamp_like_the_real_library() {
                 System.out.println(q.getRed() + "," + q.getGreen() + "," + q.getBlue());
             }
         }
-        "##,
+        "#,
         "ClampScene",
     );
     assert_eq!(
@@ -12296,8 +12296,12 @@ fn fault_inside_a_warm_accessor_keeps_its_frame_in_the_trace() {
         ),
         "{stderr}"
     );
-    let peek_at = stderr.find("\tat WarmTrace.peek(WarmTrace.java:12)").unwrap();
-    let main_at = stderr.find("\tat WarmTrace.main(WarmTrace.java:23)").unwrap();
+    let peek_at = stderr
+        .find("\tat WarmTrace.peek(WarmTrace.java:12)")
+        .unwrap();
+    let main_at = stderr
+        .find("\tat WarmTrace.main(WarmTrace.java:23)")
+        .unwrap();
     assert!(peek_at < main_at, "{stderr}");
     // The successful warm calls came through first.
     assert_eq!(console.stdout_text(), "800\n");

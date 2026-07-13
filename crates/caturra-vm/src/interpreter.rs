@@ -6807,11 +6807,7 @@ impl<'run> Interpreter<'run> {
                     match code.attr.code.get(pc) {
                         Some(&op::RETURN) => break 'mini MiniExit::Done(None),
                         Some(
-                            &(op::IRETURN
-                            | op::DRETURN
-                            | op::ARETURN
-                            | op::LRETURN
-                            | op::FRETURN),
+                            &(op::IRETURN | op::DRETURN | op::ARETURN | op::LRETURN | op::FRETURN),
                         ) if sp > 0 => {
                             sp -= 1;
                             break 'mini MiniExit::Done(Some(stack[sp]));
@@ -6820,7 +6816,10 @@ impl<'run> Interpreter<'run> {
                     }
                 }
             }
-            break 'mini MiniExit::Suspend { at: pc, refund: true };
+            break 'mini MiniExit::Suspend {
+                at: pc,
+                refund: true,
+            };
         };
 
         match exit {
@@ -8924,9 +8923,9 @@ fn frameless_eligible(attr: &CodeAttribute, insts: &[Inst]) -> bool {
             Inst::Load { slot, .. } | Inst::Store { slot, .. } => {
                 usize::from(*slot) < usize::from(attr.max_locals)
             }
-            Inst::Goto { target }
-            | Inst::IfICmp { target, .. }
-            | Inst::IfInt { target, .. } => *target as usize > pc,
+            Inst::Goto { target } | Inst::IfICmp { target, .. } | Inst::IfInt { target, .. } => {
+                *target as usize > pc
+            }
             Inst::Legacy => matches!(
                 attr.code[pc],
                 op::IRETURN | op::LRETURN | op::FRETURN | op::DRETURN | op::ARETURN | op::RETURN
