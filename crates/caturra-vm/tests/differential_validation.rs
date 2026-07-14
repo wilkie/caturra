@@ -664,6 +664,66 @@ public class ImportTest {
 "#
 );
 
+// The corpus writes its hints across several lines, as a matter of course — a
+// sentence, then `messageGap = "\n       "`, then more guidance. caturra threw
+// the message away at its first newline (the throw carries the exception as text
+// with the stack trace appended, and the catch took the first line), so on 62
+// corpus tests the student read the prose and lost the `==> expected: <x> but was:
+// <y>` that says what their own code produced. The runner folds newlines to spaces
+// to keep one line per test; what it must never do is lose the rest of the hint.
+validation_differential_test!(
+    diff_junit_multi_line_failure_messages,
+    "GapTest",
+    r#"
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class GapTest {
+    String messageGap = "\n       ";
+
+    @Test
+    @Order(1)
+    @DisplayName("a hint that ends with a gap => ")
+    public void trailing() {
+        String message = "The toString() method should return the title." + messageGap;
+        assertEquals("Title: Dune", "nope", message);
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("a hint with a gap in the middle => ")
+    public void middle() {
+        String message = "Check your loop." + messageGap + "It should visit every element.";
+        assertTrue(false, message);
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("a bare multi-line throw => ")
+    public void bare() {
+        throw new IllegalStateException("first line\nsecond line");
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("assertSame names both objects => ")
+    public void same() {
+        String found = "Angie Thomas";
+        assertSame(null, found, "findBook() did not return a valid value." + messageGap);
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("assertNotSame names the object => ")
+    public void notSame() {
+        String found = "Angie Thomas";
+        assertNotSame(found, found, "findBook() returned the same object.");
+    }
+}
+"#
+);
+
 // The array assertions were still speaking JUnit 4 (`arrays first differed at
 // element [1]`) — wrong in the one place it is read out loud, since a failure
 // message IS the hint the student sees. JUnit 5 names the value on both sides,

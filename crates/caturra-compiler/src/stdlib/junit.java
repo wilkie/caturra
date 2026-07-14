@@ -314,17 +314,34 @@ class Assertions {
   public static void assertNotNull(Object value, String message) {
     if (value == null) throw new RuntimeException(message + " ==> expected: not <null>");
   }
+  // assertSame reports the two objects the way JUnit does — it threw the bare
+  // message, so a student was told what was wrong but never what their code
+  // actually produced. (JUnit disambiguates two DIFFERENT objects that print the
+  // same by tacking on an identity hash; that hash is unreproducible — a real JVM
+  // does not even agree with itself across runs — so the plain form is used, which
+  // is what JUnit prints for every corpus failure of this kind.)
   public static void assertSame(Object expected, Object actual) {
-    if (expected != actual) throw new RuntimeException("expected the same object");
+    __assertSame(expected, actual, null);
   }
   public static void assertSame(Object expected, Object actual, String message) {
-    if (expected != actual) throw new RuntimeException(message);
+    __assertSame(expected, actual, message);
+  }
+  private static void __assertSame(Object expected, Object actual, String message) {
+    if (expected == actual) return;
+    String prefix = message == null ? "" : message + " ==> ";
+    throw new RuntimeException(
+        prefix + "expected: <" + expected + "> but was: <" + actual + ">");
   }
   public static void assertNotSame(Object unexpected, Object actual) {
-    if (unexpected == actual) throw new RuntimeException("expected a different object");
+    __assertNotSame(unexpected, actual, null);
   }
   public static void assertNotSame(Object unexpected, Object actual, String message) {
-    if (unexpected == actual) throw new RuntimeException(message);
+    __assertNotSame(unexpected, actual, message);
+  }
+  private static void __assertNotSame(Object unexpected, Object actual, String message) {
+    if (unexpected != actual) return;
+    String prefix = message == null ? "" : message + " ==> ";
+    throw new RuntimeException(prefix + "expected: not same but was: <" + actual + ">");
   }
   public static void fail() {
     throw new RuntimeException("test failed");
