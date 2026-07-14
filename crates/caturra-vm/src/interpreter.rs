@@ -1493,8 +1493,13 @@ impl<'run> Interpreter<'run> {
                                     Some(crate::value::HeapObject::Instance {
                                         class_name, ..
                                     }) => self.is_runtime_subtype(class_name, &target),
+                                    // A String is also a Comparable and a
+                                    // CharSequence — `s instanceof Comparable`
+                                    // answered false, which is not what Java says.
                                     Some(crate::value::HeapObject::JavaString(_)) => {
                                         target == "java/lang/String"
+                                            || target == "java/lang/CharSequence"
+                                            || is_comparable(&target)
                                     }
                                     Some(crate::value::HeapObject::ArrayList(_)) => {
                                         target == "java/util/ArrayList"
@@ -10530,11 +10535,26 @@ fn primitive_wrapper(value: JValue) -> Option<&'static str> {
 /// `Comparable`; the numeric ones are also a `Number`. An `Integer` is NOT a
 /// `Double`, which is the whole point: real Java throws on `(Double) anInt`.
 fn wrapper_is(wrapper: &str, target: &str) -> bool {
+    // `Comparable` is the BUNDLED interface, so it reaches the VM under its
+    // flattened name — every wrapper implements it, and answering `false`
+    // (which is what comparing names did) is a silent wrong answer, not a gap.
+    if is_comparable(target) {
+        return true;
+    }
     match target {
-        "java/lang/Object" | "java/lang/Comparable" => true,
-        "java/lang/Number" => wrapper != "java/lang/Boolean" && wrapper != "java/lang/Character",
+        "java/lang/Object" => true,
+        "java/lang/Number" | "Number" => {
+            wrapper != "java/lang/Boolean" && wrapper != "java/lang/Character"
+        }
         other => wrapper == other,
     }
+}
+
+/// `java.lang.Comparable`, however it is spelled: caturra bundles the interface,
+/// so user classes implement a `Comparable` with no package while the JDK name is
+/// `java/lang/Comparable`.
+fn is_comparable(target: &str) -> bool {
+    matches!(target, "Comparable" | "java/lang/Comparable")
 }
 
 /// The `ClassCastException` a failed cast raises, named the way Java names it:

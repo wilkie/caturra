@@ -8712,3 +8712,40 @@ public class DiffBoxes {
 }
 "#
 );
+
+// `x instanceof Number` did not compile ("unknown type in instanceof"), and
+// `x instanceof Comparable` compiled and answered FALSE — for an Integer and for a
+// String, both of which Java says are Comparable. A wrong answer is worse than a
+// gap: the branch simply never ran.
+//
+// caturra models no `Number` TYPE (there is nothing to declare a variable of, and
+// its methods live on the wrappers), but the QUESTION is ordinary and the VM can
+// answer it. `Comparable` is bundled, so it reaches the VM under a bare name —
+// which is why comparing it against "java/lang/Comparable" quietly said no.
+differential_test!(
+    diff_instanceof_number_and_comparable,
+    "DiffNumber",
+    r#"
+import java.util.*;
+
+public class DiffNumber {
+    public static void main(String[] args) {
+        List<Object> values = new ArrayList<>();
+        values.add(5);
+        values.add(2.5);
+        values.add(7L);
+        values.add("hi");
+        values.add(true);
+        values.add('x');
+
+        for (int i = 0; i < values.size(); i++) {
+            Object value = values.get(i);
+            System.out.println(value.getClass().getName()
+                + " Number=" + (value instanceof Number)
+                + " Comparable=" + (value instanceof Comparable)
+                + " Object=" + (value instanceof Object));
+        }
+    }
+}
+"#
+);

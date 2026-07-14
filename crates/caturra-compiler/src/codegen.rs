@@ -12369,6 +12369,30 @@ impl BodyGen<'_> {
     /// `value instanceof Type` (reference types only).
     fn instance_of(&mut self, value: &Expr, ty: &TypeRef, span: SourceSpan) -> JType {
         let value_ty = self.expr(value);
+        // `x instanceof Number` — the wrapper supertype. caturra models no `Number`
+        // TYPE (there is nothing to declare a variable of; its methods live on the
+        // wrappers), but the QUESTION is ordinary and the VM can answer it: an
+        // Integer is a Number, a Boolean is not. A user class named `Number`
+        // shadows it, as it shadows every other library name.
+        if let TypeRef::Named(name) = ty
+            && matches!(name.as_str(), "Number" | "java.lang.Number")
+            && !self.table.has_class("Number")
+        {
+            if !value_ty.is_reference() && value_ty != JType::Error {
+                self.error(
+                    span,
+                    format!(
+                        "unexpected type: {} cannot be tested with instanceof",
+                        value_ty.describe(self.table)
+                    ),
+                );
+                return JType::Error;
+            }
+            let class_index = intern_class(self.pool, "java/lang/Number");
+            self.code.push_op_u16(op::INSTANCEOF, class_index, 1);
+            self.code.drop_stack(1);
+            return JType::Boolean;
+        }
         let Some(target) = self.table.resolve_type(ty) else {
             self.error(span, "unknown type in instanceof");
             return JType::Error;

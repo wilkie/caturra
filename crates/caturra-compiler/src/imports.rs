@@ -119,6 +119,10 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "Writer",
         ],
     ),
+    // `x instanceof Number` DOES work (the VM knows an Integer is a Number and a
+    // Boolean is not) — but there is no Number type to declare a variable of, so
+    // say that rather than "unknown type 'Number'", which would suggest a typo.
+    ("java.lang", &["Number"]),
 ];
 
 /// Real JDK packages we don't model at all (for wildcard/unknown-class
