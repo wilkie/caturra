@@ -409,6 +409,15 @@ struct ClassInfo {
     fields: Vec<FieldSig>,
 }
 
+/// A class whose statics an unqualified call may reach, via
+/// `import static X.*` (`member: None`) or `import static X.m` (`member:
+/// Some("m")` — which imports THAT member and no other, so the rest of `X`'s
+/// statics stay unreachable, exactly as javac has it).
+struct StaticImport {
+    class: String,
+    member: Option<String>,
+}
+
 /// All classes in the compilation.
 struct MethodTable {
     /// Indexed by [`ClassId`].
@@ -417,9 +426,9 @@ struct MethodTable {
     /// The synthetic `java.lang.Object` top type (every reference type
     /// is a subtype). Type parameters erase to it.
     object_id: ClassId,
-    /// Class names brought in by `import static X.*` (e.g. `JUnit`
-    /// `Assertions`) — unqualified calls fall back to their statics.
-    static_imports: Vec<String>,
+    /// Classes brought in by `import static` (e.g. `JUnit` `Assertions`) —
+    /// unqualified calls fall back to their statics.
+    static_imports: Vec<StaticImport>,
     /// Validation ("Test") mode: private-access checks are relaxed so a
     /// `JUnit` validator can reach the student's internals. Set when a
     /// source imports `org.junit`.
@@ -454,11 +463,21 @@ impl MethodTable {
                 {
                     relax_access = true;
                 }
-                if import.is_static
-                    && import.wildcard
-                    && let Some(class) = import.path.last()
-                {
-                    static_imports.push(class.clone());
+                if import.is_static {
+                    // `import static X.*` names the class last; `import static
+                    // X.m` names the MEMBER last and the class before it.
+                    let (class, member) = if import.wildcard {
+                        (import.path.last(), None)
+                    } else {
+                        let split = import.path.len().wrapping_sub(2);
+                        (import.path.get(split), import.path.last().cloned())
+                    };
+                    if let Some(class) = class {
+                        static_imports.push(StaticImport {
+                            class: class.clone(),
+                            member,
+                        });
+                    }
                 }
             }
         }
@@ -10636,7 +10655,14 @@ impl BodyGen<'_> {
         // Unqualified call to a `import static X.*` member (JUnit
         // `assertTrue(...)` → `Assertions.assertTrue(...)`).
         if !matches!(own, Resolution::Found(_)) {
-            for class in self.table.static_imports.clone() {
+            let reachable: Vec<String> = self
+                .table
+                .static_imports
+                .iter()
+                .filter(|import| import.member.as_deref().is_none_or(|name| name == method))
+                .map(|import| import.class.clone())
+                .collect();
+            for class in reachable {
                 if matches!(
                     self.table.resolve(&class, method, &arg_types),
                     Resolution::Found(sig) if sig.is_static
