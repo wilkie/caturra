@@ -1,0 +1,335 @@
+[
+  {
+    "id": "classes",
+    "category": "Language",
+    "title": "Classes, constructors, encapsulation",
+    "summary": "Fields, a constructor, private state behind accessors, and toString().",
+    "main": "Book",
+    "source": "public class Book {\n    private final String title;\n    private int pages;\n\n    public Book(String title, int pages) {\n        this.title = title;\n        this.pages = pages;\n    }\n\n    public String getTitle() { return title; }\n    public void read(int howMany) { pages -= howMany; }\n    public int getPagesLeft() { return pages; }\n\n    @Override\n    public String toString() { return title + \" (\" + pages + \" pages left)\"; }\n\n    public static void main(String[] args) {\n        Book book = new Book(\"Dune\", 412);\n        book.read(12);\n        System.out.println(book);\n        System.out.println(book.getTitle() + \" -> \" + book.getPagesLeft());\n    }\n}\n",
+    "status": "supported",
+    "expected": "Dune (400 pages left)\nDune -> 400\n"
+  },
+  {
+    "id": "inheritance",
+    "category": "Language",
+    "title": "Inheritance and polymorphism",
+    "summary": "A subclass overrides a method; the call dispatches on the runtime type.",
+    "main": "Shapes",
+    "source": "public class Shapes {\n    static class Shape {\n        String name() { return \"shape\"; }\n        double area() { return 0; }\n        @Override public String toString() { return name() + \" area=\" + area(); }\n    }\n\n    static class Circle extends Shape {\n        private final double r;\n        Circle(double r) { this.r = r; }\n        @Override String name() { return \"circle\"; }\n        @Override double area() { return Math.round(Math.PI * r * r * 100) / 100.0; }\n    }\n\n    static class Square extends Shape {\n        private final double side;\n        Square(double side) { this.side = side; }\n        @Override String name() { return \"square\"; }\n        @Override double area() { return side * side; }\n    }\n\n    public static void main(String[] args) {\n        Shape[] shapes = { new Circle(2), new Square(3), new Shape() };\n        for (Shape shape : shapes) {\n            System.out.println(shape);\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "circle area=12.57\nsquare area=9.0\nshape area=0.0\n"
+  },
+  {
+    "id": "interfaces",
+    "category": "Language",
+    "title": "Interfaces and abstract classes",
+    "summary": "An abstract base, an interface, and a default method.",
+    "main": "Speak",
+    "source": "public class Speak {\n    interface Greeter {\n        String greet();\n        default String greetTwice() { return greet() + \" \" + greet(); }\n    }\n\n    abstract static class Animal implements Greeter {\n        abstract String sound();\n        public String greet() { return sound() + \"!\"; }\n    }\n\n    static class Dog extends Animal {\n        String sound() { return \"woof\"; }\n    }\n\n    public static void main(String[] args) {\n        Greeter dog = new Dog();\n        System.out.println(dog.greet());\n        System.out.println(dog.greetTwice());\n    }\n}\n",
+    "status": "supported",
+    "expected": "woof!\nwoof! woof!\n"
+  },
+  {
+    "id": "generics",
+    "category": "Language",
+    "title": "Generics",
+    "summary": "A generic class and a generic method, erased as Java erases them.",
+    "main": "Pair",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Pair<T> {\n    private final T left;\n    private final T right;\n\n    public Pair(T left, T right) {\n        this.left = left;\n        this.right = right;\n    }\n\n    public T getLeft() { return left; }\n\n    public static void main(String[] args) {\n        Pair<String> words = new Pair<>(\"hello\", \"world\");\n        System.out.println(words.getLeft());\n\n        List<Integer> numbers = new ArrayList<>();\n        numbers.add(3);\n        numbers.add(1);\n        numbers.add(2);\n        System.out.println(numbers);\n    }\n}\n",
+    "status": "supported",
+    "expected": "hello\n[3, 1, 2]\n"
+  },
+  {
+    "id": "lambdas",
+    "category": "Language",
+    "title": "Lambdas and functional interfaces",
+    "summary": "A lambda passed to a method, and one stored in a variable.",
+    "main": "Lambdas",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Lambdas {\n    interface Transform {\n        String apply(String value);\n    }\n\n    static String shout(String word, Transform transform) {\n        return transform.apply(word);\n    }\n\n    public static void main(String[] args) {\n        System.out.println(shout(\"hello\", w -> w.toUpperCase() + \"!\"));\n\n        Transform reverse = w -> new StringBuilder(w).reverse().toString();\n        System.out.println(reverse.apply(\"caturra\"));\n\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        names.add(\"grace\");\n        names.forEach(name -> System.out.println(\"hi \" + name));\n    }\n}\n",
+    "status": "supported",
+    "expected": "HELLO!\narrutac\nhi ada\nhi grace\n"
+  },
+  {
+    "id": "anonymous-classes",
+    "category": "Language",
+    "title": "Anonymous inner classes",
+    "summary": "An interface implemented inline, capturing a local variable.",
+    "main": "Anon",
+    "source": "public class Anon {\n    interface Counter {\n        int next();\n    }\n\n    public static void main(String[] args) {\n        final int start = 10;\n        Counter counter = new Counter() {\n            private int seen = 0;\n            @Override public int next() { return start + seen++; }\n        };\n        System.out.println(counter.next());\n        System.out.println(counter.next());\n        System.out.println(counter.next());\n    }\n}\n",
+    "status": "supported",
+    "expected": "10\n11\n12\n"
+  },
+  {
+    "id": "control-flow",
+    "category": "Language",
+    "title": "Control flow",
+    "summary": "if/else, switch, for, while, do-while, and the ternary operator.",
+    "main": "Flow",
+    "source": "public class Flow {\n    public static void main(String[] args) {\n        for (int i = 1; i <= 5; i++) {\n            String kind;\n            switch (i % 3) {\n                case 0: kind = \"fizz\"; break;\n                case 1: kind = \"one\"; break;\n                default: kind = \"two\";\n            }\n            System.out.println(i + \" \" + kind + (i % 2 == 0 ? \" even\" : \" odd\"));\n        }\n\n        int countdown = 3;\n        while (countdown > 0) {\n            System.out.print(countdown + \" \");\n            countdown--;\n        }\n        System.out.println();\n\n        int doubling = 1;\n        do {\n            doubling *= 2;\n        } while (doubling < 20);\n        System.out.println(doubling);\n    }\n}\n",
+    "status": "supported",
+    "expected": "1 one odd\n2 two even\n3 fizz odd\n4 one even\n5 two odd\n3 2 1 \n32\n"
+  },
+  {
+    "id": "arrays",
+    "category": "Language",
+    "title": "Arrays, 2D arrays and varargs",
+    "summary": "Array literals, a nested loop over a grid, and a varargs method.",
+    "main": "Grids",
+    "source": "import java.util.Arrays;\n\npublic class Grids {\n    static int total(int... values) {\n        int sum = 0;\n        for (int value : values) {\n            sum += value;\n        }\n        return sum;\n    }\n\n    public static void main(String[] args) {\n        int[] row = { 5, 3, 8, 1 };\n        Arrays.sort(row);\n        System.out.println(Arrays.toString(row));\n\n        int[][] grid = new int[3][3];\n        for (int r = 0; r < grid.length; r++) {\n            for (int c = 0; c < grid[r].length; c++) {\n                grid[r][c] = r * 3 + c;\n            }\n        }\n        System.out.println(Arrays.deepToString(grid));\n        System.out.println(total(1, 2, 3) + \" \" + total());\n    }\n}\n",
+    "status": "supported",
+    "expected": "[1, 3, 5, 8]\n[[0, 1, 2], [3, 4, 5], [6, 7, 8]]\n6 0\n"
+  },
+  {
+    "id": "exceptions",
+    "category": "Language",
+    "title": "Exceptions",
+    "summary": "try/catch/finally, a custom exception, and a stack unwind.",
+    "main": "Boom",
+    "source": "public class Boom {\n    static class TooLoudException extends RuntimeException {\n        TooLoudException(String message) { super(message); }\n    }\n\n    static void amplify(int volume) {\n        if (volume > 11) {\n            throw new TooLoudException(\"volume \" + volume + \" is too loud\");\n        }\n        System.out.println(\"playing at \" + volume);\n    }\n\n    public static void main(String[] args) {\n        try {\n            amplify(11);\n            amplify(12);\n        } catch (TooLoudException e) {\n            System.out.println(\"caught: \" + e.getMessage());\n        } finally {\n            System.out.println(\"finally\");\n        }\n\n        try {\n            int[] small = new int[2];\n            small[5] = 1;\n        } catch (ArrayIndexOutOfBoundsException e) {\n            System.out.println(\"caught: \" + e.getMessage());\n        }\n\n        try {\n            Object text = \"not a number\";\n            Integer number = (Integer) text;\n        } catch (ClassCastException e) {\n            System.out.println(\"caught a ClassCastException\");\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "playing at 11\ncaught: volume 12 is too loud\nfinally\ncaught: Index 5 out of bounds for length 2\ncaught a ClassCastException\n"
+  },
+  {
+    "id": "boxing",
+    "category": "Language",
+    "title": "Autoboxing, wrappers and instanceof",
+    "summary": "Primitives boxed into Object keep their identity; a bad cast throws.",
+    "main": "Boxing",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Boxing {\n    public static void main(String[] args) {\n        List<Object> values = new ArrayList<>();\n        values.add(5);\n        values.add(2.5);\n        values.add(\"hi\");\n        values.add(true);\n        values.add('x');\n\n        for (Object value : values) {\n            System.out.println(value.getClass().getName()\n                + \" Number=\" + (value instanceof Number)\n                + \" Comparable=\" + (value instanceof Comparable));\n        }\n\n        Object first = values.get(0);\n        System.out.println(\"unboxed: \" + ((Integer) first + 1));\n        System.out.println(Integer.parseInt(\"42\") + Integer.valueOf(8));\n    }\n}\n",
+    "status": "supported",
+    "expected": "java.lang.Integer Number=true Comparable=true\njava.lang.Double Number=true Comparable=true\njava.lang.String Number=false Comparable=true\njava.lang.Boolean Number=false Comparable=true\njava.lang.Character Number=false Comparable=true\nunboxed: 6\n50\n"
+  },
+  {
+    "id": "recursion",
+    "category": "Language",
+    "title": "Recursion",
+    "summary": "A recursive factorial and a recursive binary search.",
+    "main": "Recur",
+    "source": "public class Recur {\n    static long factorial(int n) {\n        return n <= 1 ? 1 : n * factorial(n - 1);\n    }\n\n    static int search(int[] sorted, int target, int lo, int hi) {\n        if (lo > hi) {\n            return -1;\n        }\n        int mid = (lo + hi) / 2;\n        if (sorted[mid] == target) {\n            return mid;\n        }\n        return sorted[mid] < target\n            ? search(sorted, target, mid + 1, hi)\n            : search(sorted, target, lo, mid - 1);\n    }\n\n    public static void main(String[] args) {\n        System.out.println(factorial(10));\n        int[] sorted = { 1, 3, 5, 7, 9, 11 };\n        System.out.println(search(sorted, 9, 0, sorted.length - 1));\n        System.out.println(search(sorted, 4, 0, sorted.length - 1));\n    }\n}\n",
+    "status": "supported",
+    "expected": "3628800\n4\n-1\n"
+  },
+  {
+    "id": "enums",
+    "category": "Language",
+    "title": "Enums",
+    "summary": "An enum with a field, a constructor and values().",
+    "main": "Enums",
+    "source": "public class Enums {\n    enum Planet {\n        MERCURY(3.3), EARTH(59.7), JUPITER(1898.0);\n\n        private final double mass;\n\n        Planet(double mass) { this.mass = mass; }\n\n        double getMass() { return mass; }\n    }\n\n    public static void main(String[] args) {\n        for (Planet planet : Planet.values()) {\n            System.out.println(planet + \" \" + planet.ordinal() + \" \" + planet.getMass());\n        }\n        Planet home = Planet.EARTH;\n        System.out.println(home == Planet.valueOf(\"EARTH\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "MERCURY 0 3.3\nEARTH 1 59.7\nJUPITER 2 1898.0\ntrue\n"
+  },
+  {
+    "id": "strings",
+    "category": "Library",
+    "title": "String",
+    "summary": "The everyday String surface, plus String.format.",
+    "main": "Strings",
+    "source": "public class Strings {\n    public static void main(String[] args) {\n        String text = \"The quick brown fox\";\n        System.out.println(text.length() + \" \" + text.toUpperCase());\n        System.out.println(text.substring(4, 9) + \"|\" + text.indexOf(\"brown\"));\n        System.out.println(text.replace(\"quick\", \"slow\"));\n        String[] words = text.split(\" \");\n        System.out.println(words.length + \" words, last=\" + words[words.length - 1]);\n        System.out.println(\"  padded  \".trim() + \"|\");\n        System.out.println(String.format(\"%s scored %d (%.1f%%)\", \"Ada\", 92, 91.75));\n        System.out.println(\"abc\".compareTo(\"abd\") + \" \" + \"abc\".equals(\"ABC\")\n            + \" \" + \"abc\".equalsIgnoreCase(\"ABC\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "19 THE QUICK BROWN FOX\nquick|10\nThe slow brown fox\n4 words, last=fox\npadded|\nAda scored 92 (91.8%)\n-1 false true\n"
+  },
+  {
+    "id": "stringbuilder",
+    "category": "Library",
+    "title": "StringBuilder",
+    "summary": "Building a string in place: append, insert, reverse, delete.",
+    "main": "Builder",
+    "source": "public class Builder {\n    public static void main(String[] args) {\n        StringBuilder sb = new StringBuilder(\"caturra\");\n        sb.append(\" runs Java\");\n        sb.insert(0, \">> \");\n        System.out.println(sb);\n        System.out.println(sb.reverse());\n        sb.reverse();\n        sb.delete(0, 3);\n        sb.setCharAt(0, 'C');\n        System.out.println(sb + \" (\" + sb.length() + \")\");\n        System.out.println(sb.indexOf(\"Java\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": ">> caturra runs Java\navaJ snur arrutac >>\nCaturra runs Java (17)\n13\n"
+  },
+  {
+    "id": "arraylist",
+    "category": "Collections",
+    "title": "ArrayList",
+    "summary": "The workhorse list: add, get, set, remove, contains, iterate.",
+    "main": "Lists",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\n\npublic class Lists {\n    public static void main(String[] args) {\n        List<String> queue = new ArrayList<>();\n        queue.add(\"ada\");\n        queue.add(\"grace\");\n        queue.add(1, \"alan\");\n        System.out.println(queue + \" size=\" + queue.size());\n        System.out.println(queue.get(0) + \" \" + queue.contains(\"grace\")\n            + \" \" + queue.indexOf(\"alan\"));\n        queue.set(0, \"ADA\");\n        queue.remove(\"grace\");\n        for (String name : queue) {\n            System.out.println(name);\n        }\n        System.out.println(queue.isEmpty());\n    }\n}\n",
+    "status": "supported",
+    "expected": "[ada, alan, grace] size=3\nada true 1\nADA\nalan\nfalse\n"
+  },
+  {
+    "id": "hashmap",
+    "category": "Collections",
+    "title": "HashMap",
+    "summary": "Keys to values \u2014 and the JDK's own iteration order, not an approximation.",
+    "main": "Maps",
+    "source": "import java.util.HashMap;\nimport java.util.Map;\n\npublic class Maps {\n    public static void main(String[] args) {\n        Map<String, Integer> votes = new HashMap<>();\n        votes.put(\"ada\", 3);\n        votes.put(\"grace\", 5);\n        votes.put(\"alan\", 2);\n        votes.put(\"ada\", votes.get(\"ada\") + 1);\n\n        System.out.println(votes);\n        System.out.println(votes.containsKey(\"alan\") + \" \" + votes.getOrDefault(\"nobody\", 0));\n\n        for (Map.Entry<String, Integer> entry : votes.entrySet()) {\n            System.out.println(entry.getKey() + \" -> \" + entry.getValue());\n        }\n        System.out.println(votes.keySet());\n    }\n}\n",
+    "status": "supported",
+    "expected": "{alan=2, grace=5, ada=4}\ntrue 0\nalan -> 2\ngrace -> 5\nada -> 4\n[alan, grace, ada]\n"
+  },
+  {
+    "id": "sets",
+    "category": "Collections",
+    "title": "HashSet and TreeSet",
+    "summary": "Uniqueness, and a set that keeps itself sorted.",
+    "main": "Sets",
+    "source": "import java.util.HashSet;\nimport java.util.Set;\nimport java.util.TreeSet;\n\npublic class Sets {\n    public static void main(String[] args) {\n        Set<String> seen = new HashSet<>();\n        System.out.println(seen.add(\"ada\") + \" \" + seen.add(\"ada\"));\n        seen.add(\"grace\");\n        System.out.println(seen.contains(\"ada\") + \" size=\" + seen.size());\n\n        TreeSet<Integer> sorted = new TreeSet<>();\n        sorted.add(5);\n        sorted.add(1);\n        sorted.add(3);\n        System.out.println(sorted);\n        System.out.println(sorted.first() + \" \" + sorted.last() + \" \" + sorted.ceiling(2));\n    }\n}\n",
+    "status": "supported",
+    "expected": "true false\ntrue size=2\n[1, 3, 5]\n1 5 3\n"
+  },
+  {
+    "id": "deques",
+    "category": "Collections",
+    "title": "Stack, Queue and Deque",
+    "summary": "LinkedList as a queue, ArrayDeque, java.util.Stack, and a PriorityQueue.",
+    "main": "Deques",
+    "source": "import java.util.ArrayDeque;\nimport java.util.Deque;\nimport java.util.LinkedList;\nimport java.util.PriorityQueue;\nimport java.util.Queue;\nimport java.util.Stack;\n\npublic class Deques {\n    public static void main(String[] args) {\n        Queue<String> queue = new LinkedList<>();\n        queue.add(\"first\");\n        queue.add(\"second\");\n        System.out.println(queue.poll() + \" then \" + queue.peek());\n\n        Deque<Integer> deque = new ArrayDeque<>();\n        deque.addFirst(1);\n        deque.addLast(2);\n        System.out.println(deque.pollFirst() + \" \" + deque.pollLast());\n\n        Stack<String> stack = new Stack<>();\n        stack.push(\"bottom\");\n        stack.push(\"top\");\n        System.out.println(stack.pop() + \" \" + stack.peek());\n\n        PriorityQueue<Integer> heap = new PriorityQueue<>();\n        heap.add(5);\n        heap.add(1);\n        heap.add(3);\n        System.out.println(heap.poll() + \" \" + heap.poll() + \" \" + heap.poll());\n    }\n}\n",
+    "status": "supported",
+    "expected": "first then second\n1 2\ntop bottom\n1 3 5\n"
+  },
+  {
+    "id": "sorting",
+    "category": "Collections",
+    "title": "Sorting with a Comparator",
+    "summary": "Collections.sort, Comparable, and comparator combinators.",
+    "main": "Sorting",
+    "source": "import java.util.ArrayList;\nimport java.util.Collections;\nimport java.util.Comparator;\nimport java.util.List;\n\npublic class Sorting {\n    static class Runner implements Comparable<Runner> {\n        final String name;\n        final int time;\n\n        Runner(String name, int time) {\n            this.name = name;\n            this.time = time;\n        }\n\n        String getName() { return name; }\n        @Override public int compareTo(Runner other) { return time - other.time; }\n        @Override public String toString() { return name + \"(\" + time + \")\"; }\n    }\n\n    public static void main(String[] args) {\n        List<Runner> runners = new ArrayList<>();\n        runners.add(new Runner(\"ada\", 31));\n        runners.add(new Runner(\"grace\", 29));\n        runners.add(new Runner(\"alan\", 35));\n\n        Collections.sort(runners);\n        System.out.println(runners);\n\n        runners.sort(Comparator.comparing(Runner::getName));\n        System.out.println(runners);\n\n        List<Integer> numbers = new ArrayList<>();\n        numbers.add(3);\n        numbers.add(1);\n        numbers.add(2);\n        Collections.sort(numbers, Collections.reverseOrder());\n        System.out.println(numbers + \" max=\" + Collections.max(numbers));\n    }\n}\n",
+    "status": "supported",
+    "expected": "[grace(29), ada(31), alan(35)]\n[ada(31), alan(35), grace(29)]\n[3, 2, 1] max=3\n"
+  },
+  {
+    "id": "streams",
+    "category": "Library",
+    "title": "Streams and Optional",
+    "summary": "filter/map/collect, IntStream, and an Optional result.",
+    "main": "Streams",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\nimport java.util.Optional;\nimport java.util.stream.Collectors;\nimport java.util.stream.IntStream;\n\npublic class Streams {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        names.add(\"grace\");\n        names.add(\"alan\");\n\n        List<String> shouted = names.stream()\n            .filter(name -> name.length() > 3)\n            .map(name -> name.toUpperCase())\n            .collect(Collectors.toList());\n        System.out.println(shouted);\n\n        System.out.println(names.stream().count() + \" \" + names.stream().anyMatch(n -> n.startsWith(\"a\")));\n        System.out.println(IntStream.range(1, 6).sum());\n\n        Optional<String> first = names.stream().filter(n -> n.startsWith(\"g\")).findFirst();\n        System.out.println(first.isPresent() + \" \" + first.get());\n        System.out.println(names.stream().filter(n -> n.isEmpty()).findFirst().orElse(\"none\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "[GRACE, ALAN]\n3 true\n15\ntrue grace\nnone\n"
+  },
+  {
+    "id": "math",
+    "category": "Library",
+    "title": "Math, Integer and Character",
+    "summary": "Numeric helpers, parsing, and character classification.",
+    "main": "Numbers",
+    "source": "public class Numbers {\n    public static void main(String[] args) {\n        System.out.println(Math.max(3, 7) + \" \" + Math.abs(-4) + \" \" + Math.pow(2, 10));\n        System.out.println(Math.sqrt(144) + \" \" + Math.round(2.6) + \" \" + Math.min(0.5, 0.25));\n        System.out.println(Integer.parseInt(\"123\") + 1);\n        System.out.println(Integer.MAX_VALUE + \" \" + Integer.toBinaryString(10));\n        System.out.println(Character.isDigit('7') + \" \" + Character.isLetter('7')\n            + \" \" + Character.toUpperCase('a'));\n        System.out.println(Double.parseDouble(\"2.5\") * 2);\n        System.out.println(7 / 2 + \" \" + 7 % 2 + \" \" + 7.0 / 2);\n    }\n}\n",
+    "status": "supported",
+    "expected": "7 4 1024.0\n12.0 3 0.25\n124\n2147483647 1010\ntrue false A\n5.0\n3 1 3.5\n"
+  },
+  {
+    "id": "file-io",
+    "category": "Library",
+    "title": "File I/O",
+    "summary": "Write a file with PrintWriter, read it back with Scanner and File.",
+    "main": "Files",
+    "source": "import java.io.File;\nimport java.io.IOException;\nimport java.io.PrintWriter;\nimport java.util.Scanner;\n\npublic class Files {\n    public static void main(String[] args) throws IOException {\n        PrintWriter writer = new PrintWriter(\"notes.txt\");\n        writer.println(\"first line\");\n        writer.println(\"second line\");\n        writer.close();\n\n        File file = new File(\"notes.txt\");\n        System.out.println(file.exists() + \" \" + file.getName());\n\n        Scanner scanner = new Scanner(file);\n        while (scanner.hasNextLine()) {\n            System.out.println(\"read: \" + scanner.nextLine());\n        }\n        scanner.close();\n    }\n}\n",
+    "status": "supported",
+    "expected": "true notes.txt\nread: first line\nread: second line\n"
+  },
+  {
+    "id": "reflection",
+    "category": "Library",
+    "title": "Reflection",
+    "summary": "Class, Method and Field \u2014 the machinery Code.org's own graders run on.",
+    "main": "Reflect",
+    "source": "import java.lang.reflect.Field;\nimport java.lang.reflect.Method;\n\npublic class Reflect {\n    static class Student {\n        private String name = \"ada\";\n        public int score(int bonus) { return 90 + bonus; }\n    }\n\n    public static void main(String[] args) throws Exception {\n        Class<?> type = Student.class;\n        System.out.println(type.getSimpleName());\n\n        Method score = type.getDeclaredMethod(\"score\", int.class);\n        System.out.println(score.getName() + \" -> \" + score.invoke(new Student(), 5));\n\n        Field name = type.getDeclaredField(\"name\");\n        name.setAccessible(true);\n        System.out.println(name.getName() + \" = \" + name.get(new Student()));\n\n        try {\n            type.getDeclaredMethod(\"missing\");\n        } catch (NoSuchMethodException e) {\n            System.out.println(\"no such method, as Java says\");\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "Student\nscore -> 95\nname = ada\nno such method, as Java says\n"
+  },
+  {
+    "id": "varargs-library",
+    "category": "Library",
+    "title": "Varargs library methods (String.join)",
+    "summary": "A varargs method YOU write works; the library's own varargs (String.join) are not modelled.",
+    "main": "Join",
+    "source": "public class Join {\n    public static void main(String[] args) {\n        String[] parts = { \"a\", \"b\", \"c\" };\n        System.out.println(String.join(\",\", parts));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "String.join exists in Java, but varargs are not supported by caturra"
+  },
+  {
+    "id": "method-ref-stream",
+    "category": "Library",
+    "title": "Method references in a stream",
+    "summary": "A lambda works (`map(s -> s.toUpperCase())`), and a Comparator key extractor must BE a method reference \u2014 but `map(String::toUpperCase)` is not modelled.",
+    "main": "MethodRef",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\nimport java.util.stream.Collectors;\n\npublic class MethodRef {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        List<String> shouted = names.stream()\n            .map(String::toUpperCase)\n            .collect(Collectors.toList());\n        System.out.println(shouted);\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "a lambda or method reference is only allowed where a functional-interface type is expected"
+  },
+  {
+    "id": "iterator",
+    "category": "Collections",
+    "title": "Iterator",
+    "summary": "An explicit iterator. The for-each loop it desugars to works; the interface itself is not modelled.",
+    "main": "Iterate",
+    "source": "import java.util.ArrayList;\nimport java.util.Iterator;\nimport java.util.List;\n\npublic class Iterate {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        Iterator<String> it = names.iterator();\n        while (it.hasNext()) {\n            System.out.println(it.next());\n        }\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "java.util.Iterator is not supported by caturra (the class library covers the AP CS A subset)"
+  },
+  {
+    "id": "vector",
+    "category": "Collections",
+    "title": "Vector and Hashtable",
+    "summary": "The legacy synchronized collections. ArrayList and HashMap replace them.",
+    "main": "Legacy",
+    "source": "import java.util.Vector;\n\npublic class Legacy {\n    public static void main(String[] args) {\n        Vector<String> items = new Vector<>();\n        items.add(\"one\");\n        System.out.println(items);\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "java.util.Vector is not supported by caturra (the class library covers the AP CS A subset)"
+  },
+  {
+    "id": "threads",
+    "category": "Library",
+    "title": "Threads",
+    "summary": "Concurrency. caturra runs a program on one thread, in one WASM instance.",
+    "main": "Threads",
+    "source": "public class Threads {\n    public static void main(String[] args) throws InterruptedException {\n        Thread worker = new Thread(() -> System.out.println(\"working\"));\n        worker.start();\n        worker.join();\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "java.lang.Thread is not supported by caturra (the class library covers the AP CS A subset)"
+  },
+  {
+    "id": "buffered-reader",
+    "category": "Library",
+    "title": "BufferedReader",
+    "summary": "The java.io reader stack. Scanner and File cover the same ground.",
+    "main": "Reader",
+    "source": "import java.io.BufferedReader;\nimport java.io.FileReader;\nimport java.io.IOException;\n\npublic class Reader {\n    public static void main(String[] args) throws IOException {\n        BufferedReader reader = new BufferedReader(new FileReader(\"notes.txt\"));\n        System.out.println(reader.readLine());\n        reader.close();\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "java.io.BufferedReader is not supported by caturra (the class library covers the AP CS A subset)"
+  },
+  {
+    "id": "nio-files",
+    "category": "Library",
+    "title": "java.nio.file",
+    "summary": "Files/Paths, including Java 11's Files.readString.",
+    "main": "Nio",
+    "source": "import java.io.IOException;\nimport java.nio.file.Files;\nimport java.nio.file.Path;\n\npublic class Nio {\n    public static void main(String[] args) throws IOException {\n        Path path = Path.of(\"notes.txt\");\n        System.out.println(Files.readString(path));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "package java.nio.file does not exist"
+  },
+  {
+    "id": "records",
+    "category": "Beyond Java 11",
+    "title": "Records (Java 16)",
+    "summary": "A record is not Java 11. javac 11 rejects it too.",
+    "main": "Rec",
+    "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
+    "status": "beyond-11",
+    "reason": "missing return statement",
+    "javac": "/tmp/compat-qfmv47y_/Rec.java:2: error: cannot find symbol"
+  },
+  {
+    "id": "text-blocks",
+    "category": "Beyond Java 11",
+    "title": "Text blocks (Java 15)",
+    "summary": "Triple-quoted strings are not Java 11. javac 11 rejects them too.",
+    "main": "Block",
+    "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
+    "status": "beyond-11",
+    "reason": "unterminated string literal",
+    "javac": "/tmp/compat-ho63g17k/Block.java:3: error: unclosed string literal"
+  },
+  {
+    "id": "switch-expressions",
+    "category": "Beyond Java 11",
+    "title": "Switch expressions (Java 14)",
+    "summary": "`case ->` and switch-as-a-value are not Java 11. javac 11 rejects them too.",
+    "main": "Switch",
+    "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
+    "status": "beyond-11",
+    "reason": "expected an expression",
+    "javac": "/tmp/compat-yiat3tqn/Switch.java:4: error: illegal start of expression"
+  }
+]

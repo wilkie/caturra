@@ -3611,6 +3611,14 @@ export function App(): React.JSX.Element {
           >
             {version}
           </Typography>
+          <Typography
+            variant="body2"
+            component="a"
+            href={`${import.meta.env.BASE_URL}compat.html`}
+            sx={{ ml: 'auto', color: 'text.secondary' }}
+          >
+            Java compatibility
+          </Typography>
         </Toolbar>
       </AppBar>
 

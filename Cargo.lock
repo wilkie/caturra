@@ -31,6 +31,7 @@ dependencies = [
  "caturra-classfile",
  "caturra-compiler",
  "indexmap",
+ "serde_json",
  "thiserror",
  "typed-arena",
 ]

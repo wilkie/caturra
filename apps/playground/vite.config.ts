@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -13,8 +15,18 @@ export default defineConfig({
   // VITE_BASE=/caturra/ (project pages serve under the repo path).
   base: process.env.VITE_BASE ?? '/',
   plugins: [react()],
-  // Per-unit CSA level chunks are intentionally large and load on demand.
-  build: { chunkSizeWarningLimit: 1500 },
+  build: {
+    // Per-unit CSA level chunks are intentionally large and load on demand.
+    chunkSizeWarningLimit: 1500,
+    // Two pages: the playground, and `compat.html` — the Java compatibility page,
+    // which runs its own proof programs in the same engine.
+    rollupOptions: {
+      input: {
+        index: resolve(import.meta.dirname, 'index.html'),
+        compat: resolve(import.meta.dirname, 'compat.html'),
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
