@@ -3034,7 +3034,7 @@ export function App(): React.JSX.Element {
       if (sound) {
         const id = Number(sound[1]);
         try {
-          pcm.set(id, decodeSamples(await session.readTextFile(`__caturra_pcm_${String(id)}`)));
+          pcm.set(id, decodeSamples(await session.readFile(`__caturra_pcm_${String(id)}`)));
         } catch {
           // Missing sample file — skip this clip.
         }

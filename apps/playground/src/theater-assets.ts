@@ -121,28 +121,33 @@ export function decodePixels(bytes: Uint8Array): ImageData | undefined {
   return image;
 }
 
-/** Serialize float samples in [-1, 1] as `count s0 s1 …` of signed 16-bit ints. */
-export function encodeSamples(samples: Float32Array): string {
-  const parts = new Array<string>(samples.length + 1);
-  parts[0] = String(samples.length);
+/**
+ * Serialize float samples in [-1, 1] as raw little-endian signed 16-bit PCM —
+ * the same bytes the audio was decoded from, and the same treatment the pixels
+ * get.
+ *
+ * These used to cross as `count s0 s1 …` TEXT, which nobody noticed because no
+ * level ever read a real sound (a missing asset used to hand back silence). A
+ * real one is `beat.wav`: 4.9 MILLION samples, 24 MB of ASCII to write, ship and
+ * parse — where the bytes are 9.5 MB and parse to nothing at all.
+ */
+export function encodeSamples(samples: Float32Array): Uint8Array {
+  const bytes = new Uint8Array(samples.length * 2);
+  const view = new DataView(bytes.buffer);
   for (let i = 0; i < samples.length; i++) {
     const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
-    parts[i + 1] = String(Math.round(clamped * 32767));
+    view.setInt16(i * 2, Math.round(clamped * 32767), true);
   }
-  return parts.join(' ');
+  return bytes;
 }
 
-/** Parse the `count s0 s1 …` sample format back into floats in [-1, 1]. */
-export function decodeSamples(text: string): Float32Array {
-  const trimmed = text.trim();
-  if (trimmed === '') {
-    return new Float32Array(0);
-  }
-  const tokens = trimmed.split(/\s+/);
-  const count = Number(tokens[0] ?? 0);
+/** Read that PCM back into floats in [-1, 1]. */
+export function decodeSamples(bytes: Uint8Array): Float32Array {
+  const count = Math.floor(bytes.length / 2);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const samples = new Float32Array(count);
   for (let i = 0; i < count; i++) {
-    samples[i] = Number(tokens[i + 1] ?? 0) / 32768;
+    samples[i] = view.getInt16(i * 2, true) / 32768;
   }
   return samples;
 }

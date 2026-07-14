@@ -2542,6 +2542,64 @@ fn image_bytes<'a>(
     Some((width, height, rgb))
 }
 
+/// Sound samples, natively — the audio half of `system_image`, and for the same
+/// reason only more so.
+///
+/// Samples cross the VFS as raw little-endian signed 16-bit PCM: exactly the
+/// bytes the audio decoded from, `2 * len` of them. `beat.wav` is 4.9 MILLION
+/// samples, so the text this used to be (`count s0 s1 …`) was 24 MB that the
+/// *modelled* `Scanner` parsed one interpreted `nextInt()` at a time, and that
+/// `playSound` built one interpreted `StringBuilder.append` at a time. Nobody
+/// noticed, because a missing asset used to hand back silence and so no level
+/// ever read a real sound.
+///
+/// An absent sound reads back empty, which is what lets `SoundLoader.read` throw
+/// `FILE_NOT_FOUND` instead of inventing silence.
+fn system_sound(
+    heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
+    method: &str,
+    args: &[JValue],
+) -> Option<JValue> {
+    let Some(JValue::Ref(Some(reference))) = args.first() else {
+        return None;
+    };
+    let path = heap.string_text(*reference)?;
+    if method == "__soundSamples" {
+        let samples = vfs.read_file(&path).map_or_else(
+            |_| Vec::new(),
+            |bytes| {
+                bytes
+                    .chunks_exact(2)
+                    .map(|pair| f64::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0)
+                    .collect()
+            },
+        );
+        return Some(JValue::Ref(Some(
+            heap.alloc(HeapObject::DoubleArray(samples)),
+        )));
+    }
+    // __writeSound(path, samples[])
+    let Some(JValue::Ref(Some(array))) = args.get(1) else {
+        return None;
+    };
+    let Some(HeapObject::DoubleArray(samples)) = heap.get(*array) else {
+        return None;
+    };
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        let clamped = sample.clamp(-1.0, 1.0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "clamped to [-1, 1] and scaled, so it is in i16 range"
+        )]
+        let quantized = (clamped * 32767.0).round() as i16;
+        bytes.extend_from_slice(&quantized.to_le_bytes());
+    }
+    let _ = vfs.write_file(&path, bytes);
+    None
+}
+
 /// Image pixels, natively (`org.code.media.Image`). A 400x400 image is 160k
 /// pixels; ferrying that through `PrintWriter`/`Scanner` text costs about a
 /// minute in the interpreter, so the whole buffer crosses the VFS as bytes and is
@@ -2721,6 +2779,7 @@ pub fn invoke_static(
             "__imageDims" | "__imagePixels" | "__writeImage" => {
                 system_image(heap, vfs, method, args)
             }
+            "__soundSamples" | "__writeSound" => Ok(system_sound(heap, vfs, method, args)),
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),

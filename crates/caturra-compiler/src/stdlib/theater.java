@@ -228,24 +228,14 @@ class Scene {
   public final void playNoteAndPause(Instrument inst, int note, double seconds) { playNote(inst, note, seconds); pause(seconds); }
   public final void playSound(String filename) { __cmds.add("sound file " + filename); }
   // Serialize the samples to a VFS file the host reads back and plays; the log
-  // just references it by id. Format (shared with the host): the sample count,
-  // then that many space-separated signed 16-bit ints. See specs/EXECUTION.md.
+  // just references it by id. Format (shared with the host): raw little-endian
+  // signed 16-bit PCM, `2 * length` bytes. See specs/EXECUTION.md. This used to
+  // build the same samples as TEXT in an interpreted loop — 4.9 million rounds
+  // and appends for a real sound.
   public final void playSound(double[] sound) {
     int id = __soundSeq;
     __soundSeq = __soundSeq + 1;
-    try {
-      java.io.PrintWriter w = new java.io.PrintWriter(new java.io.File("__caturra_pcm_" + id));
-      StringBuilder sb = new StringBuilder();
-      sb.append(sound.length);
-      for (int i = 0; i < sound.length; i++) {
-        double x = sound[i];
-        if (x > 1.0) x = 1.0;
-        if (x < -1.0) x = -1.0;
-        sb.append(' ').append((int) Math.round(x * 32767.0));
-      }
-      w.print(sb.toString());
-      w.close();
-    } catch (Exception e) {}
+    System.__writeSound("__caturra_pcm_" + id, sound);
     __cmds.add("sound pcm " + id + " " + sound.length);
   }
   public final void setStrokeWidth(double width) { __cmds.add("strokeWidth " + width); }
@@ -298,21 +288,19 @@ class Scene {
 class SoundLoader {
   // The host decodes bundled audio and preloads its samples into the VFS as
   // `__caturra_sound_<filename>` (same text format as playSound's output) before
-  // the run, so real assets come back as real samples. When no asset was
-  // provided (unknown name, or a headless run), fall back to indexable silence:
-  // the lessons index by time (`sound[start * 44100]`, e.g. createClip(sound, 2,
-  // 5)), so an empty buffer would throw ArrayIndexOutOfBounds. See EXECUTION.md.
+  // the run, so real assets come back as real samples. See EXECUTION.md.
+  //
+  // A name we cannot load THROWS, exactly as the real `SoundLoader.read` throws
+  // `SoundException(FILE_NOT_FOUND)`. We used to hand back ten seconds of
+  // silence — and silence is a *plausible* sound, so nothing ever looked broken:
+  // a validator that clips a sound and compares it against its own reference
+  // clip compared silence with silence and PASSED. The student was told their
+  // code was right while Code.org failed them. Same lesson as `Image(String)`:
+  // a missing asset is a failure, and it has to say so.
   public static double[] read(String filename) {
-    try {
-      java.util.Scanner sc = new java.util.Scanner(new java.io.File("__caturra_sound_" + filename));
-      int n = sc.nextInt();
-      double[] a = new double[n];
-      for (int i = 0; i < n; i++) a[i] = sc.nextInt() / 32768.0;
-      sc.close();
-      return a;
-    } catch (Exception e) {
-      return new double[44100 * 10];
-    }
+    double[] samples = System.__soundSamples("__caturra_sound_" + filename);
+    if (samples.length == 0) throw new RuntimeException("FILE_NOT_FOUND");
+    return samples;
   }
 }
 

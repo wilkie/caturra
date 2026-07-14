@@ -488,73 +488,69 @@ fn theater_color_channels_clamp_like_the_real_library() {
     );
 }
 
-/// `SoundLoader.read` returns a non-empty **silent** buffer (10 s at 44.1 kHz)
-/// rather than `double[0]`, so the Code.org sound lessons' time-indexed clip
-/// extraction (`sound[start * 44100]`, e.g. `createClip(sound, 2, 5)`) runs
-/// instead of throwing `ArrayIndexOutOfBoundsException`. Headless audio can't be
-/// decoded, so the samples are silence (zeros) — the honest stub. Regression
-/// pin for the theater sound-clip levels.
+/// A sound `SoundLoader.read` cannot load THROWS, exactly as the real one throws
+/// `SoundException(FILE_NOT_FOUND)`.
+///
+/// It used to return ten seconds of silence, and that was recorded here as "the
+/// honest stub" — it is the opposite. Silence is a *plausible* sound, so nothing
+/// ever looked broken: on three corpus levels a validator clipped the sound and
+/// compared it against its own reference clip, silence matched silence, and
+/// **caturra told the student they passed while Code.org failed them**. Same
+/// lesson as `Image(String)`, which threw its blank-canvas fallback away for the
+/// same reason. A missing asset is a failure and has to say so.
 #[test]
-fn sound_loader_returns_indexable_silent_buffer() {
+fn sound_loader_throws_when_the_asset_is_missing() {
     let (stdout, log) = run_theater(
         r#"
         import org.code.theater.*;
         import org.code.media.*;
         public class SoundArt extends Scene {
-            static double[] createClip(double[] sound, int start, int end) {
-                int startIndex = start * 44100;
-                int endIndex = end * 44100;
-                double[] clip = new double[endIndex - startIndex];
-                for (int i = startIndex; i < endIndex; i++) {
-                    clip[i - startIndex] = sound[i];
-                }
-                return clip;
-            }
             public static void main(String[] args) {
-                double[] sound = SoundLoader.read("beat.wav");
-                System.out.println("len=" + sound.length);
-                double[] clip = createClip(sound, 2, 5);
-                System.out.println("clip=" + clip.length + " first=" + clip[0]);
-                SoundArt s = new SoundArt();
-                s.playSound(clip);
-                Theater.playScenes(s);
+                try {
+                    double[] sound = SoundLoader.read("beat.wav");
+                    System.out.println("len=" + sound.length);
+                } catch (RuntimeException e) {
+                    System.out.println("threw: " + e.getMessage());
+                }
             }
         }
         "#,
         "SoundArt",
     );
-    assert_eq!(stdout, "len=441000\nclip=132300 first=0.0\n");
-    // No asset was preloaded, so read() returned silence; playSound serializes
-    // the clip to a VFS PCM file and the log references it by id.
-    assert_eq!(log, "sound pcm 0 132300\n");
+    assert_eq!(stdout, "threw: FILE_NOT_FOUND\n");
+    assert_eq!(log, "");
 }
 
-/// When the host preloads an asset's samples into the VFS (the text format
-/// `count s0 s1 ...` of signed 16-bit ints), `SoundLoader.read` returns the
-/// real samples rather than silence. Here the program writes the preload file
-/// itself to stand in for the host.
+/// A preloaded asset's samples round-trip: `SoundLoader.read` returns what the
+/// host wrote. Samples cross the VFS as raw signed 16-bit PCM (the same bytes the
+/// audio decoded from), so the program seeds the preload file through the same
+/// native call the host uses — it could not write those bytes from Java, which is
+/// exactly why the format used to be text and why a 4.9-million-sample asset used
+/// to be parsed one interpreted `Scanner.nextInt()` at a time.
 #[test]
-fn sound_loader_reads_preloaded_asset_samples() {
-    let (stdout, _log) = run_theater(
+fn sound_samples_round_trip_through_the_vfs() {
+    let (stdout, log) = run_theater(
         r#"
         import org.code.theater.*;
         public class SoundArt extends Scene {
             public static void main(String[] args) {
-                try {
-                    java.io.PrintWriter w =
-                        new java.io.PrintWriter(new java.io.File("__caturra_sound_beat.wav"));
-                    w.print("3 16384 -16384 0");
-                    w.close();
-                } catch (Exception e) {}
+                double[] written = {0.5, -0.5, 0.0, 1.0};
+                System.__writeSound("__caturra_sound_beat.wav", written);
                 double[] s = SoundLoader.read("beat.wav");
-                System.out.println(s.length + " " + s[0] + " " + s[1] + " " + s[2]);
+                System.out.println(s.length + " " + s[0] + " " + s[1] + " " + s[2] + " " + s[3]);
+                SoundArt art = new SoundArt();
+                art.playSound(s);
+                Theater.playScenes(art);
             }
         }
         "#,
         "SoundArt",
     );
-    // 16384/32768 = 0.5, -16384/32768 = -0.5, 0/32768 = 0.0
-    assert_eq!(stdout, "3 0.5 -0.5 0.0\n");
+    // Quantized to 16 bits on the way out (x * 32767, rounded) and scaled back on
+    // the way in (/ 32768) — so 0.5 survives exactly and a full-scale 1.0 comes
+    // back one step shy of itself, as 16-bit PCM does.
+    assert_eq!(stdout, "4 0.5 -0.5 0.0 0.999969482421875\n");
+    assert_eq!(log, "sound pcm 0 4\n");
 }
 
 /// Compile a Swing program (the bundled `javax.swing` / `java.awt` library

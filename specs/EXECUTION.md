@@ -214,15 +214,22 @@ and plays.
 - `playSound(String)` / `SoundLoader.read(name)` — named assets, served
   **same-origin** (COEP-safe to fetch). Before a run the editor decodes the asset
   and preloads its samples to `__caturra_sound_<name>`, so `read` returns real
-  audio to manipulate and `playSound(name)` plays the decoded buffer. Names with
-  no asset fall back to indexable silence (`double[441000]`).
-- Sample wire format (engine ↔ editor, both directions): the sample count, then
-  that many space-separated signed 16-bit ints. The VM writes it with
-  `PrintWriter` (it has no binary streams) and reads it with `Scanner`.
+  audio to manipulate and `playSound(name)` plays the decoded buffer. A name with
+  no asset **throws** `FILE_NOT_FOUND`, as the real `SoundLoader` does. It used to
+  fall back to silence, and silence is a _plausible_ sound: a validator that
+  clipped it and compared against its own reference clip matched silence with
+  silence and passed a student Code.org had failed.
+- Sample wire format (engine ↔ editor, both directions): raw little-endian signed
+  16-bit PCM, `2 * length` bytes — the bytes the audio decoded from, and the same
+  treatment the image pixels get. It was text (`count s0 s1 …`) until a real sound
+  was finally read through it: `beat.wav` is 4.9 million samples, so the VM was
+  parsing 24 MB of ASCII one interpreted `Scanner.nextInt()` at a time, and
+  building it one interpreted `StringBuilder.append` at a time. `System.__soundSamples`
+  and `System.__writeSound` now move the whole buffer in one native call.
 
-Because sample data rides ordinary VFS files (`writeFile`/`readTextFile`), sound
-works identically in worker and sandbox modes — the data crosses the RPC, the
-audio stays on the editor.
+Because sample data rides ordinary VFS files (`writeFile`/`readFile`), sound works
+identically in worker and sandbox modes — the data crosses the RPC, the audio
+stays on the editor.
 
 ### Named starter assets (sounds and images)
 

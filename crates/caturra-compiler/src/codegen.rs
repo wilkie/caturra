@@ -3099,6 +3099,8 @@ enum BRet {
     StreamInteger,
     /// `int[]` — `IntStream.toArray()`.
     IntArray,
+    /// `double[]` — the samples of a preloaded sound.
+    DoubleArray,
     /// `Optional<E>` of the receiver's element (`findFirst`, `max`, `min`).
     Optional,
     /// `Optional.map` — an `Optional` whose element is erased to `Object`.
@@ -5157,6 +5159,24 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/lang/String;II[I)V",
     ),
+    // Sound samples, for the same reason and then some: `beat.wav` is 4.9 MILLION
+    // samples, crossing as signed 16-bit PCM bytes. They used to be TEXT, which
+    // `SoundLoader.read` parsed one interpreted `Scanner.nextInt()` at a time and
+    // `playSound` built one interpreted `StringBuilder.append` at a time — and
+    // nobody noticed, because a missing asset used to hand back silence and so no
+    // level ever read a real sound.
+    bm(
+        "__soundSamples",
+        &[S],
+        BRet::DoubleArray,
+        "(Ljava/lang/String;)[D",
+    ),
+    bm(
+        "__writeSound",
+        &[S, BParam::RefArray],
+        BRet::Void,
+        "(Ljava/lang/String;[D)V",
+    ),
 ];
 
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[
@@ -6407,6 +6427,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::StreamInteger => Some(JType::Stream(ElemType::Int)),
         BRet::IntArray => Some(JType::Array {
             elem: ElemType::Int,
+            dims: 1,
+        }),
+        BRet::DoubleArray => Some(JType::Array {
+            elem: ElemType::Double,
             dims: 1,
         }),
         BRet::Optional => Some(args.first.map_or(JType::Error, JType::Optional)),

@@ -82,7 +82,8 @@ fn one(case: &Path, packed: &Path) -> Option<(String, String)> {
     }
 
     // This level's assets, decoded by the REAL library and packed as the host
-    // preloads them, so an image decode is not what the sweep compares.
+    // preloads them, so a media decode is not what the sweep compares. Sounds
+    // are checked first: `__packed_sound_x.wav` also starts with `__packed_`.
     let mut assets: Vec<(String, Vec<u8>)> = Vec::new();
     for entry in std::fs::read_dir(packed.join(&name))
         .into_iter()
@@ -90,10 +91,15 @@ fn one(case: &Path, packed: &Path) -> Option<(String, String)> {
         .flatten()
     {
         let file = entry.file_name().to_string_lossy().into_owned();
-        if let Some(asset) = file.strip_prefix("__packed_")
-            && let Ok(bytes) = std::fs::read(entry.path())
-        {
-            assets.push((format!("__caturra_image_{asset}"), bytes));
+        let key = if let Some(sound) = file.strip_prefix("__packed_sound_") {
+            format!("__caturra_sound_{sound}")
+        } else if let Some(image) = file.strip_prefix("__packed_") {
+            format!("__caturra_image_{image}")
+        } else {
+            continue;
+        };
+        if let Ok(bytes) = std::fs::read(entry.path()) {
+            assets.push((key, bytes));
         }
     }
 
