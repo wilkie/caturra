@@ -21,7 +21,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from snippets import BEYOND, FEATURES, GAPS  # noqa: E402
+from snippets import BEYOND, FEATURES, GAPS, GRAMMAR  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = os.path.join(REPO, "apps/playground/src/compat/features.json")
@@ -88,12 +88,21 @@ def main():
 
     entries = []
     problems = []
-    for feature in FEATURES + GAPS + BEYOND:
+    # GRAMMAR carries no claim at all: it is a survey, and whatever the engines say
+    # about a construct IS its status. Only the curated lists assert anything, and
+    # those assertions are what `problems` checks.
+    for feature in FEATURES + GAPS + BEYOND + GRAMMAR:
         source = feature["source"].strip() + "\n"
         jdk_compiles, jdk_ok, jdk_out = jdk(source, feature["main"])
         cat_ok, cat_out = caturra(source, feature["main"])
         expected_kind = (
-            "supported" if feature in FEATURES else "unsupported" if feature in GAPS else "beyond-11"
+            "supported"
+            if feature in FEATURES
+            else "unsupported"
+            if feature in GAPS
+            else "beyond-11"
+            if feature in BEYOND
+            else None  # GRAMMAR: no claim to check, the engines decide
         )
 
         entry = dict(
@@ -122,7 +131,7 @@ def main():
             entry["expected"] = jdk_out
             entry["actual"] = cat_out
 
-        if entry["status"] != expected_kind:
+        if expected_kind is not None and entry["status"] != expected_kind:
             problems.append(
                 f"  {feature['id']}: listed as {expected_kind}, engines say {entry['status']}\n"
                 f"      jdk({jdk_ok}): {jdk_out.strip()[:150]!r}\n"

@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-qfmv47y_/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-kr71i8ur/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-ho63g17k/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-eznt2887/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,6 +330,376 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-yiat3tqn/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-ksxd3h2c/Switch.java:4: error: illegal start of expression"
+  },
+  {
+    "id": "g-primitives",
+    "category": "Types and literals",
+    "title": "The eight primitive types",
+    "summary": "byte, short, int, long, float, double, char, boolean.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nbyte b = 1; short s = 2; int i = 3; long l = 4L; float f = 5.0f;\n        double d = 6.5; char c = 'x'; boolean z = true;\n        System.out.println(b + \" \" + s + \" \" + i + \" \" + l + \" \" + f + \" \" + d + \" \" + c + \" \" + z);\n    }\n}\n",
+    "status": "supported",
+    "expected": "1 2 3 4 5.0 6.5 x true\n"
+  },
+  {
+    "id": "g-literals",
+    "category": "Types and literals",
+    "title": "Number literals: hex, octal, binary, underscores",
+    "summary": "0xFF, 010, 0b1010, 1_000_000, and the L/f/e suffixes.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nint hex = 0xFF; int oct = 010; int bin = 0b1010; int big = 1_000_000;\n        long l = 10L; float f = 1.5f; double sci = 1.5e3;\n        System.out.println(hex + \" \" + oct + \" \" + bin + \" \" + big + \" \" + l + \" \" + f + \" \" + sci);\n    }\n}\n",
+    "status": "supported",
+    "expected": "255 8 10 1000000 10 1.5 1500.0\n"
+  },
+  {
+    "id": "g-char-escapes",
+    "category": "Types and literals",
+    "title": "Character escapes and \\u literals",
+    "summary": "\\t, \\n, \\\\, and a unicode escape.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nchar tab = '\\t'; char u = '\\u0041';\n        System.out.println(\"[\" + tab + \"]\" + u + \"\\\\\");\n    }\n}\n",
+    "status": "supported",
+    "expected": "[\t]A\\\n"
+  },
+  {
+    "id": "g-arrays",
+    "category": "Types and literals",
+    "title": "Arrays: jagged, covariant, C-style brackets",
+    "summary": "new int[2][], an Object[] holding a String[], and `int a[]`.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nint[][] jagged = new int[2][];\n        jagged[0] = new int[] { 1, 2 };\n        jagged[1] = new int[] { 3 };\n        Object[] objects = new String[] { \"a\" };\n        int old[] = { 7 };\n        System.out.println(jagged[0][1] + \" \" + jagged[1][0] + \" \" + objects[0] + \" \" + old[0]);\n    }\n}\n",
+    "status": "supported",
+    "expected": "2 3 a 7\n"
+  },
+  {
+    "id": "g-var",
+    "category": "Types and literals",
+    "title": "var (Java 10 local type inference)",
+    "summary": "`var count = 3;` \u2014 real Java 11, and caturra wants the type written out.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nvar count = 3;\n        var name = \"ada\";\n        System.out.println(count + name);\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "'var' is not supported by caturra; write the type explicitly"
+  },
+  {
+    "id": "g-nested-class",
+    "category": "Declarations",
+    "title": "Static nested class",
+    "summary": "A class inside a class.",
+    "main": "G",
+    "source": "public class G {\n    static class Inner { String hi() { return \"inner\"; } }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(new Inner().hi());\n    }\n}\n",
+    "status": "supported",
+    "expected": "inner\n"
+  },
+  {
+    "id": "g-inner-class",
+    "category": "Declarations",
+    "title": "Inner (non-static) class",
+    "summary": "`outer.new Inner()` \u2014 an instance bound to an enclosing one.",
+    "main": "G",
+    "source": "public class G {\n    class Inner { String hi() { return \"inner\"; } }\n    public static void main(String[] args) throws Exception {\nG outer = new G();\n        G.Inner inner = outer.new Inner();\n        System.out.println(inner.hi());\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "expected a name after '.'"
+  },
+  {
+    "id": "g-local-class",
+    "category": "Declarations",
+    "title": "Local class (declared inside a method)",
+    "summary": "A named class in a method body.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nclass Local { String hi() { return \"local\"; } }\n        System.out.println(new Local().hi());\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "a class declared inside a method (a local class) is not supported by caturra; declare it at the top level"
+  },
+  {
+    "id": "g-init-blocks",
+    "category": "Declarations",
+    "title": "Static and instance initializer blocks",
+    "summary": "`static { ... }` and `{ ... }`.",
+    "main": "G",
+    "source": "public class G {\n    static int VALUE;\n    static { VALUE = 7; }\n    int value;\n    { value = 9; }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(VALUE + \" \" + new G().value);\n    }\n}\n",
+    "status": "supported",
+    "expected": "7 9\n"
+  },
+  {
+    "id": "g-ctor-chain",
+    "category": "Declarations",
+    "title": "Constructor overloading and this(...)",
+    "summary": "One constructor delegating to another.",
+    "main": "G",
+    "source": "public class G {\n    int value;\n    G() { this(1); }\n    G(int v) { value = v; }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(new G(2).value + \" \" + new G().value);\n    }\n}\n",
+    "status": "supported",
+    "expected": "2 1\n"
+  },
+  {
+    "id": "g-iface-static",
+    "category": "Declarations",
+    "title": "Interface with a static method",
+    "summary": "`interface H { static ... }` (Java 8).",
+    "main": "G",
+    "source": "public class G {\n    interface Helper { static String of() { return \"static\"; } }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(Helper.of());\n    }\n}\n",
+    "status": "supported",
+    "expected": "static\n"
+  },
+  {
+    "id": "g-iface-private",
+    "category": "Declarations",
+    "title": "Interface with a private method (Java 9)",
+    "summary": "A private helper behind a default method.",
+    "main": "G",
+    "source": "public class G {\n    interface H {\n        private String secret() { return \"priv\"; }\n        default String pub() { return secret(); }\n    }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(new H() {}.pub());\n    }\n}\n",
+    "status": "supported",
+    "expected": "priv\n"
+  },
+  {
+    "id": "g-enum-body",
+    "category": "Declarations",
+    "title": "Enum with a body per constant",
+    "summary": "Constant-specific class bodies implementing an abstract method.",
+    "main": "G",
+    "source": "public class G {\n    enum Op {\n        PLUS { int apply(int a, int b) { return a + b; } };\n        abstract int apply(int a, int b);\n    }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(Op.PLUS.apply(2, 3));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "expected ';' to end the declaration"
+  },
+  {
+    "id": "g-annotation",
+    "category": "Declarations",
+    "title": "Declaring an annotation type (@interface)",
+    "summary": "`@interface Marker { }` and using it.",
+    "main": "G",
+    "source": "public class G {\n    @interface Marker { }\n    @Marker static class Thing { }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(\"annotated\");\n    }\n}\n",
+    "status": "supported",
+    "expected": "annotated\n"
+  },
+  {
+    "id": "g-generic-method",
+    "category": "Declarations",
+    "title": "Generic method",
+    "summary": "`static <T> T firstOf(T a, T b)`.",
+    "main": "G",
+    "source": "public class G {\n    static <T> T firstOf(T a, T b) { return a; }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(firstOf(\"a\", \"b\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "a\n"
+  },
+  {
+    "id": "g-bounded-type",
+    "category": "Declarations",
+    "title": "Bounded type parameter (<T extends Comparable<T>>)",
+    "summary": "The bound is itself generic, which caturra's erasure does not model.",
+    "main": "G",
+    "source": "public class G {\n    static <T extends Comparable<T>> T max(T a, T b) {\n        return a.compareTo(b) >= 0 ? a : b;\n    }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(max(3, 5));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "nested generic types (like ArrayList<ArrayList<...>>) are not supported by caturra"
+  },
+  {
+    "id": "g-wildcard",
+    "category": "Declarations",
+    "title": "Wildcard generics (? extends)",
+    "summary": "`List<? extends Number>` as a parameter type.",
+    "main": "G",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\npublic class G {\n    static int count(List<? extends Number> values) { return values.size(); }\n    public static void main(String[] args) throws Exception {\nList<Integer> n = new ArrayList<>();\n        n.add(2);\n        System.out.println(count(n));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "no suitable method found for count(ArrayList<Integer>) in class G"
+  },
+  {
+    "id": "g-final-param",
+    "category": "Declarations",
+    "title": "final parameters",
+    "summary": "`static int twice(final int v)`. A final LOCAL works; a final parameter does not.",
+    "main": "G",
+    "source": "public class G {\n    static int twice(final int v) { return v * 2; }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(twice(2));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "expected a type"
+  },
+  {
+    "id": "g-package",
+    "category": "Declarations",
+    "title": "package declaration",
+    "summary": "caturra puts every class in one namespace.",
+    "main": "G",
+    "source": "package demo;\n\npublic class G {\n    public static void main(String[] args) {\n        System.out.println(\"packaged\");\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "package declarations are not supported by caturra; classes share one namespace"
+  },
+  {
+    "id": "g-static-import",
+    "category": "Declarations",
+    "title": "Static import of a library member",
+    "summary": "`import static java.lang.Math.max;` (a static import of a USER class works \u2014 this is the library one).",
+    "main": "G",
+    "source": "import static java.lang.Math.max;\n\npublic class G {\n    public static void main(String[] args) {\n        System.out.println(max(2, 3));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "package java.lang.Math does not exist"
+  },
+  {
+    "id": "g-labeled",
+    "category": "Statements",
+    "title": "Labeled break and continue",
+    "summary": "`outer: for (...) { ... continue outer; }`.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nouter:\n        for (int i = 0; i < 3; i++) {\n            for (int j = 0; j < 3; j++) {\n                if (j == 1) continue outer;\n                if (i == 2) break outer;\n                System.out.println(i + \",\" + j);\n            }\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "0,0\n1,0\n"
+  },
+  {
+    "id": "g-switch-kinds",
+    "category": "Statements",
+    "title": "switch on String, char and enum",
+    "summary": "All three selector types, with fall-through and default.",
+    "main": "G",
+    "source": "public class G {\n    enum Color { RED, BLUE }\n    public static void main(String[] args) throws Exception {\nString day = \"tue\";\n        switch (day) {\n            case \"mon\": System.out.println(\"start\"); break;\n            case \"tue\": System.out.println(\"second\"); break;\n            default: System.out.println(\"other\");\n        }\n        char grade = 'B';\n        switch (grade) {\n            case 'A': System.out.println(4); break;\n            case 'B': System.out.println(3); break;\n            default: System.out.println(0);\n        }\n        Color c = Color.RED;\n        switch (c) {\n            case RED: System.out.println(\"red\"); break;\n            default: System.out.println(\"other\");\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "second\n3\nred\n"
+  },
+  {
+    "id": "g-try-finally",
+    "category": "Statements",
+    "title": "try / catch / finally, and checked exceptions",
+    "summary": "`throws`, a caught checked exception, and finally running on the way out of a return.",
+    "main": "G",
+    "source": "public class G {\n    static void risky() throws Exception { throw new Exception(\"checked\"); }\n    static int f() {\n        try { return 1; } finally { System.out.println(\"fin\"); }\n    }\n    public static void main(String[] args) throws Exception {\ntry {\n            risky();\n        } catch (Exception e) {\n            System.out.println(\"caught \" + e.getMessage());\n        }\n        System.out.println(f());\n    }\n}\n",
+    "status": "supported",
+    "expected": "caught checked\nfin\n1\n"
+  },
+  {
+    "id": "g-try-resources",
+    "category": "Statements",
+    "title": "try-with-resources",
+    "summary": "`try (PrintWriter w = ...) { }` \u2014 the resource closes itself.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\ntry (java.io.PrintWriter w = new java.io.PrintWriter(\"g.txt\")) {\n            w.println(\"x\");\n        }\n        System.out.println(\"closed\");\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "expected '{' after 'try'"
+  },
+  {
+    "id": "g-multicatch",
+    "category": "Statements",
+    "title": "Multi-catch (catch A | B)",
+    "summary": "One clause, two exception types.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\ntry {\n            throw new IllegalStateException(\"boom\");\n        } catch (IllegalStateException | IllegalArgumentException e) {\n            System.out.println(\"caught \" + e.getMessage());\n        }\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "expected a name for the caught exception"
+  },
+  {
+    "id": "g-assert",
+    "category": "Statements",
+    "title": "assert",
+    "summary": "Real Java (off at runtime unless -ea), and caturra will not take it.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nassert 1 + 1 == 2 : \"math\";\n        System.out.println(\"asserted\");\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "'assert' is not supported by caturra"
+  },
+  {
+    "id": "g-synchronized",
+    "category": "Statements",
+    "title": "synchronized",
+    "summary": "A program here runs on one thread, in one WASM instance.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nObject lock = new Object();\n        synchronized (lock) {\n            System.out.println(\"locked\");\n        }\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "'synchronized' is not supported by caturra; programs run single-threaded"
+  },
+  {
+    "id": "g-for-forms",
+    "category": "Statements",
+    "title": "Every for loop",
+    "summary": "Comma-separated init/update, `for(;;)` with break, and the enhanced for.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nfor (int i = 0, j = 3; i < j; i++, j--) {\n            System.out.println(i + \" \" + j);\n        }\n        int n = 0;\n        for (;;) {\n            if (n++ > 1) break;\n        }\n        System.out.println(n);\n        for (String s : new String[] { \"a\", \"b\" }) {\n            System.out.println(s);\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "0 3\n1 2\n3\na\nb\n"
+  },
+  {
+    "id": "g-bitwise",
+    "category": "Expressions",
+    "title": "Bitwise operators and shifts",
+    "summary": "& | ^ ~ << >> and the unsigned >>>.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nint a = 0b1100, b = 0b1010;\n        System.out.println((a & b) + \" \" + (a | b) + \" \" + (a ^ b) + \" \" + (~a));\n        System.out.println((a << 2) + \" \" + (a >> 1) + \" \" + (-8 >>> 28));\n    }\n}\n",
+    "status": "supported",
+    "expected": "8 14 6 -13\n48 6 15\n"
+  },
+  {
+    "id": "g-compound",
+    "category": "Expressions",
+    "title": "Compound assignment, every form",
+    "summary": "+= -= *= /= %= <<= >>= &= |= ^=.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nint x = 8;\n        x += 2; x -= 1; x *= 3; x /= 2; x %= 7; x <<= 1; x >>= 1;\n        x &= 6; x |= 1; x ^= 2;\n        System.out.println(x);\n    }\n}\n",
+    "status": "supported",
+    "expected": "5\n"
+  },
+  {
+    "id": "g-numeric-edges",
+    "category": "Expressions",
+    "title": "Integer overflow, division, NaN",
+    "summary": "Java's exact wrap-around, truncating division, and 1/0.0.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nSystem.out.println(Integer.MAX_VALUE + 1);\n        System.out.println(-7 / 2 + \" \" + -7 % 2);\n        System.out.println(1 / 0.0 + \" \" + 0.0 / 0.0);\n        char c = 'a';\n        System.out.println((c + 1) + \" \" + (char) (c - 32));\n    }\n}\n",
+    "status": "supported",
+    "expected": "-2147483648\n-3 -1\nInfinity NaN\n98 A\n"
+  },
+  {
+    "id": "g-method-ref-instance",
+    "category": "Expressions",
+    "title": "Method references: obj::method and Class::new",
+    "summary": "A bound instance reference, and a constructor reference.",
+    "main": "G",
+    "source": "public class G {\n    interface Greeter { String greet(String name); }\n    interface Maker { G make(); }\n    public static void main(String[] args) throws Exception {\nString prefix = \"hi \";\n        Greeter g = prefix::concat;\n        System.out.println(g.greet(\"ada\"));\n        Maker m = G::new;\n        System.out.println(m.make() != null);\n    }\n}\n",
+    "status": "supported",
+    "expected": "hi ada\ntrue\n"
+  },
+  {
+    "id": "g-method-ref-static",
+    "category": "Expressions",
+    "title": "Method reference to a STATIC method (Class::method)",
+    "summary": "`Comparator.comparing(G::key)` \u2014 caturra reads Class::method as an instance reference.",
+    "main": "G",
+    "source": "import java.util.ArrayList;\nimport java.util.Comparator;\nimport java.util.List;\npublic class G {\n    static String key(String s) { return s; }\n    public static void main(String[] args) throws Exception {\nList<String> l = new ArrayList<>();\n        l.add(\"b\");\n        l.add(\"a\");\n        l.sort(Comparator.comparing(G::key));\n        System.out.println(l);\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "no suitable method found for key(G) in class G"
+  },
+  {
+    "id": "g-instanceof-iface",
+    "category": "Expressions",
+    "title": "instanceof a library interface (List, Map)",
+    "summary": "`o instanceof List` \u2014 instanceof against a collection interface.",
+    "main": "G",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nObject o = new ArrayList<String>();\n        if (o instanceof List) {\n            System.out.println(\"a list\");\n        }\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "unknown type in instanceof"
+  },
+  {
+    "id": "g-anon-diamond",
+    "category": "Expressions",
+    "title": "Anonymous class with a diamond (Java 9)",
+    "summary": "`new Comparator<>() { ... }` \u2014 the diamond on an anonymous class body.",
+    "main": "G",
+    "source": "import java.util.Comparator;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nComparator<String> c = new Comparator<>() {\n            @Override public int compare(String a, String b) { return a.compareTo(b); }\n        };\n        System.out.println(c.compare(\"a\", \"b\"));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "cannot find symbol: class Comparator"
+  },
+  {
+    "id": "g-function-package",
+    "category": "Expressions",
+    "title": "java.util.function (Function, Predicate, Supplier)",
+    "summary": "The JDK's own functional interfaces. Your OWN functional interface works.",
+    "main": "G",
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\njava.util.function.Function<Integer, Integer> twice = n -> n * 2;\n        System.out.println(twice.apply(4));\n    }\n}\n",
+    "status": "unsupported",
+    "reason": "package java.util.function is not supported by caturra (the class library covers the AP CS A subset)"
+  },
+  {
+    "id": "g-shadowing",
+    "category": "Expressions",
+    "title": "Shadowing, this, and super",
+    "summary": "A local shadowing a field, `this.x`, and `super.method()`.",
+    "main": "G",
+    "source": "public class G {\n    int x = 1;\n    G() { }\n    G(int x) { this.x = x; }\n    String show() { int x = 99; return x + \" \" + this.x; }\n    static class Parent { String describe() { return \"parent\"; } }\n    static class Child extends Parent {\n        @Override String describe() { return super.describe() + \"+child\"; }\n    }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(new G(5).show());\n        System.out.println(new Child().describe());\n    }\n}\n",
+    "status": "supported",
+    "expected": "99 5\nparent+child\n"
   }
 ]

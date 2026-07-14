@@ -43,6 +43,22 @@ interface Outcome {
 
 const ALL = features as Feature[];
 
+/**
+ * Sections in reading order. The four language sections are a SURVEY of the Java
+ * grammar (JLS ch. 4, 6-10, 14, 15) — every construct in it, gaps included — not a
+ * list of things chosen because they work.
+ */
+const CATEGORY_ORDER = [
+  'Language',
+  'Types and literals',
+  'Declarations',
+  'Statements',
+  'Expressions',
+  'Library',
+  'Collections',
+  'Beyond Java 11',
+];
+
 const STATUS_LABEL: Record<Status, string> = {
   supported: 'Implemented',
   unsupported: 'Not implemented',
@@ -232,7 +248,7 @@ export function Compat() {
       list.push(feature);
       grouped.set(feature.category, list);
     }
-    return [...grouped];
+    return [...grouped].sort(([a], [b]) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b));
   }, []);
 
   const counts = useMemo(() => {
@@ -255,6 +271,11 @@ export function Compat() {
           WebAssembly. It targets <strong>Java 11</strong>. Everything below is a program, not a
           claim: press <em>Run</em> and it is compiled and executed in this tab, and its output is
           compared with what a real JDK 11 printed for the same program.
+        </p>
+        <p className="lede">
+          The four language sections walk the Java <strong>grammar</strong> — declarations,
+          statements, expressions, types — construct by construct, gaps included. They are a survey,
+          not a highlight reel: what is missing is listed beside what is not.
         </p>
         <ul className="tally">
           <li>
