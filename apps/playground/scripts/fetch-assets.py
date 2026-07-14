@@ -92,7 +92,9 @@ def load_map(regen: bool) -> dict:
             print(f"error: --regen needs artifacts/ (looked in {ART})", file=sys.stderr)
             sys.exit(1)
         with open(MAP_FILE, "w") as handle:
-            json.dump(dict(sorted(discovered.items())), handle, indent=1, sort_keys=True)
+            json.dump(dict(sorted(discovered.items())), handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        prettify([MAP_FILE])
         print(f"regenerated {MAP_FILE} ({len(discovered)} assets)")
     if discovered:
         return discovered
@@ -149,6 +151,22 @@ def transcode_image(src: str, dest: str) -> None:
     finally:
         if os.path.exists(normalized):
             os.unlink(normalized)
+
+
+def prettify(paths):
+    """Format the emitted JSON with the repo's own prettier.
+
+    `level-assets.json` is committed, so it is ordinary lint-checked source and
+    `pnpm lint` has an opinion about it. Running prettier here rather than
+    hand-matching its style (which wraps an entry only when the line would run
+    past 100 columns) keeps `--regen` a no-op instead of a phantom diff — the same
+    bargain generate-csa-levels.py makes, and for the same reason.
+    """
+    subprocess.run(
+        ["pnpm", "exec", "prettier", "--write", "--log-level", "warn", *paths],
+        cwd=REPO,
+        check=True,
+    )
 
 
 def main() -> int:
