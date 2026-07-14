@@ -428,3 +428,83 @@ public class ReflectTest {
 }
 "#
 );
+
+// `assertDoesNotThrow(() -> student.method(), message)` — a lambda bound to
+// JUnit's `Executable`. Three separate things had to be true for this to
+// compile, and none of them was:
+//   * the JUnit model had no `Executable` and no `assertDoesNotThrow`;
+//   * a lambda passed as a CALL ARGUMENT only got a target type when the method
+//     was declared exactly once, and `assertDoesNotThrow` is declared twice;
+//   * a captured enclosing instance field used as a METHOD RECEIVER inside the
+//     lambda (`() -> testObject.check(...)`) did not resolve — reading such a
+//     field worked, calling through it did not.
+// The failure wording is JUnit's own.
+validation_differential_test!(
+    diff_junit_assert_does_not_throw,
+    "DoesNotThrowTest",
+    r#"
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+class Blog {
+    private String title;
+
+    Blog(String title) {
+        this.title = title;
+    }
+
+    boolean checkForKeyword(String target) {
+        // Walks off the end for a target longer than the title, unless the
+        // loop header is right.
+        for (int i = 0; i + target.length() <= title.length(); i++) {
+            if (title.substring(i, i + target.length()).equals(target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void explode() {
+        throw new IllegalStateException("kaboom");
+    }
+}
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class DoesNotThrowTest {
+    Blog testObject;
+
+    @BeforeEach
+    public void setup() {
+        testObject = new Blog("artificialintelligence");
+    }
+
+    @Test
+    @Order(1)
+    @DisplayName("the method does not throw => ")
+    public void doesNotThrow() {
+        assertDoesNotThrow(() -> testObject.checkForKeyword("intel"), "should not have thrown");
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("and it still finds the keyword => ")
+    public void findsIt() {
+        assertTrue(testObject.checkForKeyword("intel"), "the keyword is in there");
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("a body that throws fails, with JUnit's wording => ")
+    public void bodyThrows() {
+        assertDoesNotThrow(() -> testObject.explode(), "this one blows up");
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("and without a message of its own => ")
+    public void bodyThrowsUnnamed() {
+        assertDoesNotThrow(() -> testObject.explode());
+    }
+}
+"#
+);

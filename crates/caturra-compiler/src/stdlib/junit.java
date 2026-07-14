@@ -250,4 +250,28 @@ class Assertions {
   public static void fail(String message) {
     throw new RuntimeException(message);
   }
+  // `assertDoesNotThrow(() -> student.method(), message)`: run the body and
+  // fail if it throws. The wording is JUnit's own, verified against real JUnit 5
+  // in differential_validation.rs — a Throwable's toString() is already the
+  // fully-qualified `java.lang.IllegalStateException: kaboom` JUnit prints.
+  public static void assertDoesNotThrow(Executable executable) {
+    try {
+      executable.execute();
+    } catch (Throwable e) {
+      throw new RuntimeException("Unexpected exception thrown: " + e);
+    }
+  }
+  public static void assertDoesNotThrow(Executable executable, String message) {
+    try {
+      executable.execute();
+    } catch (Throwable e) {
+      throw new RuntimeException(message + " ==> Unexpected exception thrown: " + e);
+    }
+  }
+}
+
+// JUnit's `Executable`: the body of an `assertDoesNotThrow`. A functional
+// interface, so a lambda binds to it.
+interface Executable {
+  void execute();
 }

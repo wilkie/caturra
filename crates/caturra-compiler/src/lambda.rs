@@ -705,12 +705,24 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 }
                 return;
             }
-            // Single-candidate method argument target typing.
-            let param_types = ctx
-                .methods
-                .get(method)
-                .filter(|sigs| sigs.len() == 1 && sigs[0].len() == args.len())
-                .map(|sigs| sigs[0].clone());
+            // Target typing for a lambda passed as an argument. A lambda has no
+            // type of its own; it takes the one the parameter it lands on
+            // declares, so this has to know which declaration is being called.
+            //
+            // Only the overloads whose arity matches can be, and they only pin
+            // a type if they agree on it. That is what `assertDoesNotThrow`
+            // needs — it is declared twice, `(Executable)` and
+            // `(Executable, String)`, and the argument count says which — and
+            // it was previously out of reach, because this insisted the method
+            // be declared exactly once. Overloads that disagree at a position
+            // leave it untyped, as before.
+            let param_types = ctx.methods.get(method).and_then(|sigs| {
+                let mut matching = sigs.iter().filter(|params| params.len() == args.len());
+                let first = matching.next()?;
+                matching
+                    .all(|params| params == first)
+                    .then(|| first.clone())
+            });
             for (index, arg) in args.iter_mut().enumerate() {
                 let expected = param_types.as_ref().map(|types| types[index].clone());
                 desugar_expr(arg, expected.as_ref(), ctx);

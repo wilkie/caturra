@@ -10549,9 +10549,14 @@ impl BodyGen<'_> {
                         Some(CallTarget::Static(single.to_owned()))
                     } else if self.table.field(self.current_class, single).is_some()
                         || self.enclosing_static_field(single).is_some()
+                        || self.enclosing_instance_field(single).is_some()
                     {
                         // A field of the current class used as receiver — or a
-                        // static field of the class this lambda came from.
+                        // field of the class this lambda came from, reached
+                        // through the enclosing `this` it captured. Reading such
+                        // a field already worked (`() -> title`); using it as a
+                        // receiver (`() -> blog.getTitle()`) did not, because
+                        // only the STATIC fallback was consulted here.
                         Some(CallTarget::Instance(expr))
                     } else {
                         self.error(*receiver_span, format!("cannot find symbol: '{single}'"));
