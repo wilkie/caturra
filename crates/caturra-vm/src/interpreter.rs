@@ -259,6 +259,10 @@ impl<'run> Interpreter<'run> {
 
     /// Append a Java-style stack trace (`\tat Class.method(Class.java)`
     /// lines, innermost first) to an uncaught exception's message.
+    ///
+    /// The trace is appended to the same string the throw is carried in, so
+    /// anything reading the exception back out has to know where the message
+    /// ends and the trace begins — see [`exception_header`].
     fn attach_stack_trace(&self, message: String) -> String {
         use std::fmt::Write as _;
         if message.contains("\n\tat ") {
@@ -2050,10 +2054,9 @@ impl<'run> Interpreter<'run> {
         let VmError::UncaughtException(text) = error else {
             return Ok(false);
         };
-        let first_line = text.lines().next().unwrap_or_default();
-        let (dotted, message) = match first_line.split_once(": ") {
+        let (dotted, message) = match exception_header(text).split_once(": ") {
             Some((class, message)) => (class, Some(message.to_owned())),
-            None => (first_line, None),
+            None => (exception_header(text), None),
         };
         let internal = dotted.replace('.', "/");
         let is_library = caturra_classfile::exceptions::is_exception_class(&internal);
@@ -8948,9 +8951,9 @@ impl WatchEvaluator for FrameWatchEvaluator<'_, '_> {
                 .ok_or_else(|| String::from("watch produced a non-string result")),
             Ok(_) => Err(String::from("watch produced no value")),
             Err(VmError::UncaughtException(message)) => {
-                // First line only: the trace points into synthesized
+                // The message without the trace: it points into synthesized
                 // code, which would confuse more than help.
-                Err(message.lines().next().unwrap_or("exception").to_owned())
+                Err(exception_header(&message).to_owned())
             }
             Err(VmError::InstructionBudgetExceeded) => {
                 Err(String::from("the watch expression ran too long"))
@@ -10472,6 +10475,20 @@ fn descriptor_arg_count(descriptor: &str) -> Option<usize> {
         }
     }
     Some(count)
+}
+
+/// The `Class: message` header of a thrown exception, without the stack trace
+/// `attach_stack_trace` appends to the same string.
+///
+/// It is NOT the first line. **A Java exception message may itself contain
+/// newlines**, and taking `lines().next()` threw away everything after the first
+/// one — so a `catch` block saw a message the `throw` never sent. The corpus
+/// writes multi-line hints as a matter of course ("...check your loop.\n       "),
+/// and on 62 of its tests the student lost the whole `==> expected: <x> but was:
+/// <y>` half of the explanation. The trace is what has to be stripped, and its
+/// lines are exactly the ones starting `\tat `.
+fn exception_header(text: &str) -> &str {
+    text.find("\n\tat ").map_or(text, |trace| &text[..trace])
 }
 
 /// A `Stream.limit`/`skip` count (a `long`, but occasionally passed as an int),

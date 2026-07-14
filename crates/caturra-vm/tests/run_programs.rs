@@ -6929,6 +6929,37 @@ fn mutual_recursion_at_depth() {
     assert_eq!(out, "2500\n");
 }
 
+/// A message with a NEWLINE in it survives being thrown.
+///
+/// The throw carries the exception as `Class: message` text and appends the
+/// stack trace to the same string, so the `catch` had to work out where the
+/// message ended — and it took the FIRST LINE, which silently cut every
+/// multi-line message at its first newline. Java messages are routinely
+/// multi-line, and the Code.org validators write their hints that way as a
+/// matter of course: on 62 corpus tests the student was handed the prose and
+/// lost the `==> expected: <x> but was: <y>` that told them what their own code
+/// had produced.
+#[test]
+fn a_multi_line_exception_message_survives_the_throw() {
+    let out = run_stdout(
+        r#"
+        public class Multi {
+            public static void main(String[] args) {
+                try {
+                    throw new IllegalStateException("first line\nsecond line");
+                } catch (RuntimeException e) {
+                    String m = e.getMessage();
+                    System.out.println("len=" + m.length());
+                    System.out.println(m.replace('\n', '|'));
+                }
+            }
+        }
+        "#,
+        "Multi",
+    );
+    assert_eq!(out, "len=22\nfirst line|second line\n");
+}
+
 #[test]
 fn uncaught_exceptions_carry_a_stack_trace() {
     let (result, console) = compile_and_run(
