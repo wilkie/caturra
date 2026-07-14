@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>caturra playground</title>
+    <script>
+      // Cross-origin isolation for SharedArrayBuffer (blocking stdin) on static
+      // hosts like GitHub Pages, which can't send COOP/COEP headers. The dev and
+      // preview servers set the headers directly, so skip the worker on
+      // localhost. See apps/playground/public/coi-serviceworker.js.
+      if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+        const s = document.createElement('script');
+        s.src = '/caturra/coi-serviceworker.js';
+        document.head.appendChild(s);
+      }
+    </script>
+    <script type="module" crossorigin src="/caturra/assets/index-BSAVjmcX.js"></script>
+    <link rel="modulepreload" crossorigin href="/caturra/assets/src-BoKlOSI_.js">
+    <link rel="stylesheet" crossorigin href="/caturra/assets/index-CarpfGdD.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
