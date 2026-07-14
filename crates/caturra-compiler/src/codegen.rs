@@ -6494,6 +6494,16 @@ enum FieldReceiver<'e> {
     Object(&'e Expr),
 }
 
+/// The field an `x++` / `--x` EXPRESSION updates: named bare (`count++`, a field
+/// of this class), through a receiver expression (`this.count++`), or through a
+/// dotted name (`node.size--`, `Counter.total++` — which the parser keeps as a
+/// name path, not a field access).
+enum FieldTarget<'e> {
+    Implicit(String),
+    Qualified(&'e Expr, String),
+    Path(&'e [String]),
+}
+
 /// What a method call's receiver refers to.
 enum CallTarget<'e> {
     /// `System.out` / `System.err`.
@@ -6523,6 +6533,11 @@ struct LoopLabels {
     /// The source label (`outer:`) attached to this loop/switch, if
     /// any — the target of `break outer;` / `continue outer;`.
     label: Option<String>,
+    /// Definite-assignment state captured at every `break` that leaves this
+    /// switch (JLS §16.2.9). A switch assigns a variable only if EVERY way out
+    /// of it does — each break, and falling out of the last arm — so the exits
+    /// have to be collected where they happen.
+    break_flags: Vec<Vec<Vec<bool>>>,
 }
 
 /// Per-method-body emission state.
@@ -6761,6 +6776,10 @@ impl BodyGen<'_> {
                 match target_index {
                     Some(index) => {
                         let target = self.loop_stack[index].break_label;
+                        // This break is one of the ways out; what it has assigned
+                        // by now is what the switch can promise on this path.
+                        let flags = self.assigned_flags();
+                        self.loop_stack[index].break_flags.push(flags);
                         self.emit_pending_finallys(Some(index));
                         self.code.branch(op::GOTO, target, 0);
                     }
@@ -6866,6 +6885,7 @@ impl BodyGen<'_> {
             continue_label: end, // unused: continue can't target a non-loop
             is_loop: false,
             label: Some(label.to_owned()),
+            break_flags: Vec::new(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -6998,21 +7018,50 @@ impl BodyGen<'_> {
             continue_label: end, // never targeted: continue skips switches
             is_loop: false,
             label: self.pending_label.take(),
+            break_flags: Vec::new(),
         });
+        let last = arms.len().saturating_sub(1);
+        let mut falls_out: Option<Vec<Vec<bool>>> = None;
         for (index, arm) in arms.iter().enumerate() {
             self.code.bind(arm_labels[index]);
             self.code.mark_line(arm.span.start.line);
+            // Every group is reachable through its own label, so each one starts
+            // from what was assigned BEFORE the switch (JLS §16.2.9) — not from
+            // whatever the group above it happened to assign.
+            self.restore_assigned(&before_flags);
             self.scopes.push(Vec::new());
             for stmt in &arm.body {
                 self.statement(stmt);
             }
             self.scopes.pop();
+            // Running off the end of the LAST group is a way out of the switch;
+            // running off the end of any other group just falls into the next.
+            if index == last && block_completes_normally(&arm.body) {
+                falls_out = Some(self.assigned_flags());
+            }
         }
-        self.loop_stack.pop();
+        let exits = self.loop_stack.pop().map(|entry| entry.break_flags);
         self.code.bind(end);
-        // Conservative definite assignment: paths through the switch
-        // vary, so restore the pre-switch state.
-        self.restore_assigned(&before_flags);
+
+        // A switch assigns a variable only if EVERY way out of it does: each
+        // `break`, and falling out of the bottom. Without a `default` there is a
+        // way out that runs no arm at all, so it can promise nothing.
+        //
+        // This used to restore the pre-switch state unconditionally — "paths
+        // through the switch vary" — which meant the plainest idiom in the
+        // language, `switch (x) { case 1: k = a; break; default: k = b; }`, was
+        // told `variable 'k' might not have been initialized`. javac accepts it,
+        // and refusing a correct program is the wrong direction to be wrong in.
+        let mut ways_out = exits.unwrap_or_default();
+        ways_out.extend(falls_out);
+        if let (Some(_), Some((first, rest))) = (default_arm, ways_out.split_first()) {
+            self.restore_assigned(first);
+            for flags in rest {
+                self.intersect_assigned(flags);
+            }
+        } else {
+            self.restore_assigned(&before_flags);
+        }
         let _ = span;
     }
 
@@ -7367,6 +7416,7 @@ impl BodyGen<'_> {
             continue_label: start,
             is_loop: true,
             label: self.pending_label.take(),
+            break_flags: Vec::new(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -7385,6 +7435,7 @@ impl BodyGen<'_> {
             continue_label,
             is_loop: true,
             label: self.pending_label.take(),
+            break_flags: Vec::new(),
         });
         // A do-while body always runs once, so its assignments stick.
         self.statement(body);
@@ -7421,6 +7472,7 @@ impl BodyGen<'_> {
             continue_label: update_label,
             is_loop: true,
             label: self.pending_label.take(),
+            break_flags: Vec::new(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -8090,6 +8142,198 @@ impl BodyGen<'_> {
 
     /// Look up a field of `class_id`, with a javac-style private-access
     /// check. Returns a copied signature.
+    /// Is `name` a field of `class_id`? Asks without reporting anything — the
+    /// increment path needs to know before it commits to reading it as a field.
+    fn resolve_field_quietly(&self, class_id: ClassId, name: &str) -> Option<FieldSig> {
+        let class_name = self.table.class_name(class_id);
+        self.table
+            .field(class_name, name)
+            .map(|(_, field)| field.clone())
+    }
+
+    /// `count++` / `this.count--` used as a VALUE.
+    ///
+    /// This was the one shape the increment expression did not emit: locals and
+    /// array elements worked, and a field said "use a statement form" — or, for a
+    /// bare name, the actively misleading "cannot find variable 'count'". But
+    /// `return count++;` is as ordinary as Java gets, and javac takes it.
+    ///
+    /// The old value has to survive the store, so the receiver is duplicated under
+    /// it: `[obj] dup [obj, obj] getfield [obj, v] dup_x1 [v, obj, v] +1 putfield`
+    /// leaves exactly `[v]` (and `[v']` for the prefix form).
+    #[allow(clippy::too_many_lines)] // four target shapes x static/instance x pre/post
+    fn increment_field(
+        &mut self,
+        target: &FieldTarget<'_>,
+        prefix: bool,
+        increment: bool,
+        span: SourceSpan,
+    ) -> JType {
+        let (class_id, field) = match target {
+            FieldTarget::Implicit(name) => {
+                let Some((owner, field)) = self.resolve_field(self.current_class_id, name, span)
+                else {
+                    return JType::Error;
+                };
+                (owner, field)
+            }
+            FieldTarget::Qualified(object, name) => {
+                let object_ty = self.type_of(object);
+                let JType::Object(id) = object_ty else {
+                    self.error(
+                        span,
+                        format!(
+                            "++/-- needs a numeric variable, got {}",
+                            object_ty.describe(self.table)
+                        ),
+                    );
+                    return JType::Error;
+                };
+                let Some((owner, field)) = self.resolve_field(id, name, span) else {
+                    return JType::Error;
+                };
+                (owner, field)
+            }
+            FieldTarget::Path(path) => {
+                let (base, name) = (&path[0], &path[1]);
+                // `node.size++` (a local's field) or `Counter.total++` (a class's).
+                let owner_id = match self.lookup(base).map(|var| var.ty) {
+                    Some(JType::Object(id)) => Some(id),
+                    Some(_) => None,
+                    None => self.table.class_id(base),
+                };
+                let Some(owner_id) = owner_id else {
+                    self.error(span, format!("cannot find variable '{base}'"));
+                    return JType::Error;
+                };
+                let Some((owner, field)) = self.resolve_field(owner_id, name, span) else {
+                    return JType::Error;
+                };
+                (owner, field)
+            }
+        };
+
+        if field.is_final && !(self.in_constructor && class_id == self.current_class_id) {
+            self.error(
+                span,
+                format!("cannot assign a value to final variable {}", field.name),
+            );
+            return JType::Error;
+        }
+        let ty = field.ty;
+        if !ty.is_numeric() {
+            self.error(
+                span,
+                format!(
+                    "++/-- needs a numeric variable, got {}",
+                    ty.describe(self.table)
+                ),
+            );
+            return JType::Error;
+        }
+
+        let class_name = self.table.class_name(class_id).to_owned();
+        let field_ref = intern_field_ref(
+            self.pool,
+            &class_name,
+            &field.name,
+            &ty.descriptor(self.table),
+        );
+        let wide = ty.width() == 2;
+
+        if field.is_static {
+            if let FieldTarget::Qualified(object, _) = target {
+                // `instance.staticField++`: the receiver still evaluates.
+                self.expr(object);
+                self.code.push_op(op::POP, 0);
+                self.code.drop_stack(1);
+            }
+            self.code.push_op_u16(op::GETSTATIC, field_ref, ty.width());
+            if !prefix {
+                self.code
+                    .push_op(if wide { op::DUP2 } else { op::DUP }, ty.width());
+            }
+            self.one_more(ty, increment);
+            if prefix {
+                self.code
+                    .push_op(if wide { op::DUP2 } else { op::DUP }, ty.width());
+            }
+            self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
+            self.code.drop_stack(ty.width());
+            return ty;
+        }
+
+        match target {
+            FieldTarget::Implicit(_) => self.code.push_op(op::ALOAD_0, 1),
+            FieldTarget::Qualified(object, _) => {
+                if self.expr(object) == JType::Error {
+                    return JType::Error;
+                }
+            }
+            FieldTarget::Path(path) => {
+                let Some(var) = self.lookup(&path[0]) else {
+                    self.error(span, format!("cannot find variable '{}'", path[0]));
+                    return JType::Error;
+                };
+                let (slot, var_ty) = (var.slot, var.ty);
+                self.emit_load(slot, var_ty);
+            }
+        }
+        self.code.push_op(op::DUP, 1);
+        self.code.push_op_u16(op::GETFIELD, field_ref, ty.width());
+        self.code.drop_stack(1);
+        if !prefix {
+            self.code
+                .push_op(if wide { op::DUP2_X1 } else { op::DUP_X1 }, ty.width());
+        }
+        self.one_more(ty, increment);
+        if prefix {
+            self.code
+                .push_op(if wide { op::DUP2_X1 } else { op::DUP_X1 }, ty.width());
+        }
+        self.code.push_op_u16(op::PUTFIELD, field_ref, 0);
+        self.code.drop_stack(1 + ty.width());
+        ty
+    }
+
+    /// Add (or subtract) one from the numeric value on top of the stack — the
+    /// same step `inc_dec` applies to a local or an array element.
+    fn one_more(&mut self, ty: JType, increment: bool) {
+        match ty {
+            JType::Double => {
+                let index = self.pool.intern(Constant::Double(1.0));
+                self.code.push_op_u16(op::LDC2_W, index, 2);
+                self.code
+                    .push_op(if increment { op::DADD } else { op::DSUB }, 0);
+                self.code.drop_stack(2);
+            }
+            JType::Long => {
+                self.code.push_op(op::LCONST_1, 2);
+                self.code
+                    .push_op(if increment { op::LADD } else { op::LSUB }, 0);
+                self.code.drop_stack(2);
+            }
+            JType::Float => {
+                self.code.push_op(op::FCONST_1, 1);
+                self.code
+                    .push_op(if increment { op::FADD } else { op::FSUB }, 0);
+                self.code.drop_stack(1);
+            }
+            _ => {
+                self.code.push_op(op::ICONST_1, 1);
+                self.code
+                    .push_op(if increment { op::IADD } else { op::ISUB }, 0);
+                self.code.drop_stack(1);
+                match ty {
+                    JType::Char => self.code.push_op(op::I2C, 0),
+                    JType::Byte => self.code.push_op(op::I2B, 0),
+                    JType::Short => self.code.push_op(op::I2S, 0),
+                    _ => {}
+                }
+            }
+        }
+    }
+
     fn resolve_field(
         &mut self,
         class_id: ClassId,
@@ -10452,6 +10696,7 @@ impl BodyGen<'_> {
             continue_label,
             is_loop: true,
             label: self.pending_label.take(),
+            break_flags: Vec::new(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -10548,6 +10793,7 @@ impl BodyGen<'_> {
             continue_label,
             is_loop: true,
             label: self.pending_label.take(),
+            break_flags: Vec::new(),
         });
         self.statement(body);
         self.loop_stack.pop();
@@ -13564,6 +13810,33 @@ impl BodyGen<'_> {
         };
 
         match target {
+            // A bare name that is not a LOCAL is a field of this class —
+            // `return count++;`. It used to report "cannot find variable
+            // 'count'", which reads as a typo for a field that is right there.
+            Expr::Name { path, .. }
+                if path.len() == 1
+                    && self.lookup(&path[0]).is_none()
+                    && self
+                        .resolve_field_quietly(self.current_class_id, &path[0])
+                        .is_some() =>
+            {
+                self.increment_field(
+                    &FieldTarget::Implicit(path[0].clone()),
+                    prefix,
+                    increment,
+                    span,
+                )
+            }
+            Expr::Field { object, name, .. } => self.increment_field(
+                &FieldTarget::Qualified(object, name.clone()),
+                prefix,
+                increment,
+                span,
+            ),
+            // `node.size++`, `Counter.total++` — a dotted name, not a field access.
+            Expr::Name { path, .. } if path.len() == 2 => {
+                self.increment_field(&FieldTarget::Path(path), prefix, increment, span)
+            }
             Expr::Name { path, .. } if path.len() == 1 => {
                 let Some(var) = self.lookup(&path[0]) else {
                     self.error(span, format!("cannot find variable '{}'", path[0]));

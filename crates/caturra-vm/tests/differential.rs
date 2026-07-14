@@ -8749,3 +8749,105 @@ public class DiffNumber {
 }
 "#
 );
+
+// `switch` threw away everything it assigned ("paths through the switch vary"), so
+// the plainest idiom in the language — assign in every case, with a default — was
+// told `variable 'kind' might not have been initialized`. javac accepts it, and
+// refusing a correct program is the wrong direction to be wrong in. A switch now
+// promises what EVERY way out of it promises: each break, and falling out the
+// bottom. (No default? Then a path runs no arm at all and it can promise nothing —
+// javac rejects that too.)
+differential_test!(
+    diff_switch_definite_assignment,
+    "DiffSwitch",
+    r#"
+public class DiffSwitch {
+    static String classify(int value) {
+        String kind;
+        switch (value % 3) {
+            case 0:
+                kind = "fizz";
+                break;
+            case 1:
+                kind = "one";
+                break;
+            default:
+                kind = "two";
+        }
+        return kind;
+    }
+
+    static String grouped(int value) {
+        String size;
+        switch (value) {
+            case 1:
+            case 2:
+                size = "small";
+                break;
+            case 3:
+                size = "medium";
+                break;
+            default:
+                size = "large";
+        }
+        return size;
+    }
+
+    static String early(int value) {
+        String verdict;
+        switch (value) {
+            case 0:
+                return "zero";
+            default:
+                verdict = "nonzero";
+        }
+        return verdict;
+    }
+
+    public static void main(String[] args) {
+        for (int i = 0; i < 5; i++) {
+            System.out.println(i + " " + classify(i) + " " + grouped(i) + " " + early(i));
+        }
+    }
+}
+"#
+);
+
+// `count++` used as a VALUE (rather than as a statement) worked on locals and array
+// elements, and on a field it said "use a statement form for fields" — or, for a
+// bare name, the actively misleading "cannot find variable 'count'". `return
+// count++;` is as ordinary as Java gets. The old value has to survive the store, so
+// the receiver is duplicated under it.
+differential_test!(
+    diff_field_increment_as_a_value,
+    "DiffIncrement",
+    r#"
+public class DiffIncrement {
+    private int count = 5;
+    private double ratio = 1.5;
+    static int tally = 100;
+
+    interface Counter {
+        int next();
+    }
+
+    int bump() {
+        return count++;
+    }
+
+    public static void main(String[] args) {
+        DiffIncrement it = new DiffIncrement();
+        System.out.println(it.bump() + " " + it.bump() + " " + it.count);
+        System.out.println(++it.count + " " + it.count--  + " " + it.count);
+        System.out.println(it.ratio++ + " " + it.ratio);
+        System.out.println(tally++ + " " + tally + " " + --tally);
+
+        Counter counter = new Counter() {
+            private int value = 10;
+            @Override public int next() { return value++; }
+        };
+        System.out.println(counter.next() + " " + counter.next() + " " + counter.next());
+    }
+}
+"#
+);
