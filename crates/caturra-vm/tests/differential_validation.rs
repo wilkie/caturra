@@ -618,3 +618,128 @@ public class ThrowsTest {
 }
 "#
 );
+
+// Every validator in this file (and nearly every one in the corpus) reaches its
+// assertions through `import static ...Assertions.*`, which is why it took a
+// corpus sweep to notice that the SINGLE-MEMBER form imported nothing at all —
+// two levels spell it that way and caturra could not compile either of them.
+// Nothing about this is JUnit-specific: `import static java.lang.Math.max` was
+// just as dead.
+validation_differential_test!(
+    diff_junit_single_member_static_import,
+    "ImportTest",
+    r#"
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class ImportTest {
+    @Test
+    @Order(1)
+    @DisplayName("each imported member resolves unqualified => ")
+    public void imported() {
+        assertEquals(2, 1 + 1);
+        assertTrue(true);
+        double[] expected = {1.0, 2.0};
+        double[] actual = {1.0, 2.0};
+        assertArrayEquals(expected, actual, "the samples differ");
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("and a failure through one still reads like JUnit => ")
+    public void stillFails() {
+        double[] expected = {1.0, 2.0};
+        double[] actual = {1.0, 3.0};
+        assertArrayEquals(expected, actual, "the samples differ");
+    }
+}
+"#
+);
+
+// The array assertions were still speaking JUnit 4 (`arrays first differed at
+// element [1]`) — wrong in the one place it is read out loud, since a failure
+// message IS the hint the student sees. JUnit 5 names the value on both sides,
+// and for a 2D array it names the whole path to the element.
+validation_differential_test!(
+    diff_junit_array_failure_messages,
+    "ArraysTest",
+    r#"
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class ArraysTest {
+    @Test
+    @Order(1)
+    @DisplayName("contents, with no message => ")
+    public void contents() {
+        assertArrayEquals(new double[] {1.0, 2.0}, new double[] {1.0, 3.0});
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("contents, with a message => ")
+    public void contentsMessage() {
+        assertArrayEquals(new int[] {1, 2}, new int[] {1, 3}, "the samples differ");
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("lengths => ")
+    public void lengths() {
+        assertArrayEquals(new double[] {1.0}, new double[] {1.0, 2.0});
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("a 2D array names the whole index path => ")
+    public void twoDimensional() {
+        assertArrayEquals(new int[][] {{1, 2}}, new int[][] {{1, 3}});
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("a 2D row of the wrong length says WHICH row => ")
+    public void twoDimensionalLengths() {
+        assertArrayEquals(new int[][] {{1, 2}}, new int[][] {{1}});
+    }
+
+    @Test
+    @Order(6)
+    @DisplayName("a null array on either side => ")
+    public void nulls() {
+        assertArrayEquals(new int[] {1}, null, "gone");
+    }
+
+    @Test
+    @Order(7)
+    @DisplayName("within a delta it passes; outside it reports both values => ")
+    public void delta() {
+        assertArrayEquals(new double[] {1.0}, new double[] {1.01}, 0.1);
+        assertArrayEquals(new double[] {1.0}, new double[] {1.5}, 0.1, "too far");
+    }
+
+    @Test
+    @Order(8)
+    @DisplayName("String[] with a null element => ")
+    public void objectElements() {
+        assertArrayEquals(new String[] {"a"}, new String[] {null});
+    }
+
+    @Test
+    @Order(9)
+    @DisplayName("two nulls are equal => ")
+    public void bothNull() {
+        assertArrayEquals((int[]) null, (int[]) null);
+    }
+}
+"#
+);

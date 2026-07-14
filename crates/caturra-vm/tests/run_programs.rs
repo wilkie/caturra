@@ -12413,13 +12413,15 @@ fn junit_assert_equals_honours_a_delta() {
         "DeltaTest",
     );
     // The failure text is JUnit's own, verified against it in
-    // differential_validation.rs: the message, then `==> expected: <x> but
-    // was: <y>`.
+    // differential_validation.rs. The array line used to read `arrays first
+    // differed at element [1]` — JUnit *4*'s wording, which this test had
+    // simply frozen from caturra's own output. Only running the real thing
+    // caught it.
     assert_eq!(
         out,
         "exact ok\n\
          threw: too far apart ==> expected: <0.02> but was: <0.03>\n\
-         threw: array ==> arrays first differed at element [1] ==> expected: <2.0> but was: <2.5>\n"
+         threw: array ==> array contents differ at index [1], expected: <2.0> but was: <2.5>\n"
     );
 }
 
