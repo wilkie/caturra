@@ -691,6 +691,13 @@ impl MethodTable {
 
                 let mut library_superclass = None;
                 let superclass = class.superclass.as_ref().and_then(|name| {
+                    // An anonymous class's supertype lands here whether it is a class
+                    // or an interface, so it needs the same aliasing the `implements`
+                    // list gets: `new Comparator<String>() { ... }` implements the
+                    // bundled erased `__Comparator`. Without it, the anonymous form of
+                    // a library interface reported "cannot find symbol: class
+                    // Comparator" about a class that was imported two lines up.
+                    let name = comparator_alias(name);
                     let id = table.class_id(name);
                     if id.is_none() {
                         // `extends Exception` and friends: a library
@@ -1469,6 +1476,42 @@ fn library_exception_internal(name: &str, table: &MethodTable) -> Option<String>
         caturra_classfile::exceptions::internal_name_of(simple)?.to_owned()
     };
     exception_id(&internal).map(|_| internal)
+}
+
+/// The internal name of a RAW library type as `instanceof` names it — `List`,
+/// `Map`, `Set`, `ArrayList`. A user class of that name shadows it.
+///
+/// These have no `JType` of their own without type arguments (a raw `List` is not
+/// a variable type caturra models), but `o instanceof List` is a perfectly ordinary
+/// question and the VM can answer it.
+fn raw_library_internal(name: &str) -> Option<&'static str> {
+    let simple = crate::imports::canonical_library_class(name).unwrap_or(name);
+    // An INTERFACE must map to the interface's own name, never to a concrete class:
+    // `Set` -> `java/util/HashSet` made a TreeSet answer `instanceof Set` with false,
+    // and a LinkedList answer `instanceof List` with false.
+    Some(match simple {
+        "List" => "java/util/List",
+        "Map" => "java/util/Map",
+        "Set" => "java/util/Set",
+        "SortedMap" | "NavigableMap" => "java/util/SortedMap",
+        "SortedSet" | "NavigableSet" => "java/util/SortedSet",
+        "ArrayList" => "java/util/ArrayList",
+        "HashMap" => "java/util/HashMap",
+        "HashSet" => "java/util/HashSet",
+        "TreeMap" => "java/util/TreeMap",
+        "TreeSet" => "java/util/TreeSet",
+        "LinkedList" => "java/util/LinkedList",
+        "ArrayDeque" => "java/util/ArrayDeque",
+        "Stack" => "java/util/Stack",
+        "PriorityQueue" => "java/util/PriorityQueue",
+        "Queue" => "java/util/Queue",
+        "Deque" => "java/util/Deque",
+        "Collection" => "java/util/Collection",
+        "Optional" => "java/util/Optional",
+        "StringBuilder" => "java/lang/StringBuilder",
+        "CharSequence" => "java/lang/CharSequence",
+        _ => return None,
+    })
 }
 
 /// A catch clause's resolved type: a library throwable or a
@@ -11005,6 +11048,17 @@ impl BodyGen<'_> {
                 ) {
                     return self.static_call(&class, method, args, span);
                 }
+                // `import static java.lang.Math.max` — the imported class can be a
+                // LIBRARY one, whose statics live in the builtin table rather than
+                // the user class table. Only user classes were consulted, so the
+                // import validated and then the call it enabled did not resolve.
+                if !self.table.has_class(&class)
+                    && let Some((_, methods)) = builtin_static_table(&class)
+                    && pick_builtin(methods, method, &arg_types, TypeArgs::default(), self.table)
+                        .is_some()
+                {
+                    return self.static_call(&class, method, args, span);
+                }
             }
         }
         // A nested class calls its enclosing class's STATIC methods unqualified,
@@ -12387,6 +12441,42 @@ impl BodyGen<'_> {
                     }
                 }
                 let table = self.table;
+                // A statically imported member, called unqualified. The EMITTER has
+                // always followed static imports; this did not, and the two must
+                // agree or the emitted code is typed by a guess: with
+                // `import static java.lang.Math.max`, `max(2, 3) + abs(-1)` typed as
+                // nothing, and the addition it fed produced 1 instead of 4.
+                if receiver.is_none()
+                    && !matches!(
+                        table.resolve(&class, method, &arg_types),
+                        Resolution::Found(_)
+                    )
+                {
+                    for import in &table.static_imports {
+                        if import.member.as_deref().is_some_and(|name| name != method) {
+                            continue;
+                        }
+                        if let Resolution::Found(sig) =
+                            table.resolve(&import.class, method, &arg_types)
+                            && sig.is_static
+                        {
+                            return sig.ret.unwrap_or(JType::Error);
+                        }
+                        if !table.has_class(&import.class)
+                            && let Some((_, methods)) = builtin_static_table(&import.class)
+                            && let Some(chosen) = pick_builtin(
+                                methods,
+                                method,
+                                &arg_types,
+                                TypeArgs::default(),
+                                table,
+                            )
+                        {
+                            return bret_type(chosen.ret, TypeArgs::default(), table)
+                                .unwrap_or(JType::Error);
+                        }
+                    }
+                }
                 match table.resolve(&class, method, &arg_types) {
                     Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
                     _ => {
@@ -12672,6 +12762,29 @@ impl BodyGen<'_> {
     /// `value instanceof Type` (reference types only).
     fn instance_of(&mut self, value: &Expr, ty: &TypeRef, span: SourceSpan) -> JType {
         let value_ty = self.expr(value);
+        // `o instanceof List` / `Map` / `Set` — a RAW library type, which is how
+        // instanceof is always written (`instanceof List<String>` is illegal Java).
+        // The generic forms resolve; the raw names did not, so the test that people
+        // actually write reported "unknown type in instanceof".
+        if let TypeRef::Named(name) = ty
+            && let Some(internal) = raw_library_internal(name)
+            && !self.table.has_class(name)
+        {
+            if !value_ty.is_reference() && value_ty != JType::Error {
+                self.error(
+                    span,
+                    format!(
+                        "unexpected type: {} cannot be tested with instanceof",
+                        value_ty.describe(self.table)
+                    ),
+                );
+                return JType::Error;
+            }
+            let class_index = intern_class(self.pool, internal);
+            self.code.push_op_u16(op::INSTANCEOF, class_index, 1);
+            self.code.drop_stack(1);
+            return JType::Boolean;
+        }
         // `x instanceof Number` — the wrapper supertype. caturra models no `Number`
         // TYPE (there is nothing to declare a variable of; its methods live on the
         // wrappers), but the QUESTION is ordinary and the VM can answer it: an

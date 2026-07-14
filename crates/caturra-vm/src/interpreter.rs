@@ -1501,10 +1501,68 @@ impl<'run> Interpreter<'run> {
                                             || target == "java/lang/CharSequence"
                                             || is_comparable(&target)
                                     }
-                                    Some(crate::value::HeapObject::ArrayList(_)) => {
-                                        target == "java/util/ArrayList"
-                                            || target == "java/util/List"
+                                    Some(crate::value::HeapObject::ArrayList(_)) => matches!(
+                                        target.as_str(),
+                                        "java/util/ArrayList"
+                                            | "java/util/List"
+                                            | "java/util/Collection"
+                                    ),
+                                    // The rest of the collections. They answered
+                                    // FALSE to everything — there was no arm at all
+                                    // — so `o instanceof Map` was silently wrong.
+                                    Some(crate::value::HeapObject::HashMap(_)) => matches!(
+                                        target.as_str(),
+                                        "java/util/HashMap" | "java/util/Map"
+                                    ),
+                                    Some(crate::value::HeapObject::TreeMap { .. }) => matches!(
+                                        target.as_str(),
+                                        "java/util/TreeMap"
+                                            | "java/util/Map"
+                                            | "java/util/SortedMap"
+                                            | "java/util/NavigableMap"
+                                    ),
+                                    Some(crate::value::HeapObject::UnmodifiableList(_)) => {
+                                        matches!(
+                                            target.as_str(),
+                                            "java/util/List" | "java/util/Collection"
+                                        )
                                     }
+                                    Some(crate::value::HeapObject::UnmodifiableSet(_)) => matches!(
+                                        target.as_str(),
+                                        "java/util/Set" | "java/util/Collection"
+                                    ),
+                                    Some(crate::value::HeapObject::UnmodifiableMap(_)) => {
+                                        target == "java/util/Map"
+                                    }
+                                    Some(crate::value::HeapObject::HashSet(_)) => matches!(
+                                        target.as_str(),
+                                        "java/util/HashSet"
+                                            | "java/util/Set"
+                                            | "java/util/Collection"
+                                    ),
+                                    Some(crate::value::HeapObject::TreeSet { .. }) => matches!(
+                                        target.as_str(),
+                                        "java/util/TreeSet"
+                                            | "java/util/Set"
+                                            | "java/util/SortedSet"
+                                            | "java/util/NavigableSet"
+                                            | "java/util/Collection"
+                                    ),
+                                    Some(crate::value::HeapObject::PriorityQueue { .. }) => {
+                                        matches!(
+                                            target.as_str(),
+                                            "java/util/PriorityQueue"
+                                                | "java/util/Queue"
+                                                | "java/util/Collection"
+                                        )
+                                    }
+                                    Some(crate::value::HeapObject::Optional { .. }) => {
+                                        target == "java/util/Optional"
+                                    }
+                                    Some(crate::value::HeapObject::StringBuilder(_)) => matches!(
+                                        target.as_str(),
+                                        "java/lang/StringBuilder" | "java/lang/CharSequence"
+                                    ),
                                     Some(crate::value::HeapObject::Stack(_)) => matches!(
                                         target.as_str(),
                                         "java/util/Stack"
@@ -7543,6 +7601,9 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::ArrayDeque(_)) => String::from("java/util/ArrayDeque"),
             Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
             Some(HeapObject::HashSet(_)) => String::from("java/util/HashSet"),
+            // HashMap was the one collection missing here, so `map.getClass()`
+            // answered `java.lang.Object` — the TreeMap beside it was fine.
+            Some(HeapObject::HashMap(_)) => String::from("java/util/HashMap"),
             Some(HeapObject::TreeSet { .. }) => String::from("java/util/TreeSet"),
             Some(HeapObject::TreeMap { .. }) => String::from("java/util/TreeMap"),
             Some(HeapObject::PriorityQueue { .. }) => String::from("java/util/PriorityQueue"),

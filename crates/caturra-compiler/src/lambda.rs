@@ -1009,7 +1009,10 @@ fn comparator_target_elem(target: &TypeRef) -> Option<TypeRef> {
 /// is cast to the qualifier class. Returns whether it handled `arg` (false for a
 /// lambda or a non-extractor, which the caller types some other way).
 fn desugar_key_extractor(arg: &mut Expr, ctx: &mut Ctx) -> bool {
-    let Expr::MethodRef { qualifier, .. } = &*arg else {
+    let Expr::MethodRef {
+        qualifier, method, ..
+    } = &*arg
+    else {
         return false;
     };
     let Expr::Name { path, .. } = qualifier.as_ref() else {
@@ -1018,7 +1021,33 @@ fn desugar_key_extractor(arg: &mut Expr, ctx: &mut Ctx) -> bool {
     if path.len() != 1 {
         return false;
     }
-    let elem = TypeRef::Named(path[0].clone());
+    // The key extractor's parameter is the ELEMENT being sorted.
+    //
+    // For an unbound instance reference (`Runner::getName`) that element IS the
+    // qualifier class. For a STATIC one (`G::key`) it is not — the element is
+    // whatever the static method takes, and typing it as the qualifier produced
+    // `no suitable method found for key(G)`: caturra had read `G::key` as
+    // "call key() ON a G".
+    let is_static = ctx
+        .static_methods
+        .get(&path[0])
+        .is_some_and(|names| names.contains(method));
+    let elem = if is_static {
+        let mut one_param = ctx
+            .methods
+            .get(method)
+            .into_iter()
+            .flatten()
+            .filter(|params| params.len() == 1);
+        let first = one_param.next().cloned();
+        // Overloads that disagree cannot pin the element type; leave it alone.
+        match first {
+            Some(param) if one_param.all(|other| other[..] == param[..]) => param[0].clone(),
+            _ => return false,
+        }
+    } else {
+        TypeRef::Named(path[0].clone())
+    };
     let Some(sam) = ctx.sams.get("__UnaryOperator").cloned() else {
         return false;
     };

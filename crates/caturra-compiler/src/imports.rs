@@ -487,11 +487,22 @@ fn validate_import(
         return;
     }
 
-    let package = if import.wildcard {
-        import.path.join(".")
-    } else {
-        import.path[..import.path.len() - 1].join(".")
-    };
+    // A STATIC import names a MEMBER after the class: `import static
+    // java.lang.Math.max` is the class `java.lang.Math` and the member `max`, so
+    // the package ends one element earlier than for an ordinary import. Reading it
+    // the usual way made the package `java.lang.Math`, and the message was "package
+    // java.lang.Math does not exist" — about a class everyone has used.
+    // `import java.util.List`      -> package java.util          (drop the class)
+    // `import java.util.*`          -> package java.util          (drop nothing)
+    // `import static java.lang.Math.max` -> package java.lang     (drop member + class)
+    // `import static java.lang.Math.*`   -> package java.lang     (drop the class)
+    let drop = usize::from(!import.wildcard) + usize::from(import.is_static);
+    let package = import.path[..import.path.len().saturating_sub(drop)].join(".");
+    // For a static import the class is what the member hangs off, not the last name.
+    let class_index = import
+        .path
+        .len()
+        .saturating_sub(1 + usize::from(import.is_static && !import.wildcard));
 
     if let Some(classes) = package_classes(&package) {
         if import.wildcard {
@@ -502,7 +513,7 @@ fn validate_import(
             }
             return;
         }
-        let class = import.path.last().expect("non-empty import path");
+        let class = &import.path[class_index];
         if let Some(name) = classes.iter().find(|n| *n == class) {
             if REQUIRES_IMPORT.contains(name) {
                 enabled.insert(name);
@@ -525,6 +536,15 @@ fn validate_import(
         return;
     }
 
+    // `import static Helper.twice;` — a static import out of the unnamed package,
+    // which javac rejects too ("cannot find symbol"). caturra has only the unnamed
+    // package, so this is where a user class lands; refusing it is right, but
+    // "package  does not exist" is not the way to say so.
+    if package.is_empty() {
+        let class = &import.path[class_index];
+        error(format!("cannot find symbol: class {class}"), import.span);
+        return;
+    }
     if KNOWN_UNSUPPORTED_PACKAGES.contains(&package.as_str()) {
         error(not_supported(&format!("package {package}")), import.span);
     } else {

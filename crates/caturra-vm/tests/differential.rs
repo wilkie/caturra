@@ -8906,7 +8906,7 @@ public class DiffFinalCatch {
 differential_reject!(
     diff_final_parameter_cannot_be_assigned,
     "DiffFinalAssign",
-    r#"
+    r"
 public class DiffFinalAssign {
     static int bad(final int value) {
         value = 3;
@@ -8915,6 +8915,106 @@ public class DiffFinalAssign {
 
     public static void main(String[] args) {
         System.out.println(bad(1));
+    }
+}
+"
+);
+
+// The next tier of grammar gaps, closed together because the survey found them
+// together:
+//
+//   - `o instanceof List` — a RAW library type, which is the only way instanceof
+//     can be written (`instanceof List<String>` is illegal Java). The generic forms
+//     resolved; the raw names did not. The VM had no arm for maps or sets at all,
+//     so it would have answered `false` even once the compiler emitted the check —
+//     and an INTERFACE has to map to the interface's own name, or a TreeSet fails
+//     `instanceof Set` and a LinkedList fails `instanceof List`.
+//   - `new Comparator<String>() { ... }` — an anonymous class over a LIBRARY
+//     interface. The `implements` list aliased Comparator to the bundled
+//     `__Comparator`; the anonymous supertype (which the parser stores as the
+//     superclass, class or interface alike) did not, so it reported "cannot find
+//     symbol: class Comparator" about a class imported two lines up. Not the
+//     diamond: the explicit form failed identically.
+//   - `Comparator.comparing(G::key)` — a STATIC method reference. The key
+//     extractor's parameter was typed as the qualifier class, which is right for
+//     `Runner::getName` and wrong for a static, whose parameter is the element.
+//   - `import static java.lang.Math.max` — the package was read as `java.lang.Math`,
+//     and the call it enables resolved only against USER classes.
+differential_test!(
+    diff_raw_instanceof_anon_library_iface_and_static_import,
+    "DiffTier",
+    r#"
+import static java.lang.Math.max;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+public class DiffTier {
+    static class Runner {
+        final String name;
+
+        Runner(String name) {
+            this.name = name;
+        }
+
+        String getName() {
+            return name;
+        }
+
+        @Override
+        public String toString() {
+            return name;
+        }
+    }
+
+    static String lower(Runner runner) {
+        return runner.name.toLowerCase();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(max(2, 3) + max(1, 4));
+
+        Object list = new ArrayList<String>();
+        Object linked = new LinkedList<String>();
+        Object map = new HashMap<String, Integer>();
+        Object set = new TreeSet<String>();
+        System.out.println((list instanceof List) + " " + (list instanceof Collection));
+        System.out.println((linked instanceof List) + " " + (map instanceof Map)
+            + " " + (set instanceof Set) + " " + (set instanceof Collection));
+        System.out.println(map.getClass().getSimpleName() + " " + set.getClass().getSimpleName());
+
+        List<Runner> runners = new ArrayList<>();
+        runners.add(new Runner("Carol"));
+        runners.add(new Runner("al"));
+        runners.add(new Runner("Bea"));
+
+        runners.sort(Comparator.comparing(Runner::getName));
+        System.out.println(runners);
+        runners.sort(Comparator.comparing(DiffTier::lower));
+        System.out.println(runners);
+
+        runners.sort(new Comparator<Runner>() {
+            @Override
+            public int compare(Runner a, Runner b) {
+                return b.name.compareTo(a.name);
+            }
+        });
+        System.out.println(runners);
+
+        runners.sort(new Comparator<>() {
+            @Override
+            public int compare(Runner a, Runner b) {
+                return a.name.length() - b.name.length();
+            }
+        });
+        System.out.println(runners);
     }
 }
 "#

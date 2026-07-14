@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-jz0qbxwd/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-bu5opl6g/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-6oevq6wh/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-y9d9ffs5/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-1bz1o65v/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-75s2n28n/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -529,8 +529,8 @@
     "summary": "`import static java.lang.Math.max;` (a static import of a USER class works \u2014 this is the library one).",
     "main": "G",
     "source": "import static java.lang.Math.max;\n\npublic class G {\n    public static void main(String[] args) {\n        System.out.println(max(2, 3));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "package java.lang.Math does not exist"
+    "status": "supported",
+    "expected": "3\n"
   },
   {
     "id": "g-labeled",
@@ -659,8 +659,8 @@
     "summary": "`Comparator.comparing(G::key)` \u2014 caturra reads Class::method as an instance reference.",
     "main": "G",
     "source": "import java.util.ArrayList;\nimport java.util.Comparator;\nimport java.util.List;\npublic class G {\n    static String key(String s) { return s; }\n    public static void main(String[] args) throws Exception {\nList<String> l = new ArrayList<>();\n        l.add(\"b\");\n        l.add(\"a\");\n        l.sort(Comparator.comparing(G::key));\n        System.out.println(l);\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "no suitable method found for key(G) in class G"
+    "status": "supported",
+    "expected": "[a, b]\n"
   },
   {
     "id": "g-instanceof-iface",
@@ -669,8 +669,8 @@
     "summary": "`o instanceof List` \u2014 instanceof against a collection interface.",
     "main": "G",
     "source": "import java.util.ArrayList;\nimport java.util.List;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nObject o = new ArrayList<String>();\n        if (o instanceof List) {\n            System.out.println(\"a list\");\n        }\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "unknown type in instanceof"
+    "status": "supported",
+    "expected": "a list\n"
   },
   {
     "id": "g-anon-diamond",
@@ -679,8 +679,8 @@
     "summary": "`new Comparator<>() { ... }` \u2014 the diamond on an anonymous class body.",
     "main": "G",
     "source": "import java.util.Comparator;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nComparator<String> c = new Comparator<>() {\n            @Override public int compare(String a, String b) { return a.compareTo(b); }\n        };\n        System.out.println(c.compare(\"a\", \"b\"));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "cannot find symbol: class Comparator"
+    "status": "supported",
+    "expected": "-1\n"
   },
   {
     "id": "g-function-package",
