@@ -703,7 +703,9 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                     self.stmt(stmt);
                 }
                 for clause in catches {
-                    self.type_ref(&clause.ty, clause.span);
+                    for ty in &clause.types {
+                        self.type_ref(ty, clause.span);
+                    }
                     for stmt in &clause.body {
                         self.stmt(stmt);
                     }

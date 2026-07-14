@@ -1284,6 +1284,7 @@ fn build_erased_lambda(
             ty: object(),
             name: format!("__caturraArg{i}"),
             is_varargs: false,
+            is_final: false,
         })
         .collect();
 
@@ -1420,6 +1421,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
             ty: ty.clone(),
             name: p.name.clone(),
             is_varargs: false,
+            is_final: false,
         })
         .collect();
 

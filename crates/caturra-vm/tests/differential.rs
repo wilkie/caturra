@@ -8851,3 +8851,71 @@ public class DiffIncrement {
 }
 "#
 );
+
+// Two shallow gaps the grammar survey turned up.
+//
+// `final` on a PARAMETER did not parse ("expected a type"), though a final LOCAL
+// always worked. Taking the modifier is only half of it: javac REFUSES an
+// assignment to a final parameter, so accepting one would let through a program
+// javac rejects — the direction never to be wrong in. `final_parameter_rejects_
+// assignment` in run_programs.rs pins that half.
+//
+// Multi-catch is one handler with several exception-table entries, and the caught
+// variable takes a type that covers every alternative (Java's least upper bound):
+// `ArithmeticException | NumberFormatException` widens to RuntimeException, which
+// is why `RuntimeException widened = e;` below has to compile.
+differential_test!(
+    diff_final_params_and_multi_catch,
+    "DiffFinalCatch",
+    r#"
+public class DiffFinalCatch {
+    static int twice(final int value) {
+        return value * 2;
+    }
+
+    static String describe(final String label, int which) {
+        try {
+            if (which == 0) {
+                throw new ArithmeticException("div");
+            }
+            throw new NumberFormatException("nan");
+        } catch (ArithmeticException | NumberFormatException e) {
+            RuntimeException widened = e;
+            return label + ": " + e.getClass().getName() + " " + widened.getMessage();
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(twice(21));
+        System.out.println(describe("a", 0));
+        System.out.println(describe("b", 1));
+
+        try {
+            throw new IllegalStateException("state");
+        } catch (final IllegalStateException | IllegalArgumentException e) {
+            System.out.println("caught " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// Taking `final` on a parameter is only half the feature: javac REFUSES an
+// assignment to one, and so must caturra. Accepting it would be a program that
+// compiles here and fails on the JDK — the direction never to be wrong in.
+differential_reject!(
+    diff_final_parameter_cannot_be_assigned,
+    "DiffFinalAssign",
+    r#"
+public class DiffFinalAssign {
+    static int bad(final int value) {
+        value = 3;
+        return value;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(bad(1));
+    }
+}
+"#
+);

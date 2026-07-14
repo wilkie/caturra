@@ -214,12 +214,14 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers
             ty: ty.clone(),
             name: name.clone(),
             is_varargs: false,
+            is_final: false,
         })
         .collect();
     params.extend(caps.iter().map(|(name, ty)| Param {
         ty: ty.clone(),
         name: name.clone(),
         is_varargs: false,
+        is_final: false,
     }));
     let mut body: Vec<Stmt> = Vec::new();
     if !supers.is_empty() {
@@ -431,7 +433,11 @@ fn find_in_stmt(
             for c in catches {
                 scope.push(HashMap::new());
                 if let Some(frame) = scope.last_mut() {
-                    frame.insert(c.name.clone(), c.ty.clone());
+                    // A multi-catch variable is typed by its first alternative here;
+                    // capture only needs to know the name is bound, not its exact type.
+                    if let Some(ty) = c.types.first() {
+                        frame.insert(c.name.clone(), ty.clone());
+                    }
                 }
                 find_in_stmts(&c.body, scope, anon, out, owner, mutations);
                 scope.pop();

@@ -908,6 +908,9 @@ impl Parser<'_> {
         let mut params = Vec::new();
         if !self.at_symbol(")") {
             loop {
+                // `void m(final int v)` — legal on any parameter, and common in
+                // code that leans on effectively-final capture.
+                let is_final = self.eat_keyword(Keyword::Final);
                 let mut ty = self.type_ref()?;
                 // Varargs: `Type... name` — the parameter is an array.
                 let is_varargs = self.eat_symbol("...");
@@ -924,6 +927,7 @@ impl Parser<'_> {
                     ty: crate::ast::array_of(ty, dims),
                     name: param_name,
                     is_varargs,
+                    is_final,
                 });
                 if is_varargs {
                     // A varargs parameter must be last.
@@ -1454,13 +1458,19 @@ impl Parser<'_> {
             let clause_start = self.here();
             self.pos += 1;
             self.expect_symbol("(", "after 'catch'")?;
-            let ty = self.type_ref()?;
+            // `catch (final IOException | SQLException e)` — the modifier is legal,
+            // and so is a multi-catch: one handler, several alternatives.
+            let _ = self.eat_keyword(Keyword::Final);
+            let mut types = vec![self.type_ref()?];
+            while self.eat_symbol("|") {
+                types.push(self.type_ref()?);
+            }
             let (name, _) = self.expect_ident("for the caught exception")?;
             self.expect_symbol(")", "after the catch parameter")?;
             self.expect_symbol("{", "after the catch parameter")?;
             let catch_body = self.block_body();
             catches.push(CatchClause {
-                ty,
+                types,
                 name,
                 body: catch_body,
                 span: SourceSpan {
@@ -3016,11 +3026,13 @@ fn desugar_enum(
                 ty: str_ty.clone(),
                 name: String::from("__name"),
                 is_varargs: false,
+                is_final: false,
             },
             Param {
                 ty: TypeRef::Int,
                 name: String::from("__ordinal"),
                 is_varargs: false,
+                is_final: false,
             },
         ]
     };
@@ -3176,6 +3188,7 @@ fn desugar_enum(
                 ty: str_ty,
                 name: String::from("__n"),
                 is_varargs: false,
+                is_final: false,
             }],
             body: vec![for_each, throw],
             annotations: Vec::new(),

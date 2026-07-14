@@ -149,6 +149,18 @@ pub fn is_exception_subclass(sub: &str, sup: &str) -> bool {
     }
 }
 
+/// The superclass of a throwable (internal names), or `None` at `Throwable`.
+///
+/// A multi-catch needs it: the caught variable's type is a supertype of every
+/// alternative, so the compiler climbs from one until it covers the rest.
+#[must_use]
+pub fn parent_of(name: &str) -> Option<&'static str> {
+    EXCEPTIONS
+        .iter()
+        .find(|(class, _)| *class == name)
+        .map(|(_, parent)| *parent)
+}
+
 /// Resolve a simple name (`ArithmeticException`) to its internal name.
 #[must_use]
 pub fn internal_name_of(simple: &str) -> Option<&'static str> {

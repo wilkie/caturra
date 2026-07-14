@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-kr71i8ur/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-jz0qbxwd/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-eznt2887/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-6oevq6wh/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-ksxd3h2c/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-1bz1o65v/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -509,8 +509,8 @@
     "summary": "`static int twice(final int v)`. A final LOCAL works; a final parameter does not.",
     "main": "G",
     "source": "public class G {\n    static int twice(final int v) { return v * 2; }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(twice(2));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "expected a type"
+    "status": "supported",
+    "expected": "4\n"
   },
   {
     "id": "g-package",
@@ -579,8 +579,8 @@
     "summary": "One clause, two exception types.",
     "main": "G",
     "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\ntry {\n            throw new IllegalStateException(\"boom\");\n        } catch (IllegalStateException | IllegalArgumentException e) {\n            System.out.println(\"caught \" + e.getMessage());\n        }\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "expected a name for the caught exception"
+    "status": "supported",
+    "expected": "caught boom\n"
   },
   {
     "id": "g-assert",

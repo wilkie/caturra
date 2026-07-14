@@ -2605,7 +2605,10 @@ fn emit_method(
             LocalVar {
                 slot,
                 ty,
-                is_final: false,
+                // `final int v` — javac refuses an assignment to it, so taking the
+                // modifier without honouring it would let through a program javac
+                // rejects, which is the direction never to be wrong in.
+                is_final: param.is_final,
                 assigned: true,
             },
         ));
@@ -7080,10 +7083,10 @@ impl BodyGen<'_> {
         // Resolve catch types first: exception classes only, and no
         // clause may be masked by an earlier broader one (javac:
         // "exception X has already been caught").
-        let mut resolved: Vec<Option<CatchKind>> = Vec::with_capacity(catches.len());
+        let mut resolved: Vec<Vec<CatchKind>> = Vec::with_capacity(catches.len());
         for (index, clause) in catches.iter().enumerate() {
-            let kind = self.resolve_catch_type(clause);
-            if let Some(kind) = kind {
+            let kinds = self.resolve_catch_types(clause);
+            for kind in &kinds {
                 for earlier in resolved.iter().take(index).flatten() {
                     if kind.is_masked_by(*earlier, self.table) {
                         self.error(
@@ -7096,7 +7099,7 @@ impl BodyGen<'_> {
                     }
                 }
             }
-            resolved.push(kind);
+            resolved.push(kinds);
         }
 
         // Abrupt exits (return/break/continue) inside the protected
@@ -7144,7 +7147,7 @@ impl BodyGen<'_> {
         // inside a finally copy must not re-run it).
         let mut catch_ranges: Vec<(u16, u16)> = Vec::new();
 
-        for (clause, id) in catches.iter().zip(&resolved) {
+        for (clause, kinds) in catches.iter().zip(&resolved) {
             self.restore_assigned(&before_flags);
             let handler = self.code.offset();
             self.code.mark_line(clause.span.start.line);
@@ -7152,13 +7155,15 @@ impl BodyGen<'_> {
             self.code.assume_stack(1);
 
             self.scopes.push(Vec::new());
-            let Some(kind) = id else {
+            if kinds.is_empty() {
                 // Unresolvable type: an error was reported; skip body
                 // emission to avoid cascades.
                 self.scopes.pop();
                 continue;
-            };
-            let ty = kind.jtype();
+            }
+            // A multi-catch has ONE handler; the alternatives differ only in which
+            // exceptions reach it, so the variable takes a type that covers them all.
+            let ty = Self::catch_variable_type(kinds);
             let slot = self.next_slot;
             self.next_slot += 1;
             self.emit_store(slot, ty);
@@ -7197,9 +7202,12 @@ impl BodyGen<'_> {
             self.code.branch(op::GOTO, after, 0);
             branch_flags.push(self.assigned_flags());
 
-            let catch_class = intern_class(self.pool, &kind.table_name(self.table));
-            self.code
-                .add_exception_entry(start, end, handler, catch_class);
+            // One entry per alternative, all pointing at this handler.
+            for kind in kinds {
+                let catch_class = intern_class(self.pool, &kind.table_name(self.table));
+                self.code
+                    .add_exception_entry(start, end, handler, catch_class);
+            }
         }
 
         // The finally's catch-all: run the finally, then rethrow.
@@ -7264,11 +7272,60 @@ impl BodyGen<'_> {
         self.finally_stack = saved;
     }
 
-    /// The resolved type of a catch clause, with javac-flavored errors
+    /// The resolved alternatives of a catch clause — one, or several for a
+    /// multi-catch (`catch (IOException | SQLException e)`), each of which gets its
+    /// own exception-table entry pointing at the SAME handler.
+    fn resolve_catch_types(&mut self, clause: &CatchClause) -> Vec<CatchKind> {
+        clause
+            .types
+            .iter()
+            .filter_map(|ty| self.resolve_catch_type(ty, clause.span))
+            .collect()
+    }
+
+    /// The type the caught variable takes. With one alternative it is that type;
+    /// with several it is a supertype of all of them, which is what Java gives the
+    /// variable (its least upper bound). Climbing to a common library ancestor is
+    /// exact for the library hierarchy; anything else falls back to `Throwable`,
+    /// which is stricter than javac, never looser.
+    fn catch_variable_type(kinds: &[CatchKind]) -> JType {
+        let [single] = kinds else {
+            let library: Vec<u8> = kinds
+                .iter()
+                .filter_map(|kind| match kind {
+                    CatchKind::Library(id) => Some(*id),
+                    CatchKind::User(_) => None,
+                })
+                .collect();
+            if library.len() != kinds.len() || library.is_empty() {
+                return JType::Exception(0); // Throwable
+            }
+            // Walk up from the first alternative until it covers all of them.
+            let mut candidate = exception_internal(library[0]).to_owned();
+            loop {
+                let covers = library.iter().all(|id| {
+                    let name = exception_internal(*id);
+                    name == candidate
+                        || caturra_classfile::exceptions::is_exception_subclass(name, &candidate)
+                });
+                if covers {
+                    return exception_id(&candidate).map_or(JType::Exception(0), JType::Exception);
+                }
+                match caturra_classfile::exceptions::parent_of(&candidate) {
+                    Some(parent) => candidate = parent.to_owned(),
+                    None => return JType::Exception(0),
+                }
+            }
+        };
+        single.jtype()
+    }
+
+    /// The resolved type of one catch alternative, with javac-flavored errors
     /// for non-throwables.
-    fn resolve_catch_type(&mut self, clause: &CatchClause) -> Option<CatchKind> {
-        let TypeRef::Named(name) = &clause.ty else {
-            self.error(clause.span, "expected an exception class in 'catch'");
+    fn resolve_catch_type(&mut self, ty: &TypeRef, span: SourceSpan) -> Option<CatchKind> {
+        let clause = span; // the diagnostics all point at the clause
+        let TypeRef::Named(name) = ty else {
+            self.error(clause, "expected an exception class in 'catch'");
             return None;
         };
         if name.contains('.') {
@@ -7277,18 +7334,18 @@ impl BodyGen<'_> {
                 return exception_id(&internal).map(CatchKind::Library);
             }
             self.error(
-                clause.span,
+                clause,
                 crate::imports::unknown_qualified_message(name.as_str()),
             );
             return None;
         }
         // User exception classes shadow library names, like elsewhere.
-        if let Some(id) = self.table.class_id(name) {
+        if let Some(id) = self.table.class_id(name.as_str()) {
             if self.table.is_throwable(id) {
                 return Some(CatchKind::User(id));
             }
             self.error(
-                clause.span,
+                clause,
                 format!("incompatible types: {name} cannot be converted to Throwable"),
             );
             return None;
@@ -7296,7 +7353,7 @@ impl BodyGen<'_> {
         if let Some(internal) = caturra_classfile::exceptions::internal_name_of(name.as_str()) {
             return exception_id(internal).map(CatchKind::Library);
         }
-        self.error(clause.span, format!("cannot find symbol: class {name}"));
+        self.error(clause, format!("cannot find symbol: class {name}"));
         None
     }
 

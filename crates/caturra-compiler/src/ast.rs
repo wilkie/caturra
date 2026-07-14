@@ -129,6 +129,10 @@ pub struct Annotation {
 pub struct Param {
     pub ty: TypeRef,
     pub name: String,
+    /// `void m(final int v)` — a parameter that cannot be reassigned. Java allows
+    /// it on every parameter, and javac rejects an assignment to one, so accepting
+    /// the modifier without enforcing it would be worse than not taking it at all.
+    pub is_final: bool,
     /// The trailing `Type... name` varargs parameter (`ty` is the
     /// array type). Only valid as the last parameter.
     pub is_varargs: bool,
@@ -285,7 +289,9 @@ pub struct SwitchArm {
 /// One `catch (Type name) { ... }` clause.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchClause {
-    pub ty: TypeRef,
+    /// The alternatives: one type, or several for a multi-catch
+    /// (`catch (IOException | SQLException e)`).
+    pub types: Vec<TypeRef>,
     pub name: String,
     pub body: Vec<Stmt>,
     pub span: SourceSpan,
