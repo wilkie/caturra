@@ -1434,6 +1434,24 @@ fn exception_id(internal: &str) -> Option<u8> {
         .and_then(|index| u8::try_from(index + 1).ok())
 }
 
+/// The internal name a source type names, when it names a library
+/// throwable caturra models — `Throwable`, `IllegalStateException`,
+/// `java.lang.RuntimeException`. A user class of the same simple name
+/// shadows it, exactly as it does everywhere else.
+fn library_exception_internal(name: &str, table: &MethodTable) -> Option<String> {
+    let simple = crate::imports::canonical_library_class(name).unwrap_or(name);
+    if table.has_class(simple) {
+        return None;
+    }
+    let internal = if name.contains('.') && crate::imports::canonical_library_class(name).is_none()
+    {
+        name.replace('.', "/")
+    } else {
+        caturra_classfile::exceptions::internal_name_of(simple)?.to_owned()
+    };
+    exception_id(&internal).map(|_| internal)
+}
+
 /// A catch clause's resolved type: a library throwable or a
 /// user-defined exception class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2854,6 +2872,12 @@ fn method_descriptor(
                 {
                     out.push('L');
                     out.push_str(simple);
+                    out.push(';');
+                } else if let Some(internal) = library_exception_internal(name, table) {
+                    // A library throwable named in a signature —
+                    // `Throwable assertThrows(...)`, `catch` aside.
+                    out.push('L');
+                    out.push_str(&internal);
                     out.push(';');
                 } else {
                     let message = if name.contains('.') {
@@ -4634,6 +4658,14 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
 ];
 
 const EXCEPTION_METHODS: &[BuiltinMethod] = &[
+    // `e.getClass()` — every object has it, and a validator reporting which
+    // exception it caught needs it.
+    BuiltinMethod {
+        name: "getClass",
+        params: &[],
+        ret: BRet::Class,
+        descriptor: "()Ljava/lang/Class;",
+    },
     BuiltinMethod {
         name: "getMessage",
         params: &[],
@@ -5128,6 +5160,14 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         &[BParam::Class],
         BRet::Boolean,
         "(Ljava/lang/Class;)Z",
+    ),
+    // `expected.isInstance(value)` — the runtime type test behind
+    // `assertThrows`, which has only a Class to check against.
+    bm(
+        "isInstance",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
     ),
     bm("getSuperclass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
@@ -12289,6 +12329,9 @@ impl BodyGen<'_> {
                 TypeRef::Named(name) => format!("java/lang/reflect/{name}"),
                 _ => String::from("java/lang/reflect/Type"),
             },
+            // `e instanceof RuntimeException` — a library throwable. The VM
+            // climbs the shared exception hierarchy, so a subclass answers true.
+            JType::Exception(id) => exception_internal(id).to_owned(),
             other => {
                 self.error(
                     span,
@@ -12401,7 +12444,14 @@ impl BodyGen<'_> {
                 format!("java/lang/{base}")
             }
             other => self.table.class_id(other).map_or_else(
-                || other.to_owned(),
+                || {
+                    // `IllegalStateException.class` — a library throwable, whose
+                    // Class carries its qualified name so `getName()` reports
+                    // `java.lang.IllegalStateException` and a runtime type test
+                    // can climb the exception hierarchy.
+                    caturra_classfile::exceptions::internal_name_of(other)
+                        .map_or_else(|| other.to_owned(), str::to_owned)
+                },
                 |id| self.table.class_name(id).to_owned(),
             ),
         };

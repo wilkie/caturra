@@ -268,6 +268,32 @@ class Assertions {
       throw new RuntimeException(message + " ==> Unexpected exception thrown: " + e);
     }
   }
+  // `assertThrows(IllegalStateException.class, () -> student.method())`: the body
+  // must throw, and throw something the expected type accepts — a SUBCLASS
+  // counts, so this is a runtime type test (`isInstance`) and not a name
+  // comparison. Returns the throwable, as JUnit does; caturra erases the
+  // generic, so it comes back as a Throwable and a test wanting the exact type
+  // must cast. The wording is JUnit's own.
+  public static Throwable assertThrows(Class expected, Executable executable) {
+    return __assertThrows(expected, executable, null);
+  }
+  public static Throwable assertThrows(Class expected, Executable executable, String message) {
+    return __assertThrows(expected, executable, message);
+  }
+  private static Throwable __assertThrows(Class expected, Executable executable, String message) {
+    String prefix = message == null ? "" : message + " ==> ";
+    try {
+      executable.execute();
+    } catch (Throwable actual) {
+      if (expected.isInstance(actual)) {
+        return actual;
+      }
+      throw new RuntimeException(prefix + "Unexpected exception type thrown ==> expected: <"
+          + expected.getName() + "> but was: <" + actual.getClass().getName() + ">");
+    }
+    throw new RuntimeException(
+        prefix + "Expected " + expected.getName() + " to be thrown, but nothing was thrown.");
+  }
 }
 
 // JUnit's `Executable`: the body of an `assertDoesNotThrow`. A functional

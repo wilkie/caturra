@@ -1510,6 +1510,19 @@ impl<'run> Interpreter<'run> {
                                             || (target == "java/lang/reflect/ParameterizedType"
                                                 && !args.is_empty())
                                     }
+                                    // A library throwable: `e instanceof
+                                    // RuntimeException` has to climb the
+                                    // exception hierarchy, not just compare
+                                    // names — an IllegalStateException IS a
+                                    // RuntimeException. Nothing consulted that
+                                    // table here, so every such test was false.
+                                    Some(crate::value::HeapObject::Exception {
+                                        class_name,
+                                        ..
+                                    }) => caturra_classfile::exceptions::is_exception_subclass(
+                                        &class_name.replace('.', "/"),
+                                        &target,
+                                    ),
                                     _ => false,
                                 },
                             };
@@ -7498,6 +7511,9 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::Optional { kind, .. }) => {
                 format!("java/util/{}", kind.prefix())
             }
+            // A library throwable stores its class DOTTED; everything else here
+            // is internal, and callers compare against internal names.
+            Some(HeapObject::Exception { class_name, .. }) => class_name.replace('.', "/"),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }
@@ -8143,12 +8159,14 @@ impl<'run> Interpreter<'run> {
                     // An array's binary name spells its element class with
                     // dots (`[Ljava.lang.String;`), though the descriptor the
                     // heap and the constant pool carry uses slashes.
+                    // The BINARY name, which is dotted: `java.lang.String`, not
+                    // the internal `java/lang/String` the heap stores. We
+                    // reported the internal form for every library class —
+                    // `String.class.getName()` said `java/lang/String` — which
+                    // is not a name Java has ever produced. A user class is
+                    // unqualified either way (caturra has one flat namespace).
                     "getName" => {
-                        let binary = if name.starts_with('[') {
-                            name.replace('/', ".")
-                        } else {
-                            name.clone()
-                        };
+                        let binary = name.replace('/', ".");
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&binary)))))
                     }
                     "getSimpleName" => {
@@ -8163,6 +8181,25 @@ impl<'run> Interpreter<'run> {
                     }
                     // `this.isAssignableFrom(other)`: `other` is `this` or a
                     // subclass of `this` (walk `other`'s superclass chain).
+                    // `expected.isInstance(thrown)`: does this Class describe
+                    // the object's runtime type, or one of its supertypes? Both
+                    // hierarchies have to answer — a user class walks its
+                    // `extends` chain, a library throwable walks the shared
+                    // exception table. `null` is an instance of nothing.
+                    "isInstance" => {
+                        let matches = match args.first() {
+                            Some(JValue::Ref(Some(reference))) => {
+                                let actual = self.object_class_name(*reference);
+                                actual == name
+                                    || caturra_classfile::exceptions::is_exception_subclass(
+                                        &actual, &name,
+                                    )
+                                    || self.is_runtime_subtype(&actual, &name)
+                            }
+                            _ => false,
+                        };
+                        Ok(Some(JValue::Int(i32::from(matches))))
+                    }
                     "isAssignableFrom" => {
                         let other = match args.first() {
                             Some(JValue::Ref(Some(reference))) => match self.heap.get(*reference) {

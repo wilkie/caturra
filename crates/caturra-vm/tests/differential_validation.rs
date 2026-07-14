@@ -508,3 +508,113 @@ public class DoesNotThrowTest {
 }
 "#
 );
+
+// `assertThrows(IllegalStateException.class, () -> student.method())`. A
+// SUBCLASS counts — an IllegalStateException satisfies
+// `assertThrows(RuntimeException.class, …)` — so this is a runtime type test,
+// not a name comparison, and getting that wrong would fail correct work. It
+// needed three things caturra did not have: `instanceof`/`isInstance` that climb
+// the LIBRARY EXCEPTION hierarchy (nothing consulted that table, so every such
+// test was false), `Throwable.getClass()`, and a `Class.getName()` that returns
+// the binary name — it used to report the internal `java/lang/String`, which is
+// not a name Java has ever produced.
+validation_differential_test!(
+    diff_junit_assert_throws,
+    "ThrowsTest",
+    r#"
+import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+class BadStudent extends RuntimeException {
+    public BadStudent(String message) {
+        super(message);
+    }
+}
+
+class Fragile {
+    void explode() {
+        throw new IllegalStateException("kaboom");
+    }
+
+    void divide(int by) {
+        int x = 10 / by;
+    }
+
+    void reject() {
+        throw new BadStudent("no");
+    }
+
+    void fine() {
+    }
+}
+
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class ThrowsTest {
+    Fragile testObject;
+
+    @BeforeEach
+    public void setup() {
+        testObject = new Fragile();
+    }
+
+    @Test
+    @Order(1)
+    @DisplayName("the exact type is accepted => ")
+    public void exactType() {
+        assertThrows(IllegalStateException.class, () -> testObject.explode());
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("a SUPERTYPE is accepted too => ")
+    public void superType() {
+        assertThrows(RuntimeException.class, () -> testObject.explode());
+        assertThrows(Throwable.class, () -> testObject.explode());
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("a real exception from real code => ")
+    public void realException() {
+        assertThrows(ArithmeticException.class, () -> testObject.divide(0));
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("nothing thrown is a failure => ")
+    public void nothingThrown() {
+        assertThrows(IllegalStateException.class, () -> testObject.fine());
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("the wrong type is a failure => ")
+    public void wrongType() {
+        assertThrows(NullPointerException.class, () -> testObject.explode());
+    }
+
+    @Test
+    @Order(6)
+    @DisplayName("and both failures carry a message when given one => ")
+    public void withMessage() {
+        assertThrows(NullPointerException.class, () -> testObject.explode(), "expected an NPE");
+    }
+
+    @Test
+    @Order(7)
+    @DisplayName("the thrown exception is RETURNED for inspection => ")
+    public void returnsTheThrowable() {
+        Throwable thrown = assertThrows(IllegalStateException.class, () -> testObject.explode());
+        assertEquals("kaboom", thrown.getMessage(), "the message survives the throw");
+    }
+
+    @Test
+    @Order(8)
+    @DisplayName("a user-defined exception, by its own type and by its super => ")
+    public void userDefined() {
+        assertThrows(BadStudent.class, () -> testObject.reject());
+        assertThrows(RuntimeException.class, () -> testObject.reject());
+    }
+}
+"#
+);
