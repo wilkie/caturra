@@ -9727,9 +9727,18 @@ impl BodyGen<'_> {
         for (arg, param) in args.iter().zip(chosen.params) {
             let param_ty = bparam_type(*param, elem);
             let actual = self.expr(arg);
-            if matches!(param_ty, JType::Boxed(_)) {
+            if matches!(param_ty, JType::Boxed(_))
+                || param_ty == JType::Object(self.table.object_id)
+            {
                 // `numeric_conversion` unboxes a wrapper argument but never
                 // boxes a primitive one, which `Map.put(K, V)` needs.
+                //
+                // An `Object` parameter needs it just as much: `List<Object>`'s
+                // `add(true)` used to store a bare int, and a bare int cannot say
+                // whether it is an `Integer`, a `Boolean` or a `Character` —
+                // `getClass()` on it answered `java.lang.Integer` for all three.
+                // Boxing at the boundary is what keeps the wrapper's identity,
+                // and a plain `Object o = true;` has always done it.
                 self.convert_for_assignment(actual, param_ty, span);
             } else {
                 self.numeric_conversion(actual, param_ty);
@@ -13265,9 +13274,18 @@ impl BodyGen<'_> {
         // answer the unboxing accessor directly.
         let erased_object = matches!(source, JType::Object(id) if id == self.table.object_id);
         if erased_object || matches!(source, JType::Boxed(_)) {
-            // `(Double) obj` — cast to a wrapper: the runtime value is already
-            // the boxed wrapper, so retag without emitting a conversion.
-            if matches!(target, JType::Boxed(_)) {
+            // `(Integer) obj` — a cast to a wrapper is CHECKED (JLS §5.5). This
+            // used to retag the static type and emit nothing, on the theory that
+            // the value was already that wrapper — true only while the program is
+            // right. `(Integer) o` on a String sailed through and the String went
+            // on being treated as an Integer; real Java throws ClassCastException.
+            // From a wrapper the compiler already knows the type, so only the
+            // erased case needs asking at runtime.
+            if let JType::Boxed(elem) = target {
+                if erased_object {
+                    let class_index = intern_class(self.pool, wrapper_internal(elem));
+                    self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+                }
                 return target;
             }
             if let Some(elem) = elem_type_of(target) {

@@ -6929,6 +6929,79 @@ fn mutual_recursion_at_depth() {
     assert_eq!(out, "2500\n");
 }
 
+/// A boxed value keeps its identity through an `ArrayList<Object>`, and a cast
+/// to the wrong wrapper throws — the textbook polymorphism exercise.
+///
+/// caturra keeps a boxed value UNBOXED where it can, so a list handed back a raw
+/// `Int(5)`, and `instanceof`/`checkcast` demanded a reference: `list.get(0)
+/// instanceof Integer` died with **"expected a reference on the stack, found
+/// Int(5)"**. A raw int also cannot say whether it is an `Integer`, a `Boolean`
+/// or a `Character` — all three are `Int` — so `getClass()` called every one of
+/// them `java.lang.Integer`. And `(Integer) obj` emitted no check at all, so a
+/// String cast to Integer sailed straight through where real Java throws.
+///
+/// Now: an `Object` parameter boxes at the boundary (as `Object o = true;` always
+/// did), so the wrapper's identity survives; a bare primitive answers `instanceof`
+/// as its own wrapper; and a bad cast raises `ClassCastException`. Every line here
+/// is what a real JDK prints — bar one deliberate omission: a real
+/// `ClassCastException` ends with "(java.lang.String and java.lang.Integer are in
+/// module java.base of loader 'bootstrap')", and caturra has neither modules nor
+/// class loaders, so saying so would be inventing a fact about itself.
+#[test]
+fn boxed_values_keep_their_identity_through_an_object_list() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class Boxes {
+            public static void main(String[] args) {
+                List<Object> l = new ArrayList<>();
+                l.add(5);
+                l.add("hi");
+                l.add(2.5);
+                l.add(true);
+                l.add('x');
+                for (int i = 0; i < l.size(); i++) {
+                    System.out.print(l.get(i).getClass().getName() + " ");
+                }
+                System.out.println();
+
+                Object n = l.get(0);
+                System.out.println("Integer=" + (n instanceof Integer)
+                    + " String=" + (n instanceof String)
+                    + " Double=" + (n instanceof Double));
+                System.out.println("Boolean=" + (l.get(3) instanceof Boolean)
+                    + " Character=" + (l.get(4) instanceof Character));
+                System.out.println("unboxed again: " + ((Integer) n + 1));
+
+                try {
+                    Integer bad = (Integer) l.get(1);
+                    System.out.println("no throw");
+                } catch (ClassCastException e) {
+                    System.out.println(e.getMessage());
+                }
+                try {
+                    Double bad = (Double) n;
+                    System.out.println("no throw");
+                } catch (ClassCastException e) {
+                    System.out.println(e.getMessage());
+                }
+            }
+        }
+        "#,
+        "Boxes",
+    );
+    assert_eq!(
+        out,
+        "java.lang.Integer java.lang.String java.lang.Double java.lang.Boolean \
+         java.lang.Character \n\
+         Integer=true String=false Double=false\n\
+         Boolean=true Character=true\n\
+         unboxed again: 6\n\
+         class java.lang.String cannot be cast to class java.lang.Integer\n\
+         class java.lang.Integer cannot be cast to class java.lang.Double\n"
+    );
+}
+
 /// A message with a NEWLINE in it survives being thrown.
 ///
 /// The throw carries the exception as `Class: message` text and appends the

@@ -1456,6 +1456,27 @@ impl<'run> Interpreter<'run> {
                                 .get_class_name(index)
                                 .ok_or_else(|| malformed(format!("bad class ref at pool {index}")))?
                                 .to_owned();
+                            // caturra keeps a boxed value UNBOXED where it can —
+                            // an `ArrayList<Object>` holding a 5 hands back a raw
+                            // `Int(5)`, not a reference. Both opcodes used to demand
+                            // a reference, so `list.get(0) instanceof Integer` — as
+                            // ordinary as CSA code gets — died with "expected a
+                            // reference on the stack, found Int(5)". A primitive here
+                            // IS its wrapper, and answers for it.
+                            if let Some(value) = frame.stack.last().copied()
+                                && let Some(wrapper) = primitive_wrapper(value)
+                            {
+                                frame.pop()?;
+                                let matches_type = wrapper_is(wrapper, &target);
+                                if opcode == op::INSTANCEOF {
+                                    frame.stack.push(JValue::Int(i32::from(matches_type)));
+                                } else if matches_type {
+                                    frame.stack.push(value);
+                                } else {
+                                    return Err(class_cast_error(wrapper, &target));
+                                }
+                                return Ok(Flow::Next);
+                            }
                             let reference = frame.pop_ref()?;
                             let matches_type = match reference {
                                 None => false,
@@ -1501,10 +1522,11 @@ impl<'run> Interpreter<'run> {
                                             | "java/util/Deque"
                                             | "java/util/Collection"
                                     ),
-                                    // Boxed wrapper: `x instanceof Integer`.
+                                    // Boxed wrapper: `x instanceof Integer` — and
+                                    // an Integer IS a Number and a Comparable.
                                     Some(crate::value::HeapObject::Boxed {
                                         class_name, ..
-                                    }) => **class_name == target,
+                                    }) => wrapper_is(class_name, &target),
                                     // A reflect Type: it is a ParameterizedType
                                     // only when it carries type arguments.
                                     Some(crate::value::HeapObject::ReflectType {
@@ -1539,10 +1561,20 @@ impl<'run> Interpreter<'run> {
                                         .and_then(|r| {
                                             intrinsics::array_class_name(&self.heap, r).or_else(
                                                 || match self.heap.get(r) {
-                                                    Some(crate::value::HeapObject::Instance {
-                                                        class_name,
-                                                        ..
-                                                    }) => Some(class_name.to_string()),
+                                                    // A wrapper names itself like an
+                                                    // instance does, or the failed cast
+                                                    // reads "class <object> cannot be
+                                                    // cast to ...".
+                                                    Some(
+                                                        crate::value::HeapObject::Instance {
+                                                            class_name,
+                                                            ..
+                                                        }
+                                                        | crate::value::HeapObject::Boxed {
+                                                            class_name,
+                                                            ..
+                                                        },
+                                                    ) => Some(class_name.to_string()),
                                                     Some(crate::value::HeapObject::JavaString(
                                                         _,
                                                     )) => Some(String::from("java/lang/String")),
@@ -1551,10 +1583,7 @@ impl<'run> Interpreter<'run> {
                                             )
                                         })
                                         .unwrap_or_else(|| String::from("<object>"));
-                                    return Err(VmError::UncaughtException(format!(
-                                        "java.lang.ClassCastException: class {actual} cannot be cast \
-                                 to class {target}"
-                                    )));
+                                    return Err(class_cast_error(&actual, &target));
                                 }
                                 frame.stack.push(JValue::Ref(reference));
                             }
@@ -7283,8 +7312,9 @@ impl<'run> Interpreter<'run> {
         };
         let Some(receiver) = receiver else {
             return Err(VmError::UncaughtException(format!(
-                "java.lang.NullPointerException: cannot invoke \
-                 \"{target_class}.{method_name}\" because the receiver is null"
+                "java.lang.NullPointerException: cannot invoke \"{}.{method_name}()\" \
+                 because the receiver is null",
+                target_class.replace('/', ".")
             )));
         };
 
@@ -7671,8 +7701,9 @@ impl<'run> Interpreter<'run> {
             };
             let Some(receiver_ref) = receiver_ref else {
                 return Err(VmError::UncaughtException(format!(
-                    "java.lang.NullPointerException: cannot invoke \"{declaring}.{name}\" \
-                     because the receiver is null"
+                    "java.lang.NullPointerException: cannot invoke \"{}.{name}()\" \
+                     because the receiver is null",
+                    declaring.replace('/', ".")
                 )));
             };
             let belongs = matches!(
@@ -10475,6 +10506,46 @@ fn descriptor_arg_count(descriptor: &str) -> Option<usize> {
         }
     }
     Some(count)
+}
+
+/// The wrapper class an unboxed primitive on the stack stands for, or `None`
+/// for a reference (which carries its own class).
+///
+/// caturra stores a boxed value unboxed wherever it can — an `ArrayList<Object>`
+/// holding a 5 gives back `Int(5)`, not a reference to a `HeapObject::Boxed`. To
+/// `instanceof` and `checkcast` that value IS an `Integer`, and has to answer as
+/// one.
+fn primitive_wrapper(value: JValue) -> Option<&'static str> {
+    Some(match value {
+        JValue::Int(_) => "java/lang/Integer",
+        JValue::Long(_) => "java/lang/Long",
+        JValue::Double(_) => "java/lang/Double",
+        JValue::Float(_) => "java/lang/Float",
+        JValue::Ref(_) => return None,
+    })
+}
+
+/// Whether a wrapper class is (or inherits/implements) `target` — the subtype
+/// test `instanceof`/`checkcast` needs. Every wrapper is an `Object` and a
+/// `Comparable`; the numeric ones are also a `Number`. An `Integer` is NOT a
+/// `Double`, which is the whole point: real Java throws on `(Double) anInt`.
+fn wrapper_is(wrapper: &str, target: &str) -> bool {
+    match target {
+        "java/lang/Object" | "java/lang/Comparable" => true,
+        "java/lang/Number" => wrapper != "java/lang/Boolean" && wrapper != "java/lang/Character",
+        other => wrapper == other,
+    }
+}
+
+/// The `ClassCastException` a failed cast raises, named the way Java names it:
+/// BINARY names, dotted. (The module/loader parenthetical a real JVM adds says
+/// where the classes were loaded from, which is not a thing caturra has.)
+fn class_cast_error(actual: &str, target: &str) -> VmError {
+    VmError::UncaughtException(format!(
+        "java.lang.ClassCastException: class {} cannot be cast to class {}",
+        actual.replace('/', "."),
+        target.replace('/', ".")
+    ))
 }
 
 /// The `Class: message` header of a thrown exception, without the stack trace

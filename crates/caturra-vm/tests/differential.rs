@@ -8652,3 +8652,63 @@ public class DiffReflectVarargs {
 }
 "#
 );
+
+// Boxing, `instanceof` and casts through an erased `Object` — the textbook
+// polymorphism exercise, and three bugs at once until now: a list handed back a
+// bare int, so `list.get(0) instanceof Integer` died with "expected a reference on
+// the stack"; a bare int cannot say whether it is an Integer, a Boolean or a
+// Character, so `getClass()` called all three `java.lang.Integer`; and a cast to a
+// wrapper emitted no check, so `(Integer) obj` on a String sailed through.
+//
+// The `ClassCastException` message is cut at " (": a real JVM appends "(… are in
+// module java.base of loader 'bootstrap')", and caturra has neither modules nor
+// class loaders to report. Everything before that is its own.
+differential_test!(
+    diff_boxed_identity_instanceof_and_casts,
+    "DiffBoxes",
+    r#"
+import java.util.*;
+
+public class DiffBoxes {
+    static String reason(ClassCastException e) {
+        String message = e.getMessage();
+        int cut = message.indexOf(" (");
+        return cut < 0 ? message : message.substring(0, cut);
+    }
+
+    public static void main(String[] args) {
+        List<Object> values = new ArrayList<>();
+        values.add(5);
+        values.add("hi");
+        values.add(2.5);
+        values.add(true);
+        values.add('x');
+        for (int i = 0; i < values.size(); i++) {
+            System.out.print(values.get(i).getClass().getName() + " ");
+        }
+        System.out.println();
+
+        Object number = values.get(0);
+        System.out.println("Integer=" + (number instanceof Integer)
+            + " String=" + (number instanceof String)
+            + " Double=" + (number instanceof Double));
+        System.out.println("Boolean=" + (values.get(3) instanceof Boolean)
+            + " Character=" + (values.get(4) instanceof Character));
+        System.out.println("unboxed again: " + ((Integer) number + 1));
+
+        try {
+            Integer bad = (Integer) values.get(1);
+            System.out.println("no throw");
+        } catch (ClassCastException e) {
+            System.out.println(reason(e));
+        }
+        try {
+            Double bad = (Double) number;
+            System.out.println("no throw");
+        } catch (ClassCastException e) {
+            System.out.println(reason(e));
+        }
+    }
+}
+"#
+);
