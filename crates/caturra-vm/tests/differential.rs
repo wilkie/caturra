@@ -9166,3 +9166,76 @@ public class DiffFunction {
 }
 "#
 );
+
+// java.util.Iterator over a list and a set: hasNext/next/remove, the last of
+// which takes the element next() returned out of the underlying collection. The
+// element comes back boxed uniformly (a list stores primitives unboxed, a set
+// boxed), so `sum += it.next()` unboxes and the value is usable as a number.
+differential_test!(
+    diff_iterator,
+    "DiffIterator",
+    r#"
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.TreeSet;
+
+public class DiffIterator {
+    public static void main(String[] args) {
+        List<String> names = new ArrayList<>();
+        names.add("ada");
+        names.add("grace");
+        names.add("alan");
+
+        Iterator<String> it = names.iterator();
+        while (it.hasNext()) {
+            if (it.next().equals("grace")) {
+                it.remove();
+            }
+        }
+        System.out.println(names);
+
+        Set<Integer> scores = new TreeSet<>();
+        scores.add(3);
+        scores.add(1);
+        scores.add(2);
+        Iterator<Integer> nums = scores.iterator();
+        int sum = 0;
+        while (nums.hasNext()) {
+            sum += nums.next();
+        }
+        System.out.println("sum=" + sum);
+
+        Iterator<Integer> odd = scores.iterator();
+        while (odd.hasNext()) {
+            if (odd.next() % 2 == 0) {
+                odd.remove();
+            }
+        }
+        System.out.println(scores);
+
+        Iterator<String> empty = new ArrayList<String>().iterator();
+        try {
+            empty.next();
+        } catch (NoSuchElementException e) {
+            System.out.println("empty throws");
+        }
+
+        // A keySet() iterator, whose remove() writes back to the map.
+        java.util.Map<String, Integer> ages = new java.util.TreeMap<>();
+        ages.put("ada", 36);
+        ages.put("bea", 41);
+        ages.put("cal", 29);
+        Iterator<String> keys = ages.keySet().iterator();
+        while (keys.hasNext()) {
+            if (keys.next().equals("bea")) {
+                keys.remove();
+            }
+        }
+        System.out.println(ages);
+    }
+}
+"#
+);

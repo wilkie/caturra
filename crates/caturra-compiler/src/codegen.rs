@@ -1213,6 +1213,8 @@ impl MethodTable {
                     && !self.has_class(simple)
                 {
                     elem_from_type_arg(&args[0], self).map(JType::TreeSet)
+                } else if simple == "Iterator" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::Iterator)
                 } else if simple == "Optional" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Optional)
                 } else if matches!(
@@ -2154,6 +2156,10 @@ enum JType {
     /// models it as a `Stream` of unboxed ints). Adds numeric terminals
     /// (`sum`/`toArray`) the object `Stream` lacks.
     IntStream,
+    /// `java.util.Iterator<E>` over a collection — `next()` returns `E`,
+    /// `hasNext()` a boolean, `remove()` is void. Erased at runtime to a live
+    /// cursor over the source collection (see the VM's `HeapObject::Iterator`).
+    Iterator(ElemType),
     /// `java.util.Optional<E>` — a present-or-absent value; `get` returns `E`.
     Optional(ElemType),
     /// `java.util.OptionalInt` — `getAsInt` returns `int`.
@@ -2290,6 +2296,7 @@ impl JType {
             JType::Stream(elem) => format!("Stream<{}>", elem.base_type().describe(table)),
             JType::Collector => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
+            JType::Iterator(elem) => format!("Iterator<{}>", elem.base_type().describe(table)),
             JType::Optional(elem) => format!("Optional<{}>", elem.base_type().describe(table)),
             JType::OptionalInt => String::from("OptionalInt"),
             JType::OptionalDouble => String::from("OptionalDouble"),
@@ -2455,6 +2462,7 @@ impl JType {
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
+            JType::Iterator(_) => String::from("Ljava/util/Iterator;"),
             JType::Optional(_) => String::from("Ljava/util/Optional;"),
             JType::OptionalInt => String::from("Ljava/util/OptionalInt;"),
             JType::OptionalDouble => String::from("Ljava/util/OptionalDouble;"),
@@ -3216,6 +3224,8 @@ enum BRet {
     Char,
     /// `Stream<E>` of the receiver's element type (an element-preserving op).
     Stream,
+    /// `Iterator<E>` of the receiver's element type (`collection.iterator()`).
+    Iterator,
     /// `Stream<Object>` — an op (`map`) whose element type is erased.
     StreamErased,
     /// `IntStream` (`mapToInt`, and the `IntStream` intermediate ops).
@@ -3664,7 +3674,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("StringBuilder", "codePoints", "streams are not supported by caturra"),
     ("Integer", "decode", "system properties are not supported by caturra"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
-    ("ArrayList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("ArrayList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
     ("ArrayList", "toArray", "Object arrays are not supported by caturra"),
@@ -3686,7 +3695,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("HashMap", "clone", "clone is not supported by caturra"),
     ("HashMap", "of", "varargs are not supported by caturra"),
     ("HashMap", "ofEntries", "varargs are not supported by caturra"),
-    ("Set", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Set", "removeIf", "Set.removeIf is not supported by caturra"),
     ("TreeMap", "clone", "clone is not supported by caturra"),
     ("TreeMap", "headMap", "TreeMap range views are not supported by caturra"),
@@ -3697,19 +3705,16 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("TreeMap", "lastEntry", "TreeMap entry views are not supported by caturra (use lastKey)"),
     ("TreeMap", "pollFirstEntry", "TreeMap entry views are not supported by caturra"),
     ("TreeMap", "pollLastEntry", "TreeMap entry views are not supported by caturra"),
-    ("TreeSet", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("TreeSet", "descendingIterator", "iterators are not supported by caturra"),
     ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
     ("TreeSet", "removeIf", "TreeSet.removeIf is not supported by caturra"),
     ("TreeSet", "headSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "tailSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "subSet", "TreeSet range views are not supported by caturra"),
-    ("LinkedList", "iterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("LinkedList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("LinkedList", "descendingIterator", "iterators are not supported by caturra"),
     ("LinkedList", "removeIf", "LinkedList.removeIf is not supported by caturra"),
     ("LinkedList", "toArray", "Object arrays are not supported by caturra"),
-    ("Collection", "iterator", "iterators are not supported by caturra (use for-each)"),
     ("Collection", "removeIf", "lambdas are not supported by caturra"),
     ("Collection", "add", "a map's values() does not support add — Java throws UnsupportedOperationException"),
     ("Collection", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
@@ -3807,6 +3812,7 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     BuiltinMethod {
         name: "size",
         params: &[],
@@ -3950,6 +3956,7 @@ const LIST_METHODS: &[BuiltinMethod] = &[
 /// the five LIFO operations. `push`/`pop`/`peek` act on the top (the end);
 /// `empty` mirrors `isEmpty`; `search` is a 1-based distance from the top.
 const STACK_METHODS: &[BuiltinMethod] = &[
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm(
         "push",
         &[BParam::Elem],
@@ -4219,6 +4226,7 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),
@@ -4558,6 +4566,16 @@ const INTSTREAM_STATIC_METHODS: &[BuiltinMethod] = &[
 ];
 
 /// `java.util.Optional<E>` — `get`/`orElse`/`orElseThrow` yield the element.
+const ITERATOR_METHODS: &[BuiltinMethod] = &[
+    bm("hasNext", &[], BRet::Boolean, "()Z"),
+    // `BoxedElem`, not `Elem`: a list stores its elements unboxed and a set stores
+    // them boxed, and the VM's `next()` boxes a primitive so both come back the
+    // same — a `List<Integer>` and a `TreeSet<Integer>` iterator alike return an
+    // `Integer`, which unboxes on demand.
+    bm("next", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("remove", &[], BRet::Void, "()V"),
+];
+
 const OPTIONAL_METHODS: &[BuiltinMethod] = &[
     bm("isPresent", &[], BRet::Boolean, "()Z"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
@@ -5925,6 +5943,7 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
 /// `values()` views. `__get` is caturra's own indexed accessor, standing in
 /// for the iterator the enhanced-for loop would otherwise need.
 const VIEW_METHODS: &[BuiltinMethod] = &[
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     // `forEach(Consumer)` over the view's elements (keys or values).
@@ -5949,6 +5968,7 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
 /// `remove`/`clear`, exactly as Java's does. `__get` (the enhanced-for
 /// accessor) is synthesized by `for_each`, not listed here.
 const SET_METHODS: &[BuiltinMethod] = &[
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),
@@ -6021,6 +6041,7 @@ const SET_METHODS: &[BuiltinMethod] = &[
 /// empty set; the `floor`/`ceiling`/`lower`/`higher` and `pollFirst`/`pollLast`
 /// return the boxed element so an absent/empty result is `null`.
 const TREESET_METHODS: &[BuiltinMethod] = &[
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),
@@ -6143,6 +6164,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
+        JType::Iterator(_) => Some(("java/util/Iterator", ITERATOR_METHODS)),
         JType::Optional(_) => Some(("java/util/Optional", OPTIONAL_METHODS)),
         JType::OptionalInt => Some(("java/util/OptionalInt", OPTIONALINT_METHODS)),
         JType::OptionalDouble => Some(("java/util/OptionalDouble", OPTIONALDOUBLE_METHODS)),
@@ -6358,6 +6380,7 @@ impl TypeArgs {
             | JType::Set(elem)
             | JType::TreeSet(elem)
             | JType::Stream(elem)
+            | JType::Iterator(elem)
             | JType::Optional(elem)
             | JType::Collection(elem)
             | JType::LinkedList { elem, .. } => Self {
@@ -6547,6 +6570,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         }),
         BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
         BRet::Stream => Some(args.first.map_or(JType::Error, JType::Stream)),
+        BRet::Iterator => Some(args.first.map_or(JType::Error, JType::Iterator)),
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
         BRet::IntStream => Some(JType::IntStream),
         BRet::StreamInteger => Some(JType::Stream(ElemType::Int)),
@@ -10000,6 +10024,7 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::Iterator(_)
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble
@@ -12216,6 +12241,7 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::Iterator(_)
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble
@@ -12495,6 +12521,7 @@ impl BodyGen<'_> {
                         | JType::Stream(_)
                         | JType::Collector
                         | JType::IntStream
+                        | JType::Iterator(_)
                         | JType::Optional(_)
                         | JType::OptionalInt
                         | JType::OptionalDouble
@@ -14674,6 +14701,7 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::Iterator(_)
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble

@@ -4580,6 +4580,29 @@ impl<'run> Interpreter<'run> {
         // A TreeMap flows through the same arms: its methods reach the map
         // helpers, which route a TreeMap to comparison-based lookup and its
         // sorted vector. The sorted-only navigation methods are handled below.
+        // `set.iterator()` is uniform across HashSet/TreeSet — a cursor over the
+        // set's iteration order — so it is made here rather than in each set's
+        // own intrinsic.
+        if method_name == "iterator"
+            && matches!(
+                self.heap.get(receiver),
+                Some(
+                    HeapObject::HashSet(_)
+                        | HeapObject::TreeSet { .. }
+                        | HeapObject::MapView {
+                            kind: MapViewKind::Keys | MapViewKind::Values,
+                            ..
+                        }
+                )
+            )
+        {
+            let iterator = self.heap.alloc(HeapObject::Iterator {
+                source: receiver,
+                index: 0,
+                last: None,
+            });
+            return Ok(Answered::Value(JValue::Ref(Some(iterator))));
+        }
         match self.heap.get(receiver) {
             Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. }) => {}
             Some(HeapObject::HashSet(_)) => {

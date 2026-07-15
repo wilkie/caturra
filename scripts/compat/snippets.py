@@ -758,6 +758,49 @@ public class Reflect {
 }
 ''',
     ),
+    dict(
+        id="iterator",
+        category="Collections",
+        title="Iterator",
+        summary="An explicit iterator over a list or set, including remove() while iterating.",
+        main="Iterate",
+        source='''
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+
+public class Iterate {
+    public static void main(String[] args) {
+        List<String> names = new ArrayList<>();
+        names.add("ada");
+        names.add("grace");
+        names.add("alan");
+
+        // remove() takes the last element next() returned out of the collection.
+        Iterator<String> it = names.iterator();
+        while (it.hasNext()) {
+            if (it.next().equals("grace")) {
+                it.remove();
+            }
+        }
+        System.out.println(names);
+
+        Set<Integer> scores = new TreeSet<>();
+        scores.add(3);
+        scores.add(1);
+        scores.add(2);
+        Iterator<Integer> nums = scores.iterator();
+        int sum = 0;
+        while (nums.hasNext()) {
+            sum += nums.next();
+        }
+        System.out.println("sum=" + sum);
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -798,29 +841,6 @@ public class MethodRef {
             .map(String::toUpperCase)
             .collect(Collectors.toList());
         System.out.println(shouted);
-    }
-}
-''',
-    ),
-    dict(
-        id="iterator",
-        category="Collections",
-        title="Iterator",
-        summary="An explicit iterator. The for-each loop it desugars to works; the interface itself is not modelled.",
-        main="Iterate",
-        source='''
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-
-public class Iterate {
-    public static void main(String[] args) {
-        List<String> names = new ArrayList<>();
-        names.add("ada");
-        Iterator<String> it = names.iterator();
-        while (it.hasNext()) {
-            System.out.println(it.next());
-        }
     }
 }
 ''',

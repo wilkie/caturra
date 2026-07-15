@@ -300,6 +300,14 @@ pub enum HeapObject {
         values: Vec<JValue>,
         comparator: Option<HeapRef>,
     },
+    /// A live `java.util.Iterator` over a list or set: the collection it walks,
+    /// the position it will return next, and the position it last returned (for
+    /// `remove()`, `None` before the first `next()` or right after a `remove()`).
+    Iterator {
+        source: HeapRef,
+        index: usize,
+        last: Option<usize>,
+    },
     /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
     /// Java's are views too, so a later `put` shows through.
     MapView { map: HeapRef, kind: MapViewKind },

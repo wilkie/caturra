@@ -8,7 +8,7 @@
 
 use crate::io::ConsoleIo;
 use crate::map::JavaHashMap;
-use crate::value::{Heap, HeapObject, HeapRef, IntKind, JValue, StdStream};
+use crate::value::{Heap, HeapObject, HeapRef, IntKind, JValue, MapViewKind, StdStream};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
@@ -397,6 +397,7 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
+        (HeapObject::Iterator { .. }, _) => iterator_method(heap, receiver, method),
         (HeapObject::StringBuilder(_), _) => {
             builder_method(heap, receiver, method, descriptor, args)
         }
@@ -2023,6 +2024,173 @@ fn stack_method(
 /// (`contains`/`indexOf`/`remove(Object)`/`equals` compare elements, so they
 /// live in the interpreter, which can call a user `equals`.)
 #[allow(clippy::too_many_lines)] // one arm per documented method
+/// The map a `keySet()`/`values()` view iterates, if `source` is one.
+fn view_map(heap: &Heap, source: HeapRef) -> Option<HeapRef> {
+    match heap.get(source) {
+        Some(HeapObject::MapView {
+            map,
+            kind: MapViewKind::Keys | MapViewKind::Values,
+        }) => Some(*map),
+        _ => None,
+    }
+}
+
+/// The element count of a collection an iterator walks (list, set, or map view).
+fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
+    if let Some(values) = heap.list_values(source) {
+        return values.len();
+    }
+    if let Some(map) = view_map(heap, source) {
+        return iterated_len(heap, map);
+    }
+    match heap.get(source) {
+        Some(HeapObject::HashSet(entries) | HeapObject::HashMap(entries)) => entries.len(),
+        Some(HeapObject::TreeSet { values, .. }) => values.len(),
+        Some(HeapObject::TreeMap { entries, .. }) => entries.len(),
+        _ => 0,
+    }
+}
+
+/// The element at `index` in that collection's iteration order. For a `keySet()`
+/// view it is the key; for a `values()` view, the value.
+fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
+    if let Some(values) = heap.list_values(source) {
+        return values.get(index).copied().unwrap_or(JValue::NULL);
+    }
+    if let Some(HeapObject::MapView { map, kind }) = heap.get(source) {
+        return match kind {
+            MapViewKind::Values => map_value_at(heap, *map, index),
+            _ => map_key_at(heap, *map, index),
+        };
+    }
+    match heap.get(source) {
+        // A HashSet stores its elements as the KEYS of its backing map.
+        Some(HeapObject::HashSet(entries)) => entries.key_at(index),
+        Some(HeapObject::TreeSet { values, .. }) => {
+            values.get(index).copied().unwrap_or(JValue::NULL)
+        }
+        _ => JValue::NULL,
+    }
+}
+
+fn map_key_at(heap: &Heap, map: HeapRef, index: usize) -> JValue {
+    match heap.get(map) {
+        Some(HeapObject::HashMap(entries)) => entries.key_at(index),
+        Some(HeapObject::TreeMap { entries, .. }) => {
+            entries.get(index).map_or(JValue::NULL, |(key, _)| *key)
+        }
+        _ => JValue::NULL,
+    }
+}
+
+fn map_value_at(heap: &Heap, map: HeapRef, index: usize) -> JValue {
+    match heap.get(map) {
+        Some(HeapObject::HashMap(entries)) => entries.value_at(index),
+        Some(HeapObject::TreeMap { entries, .. }) => {
+            entries.get(index).map_or(JValue::NULL, |(_, value)| *value)
+        }
+        _ => JValue::NULL,
+    }
+}
+
+/// Remove the element at `index` from the collection an iterator is walking —
+/// `Iterator.remove()`, which takes the last element `next()` returned out of the
+/// underlying collection. Through a `keySet()`/`values()` view this writes back to
+/// the map, as Java's do.
+fn iterated_remove(heap: &mut Heap, source: HeapRef, index: usize) {
+    if let Some(values) = heap.list_values_mut(source)
+        && index < values.len()
+    {
+        values.remove(index);
+        return;
+    }
+    let target = view_map(heap, source).unwrap_or(source);
+    match heap.get_mut(target) {
+        Some(HeapObject::HashSet(entries) | HeapObject::HashMap(entries)) => {
+            entries.remove_at(index);
+        }
+        Some(HeapObject::TreeSet { values, .. }) if index < values.len() => {
+            values.remove(index);
+        }
+        Some(HeapObject::TreeMap { entries, .. }) if index < entries.len() => {
+            entries.remove(index);
+        }
+        _ => {}
+    }
+}
+
+/// `java.util.Iterator`: `hasNext`/`next`/`remove` over the position the iterator
+/// holds. The collection is read live, so a `remove()` (or any other mutation)
+/// shows through on the next call — caturra does not model
+/// `ConcurrentModificationException`.
+fn iterator_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+) -> Result<Option<JValue>, VmError> {
+    let Some(HeapObject::Iterator {
+        source,
+        index,
+        last,
+    }) = heap.get(receiver)
+    else {
+        unreachable!("receiver kind checked by caller");
+    };
+    let (source, index, last) = (*source, *index, *last);
+    match method {
+        "hasNext" => Ok(Some(JValue::Int(i32::from(
+            index < iterated_len(heap, source),
+        )))),
+        "next" => {
+            if index >= iterated_len(heap, source) {
+                return Err(throw("java.util.NoSuchElementException"));
+            }
+            // A list stores primitives unboxed; box one so `next()` returns the
+            // wrapper for every collection alike (a set's element is already a
+            // reference). `next()` is typed `BoxedElem`, which expects this.
+            let element = match iterated_get(heap, source, index) {
+                primitive @ (JValue::Int(_)
+                | JValue::Long(_)
+                | JValue::Double(_)
+                | JValue::Float(_)) => {
+                    let class_name = match primitive {
+                        JValue::Long(_) => "java/lang/Long",
+                        JValue::Double(_) => "java/lang/Double",
+                        JValue::Float(_) => "java/lang/Float",
+                        _ => "java/lang/Integer",
+                    };
+                    let boxed = heap.alloc(HeapObject::Boxed {
+                        class_name: std::rc::Rc::from(class_name),
+                        value: primitive,
+                    });
+                    JValue::Ref(Some(boxed))
+                }
+                reference => reference,
+            };
+            if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
+                *last = Some(*index);
+                *index += 1;
+            }
+            Ok(Some(element))
+        }
+        "remove" => {
+            let Some(position) = last else {
+                return Err(throw("java.lang.IllegalStateException"));
+            };
+            iterated_remove(heap, source, position);
+            // The cursor steps back onto the hole so the next element is not
+            // skipped, and `remove()` cannot be called twice in a row.
+            if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
+                *index = position;
+                *last = None;
+            }
+            Ok(None)
+        }
+        other => Err(VmError::UnknownIntrinsic(format!("Iterator.{other}"))),
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per list/queue/deque method
 fn list_method(
     heap: &mut Heap,
     receiver: HeapRef,
@@ -2067,6 +2235,14 @@ fn list_method(
         Ok(Some(value))
     };
     match (method, descriptor, args) {
+        ("iterator", _, []) => {
+            let iterator = heap.alloc(HeapObject::Iterator {
+                source: receiver,
+                index: 0,
+                last: None,
+            });
+            Ok(Some(JValue::Ref(Some(iterator))))
+        }
         ("size", _, []) => Ok(Some(JValue::Int(
             i32::try_from(list_len).unwrap_or(i32::MAX),
         ))),

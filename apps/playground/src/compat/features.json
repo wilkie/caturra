@@ -230,6 +230,16 @@
     "expected": "Student\nscore -> 95\nname = ada\nno such method, as Java says\n"
   },
   {
+    "id": "iterator",
+    "category": "Collections",
+    "title": "Iterator",
+    "summary": "An explicit iterator over a list or set, including remove() while iterating.",
+    "main": "Iterate",
+    "source": "import java.util.ArrayList;\nimport java.util.Iterator;\nimport java.util.List;\nimport java.util.Set;\nimport java.util.TreeSet;\n\npublic class Iterate {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        names.add(\"grace\");\n        names.add(\"alan\");\n\n        // remove() takes the last element next() returned out of the collection.\n        Iterator<String> it = names.iterator();\n        while (it.hasNext()) {\n            if (it.next().equals(\"grace\")) {\n                it.remove();\n            }\n        }\n        System.out.println(names);\n\n        Set<Integer> scores = new TreeSet<>();\n        scores.add(3);\n        scores.add(1);\n        scores.add(2);\n        Iterator<Integer> nums = scores.iterator();\n        int sum = 0;\n        while (nums.hasNext()) {\n            sum += nums.next();\n        }\n        System.out.println(\"sum=\" + sum);\n    }\n}\n",
+    "status": "supported",
+    "expected": "[ada, alan]\nsum=6\n"
+  },
+  {
     "id": "varargs-library",
     "category": "Library",
     "title": "Varargs library methods (String.join)",
@@ -248,16 +258,6 @@
     "source": "import java.util.ArrayList;\nimport java.util.List;\nimport java.util.stream.Collectors;\n\npublic class MethodRef {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        List<String> shouted = names.stream()\n            .map(String::toUpperCase)\n            .collect(Collectors.toList());\n        System.out.println(shouted);\n    }\n}\n",
     "status": "unsupported",
     "reason": "a lambda or method reference is only allowed where a functional-interface type is expected"
-  },
-  {
-    "id": "iterator",
-    "category": "Collections",
-    "title": "Iterator",
-    "summary": "An explicit iterator. The for-each loop it desugars to works; the interface itself is not modelled.",
-    "main": "Iterate",
-    "source": "import java.util.ArrayList;\nimport java.util.Iterator;\nimport java.util.List;\n\npublic class Iterate {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        Iterator<String> it = names.iterator();\n        while (it.hasNext()) {\n            System.out.println(it.next());\n        }\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "java.util.Iterator is not supported by caturra (the class library covers the AP CS A subset)"
   },
   {
     "id": "vector",
@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-k1kr63ek/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-mbbhufub/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-tl2nbnny/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-lcydyce9/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-fljop_8u/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-7trr0g3f/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

@@ -7889,10 +7889,6 @@ fn try_catch_compile_errors_match_javac() {
             "String.lines exists in Java, but streams are not supported by caturra",
         ),
         (
-            "import java.util.ArrayList; class M { static void f() { ArrayList<Integer> a = new ArrayList<>(); a.iterator(); } }",
-            "ArrayList.iterator exists in Java, but iterators are not supported by caturra (use for-each or an index loop)",
-        ),
-        (
             "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextBigInteger(); } }",
             "Scanner.nextBigInteger exists in Java, but BigInteger is not supported by caturra",
         ),
@@ -9505,10 +9501,6 @@ fn unsupported_map_members_explain_themselves() {
             "HashMap.merge exists in Java, but lambdas are not supported by caturra",
         ),
         (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().keySet().iterator(); } }",
-            "Set.iterator exists in Java, but iterators are not supported by caturra (use for-each)",
-        ),
-        (
             "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().removeIf(x -> true); } }",
             "Collection.removeIf exists in Java, but lambdas are not supported by caturra",
         ),
@@ -10874,7 +10866,7 @@ fn unmodeled_library_classes_explain_themselves_in_every_position() {
             "class M { static void r() { Object o = new Vector<Integer>(); } }",
         ),
         ("extends", "class D extends Vector {} class M {}"),
-        ("implements", "class D implements Iterator {} class M {}"),
+        ("implements", "class D implements Runnable {} class M {}"),
         (
             "type argument",
             "class M { static void r() { ArrayList<Vector> l; } }",

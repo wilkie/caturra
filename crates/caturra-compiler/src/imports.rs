@@ -37,6 +37,7 @@ const JAVA_UTIL: &[&str] = &[
     "Stack",
     "Collection",
     "Comparator",
+    "Iterator",
     "Optional",
     "OptionalInt",
     "OptionalDouble",
@@ -115,7 +116,7 @@ const JAVA_LANG: &[&str] = &[
 /// implement — named so the message is honest instead of a misleading
 /// "cannot find symbol".
 const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
-    ("java.util", &["Iterator", "Vector", "Hashtable"]),
+    ("java.util", &["Vector", "Hashtable"]),
     (
         "java.io",
         &[
@@ -187,6 +188,7 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Stack",
     "Collection",
     "Comparator",
+    "Iterator",
     "Function",
     "BiFunction",
     "UnaryOperator",
