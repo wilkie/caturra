@@ -925,6 +925,65 @@ public class DiffFiles {
 "#
 );
 
+// The java.io reader stack over a file: `new BufferedReader(new FileReader(..))`
+// hands out lines with `readLine()` (null at end, no exception), a character
+// with `read()`, and reports `ready()`.
+differential_test!(
+    diff_buffered_reader,
+    "DiffReader",
+    r#"
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.PrintWriter;
+
+public class DiffReader {
+    public static void main(String[] args) throws Exception {
+        PrintWriter out = new PrintWriter("dr.txt");
+        out.println("alpha");
+        out.println("beta");
+        out.println("gamma");
+        out.close();
+
+        BufferedReader r = new BufferedReader(new FileReader("dr.txt"));
+        System.out.println(r.readLine());        // alpha
+        System.out.println((char) r.read());     // b
+        System.out.println(r.readLine());        // eta
+        while (r.ready()) {                       // a file's ready() is honest
+            System.out.println("[" + r.readLine() + "]");
+        }
+        System.out.println(r.readLine());        // null at end
+        r.close();
+    }
+}
+"#
+);
+
+// The same stack over `System.in`.
+#[test]
+fn diff_buffered_reader_stdin() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    assert_same_output_with_stdin(
+        "DiffReaderIn",
+        r#"
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+
+public class DiffReaderIn {
+    public static void main(String[] args) throws Exception {
+        BufferedReader r = new BufferedReader(new InputStreamReader(System.in));
+        System.out.println("1:" + r.readLine());
+        System.out.println("2:" + r.readLine());
+        System.out.println("3:" + r.readLine());
+    }
+}
+"#,
+        "hello\nworld\n",
+    );
+}
+
 differential_test!(
     diff_deep_recursion,
     "DiffDeep",

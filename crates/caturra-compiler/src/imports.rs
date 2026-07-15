@@ -55,6 +55,9 @@ const JAVA_UTIL: &[&str] = &[
 const JAVA_IO: &[&str] = &[
     "File",
     "PrintWriter",
+    "BufferedReader",
+    "FileReader",
+    "InputStreamReader",
     "FileNotFoundException",
     "IOException",
 ];
@@ -120,11 +123,8 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.io",
         &[
-            "BufferedReader",
             "BufferedWriter",
-            "FileReader",
             "FileWriter",
-            "InputStreamReader",
             "PrintStream",
             "InputStream",
             "OutputStream",
@@ -201,6 +201,9 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Stream",
     "File",
     "PrintWriter",
+    "BufferedReader",
+    "FileReader",
+    "InputStreamReader",
     "InputMismatchException",
     "NoSuchElementException",
     "IOException",

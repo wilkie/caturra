@@ -1222,6 +1222,9 @@ impl MethodTable {
                     "StringBuilder" => Some(JType::StringBuilder),
                     "File" => Some(JType::File),
                     "PrintWriter" => Some(JType::Writer),
+                    "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => {
+                        Some(JType::Reader)
+                    }
                     "OptionalInt" if !self.has_class(simple) => Some(JType::OptionalInt),
                     "OptionalDouble" if !self.has_class(simple) => Some(JType::OptionalDouble),
                     "Class" => Some(JType::Class),
@@ -2461,6 +2464,10 @@ enum JType {
     /// `java.io.PrintWriter` (intrinsic, writes into the virtual
     /// filesystem).
     Writer,
+    /// `java.io.BufferedReader`/`FileReader`/`InputStreamReader` (intrinsic).
+    /// One reader kind: a file reader slurps the file, a `System.in` reader
+    /// pulls console lines. `readLine`/`read` hand them out.
+    Reader,
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
@@ -2690,6 +2697,7 @@ impl JType {
                 .to_owned(),
             JType::File => String::from("File"),
             JType::Writer => String::from("PrintWriter"),
+            JType::Reader => String::from("BufferedReader"),
             JType::List(elem) => {
                 format!("ArrayList<{}>", wrapper_name(elem, table))
             }
@@ -2724,6 +2732,7 @@ impl JType {
                 | JType::Scanner
                 | JType::File
                 | JType::Writer
+                | JType::Reader
                 | JType::List(_)
                 | JType::Stack(_)
                 | JType::LinkedList { .. }
@@ -2831,6 +2840,7 @@ impl JType {
             JType::Exception(id) => format!("L{};", exception_internal(id)),
             JType::File => String::from("Ljava/io/File;"),
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
+            JType::Reader => String::from("Ljava/io/BufferedReader;"),
             JType::List(_) => String::from("Ljava/util/ArrayList;"),
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
@@ -3330,6 +3340,12 @@ fn method_descriptor(
                     out.push_str("Ljava/io/File;");
                 } else if simple == "PrintWriter" && !table.has_class(simple) {
                     out.push_str("Ljava/io/PrintWriter;");
+                } else if matches!(
+                    simple,
+                    "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader"
+                ) && !table.has_class(simple)
+                {
+                    out.push_str("Ljava/io/BufferedReader;");
                 } else if simple == "Class" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/Class;");
                 } else if simple == "Field" && !table.has_class(simple) {
@@ -4148,6 +4164,14 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
     bm("hasNextLong", &[], BRet::Boolean, "()Z"),
     bm("nextBoolean", &[], BRet::Boolean, "()Z"),
     bm("hasNextBoolean", &[], BRet::Boolean, "()Z"),
+    bm("close", &[], BRet::Void, "()V"),
+];
+
+const READER_METHODS: &[BuiltinMethod] = &[
+    // `readLine` returns null at end of stream; its static type is String.
+    bm("readLine", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("read", &[], BRet::Int, "()I"),
+    bm("ready", &[], BRet::Boolean, "()Z"),
     bm("close", &[], BRet::Void, "()V"),
 ];
 
@@ -6512,6 +6536,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::File => Some(("java/io/File", FILE_METHODS)),
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
+        JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
@@ -9106,6 +9131,7 @@ impl BodyGen<'_> {
             "Scanner" => JType::Scanner,
             "File" => JType::File,
             "PrintWriter" => JType::Writer,
+            "BufferedReader" | "FileReader" | "InputStreamReader" => JType::Reader,
             "ArrayList" => match type_args {
                 // A diamond `new ArrayList<>(...)` gets its element from the
                 // context — `Null` (assignable to any List), matching what
@@ -9310,6 +9336,9 @@ impl BodyGen<'_> {
                 "StringBuilder" => return self.new_string_builder(args, span),
                 "String" => return self.new_string(args, span),
                 "Scanner" => return self.new_scanner(args, span),
+                "BufferedReader" | "FileReader" | "InputStreamReader" => {
+                    return self.new_reader(class_name, args, span);
+                }
                 "ArrayList" => return self.new_array_list(type_args, args, span),
                 "Stack" => return self.new_stack(type_args, args, span),
                 "HashMap" => return self.new_hash_map(type_args, args, span),
@@ -9605,6 +9634,61 @@ impl BodyGen<'_> {
              new Scanner(new File(\"data.txt\"))",
         );
         JType::Error
+    }
+
+    /// `new FileReader(path|File)`, `new BufferedReader(reader)`, or
+    /// `new InputStreamReader(System.in)` — all one intrinsic reader.
+    fn new_reader(&mut self, class_name: &str, args: &[Expr], span: SourceSpan) -> JType {
+        let internal = format!("java/io/{class_name}");
+        let reader_class = intern_class(self.pool, &internal);
+        self.code.push_op_u16(op::NEW, reader_class, 1);
+        self.code.push_op(op::DUP, 1);
+
+        let [arg] = args else {
+            self.error(span, format!("{class_name} takes one argument"));
+            return JType::Error;
+        };
+
+        // `new InputStreamReader(System.in)` — a reader over standard input.
+        let reads_stdin = class_name == "InputStreamReader"
+            && matches!(arg, Expr::Name { path, .. }
+            if matches!(
+                path.iter().map(String::as_str).collect::<Vec<_>>()[..],
+                ["System", "in"] | ["java", "lang", "System", "in"]
+            ));
+        if reads_stdin {
+            let stdin_field =
+                intern_field_ref(self.pool, "java/lang/System", "in", "Ljava/io/InputStream;");
+            self.code.push_op_u16(op::GETSTATIC, stdin_field, 1);
+            let init =
+                intern_method_ref(self.pool, &internal, "<init>", "(Ljava/io/InputStream;)V");
+            self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+            self.code.drop_stack(2);
+            return JType::Reader;
+        }
+
+        let arg_ty = self.expr(arg);
+        if arg_ty == JType::Error {
+            return JType::Error;
+        }
+        let arg_desc = match (class_name, arg_ty) {
+            ("FileReader", JType::Str) => "Ljava/lang/String;",
+            ("FileReader", JType::File) => "Ljava/io/File;",
+            ("BufferedReader", JType::Reader) => "Ljava/io/Reader;",
+            _ => {
+                self.error(
+                    span,
+                    "a reader wraps a file or a stream: new FileReader(path) / \
+                     new FileReader(new File(...)) / new BufferedReader(reader) / \
+                     new InputStreamReader(System.in)",
+                );
+                return JType::Error;
+            }
+        };
+        let init = intern_method_ref(self.pool, &internal, "<init>", &format!("({arg_desc})V"));
+        self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+        self.code.drop_stack(2);
+        JType::Reader
     }
 
     /// `new File(pathString)`.
@@ -10502,6 +10586,7 @@ impl BodyGen<'_> {
             | JType::Scanner
             | JType::File
             | JType::Writer
+            | JType::Reader
             | JType::List(_)
             | JType::Stack(_)
             | JType::LinkedList { .. }
@@ -12832,7 +12917,7 @@ impl BodyGen<'_> {
             | JType::Stack(_)
             | JType::Exception(_)
             | JType::File => Some(String::from("(Ljava/lang/String;)V")),
-            JType::Scanner | JType::Writer => {
+            JType::Scanner | JType::Writer | JType::Reader => {
                 self.error(
                     span,
                     format!("printing a {} is not supported", ty.describe(self.table)),
@@ -13074,6 +13159,7 @@ impl BodyGen<'_> {
                         | JType::Scanner
                         | JType::File
                         | JType::Writer
+                        | JType::Reader
                         | JType::List(_)
                         | JType::Stack(_)
                         | JType::LinkedList { .. }
@@ -15311,7 +15397,7 @@ impl BodyGen<'_> {
             | JType::Stack(_)
             | JType::File
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
-            JType::Scanner | JType::Writer => {
+            JType::Scanner | JType::Writer | JType::Reader => {
                 self.error(
                     span,
                     format!(

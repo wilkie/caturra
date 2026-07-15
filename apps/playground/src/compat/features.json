@@ -260,6 +260,16 @@
     "expected": "a,b,c\nx-y-z\none two three\n"
   },
   {
+    "id": "buffered-reader",
+    "category": "Library",
+    "title": "BufferedReader",
+    "summary": "`new BufferedReader(new FileReader(path))` and `readLine()` \u2014 the java.io reader stack, over a file or `System.in`.",
+    "main": "Reader",
+    "source": "import java.io.BufferedReader;\nimport java.io.FileReader;\nimport java.io.PrintWriter;\nimport java.io.IOException;\n\npublic class Reader {\n    public static void main(String[] args) throws IOException {\n        PrintWriter writer = new PrintWriter(\"notes.txt\");\n        writer.println(\"first line\");\n        writer.println(\"second line\");\n        writer.close();\n\n        BufferedReader reader = new BufferedReader(new FileReader(\"notes.txt\"));\n        System.out.println(reader.readLine());\n        System.out.println(reader.readLine());\n        System.out.println(reader.readLine());\n        reader.close();\n    }\n}\n",
+    "status": "supported",
+    "expected": "first line\nsecond line\nnull\n"
+  },
+  {
     "id": "vector",
     "category": "Collections",
     "title": "Vector and Hashtable",
@@ -280,16 +290,6 @@
     "reason": "java.lang.Thread is not supported by caturra (the class library covers the AP CS A subset)"
   },
   {
-    "id": "buffered-reader",
-    "category": "Library",
-    "title": "BufferedReader",
-    "summary": "The java.io reader stack. Scanner and File cover the same ground.",
-    "main": "Reader",
-    "source": "import java.io.BufferedReader;\nimport java.io.FileReader;\nimport java.io.IOException;\n\npublic class Reader {\n    public static void main(String[] args) throws IOException {\n        BufferedReader reader = new BufferedReader(new FileReader(\"notes.txt\"));\n        System.out.println(reader.readLine());\n        reader.close();\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "java.io.BufferedReader is not supported by caturra (the class library covers the AP CS A subset)"
-  },
-  {
     "id": "nio-files",
     "category": "Library",
     "title": "java.nio.file",
@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-ogpn2ois/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-zwifhge5/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-z8tx0ywf/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-mz7bz8g7/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-m2a4z74i/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-utp58huw/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

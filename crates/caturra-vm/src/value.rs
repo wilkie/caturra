@@ -211,6 +211,20 @@ pub enum HeapObject {
         /// `IllegalStateException: Scanner closed`.
         closed: bool,
     },
+    /// A `java.io.BufferedReader`/`FileReader`/`InputStreamReader` — one reader
+    /// kind. A file reader slurps the whole file into `buffer` up front; a
+    /// `stdin` reader pulls each line from the console lazily. `readLine`
+    /// returns the next line (no terminator) or null; `read` the next char or
+    /// -1.
+    Reader {
+        buffer: String,
+        /// Cursor into `buffer` (UTF-8 byte index) for a file reader.
+        pos: usize,
+        /// Reads standard input rather than a file.
+        stdin: bool,
+        /// `close()` was called; further reads return end-of-stream.
+        closed: bool,
+    },
     /// A `java.util.ArrayList` (element types erased; values are
     /// stored directly — boxing is a no-op in this VM).
     ArrayList(Vec<JValue>),

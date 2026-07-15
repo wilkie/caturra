@@ -860,6 +860,34 @@ public class Join {
 }
 ''',
     ),
+    dict(
+        id="buffered-reader",
+        category="Library",
+        title="BufferedReader",
+        summary="`new BufferedReader(new FileReader(path))` and `readLine()` — the java.io reader stack, over a file or `System.in`.",
+        main="Reader",
+        source='''
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.PrintWriter;
+import java.io.IOException;
+
+public class Reader {
+    public static void main(String[] args) throws IOException {
+        PrintWriter writer = new PrintWriter("notes.txt");
+        writer.println("first line");
+        writer.println("second line");
+        writer.close();
+
+        BufferedReader reader = new BufferedReader(new FileReader("notes.txt"));
+        System.out.println(reader.readLine());
+        System.out.println(reader.readLine());
+        System.out.println(reader.readLine());
+        reader.close();
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -896,26 +924,6 @@ public class Threads {
         Thread worker = new Thread(() -> System.out.println("working"));
         worker.start();
         worker.join();
-    }
-}
-''',
-    ),
-    dict(
-        id="buffered-reader",
-        category="Library",
-        title="BufferedReader",
-        summary="The java.io reader stack. Scanner and File cover the same ground.",
-        main="Reader",
-        source='''
-import java.io.BufferedReader;
-import java.io.FileReader;
-import java.io.IOException;
-
-public class Reader {
-    public static void main(String[] args) throws IOException {
-        BufferedReader reader = new BufferedReader(new FileReader("notes.txt"));
-        System.out.println(reader.readLine());
-        reader.close();
     }
 }
 ''',

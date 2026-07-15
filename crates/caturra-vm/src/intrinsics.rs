@@ -92,6 +92,14 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         "java/io/PrintWriter" => Some(HeapObject::Writer {
             path: String::new(),
         }),
+        "java/io/BufferedReader" | "java/io/FileReader" | "java/io/InputStreamReader" => {
+            Some(HeapObject::Reader {
+                buffer: String::new(),
+                pos: 0,
+                stdin: false,
+                closed: false,
+            })
+        }
         _ => {
             if caturra_classfile::exceptions::is_exception_class(class) {
                 return Some(HeapObject::Exception {
@@ -146,7 +154,44 @@ pub fn invoke_special(
         // ignores the stream object — stdin is the only stream). The
         // no-arg case also covers `super()` into a library throwable
         // from a user exception class.
+        ("<init>", "(Ljava/io/InputStream;)V")
+            if matches!(heap.get(receiver), Some(HeapObject::Reader { .. })) =>
+        {
+            // `new InputStreamReader(System.in)` — read from standard input.
+            if let Some(HeapObject::Reader { stdin, .. }) = heap.get_mut(receiver) {
+                *stdin = true;
+            }
+            Ok(())
+        }
         ("<init>", "()V" | "(Ljava/io/InputStream;)V") => Ok(()),
+        // `new BufferedReader(reader)` — wrap the reader, inheriting its state.
+        ("<init>", "(Ljava/io/Reader;)V") => {
+            let JValue::Ref(Some(inner)) = args[0] else {
+                return Err(throw("java.lang.NullPointerException"));
+            };
+            let wrapped = match heap.get(inner) {
+                Some(HeapObject::Reader {
+                    buffer,
+                    pos,
+                    stdin,
+                    closed,
+                }) => (buffer.clone(), *pos, *stdin, *closed),
+                _ => return Err(throw("java.lang.ClassCastException: not a Reader")),
+            };
+            if let Some(HeapObject::Reader {
+                buffer,
+                pos,
+                stdin,
+                closed,
+            }) = heap.get_mut(receiver)
+            {
+                *buffer = wrapped.0;
+                *pos = wrapped.1;
+                *stdin = wrapped.2;
+                *closed = wrapped.3;
+            }
+            Ok(())
+        }
         // `new StringBuilder(capacity)`: a sizing hint with no observable
         // effect — caturra models contents, not the backing array.
         ("<init>", "(I)V") if matches!(heap.get(receiver), Some(HeapObject::StringBuilder(_))) => {
@@ -234,6 +279,24 @@ pub fn invoke_special(
                         .map_err(|e| throw(format!("java.io.FileNotFoundException: {e}")))?;
                     Ok(())
                 }
+                Some(HeapObject::Reader {
+                    buffer,
+                    pos,
+                    stdin,
+                    closed,
+                }) => {
+                    // FileReader(String): slurp the whole file up front.
+                    let content = vfs.read_file(&text).map_err(|_| {
+                        throw(format!(
+                            "java.io.FileNotFoundException: {text} (No such file or directory)"
+                        ))
+                    })?;
+                    *buffer = String::from_utf8_lossy(content).into_owned();
+                    *pos = 0;
+                    *stdin = false;
+                    *closed = false;
+                    Ok(())
+                }
                 _ => Err(VmError::UnknownIntrinsic(format!(
                     "{class}.{method}{descriptor}"
                 ))),
@@ -275,6 +338,32 @@ pub fn invoke_special(
                         *eof = true;
                         // A file scanner: closing it must not close stdin.
                         *stdin = false;
+                    }
+                    Ok(())
+                }
+                Some(HeapObject::Reader { .. }) => {
+                    // FileReader(File): slurp the whole file up front.
+                    let content = vfs
+                        .read_file(&target)
+                        .map_err(|_| {
+                            throw(format!(
+                                "java.io.FileNotFoundException: {target} \
+                                 (No such file or directory)"
+                            ))
+                        })?
+                        .to_vec();
+                    let text = String::from_utf8_lossy(&content).into_owned();
+                    if let Some(HeapObject::Reader {
+                        buffer,
+                        pos,
+                        stdin,
+                        closed,
+                    }) = heap.get_mut(receiver)
+                    {
+                        *buffer = text;
+                        *pos = 0;
+                        *stdin = false;
+                        *closed = false;
                     }
                     Ok(())
                 }
@@ -403,6 +492,7 @@ pub fn invoke_virtual(
         }
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
+        (HeapObject::Reader { .. }, _) => reader_method(heap, console, receiver, method),
         (HeapObject::ArrayList(_) | HeapObject::LinkedList(_), _) => {
             list_method(heap, receiver, method, descriptor, args)
         }
@@ -1523,6 +1613,107 @@ fn scanner_method(
         }
         _ => Err(VmError::UnknownIntrinsic(format!("Scanner.{method}"))),
     }
+}
+
+/// `java.io.BufferedReader`/`FileReader` methods. A file reader hands out lines
+/// from its slurped buffer; a `System.in` reader pulls each line from the
+/// console. `readLine` returns null at end of stream (not an exception).
+fn reader_method(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+    method: &str,
+) -> Result<Option<JValue>, VmError> {
+    let (stdin, closed) = match heap.get(receiver) {
+        Some(HeapObject::Reader { stdin, closed, .. }) => (*stdin, *closed),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    match method {
+        "readLine" => {
+            let line = if closed {
+                None
+            } else if stdin {
+                console.read_line()
+            } else {
+                reader_next_line(heap, receiver)
+            };
+            Ok(Some(match line {
+                Some(text) => JValue::Ref(Some(heap.alloc_string(&text))),
+                None => JValue::Ref(None),
+            }))
+        }
+        "read" => {
+            let ch = if closed || stdin {
+                -1
+            } else {
+                reader_next_char(heap, receiver)
+            };
+            Ok(Some(JValue::Int(ch)))
+        }
+        "ready" => {
+            let ready = !closed
+                && !stdin
+                && matches!(heap.get(receiver), Some(HeapObject::Reader { buffer, pos, .. }) if *pos < buffer.len());
+            Ok(Some(JValue::Int(i32::from(ready))))
+        }
+        "close" => {
+            if let Some(HeapObject::Reader { closed, .. }) = heap.get_mut(receiver) {
+                *closed = true;
+            }
+            Ok(None)
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!(
+            "BufferedReader.{method}"
+        ))),
+    }
+}
+
+/// The next line from a file reader's buffer, without its terminator, or `None`
+/// at end. A line ends at `\n`, `\r`, or `\r\n` (both a real `BufferedReader`
+/// and this treat them alike). `\n`/`\r` are ASCII, so scanning bytes never splits a
+/// multi-byte UTF-8 character.
+fn reader_next_line(heap: &mut Heap, receiver: HeapRef) -> Option<String> {
+    let Some(HeapObject::Reader { buffer, pos, .. }) = heap.get_mut(receiver) else {
+        return None;
+    };
+    if *pos >= buffer.len() {
+        return None;
+    }
+    let bytes = buffer.as_bytes();
+    let start = *pos;
+    let mut end = start;
+    while end < bytes.len() && bytes[end] != b'\n' && bytes[end] != b'\r' {
+        end += 1;
+    }
+    let line = buffer[start..end].to_string();
+    let mut next = end;
+    if next < bytes.len() {
+        if bytes[next] == b'\r' {
+            next += 1;
+            if next < bytes.len() && bytes[next] == b'\n' {
+                next += 1;
+            }
+        } else {
+            next += 1; // '\n'
+        }
+    }
+    *pos = next;
+    Some(line)
+}
+
+/// The next character from a file reader's buffer as its code point, or -1 at
+/// end. (A supplementary character would arrive as two UTF-16 units on a JVM;
+/// this hands back the code point, which agrees for the Basic Multilingual
+/// Plane a `read()` almost always sees.)
+fn reader_next_char(heap: &mut Heap, receiver: HeapRef) -> i32 {
+    let Some(HeapObject::Reader { buffer, pos, .. }) = heap.get_mut(receiver) else {
+        return -1;
+    };
+    let Some(ch) = buffer[*pos..].chars().next() else {
+        return -1;
+    };
+    *pos += ch.len_utf8();
+    i32::try_from(u32::from(ch)).unwrap_or(-1)
 }
 
 /// Pull one more line of input into the scanner's buffer. Returns
