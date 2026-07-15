@@ -1711,7 +1711,8 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         | ElemType::Field
         | ElemType::Method
         | ElemType::Constructor
-        | ElemType::Class => "java/lang/Object",
+        | ElemType::Class
+        | ElemType::Wildcard { .. } => "java/lang/Object",
     }
 }
 
@@ -1804,6 +1805,9 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Method => String::from("Method"),
         ElemType::Constructor => String::from("Constructor"),
         ElemType::Class => String::from("Class"),
+        // A wildcard reads out as its erased bound; describe it that way.
+        ElemType::Wildcard { read, .. } if read == table.object_id => String::from("Object"),
+        ElemType::Wildcard { read, .. } => table.class_name(read).to_owned(),
     }
 }
 
@@ -1834,6 +1838,12 @@ fn generic_field_signature(ty: &TypeRef, table: &MethodTable) -> Option<String> 
 fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
     match arg {
         TypeRef::Named(name) => {
+            // A wildcard type argument (`? extends Number`) rides in as a
+            // sentinel name; decode its variance and bound into a `Wildcard`
+            // element that argument matching can vary over.
+            if let Some((variance, bound)) = crate::ast::wildcard_parts(name) {
+                return Some(wildcard_elem(variance, bound, table));
+            }
             // A user class shadows the wrapper/library simple names
             // (a level may define its own `Character`).
             if !name.contains('.')
@@ -1858,6 +1868,94 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
         // collection; that is the depth caturra models.
         TypeRef::Generic { .. } => Some(ElemType::Object(table.object_id)),
         _ => None,
+    }
+}
+
+/// Build the [`ElemType`] for a wildcard type argument. A bound caturra can
+/// classify becomes a `Wildcard` element (which argument matching varies
+/// over); one it cannot (a wrapper, `String`, an unknown name) falls back to
+/// an invariant `Object` element — stricter than javac, but never looser.
+fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
+    let object = table.object_id;
+    // `?`, `? extends Object`, or a bound with no nameable base: any element.
+    if variance == '?' || bound.is_empty() || matches!(bound, "Object" | "java.lang.Object") {
+        return ElemType::Wildcard {
+            read: object,
+            bound: WildcardBound::Unbounded,
+        };
+    }
+    let canonical = crate::imports::canonical_library_class(bound).unwrap_or(bound);
+    match variance {
+        // `? extends Bound`.
+        '+' if canonical == "Number" => ElemType::Wildcard {
+            read: object,
+            bound: WildcardBound::NumberUpper,
+        },
+        '+' => match table.class_id(canonical) {
+            // `get()` yields the bound; `List<Sub>` is accepted.
+            Some(id) => ElemType::Wildcard {
+                read: id,
+                bound: WildcardBound::Upper(id),
+            },
+            None => ElemType::Object(object),
+        },
+        // `? super Bound` — reads out as Object; `List<Super>` is accepted.
+        '-' => match table.class_id(canonical) {
+            Some(id) => ElemType::Wildcard {
+                read: object,
+                bound: WildcardBound::Lower(id),
+            },
+            None => ElemType::Object(object),
+        },
+        _ => ElemType::Object(object),
+    }
+}
+
+/// Whether an argument collection's element type satisfies a wildcard bound,
+/// so `List<argElem>` may be passed for a `List<? …>` parameter.
+fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) -> bool {
+    match bound {
+        WildcardBound::Unbounded => true,
+        // caturra models `Number` only as the numeric wrappers.
+        WildcardBound::NumberUpper => matches!(
+            arg,
+            ElemType::Int
+                | ElemType::Double
+                | ElemType::Long
+                | ElemType::Float
+                | ElemType::Short
+                | ElemType::Byte
+        ),
+        WildcardBound::Upper(class) => elem_widens_to_class(arg, class, table),
+        // `? super C`: the argument element is a supertype of `C` (only a user
+        // class arg is checkable; a wrapper/String supertype of a class is
+        // impossible, so those correctly do not match).
+        WildcardBound::Lower(class) => {
+            matches!(arg, ElemType::Object(id) if table.is_subtype(class, id))
+        }
+    }
+}
+
+/// Whether a collection element type is `class` or a subtype: a user-class
+/// element via the class hierarchy, and — since caturra models no wrapper
+/// hierarchy — a wrapper or `String` element only for the `Comparable` bound
+/// they all implement.
+fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> bool {
+    if class == table.object_id {
+        return true;
+    }
+    match arg {
+        ElemType::Object(id) => table.is_subtype(id, class),
+        ElemType::Str
+        | ElemType::Int
+        | ElemType::Double
+        | ElemType::Long
+        | ElemType::Float
+        | ElemType::Short
+        | ElemType::Byte
+        | ElemType::Char
+        | ElemType::Boolean => table.class_id("Comparable") == Some(class),
+        _ => false,
     }
 }
 
@@ -2046,6 +2144,35 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Map { key: k2, value: v2 },
             ) if k1 == k2 && v1 == v2
         )
+        // Wildcard variance: a collection argument matches a wildcard-typed
+        // parameter of a compatible family when its element satisfies the
+        // bound. `List<Integer>` for `List<? extends Number>`; any list/set for
+        // `Collection<?>`. This is the ONLY covariance over an element type —
+        // an invariant `List<Object>` still rejects a `List<Integer>`.
+        || matches!(
+            (from, to),
+            (JType::List(a), JType::List(ElemType::Wildcard { bound, .. }))
+                if wildcard_accepts(a, bound, table)
+        )
+        || matches!(
+            (from, to),
+            (
+                JType::List(a)
+                    | JType::Collection(a)
+                    | JType::Set(a)
+                    | JType::TreeSet(a)
+                    | JType::Stack(a)
+                    | JType::LinkedList { elem: a, .. },
+                JType::Collection(ElemType::Wildcard { bound, .. }),
+            ) if wildcard_accepts(a, bound, table)
+        )
+        || matches!(
+            (from, to),
+            (
+                JType::Set(a) | JType::TreeSet(a),
+                JType::Set(ElemType::Wildcard { bound, .. }),
+            ) if wildcard_accepts(a, bound, table)
+        )
         // A parameterized type and its raw class erase alike, so they
         // are mutually assignable (`Box<String> b = new Box<>()`).
         || matches!((from.erased_class(), to.erased_class()), (Some(a), Some(b)) if a == b)
@@ -2129,6 +2256,34 @@ enum ElemType {
     Constructor,
     /// `java.lang.Class` (element of a `Class[]`, e.g. `getConstructor` args).
     Class,
+    /// A wildcard type argument in a PARAMETER position (`List<? extends
+    /// Number>`, `List<?>`). A wildcard never types a real value — you cannot
+    /// write `new ArrayList<?>()` — so `read` carries the erased element type
+    /// (what `get()` yields: the bound's class, or `Object`) for the
+    /// value-level operations, while `bound` drives argument applicability so
+    /// `List<Integer>` matches `? extends Number` and `List<String>` does not.
+    Wildcard {
+        read: ClassId,
+        bound: WildcardBound,
+    },
+}
+
+/// The bound of a wildcard type argument, as far as caturra can verify it for
+/// argument applicability. A bound it cannot classify (a wrapper, `String`, a
+/// nested generic) is not represented here: the type argument stays a plain
+/// erased `Object` element (invariant), which is stricter than javac but never
+/// looser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WildcardBound {
+    /// `?` or `? extends Object`: any reference element is accepted.
+    Unbounded,
+    /// `? extends Number`: only the numeric wrappers (Integer, Double, Long,
+    /// Float, Short, Byte) — caturra models `Number` no other way.
+    NumberUpper,
+    /// `? extends C`: an element whose type is `C` or a subtype of it.
+    Upper(ClassId),
+    /// `? super C`: an element `C` itself is assignable to (a supertype of C).
+    Lower(ClassId),
 }
 
 impl ElemType {
@@ -2148,6 +2303,9 @@ impl ElemType {
             ElemType::Method => String::from("Ljava/lang/reflect/Method;"),
             ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             ElemType::Class => String::from("Ljava/lang/Class;"),
+            // A wildcard element erases to its bound's raw class (Object when
+            // caturra models the bound no other way).
+            ElemType::Wildcard { read, .. } => format!("L{};", table.class_name(read)),
         }
     }
 
@@ -2167,6 +2325,8 @@ impl ElemType {
             ElemType::Method => JType::Method,
             ElemType::Constructor => JType::Constructor,
             ElemType::Class => JType::Class,
+            // Reading from a wildcard collection yields its erased bound.
+            ElemType::Wildcard { read, .. } => JType::Object(read),
         }
     }
 }
@@ -13488,7 +13648,8 @@ impl BodyGen<'_> {
                     | ElemType::Field
                     | ElemType::Method
                     | ElemType::Constructor
-                    | ElemType::Class => unreachable!(),
+                    | ElemType::Class
+                    | ElemType::Wildcard { .. } => unreachable!(),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
                 self.code.bytes.push(atype);
@@ -14980,7 +15141,8 @@ impl BodyGen<'_> {
             | ElemType::Field
             | ElemType::Method
             | ElemType::Constructor
-            | ElemType::Class => "intValue",
+            | ElemType::Class
+            | ElemType::Wildcard { .. } => "intValue",
             ElemType::Double => "doubleValue",
             ElemType::Long => "longValue",
             ElemType::Float => "floatValue",
@@ -15250,12 +15412,18 @@ impl BodyGen<'_> {
             (JType::Str, JType::Object(id)) if self.table.class_id("Comparable") == Some(id) => {}
             // A parameterized type and its raw class erase alike.
             (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
-            // A LinkedList (its Queue/Deque face) or a TreeSet erases to a
-            // list/set, so assigning it to a wider face, a `List`/`Set`, or a
-            // `Collection` of the same element type needs no code — as `widens`
-            // already allows.
+            // Two erasures that need no code when `widens` (which gated the
+            // call) allows them: a LinkedList/TreeSet/TreeMap widening to a
+            // wider face, `List`/`Set`/`Collection` of the same element; and a
+            // collection passed to a wildcard-typed parameter (`List<Integer>`
+            // -> `List<? extends Number>`), which erase identically.
             (JType::LinkedList { .. } | JType::TreeSet(_) | JType::TreeMap { .. }, _)
-                if widens(from, to, self.table) => {}
+            | (
+                _,
+                JType::List(ElemType::Wildcard { .. })
+                | JType::Collection(ElemType::Wildcard { .. })
+                | JType::Set(ElemType::Wildcard { .. }),
+            ) if widens(from, to, self.table) => {}
             // Array covariance: `Card[]` assigns to `Comparable[]`.
             (
                 JType::Array {

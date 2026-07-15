@@ -140,6 +140,29 @@ pub struct TypeParam {
     pub bound: Option<TypeRef>,
 }
 
+/// Reserved prefix that turns a wildcard type argument (`? extends Number`)
+/// into an ordinary [`TypeRef::Named`], the way the type-variable sentinel
+/// does — no dedicated variant, so the many `TypeRef` matches stay untouched.
+/// It cannot collide with a source identifier (leading `NUL`).
+const WILDCARD_PREFIX: &str = "\u{0}Wildcard\u{0}";
+
+/// Encode a wildcard type argument as a reserved type name. `variance` is
+/// `'?'` (unbounded), `'+'` (`extends`) or `'-'` (`super`); `bound` is the
+/// bound's simple name (empty when unbounded).
+#[must_use]
+pub fn wildcard_type_name(variance: char, bound: &str) -> String {
+    format!("{WILDCARD_PREFIX}{variance}{bound}")
+}
+
+/// Decode [`wildcard_type_name`]: `(variance, bound)`, or `None` when `name`
+/// is not a wildcard sentinel.
+#[must_use]
+pub fn wildcard_parts(name: &str) -> Option<(char, &str)> {
+    let rest = name.strip_prefix(WILDCARD_PREFIX)?;
+    let variance = rest.chars().next()?;
+    Some((variance, &rest[variance.len_utf8()..]))
+}
+
 /// A method parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {

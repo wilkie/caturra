@@ -1087,8 +1087,8 @@ GRAMMAR = [
                       '    static <T extends Comparable<T>> T max(T a, T b) {\n'
                       '        return a.compareTo(b) >= 0 ? a : b;\n    }')),
     dict(id="g-wildcard", category="Declarations", title="Wildcard generics (? extends)",
-         summary="`List<? extends Number>` parses now; the argument-variance rule that lets a List<Integer> match it is what is missing.", main="G",
-         source=_prog('List<Integer> n = new ArrayList<>();\n        n.add(2);\n'
+         summary="A `List<Integer>` passes to a `List<? extends Number>` parameter — the use-site covariance a wildcard grants. The bound is a real constraint: a `List<String>` is still refused, and a plain `List<Object>` stays invariant.", main="G",
+         source=_prog('List<Integer> n = new ArrayList<>();\n        n.add(2);\n        n.add(9);\n'
                       '        System.out.println(count(n));',
                       '    static int count(List<? extends Number> values) { return values.size(); }',
                       'import java.util.ArrayList;\nimport java.util.List;')),

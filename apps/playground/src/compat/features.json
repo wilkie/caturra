@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-ehpmq46_/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-bmb601s9/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-zp7yu7ll/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-tgrk1o75/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-lk7k5jg4/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-ebhcrept/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -496,11 +496,11 @@
     "id": "g-wildcard",
     "category": "Declarations",
     "title": "Wildcard generics (? extends)",
-    "summary": "`List<? extends Number>` parses now; the argument-variance rule that lets a List<Integer> match it is what is missing.",
+    "summary": "A `List<Integer>` passes to a `List<? extends Number>` parameter \u2014 the use-site covariance a wildcard grants. The bound is a real constraint: a `List<String>` is still refused, and a plain `List<Object>` stays invariant.",
     "main": "G",
-    "source": "import java.util.ArrayList;\nimport java.util.List;\npublic class G {\n    static int count(List<? extends Number> values) { return values.size(); }\n    public static void main(String[] args) throws Exception {\nList<Integer> n = new ArrayList<>();\n        n.add(2);\n        System.out.println(count(n));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "no suitable method found for count(ArrayList<Integer>) in class G"
+    "source": "import java.util.ArrayList;\nimport java.util.List;\npublic class G {\n    static int count(List<? extends Number> values) { return values.size(); }\n    public static void main(String[] args) throws Exception {\nList<Integer> n = new ArrayList<>();\n        n.add(2);\n        n.add(9);\n        System.out.println(count(n));\n    }\n}\n",
+    "status": "supported",
+    "expected": "2\n"
   },
   {
     "id": "g-final-param",

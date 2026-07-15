@@ -1201,17 +1201,27 @@ impl Parser<'_> {
                     if !self.at_symbol(">") {
                         loop {
                             if self.at_symbol("?") {
-                                // Wildcard `?` / `? extends T` / `? super T` —
-                                // generics erase, so track it as Object.
+                                // Wildcard `?` / `? extends T` / `? super T`.
+                                // Erasure keeps only the raw class, but the
+                                // variance and bound decide argument
+                                // applicability (`List<Integer>` matches
+                                // `List<? extends Number>`), so preserve them in
+                                // a sentinel name (see `ast::wildcard_type_name`).
                                 self.pos += 1;
-                                if matches!(
-                                    self.peek(),
-                                    Some(TokenKind::Keyword(Keyword::Extends | Keyword::Super))
-                                ) {
-                                    self.pos += 1;
-                                    let _ = self.type_ref()?;
-                                }
-                                args.push(TypeRef::Named(String::from("Object")));
+                                let (variance, bound) = match self.peek() {
+                                    Some(TokenKind::Keyword(Keyword::Extends)) => {
+                                        self.pos += 1;
+                                        ('+', wildcard_bound_name(&self.type_ref()?))
+                                    }
+                                    Some(TokenKind::Keyword(Keyword::Super)) => {
+                                        self.pos += 1;
+                                        ('-', wildcard_bound_name(&self.type_ref()?))
+                                    }
+                                    _ => ('?', String::new()),
+                                };
+                                args.push(TypeRef::Named(crate::ast::wildcard_type_name(
+                                    variance, &bound,
+                                )));
                             } else {
                                 args.push(self.type_ref()?);
                             }
@@ -3516,6 +3526,17 @@ fn infer_return_plan(
         .map(|(index, _)| index)
         .collect();
     (!indices.is_empty()).then_some(indices)
+}
+
+/// The simple name of a wildcard's bound (`? extends Number` → `"Number"`),
+/// or empty when the bound has no nameable base (an array or primitive, which
+/// Java forbids anyway) — codegen then treats it as an unresolved bound.
+fn wildcard_bound_name(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Named(name) => name.clone(),
+        TypeRef::Generic { base, .. } => base.clone(),
+        _ => String::new(),
+    }
 }
 
 /// The erasure target of a type parameter: its bound's raw base type

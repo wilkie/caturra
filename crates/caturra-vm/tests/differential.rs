@@ -9388,3 +9388,90 @@ public class DiffInfer {
 }
 "#
 );
+
+// Wildcard argument variance: a collection whose element satisfies the bound
+// passes to a wildcard-typed parameter — `List<Integer>`/`List<Double>` for
+// `List<? extends Number>`, `List<Dog>` for `? extends Animal`, any collection
+// for `Collection<?>`, and `List<Integer>`/`List<String>` for `? extends
+// Comparable`. This is the ONLY covariance over an element type.
+differential_test!(
+    diff_wildcard_variance,
+    "DiffWild",
+    r#"
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+class Animal { int legs() { return 4; } }
+class Dog extends Animal { }
+
+public class DiffWild {
+    static int count(List<? extends Number> values) { return values.size(); }
+    static int anyCount(Collection<?> values) { return values.size(); }
+    static int pets(List<? extends Animal> pets) { return pets.size(); }
+    static int cmp(List<? extends Comparable<?>> values) { return values.size(); }
+
+    public static void main(String[] args) {
+        List<Integer> ints = new ArrayList<>();
+        ints.add(2);
+        ints.add(9);
+        List<Double> dbls = new ArrayList<>();
+        dbls.add(1.5);
+        List<String> strs = new ArrayList<>();
+        strs.add("x");
+        List<Dog> dogs = new ArrayList<>();
+        dogs.add(new Dog());
+        dogs.add(new Dog());
+        dogs.add(new Dog());
+
+        System.out.println(count(ints));
+        System.out.println(count(dbls));
+        System.out.println(anyCount(ints));
+        System.out.println(anyCount(strs));
+        System.out.println(pets(dogs));
+        System.out.println(cmp(ints));
+        System.out.println(cmp(strs));
+    }
+}
+"#
+);
+
+// Soundness, the direction that hurts: a wildcard bound is a REAL constraint,
+// so a `List<String>` does not pass for `List<? extends Number>` (String is no
+// Number), and an INVARIANT `List<Object>` still rejects a `List<Integer>` —
+// javac refuses both, and so must caturra.
+differential_reject!(
+    reject_wildcard_bound_mismatch,
+    "RejectWildBound",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class RejectWildBound {
+    static int count(List<? extends Number> values) { return values.size(); }
+    public static void main(String[] args) {
+        List<String> strs = new ArrayList<>();
+        strs.add("x");
+        System.out.println(count(strs));
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_invariant_list_object,
+    "RejectInvariant",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class RejectInvariant {
+    static int count(List<Object> values) { return values.size(); }
+    public static void main(String[] args) {
+        List<Integer> ints = new ArrayList<>();
+        ints.add(2);
+        System.out.println(count(ints));
+    }
+}
+"
+);
