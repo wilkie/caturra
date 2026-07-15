@@ -800,8 +800,8 @@ public class Iterate {
         }
         System.out.println("sum=" + sum);
 
-        // entrySet iteration, via var (the explicit Iterator<Map.Entry<K, V>>
-        // declaration is a nested generic, which caturra does not parse).
+        // entrySet iteration, via var for brevity (the explicit
+        // Iterator<Map.Entry<K, V>> declaration also works).
         Map<String, Integer> ages = new TreeMap<>();
         ages.put("ada", 36);
         ages.put("bea", 41);
@@ -1092,6 +1092,13 @@ GRAMMAR = [
                       '        System.out.println(count(n));',
                       '    static int count(List<? extends Number> values) { return values.size(); }',
                       'import java.util.ArrayList;\nimport java.util.List;')),
+    dict(id="g-nested-generics", category="Declarations", title="Nested generic collections (List<List<Integer>>)",
+         summary="A collection's parameterized element keeps its type, so `grid.get(0)` is a `List<Integer>` and `grid.get(0).get(1)` type-checks — at any depth, and through a `Map<K, List<V>>` value. The element is a real constraint: `grid.add(\"x\")` is refused.", main="G",
+         source=_prog('List<List<Integer>> grid = new ArrayList<>();\n'
+                      '        List<Integer> row = new ArrayList<>();\n'
+                      '        row.add(10);\n        row.add(20);\n        grid.add(row);\n'
+                      '        System.out.println(grid.get(0).get(1));',
+                      imports='import java.util.ArrayList;\nimport java.util.List;')),
     dict(id="g-final-param", category="Declarations", title="final parameters",
          summary="`static int twice(final int v)`. A final LOCAL works; a final parameter does not.", main="G",
          source=_prog('System.out.println(twice(2));',

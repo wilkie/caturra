@@ -9307,6 +9307,76 @@ public class DiffNested {
 "#
 );
 
+// Nested-generic ELEMENT typing: a collection's parameterized element keeps
+// its type, so `grid.get(0)` is a `List<Integer>` (not `Object`) and
+// `grid.get(0).get(1)` type-checks — including through a for-each, a
+// `Map<K, List<V>>` value, and arbitrary depth.
+differential_test!(
+    diff_nested_generic_access,
+    "DiffNestAccess",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class DiffNestAccess {
+    public static void main(String[] args) {
+        List<List<Integer>> grid = new ArrayList<>();
+        List<Integer> row0 = new ArrayList<>();
+        row0.add(10);
+        row0.add(20);
+        grid.add(row0);
+        List<Integer> row1 = new ArrayList<>();
+        row1.add(30);
+        grid.add(row1);
+
+        System.out.println(grid.get(0).get(1));
+        List<Integer> first = grid.get(0);
+        System.out.println(first.size());
+
+        int total = 0;
+        for (List<Integer> row : grid) {
+            for (int v : row) {
+                total += v;
+            }
+        }
+        System.out.println(total);
+
+        Map<String, List<Integer>> groups = new HashMap<>();
+        groups.put("evens", row0);
+        System.out.println(groups.get("evens").get(0));
+
+        List<List<List<Integer>>> cube = new ArrayList<>();
+        List<List<Integer>> plane = new ArrayList<>();
+        plane.add(row1);
+        cube.add(plane);
+        System.out.println(cube.get(0).get(0).get(0));
+    }
+}
+"#
+);
+
+// Soundness: the nested element type is a REAL constraint now (it used to
+// erase to Object, silently accepting anything). `grid.add("x")` on a
+// `List<List<Integer>>` is refused — by javac and by caturra.
+differential_reject!(
+    reject_nested_element_mismatch,
+    "RejectNestElem",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class RejectNestElem {
+    public static void main(String[] args) {
+        List<List<Integer>> grid = new ArrayList<>();
+        grid.add("not a list");
+        System.out.println(grid.size());
+    }
+}
+"#
+);
+
 // A `Comparable`-bounded type parameter erases to its bound (`Comparable`),
 // not to `Object`, so the type variable's own `compareTo` resolves — the
 // classic `max`/`min` over any Comparable. The wrappers and String satisfy

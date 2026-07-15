@@ -440,6 +440,18 @@ struct MethodTable {
     /// `JUnit` validator can reach the student's internals. Set when a
     /// source imports `org.junit`.
     relax_access: bool,
+    /// Interned inner types for nested parameterized collections
+    /// (`List<List<Integer>>`): the element `ElemType`, being `Copy`, cannot
+    /// hold a parameterized type inline, so it holds an index into this arena.
+    /// Filled during type resolution (hence the interior mutability) and read
+    /// back where an element's true type matters (`get`/`add`/for-each).
+    nested: std::cell::RefCell<NestedTypes>,
+}
+
+/// The arena backing `ElemType::Nested` (see [`MethodTable::nested`]).
+#[derive(Default)]
+struct NestedTypes {
+    types: Vec<JType>,
 }
 
 /// Outcome of static overload resolution (JLS §15.12.2, without boxing
@@ -494,6 +506,7 @@ impl MethodTable {
             object_id: ClassId(0),
             static_imports,
             relax_access,
+            nested: std::cell::RefCell::default(),
         };
         // The synthetic top type: `Object`. It carries the universal
         // methods; user classes are registered as its subtypes.
@@ -1006,6 +1019,30 @@ impl MethodTable {
     }
 
     /// Whether `sub` is `sup` or reachable via extends/implements.
+    /// Intern the inner type of a nested parameterized collection, returning
+    /// the id an `ElemType::Nested` carries. Deduplicated so equal inner types
+    /// share an id, which keeps `ElemType` equality (hence overload matching)
+    /// working: a `List<List<Integer>>` parameter and argument compare equal.
+    fn intern_nested(&self, inner: JType) -> u32 {
+        let mut nested = self.nested.borrow_mut();
+        if let Some(pos) = nested.types.iter().position(|t| *t == inner) {
+            return u32::try_from(pos).unwrap_or(u32::MAX);
+        }
+        let id = u32::try_from(nested.types.len()).unwrap_or(u32::MAX);
+        nested.types.push(inner);
+        id
+    }
+
+    /// The inner type an `ElemType::Nested(id)` denotes.
+    fn nested_type(&self, id: u32) -> JType {
+        self.nested
+            .borrow()
+            .types
+            .get(id as usize)
+            .copied()
+            .unwrap_or(JType::Error)
+    }
+
     fn is_subtype(&self, sub: ClassId, sup: ClassId) -> bool {
         if sub == sup {
             return true;
@@ -1712,7 +1749,8 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         | ElemType::Method
         | ElemType::Constructor
         | ElemType::Class
-        | ElemType::Wildcard { .. } => "java/lang/Object",
+        | ElemType::Wildcard { .. }
+        | ElemType::Nested { .. } => "java/lang/Object",
     }
 }
 
@@ -1805,9 +1843,16 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Method => String::from("Method"),
         ElemType::Constructor => String::from("Constructor"),
         ElemType::Class => String::from("Class"),
-        // A wildcard reads out as its erased bound; describe it that way.
-        ElemType::Wildcard { read, .. } if read == table.object_id => String::from("Object"),
-        ElemType::Wildcard { read, .. } => table.class_name(read).to_owned(),
+        // A wildcard reads out as its erased bound; a nested element erases to
+        // Object. Describe both by their erased `read` class.
+        ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. }
+            if read == table.object_id =>
+        {
+            String::from("Object")
+        }
+        ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. } => {
+            table.class_name(read).to_owned()
+        }
     }
 }
 
@@ -1861,11 +1906,22 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 other => table.class_id(other).map(ElemType::Object),
             }
         }
-        // A nested parameterized type argument (`List<List<Integer>>`,
-        // `List<? extends Number>`): the outer collection tracks one level, so the
-        // inner erases to `Object` — its own type arguments are lost, exactly as a
-        // raw type's are. Getting an element back returns `Object`, not the nested
-        // collection; that is the depth caturra models.
+        // A nested parameterized type argument (`List<List<Integer>>`): resolve
+        // the inner type and intern it, so getting an element back returns the
+        // inner collection, not `Object`. A `Map.Entry` argument is not a value
+        // element (it only names an entrySet's type), and an inner that does not
+        // resolve to a type caturra models falls back to the erased `Object`.
+        TypeRef::Generic { base, .. }
+            if !matches!(base.as_str(), "Map.Entry" | "Entry" | "java.util.Map.Entry") =>
+        {
+            match table.resolve_type(arg) {
+                Some(inner) if !matches!(inner, JType::Object(_)) => Some(ElemType::Nested {
+                    inner: table.intern_nested(inner),
+                    read: table.object_id,
+                }),
+                _ => Some(ElemType::Object(table.object_id)),
+            }
+        }
         TypeRef::Generic { .. } => Some(ElemType::Object(table.object_id)),
         _ => None,
     }
@@ -2266,6 +2322,15 @@ enum ElemType {
         read: ClassId,
         bound: WildcardBound,
     },
+    /// A nested parameterized element (`List<Integer>` as the element of a
+    /// `List<List<Integer>>`). `inner` indexes [`MethodTable::nested`] for the
+    /// element's true type; `read` is the erased element (`Object`) so the
+    /// value-level operations that lack the table still work. Recovering
+    /// `inner` is what makes `grid.get(0).get(1)` type-check.
+    Nested {
+        inner: u32,
+        read: ClassId,
+    },
 }
 
 /// The bound of a wildcard type argument, as far as caturra can verify it for
@@ -2303,9 +2368,11 @@ impl ElemType {
             ElemType::Method => String::from("Ljava/lang/reflect/Method;"),
             ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             ElemType::Class => String::from("Ljava/lang/Class;"),
-            // A wildcard element erases to its bound's raw class (Object when
-            // caturra models the bound no other way).
-            ElemType::Wildcard { read, .. } => format!("L{};", table.class_name(read)),
+            // A wildcard or nested element erases to its `read` class (Object,
+            // unless a wildcard's modelled bound narrows it).
+            ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. } => {
+                format!("L{};", table.class_name(read))
+            }
         }
     }
 
@@ -2325,8 +2392,10 @@ impl ElemType {
             ElemType::Method => JType::Method,
             ElemType::Constructor => JType::Constructor,
             ElemType::Class => JType::Class,
-            // Reading from a wildcard collection yields its erased bound.
-            ElemType::Wildcard { read, .. } => JType::Object(read),
+            // A wildcard or nested element erases (table-free) to its `read`
+            // class; the nesting-aware `elem_value_type` recovers the true
+            // inner type where it matters (`get`/`add`/for-each).
+            ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. } => JType::Object(read),
         }
     }
 }
@@ -6701,7 +6770,27 @@ fn boxed_if_primitive(elem: Option<ElemType>) -> JType {
     }
 }
 
-fn bparam_type(param: BParam, args: TypeArgs) -> JType {
+/// The value type of a collection element: a nested parameterized element
+/// (`ElemType::Nested`) resolves to its interned inner type (so `grid.get(0)`
+/// is a `List<Integer>`, not `Object`); anything else is its plain base type.
+fn elem_value_type(elem: ElemType, table: &MethodTable) -> JType {
+    match elem {
+        ElemType::Nested { inner, .. } => table.nested_type(inner),
+        other => other.base_type(),
+    }
+}
+
+/// Like [`boxed_if_primitive`], but a nested parameterized element resolves to
+/// its inner type — for the map/queue element positions (`Map<K, List<V>>`,
+/// `Queue<List<V>>`) whose read/write goes through the boxed path.
+fn boxed_or_nested(elem: Option<ElemType>, table: &MethodTable) -> JType {
+    match elem {
+        Some(ElemType::Nested { inner, .. }) => table.nested_type(inner),
+        other => boxed_if_primitive(other),
+    }
+}
+
+fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
     match param {
         BParam::Int => JType::Int,
         BParam::Double => JType::Double,
@@ -6718,7 +6807,11 @@ fn bparam_type(param: BParam, args: TypeArgs) -> JType {
         },
         BParam::SelfList => args.first.map_or(JType::Error, JType::List),
         BParam::SelfCollection => args.first.map_or(JType::Error, JType::Collection),
-        BParam::Elem => args.first.map_or(JType::Error, ElemType::base_type),
+        // `add(E)`/`set(i, E)`/`contains(E)`: a nested element takes its true
+        // inner type, so `grid.add("x")` on a `List<List<Integer>>` is refused.
+        BParam::Elem => args
+            .first
+            .map_or(JType::Error, |elem| elem_value_type(elem, table)),
         BParam::Class => JType::Class,
         BParam::RefArray => JType::Error,
         // `BiConsumer` never reaches here: `bparam_matches` answers it
@@ -6731,8 +6824,8 @@ fn bparam_type(param: BParam, args: TypeArgs) -> JType {
         | BParam::Supplier
         | BParam::Comparator => JType::Object(ClassId(0)),
         BParam::Builder => JType::StringBuilder,
-        BParam::Key => boxed_if_primitive(args.first),
-        BParam::Val => boxed_if_primitive(args.second),
+        BParam::Key => boxed_or_nested(args.first, table),
+        BParam::Val => boxed_or_nested(args.second, table),
         BParam::SelfMap => match (args.first, args.second) {
             (Some(key), Some(value)) => JType::Map { key, value },
             _ => JType::Error,
@@ -6787,7 +6880,7 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
             ) => widens(elem.base_type(), want.base_type(), table),
             _ => false,
         },
-        other => widens(arg, bparam_type(other, args), table),
+        other => widens(arg, bparam_type(other, args, table), table),
     }
 }
 
@@ -6815,7 +6908,7 @@ fn pick_builtin<'m>(
         m.params
             .iter()
             .zip(args)
-            .all(|(p, a)| bparam_type(*p, type_args) == *a)
+            .all(|(p, a)| bparam_type(*p, type_args, table) == *a)
     }) {
         return Some(exact);
     }
@@ -6843,7 +6936,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             elem: ElemType::Char,
             dims: 1,
         }),
-        BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
+        BRet::Elem => Some(
+            args.first
+                .map_or(JType::Error, |elem| elem_value_type(elem, table)),
+        ),
         BRet::Stream => Some(args.first.map_or(JType::Error, JType::Stream)),
         BRet::Iterator => Some(args.first.map_or(JType::Error, JType::Iterator)),
         BRet::EntryIterator => Some(match (args.first, args.second) {
@@ -6877,9 +6973,9 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
                 .map_or(JType::Error, JType::Object),
         ),
         BRet::Nullish => Some(JType::Null),
-        BRet::Val => Some(boxed_if_primitive(args.second)),
+        BRet::Val => Some(boxed_or_nested(args.second, table)),
         // A map key and a queue/deque nullable element both box the first arg.
-        BRet::Key | BRet::BoxedElem => Some(boxed_if_primitive(args.first)),
+        BRet::Key | BRet::BoxedElem => Some(boxed_or_nested(args.first, table)),
         BRet::Keys => Some(args.first.map_or(JType::Error, JType::Set)),
         BRet::Values => Some(args.second.map_or(JType::Error, JType::Collection)),
         BRet::Entries => Some(match (args.first, args.second) {
@@ -10535,7 +10631,7 @@ impl BodyGen<'_> {
 
         let mut args_width: u16 = 0;
         for (arg, param) in args.iter().zip(chosen.params) {
-            let param_ty = bparam_type(*param, elem);
+            let param_ty = bparam_type(*param, elem, self.table);
             let actual = self.expr(arg);
             if matches!(param_ty, JType::Boxed(_))
                 || param_ty == JType::Object(self.table.object_id)
@@ -10819,7 +10915,7 @@ impl BodyGen<'_> {
         };
         let mut args_width: u16 = 0;
         for (arg, param) in args.iter().zip(chosen.params) {
-            let param_ty = bparam_type(*param, TypeArgs::default());
+            let param_ty = bparam_type(*param, TypeArgs::default(), self.table);
             let actual = self.expr(arg);
             self.numeric_conversion(actual, param_ty);
             args_width += param_ty.width();
@@ -11179,10 +11275,10 @@ impl BodyGen<'_> {
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
             JType::List(elem) | JType::Stack(elem) | JType::LinkedList { elem, .. } => {
-                Some(("get", elem.base_type()))
+                Some(("get", elem_value_type(elem, self.table)))
             }
             JType::Set(elem) | JType::TreeSet(elem) | JType::Collection(elem) => {
-                Some(("__get", boxed_if_primitive(Some(elem))))
+                Some(("__get", boxed_or_nested(Some(elem), self.table)))
             }
             JType::EntrySet { key, value } => Some(("__get", JType::MapEntry { key, value })),
             _ => None,
@@ -13649,7 +13745,8 @@ impl BodyGen<'_> {
                     | ElemType::Method
                     | ElemType::Constructor
                     | ElemType::Class
-                    | ElemType::Wildcard { .. } => unreachable!(),
+                    | ElemType::Wildcard { .. }
+                    | ElemType::Nested { .. } => unreachable!(),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
                 self.code.bytes.push(atype);
@@ -15142,7 +15239,8 @@ impl BodyGen<'_> {
             | ElemType::Method
             | ElemType::Constructor
             | ElemType::Class
-            | ElemType::Wildcard { .. } => "intValue",
+            | ElemType::Wildcard { .. }
+            | ElemType::Nested { .. } => "intValue",
             ElemType::Double => "doubleValue",
             ElemType::Long => "longValue",
             ElemType::Float => "floatValue",
