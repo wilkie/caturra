@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-ylwzxqii/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-ivb2sod7/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-lln8hnv1/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-b0cszxnr/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-5mjzaemc/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-zz5ptdqq/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -486,11 +486,11 @@
     "id": "g-bounded-type",
     "category": "Declarations",
     "title": "Bounded type parameter (<T extends Comparable<T>>)",
-    "summary": "It parses now; but the type variable erases to Object without its bound, so compareTo() is not found on it.",
+    "summary": "The type variable erases to its bound, so `compareTo()` resolves on it and `max(3, 5)` / `max(\"a\", \"b\")` work. (Assigning the result back to the argument's own type still needs a cast \u2014 return-type inference is a separate gap shared by every generic method.)",
     "main": "G",
     "source": "public class G {\n    static <T extends Comparable<T>> T max(T a, T b) {\n        return a.compareTo(b) >= 0 ? a : b;\n    }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(max(3, 5));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "cannot find symbol: method compareTo(Object) in class java/lang/Object"
+    "status": "supported",
+    "expected": "5\n"
   },
   {
     "id": "g-wildcard",

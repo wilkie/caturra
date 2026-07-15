@@ -9,7 +9,7 @@
 use crate::ast::{
     Annotation, AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl,
     ImportDecl, InitBlock, LambdaBody, LambdaParam, Literal, LocalDeclarator, MethodDecl, Param,
-    Stmt, SwitchArm, TypeRef, UnaryOp,
+    Stmt, SwitchArm, TypeParam, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -1113,32 +1113,35 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse a `<T, U extends Bound, ...>` type-parameter list,
-    /// returning the parameter names (bounds are erased to `Object`).
-    fn parse_type_params(&mut self) -> Parsed<Vec<String>> {
+    /// Parse a `<T, U extends Bound, ...>` type-parameter list. Each
+    /// parameter keeps its leftmost `extends` bound (further `& Other`
+    /// bounds are parsed and discarded — erasure uses the leftmost, per
+    /// JLS §4.6); an unbounded parameter erases to `Object`.
+    fn parse_type_params(&mut self) -> Parsed<Vec<TypeParam>> {
         if !self.at_symbol("<") {
             return Ok(Vec::new());
         }
         self.pos += 1; // '<'
-        let mut names = Vec::new();
+        let mut params = Vec::new();
         if !self.at_symbol(">") {
             loop {
                 let (name, _) = self.expect_ident("for the type parameter")?;
-                names.push(name);
-                // `extends Bound & Other` — parsed and discarded.
+                let mut bound = None;
                 if self.eat_keyword(Keyword::Extends) {
-                    self.type_ref()?;
+                    bound = Some(self.type_ref()?);
+                    // `& Other` intersection bounds — parsed and discarded.
                     while self.eat_symbol("&") {
                         self.type_ref()?;
                     }
                 }
+                params.push(TypeParam { name, bound });
                 if !self.eat_symbol(",") {
                     break;
                 }
             }
         }
         self.expect_symbol(">", "to close the type parameters")?;
-        Ok(names)
+        Ok(params)
     }
 
     fn type_ref(&mut self) -> Parsed<TypeRef> {
@@ -3422,39 +3425,44 @@ fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
     }
 }
 
-/// Erase generic type parameters to `Object` within a class: every
-/// `TypeRef` naming a class or method type parameter is rewritten to
-/// `Named("Object")`. Runtime semantics are unchanged (erasure); this
-/// keeps the rest of the compiler generics-unaware.
+/// Erase generic type parameters within a class: every `TypeRef` naming a
+/// class or method type parameter is rewritten to its erasure — its bound's
+/// raw base (`T extends Comparable<T>` → `Comparable`) or `Object` when
+/// unbounded. Runtime semantics are unchanged (erasure); this keeps the rest
+/// of the compiler generics-unaware while letting a bounded `T`'s methods
+/// resolve.
 fn erase_type_vars(class: &mut ClassDecl) {
-    use std::collections::HashSet;
-    // A class with exactly one type parameter tracks it: that parameter
-    // erases to the `TypeVar` sentinel (enabling cast-free reads);
-    // every other type parameter (extra class params, method params)
-    // erases straight to `Object`.
-    let tracked: Option<String> = if class.type_params.len() == 1 {
-        Some(class.type_params[0].clone())
-    } else {
-        None
+    use std::collections::HashMap;
+    // A class with exactly one UNBOUNDED type parameter tracks it: that
+    // parameter erases to the `TypeVar` sentinel (enabling cast-free reads).
+    // Every other type parameter erases to its bound — `T extends Comparable`
+    // becomes `Comparable`, so a bounded `T`'s methods resolve — or to
+    // `Object` when unbounded.
+    let tracked: Option<String> = match class.type_params.as_slice() {
+        [tp] if tp.bound.is_none() => Some(tp.name.clone()),
+        _ => None,
     };
-    let class_object: HashSet<String> = if tracked.is_some() {
-        HashSet::new()
-    } else {
-        class.type_params.iter().cloned().collect()
-    };
-    let scope = |method: &MethodDecl| -> (HashSet<String>, Option<String>) {
-        let mut to_object = class_object.clone();
-        to_object.extend(method.type_params.iter().cloned());
+    let class_erasures: HashMap<String, TypeRef> = class
+        .type_params
+        .iter()
+        .filter(|tp| Some(&tp.name) != tracked.as_ref())
+        .map(|tp| (tp.name.clone(), erasure_target(tp)))
+        .collect();
+    let scope = |method: &MethodDecl| -> (HashMap<String, TypeRef>, Option<String>) {
+        let mut to_object = class_erasures.clone();
+        for tp in &method.type_params {
+            to_object.insert(tp.name.clone(), erasure_target(tp));
+        }
         // A method type parameter shadowing the class one drops tracking.
         let tracked = tracked
             .clone()
-            .filter(|name| !method.type_params.contains(name));
+            .filter(|name| !method.type_params.iter().any(|tp| &tp.name == name));
         (to_object, tracked)
     };
     for field in &mut class.fields {
-        erase_in_type(&mut field.ty, &class_object, tracked.as_deref());
+        erase_in_type(&mut field.ty, &class_erasures, tracked.as_deref());
         if let Some(init) = &mut field.init {
-            erase_in_expr(init, &class_object, tracked.as_deref());
+            erase_in_expr(init, &class_erasures, tracked.as_deref());
         }
     }
     for method in &mut class.methods {
@@ -3469,8 +3477,19 @@ fn erase_type_vars(class: &mut ClassDecl) {
     }
     for block in &mut class.init_blocks {
         for stmt in &mut block.body {
-            erase_in_stmt(stmt, &class_object, tracked.as_deref());
+            erase_in_stmt(stmt, &class_erasures, tracked.as_deref());
         }
+    }
+}
+
+/// The erasure target of a type parameter: its bound's raw base type
+/// (`T extends Comparable<T>` → `Comparable`), or `Object` when unbounded
+/// or bounded by something without a nameable base (JLS §4.6).
+fn erasure_target(tp: &TypeParam) -> TypeRef {
+    match &tp.bound {
+        Some(TypeRef::Named(name)) => TypeRef::Named(name.clone()),
+        Some(TypeRef::Generic { base, .. }) => TypeRef::Named(base.clone()),
+        _ => TypeRef::Named(String::from("Object")),
     }
 }
 
@@ -3480,22 +3499,24 @@ pub(crate) const TYPEVAR_SENTINEL: &str = "\u{0}TypeVar";
 
 fn erase_in_type(
     ty: &mut TypeRef,
-    to_object: &std::collections::HashSet<String>,
+    to_object: &std::collections::HashMap<String, TypeRef>,
     tracked: Option<&str>,
 ) {
     match ty {
         TypeRef::Named(name) if Some(name.as_str()) == tracked => {
             *ty = TypeRef::Named(String::from(TYPEVAR_SENTINEL));
         }
-        TypeRef::Named(name) if to_object.contains(name) => {
-            *ty = TypeRef::Named(String::from("Object"));
+        TypeRef::Named(name) => {
+            if let Some(target) = to_object.get(name) {
+                *ty = target.clone();
+            }
         }
         TypeRef::Array(inner) => erase_in_type(inner, to_object, tracked),
         TypeRef::Generic { base, args } => {
             if Some(base.as_str()) == tracked {
                 *ty = TypeRef::Named(String::from(TYPEVAR_SENTINEL));
-            } else if to_object.contains(base) {
-                *ty = TypeRef::Named(String::from("Object"));
+            } else if let Some(target) = to_object.get(base) {
+                *ty = target.clone();
             } else {
                 for arg in args {
                     erase_in_type(arg, to_object, tracked);
@@ -3508,7 +3529,7 @@ fn erase_in_type(
 
 fn erase_in_stmt(
     stmt: &mut Stmt,
-    to_object: &std::collections::HashSet<String>,
+    to_object: &std::collections::HashMap<String, TypeRef>,
     tracked: Option<&str>,
 ) {
     match stmt {
@@ -3612,7 +3633,7 @@ fn erase_in_stmt(
 
 fn erase_in_expr(
     expr: &mut Expr,
-    to_object: &std::collections::HashSet<String>,
+    to_object: &std::collections::HashMap<String, TypeRef>,
     tracked: Option<&str>,
 ) {
     match expr {

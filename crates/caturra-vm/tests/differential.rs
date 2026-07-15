@@ -9306,3 +9306,35 @@ public class DiffNested {
 }
 "#
 );
+
+// A `Comparable`-bounded type parameter erases to its bound (`Comparable`),
+// not to `Object`, so the type variable's own `compareTo` resolves — the
+// classic `max`/`min` over any Comparable. The wrappers and String satisfy
+// the bound (a primitive autoboxes first). The return still erases to the
+// bound, so its use here is `println(Object)`, not assignment back to the
+// argument's type (return-type inference is a separate generics gap).
+differential_test!(
+    diff_type_variable_bounds,
+    "DiffBounds",
+    r#"
+public class DiffBounds {
+    static <T extends Comparable<T>> T max(T a, T b) {
+        return a.compareTo(b) >= 0 ? a : b;
+    }
+
+    static <T extends Comparable<T>> T min(T a, T b) {
+        return a.compareTo(b) <= 0 ? a : b;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(max(3, 5));
+        System.out.println(min(3, 5));
+        System.out.println(max("apple", "banana"));
+        System.out.println(min("apple", "banana"));
+        System.out.println(max(2.5, 1.5));
+        System.out.println(max('a', 'z'));
+        System.out.println(max(Integer.valueOf(8), 4));
+    }
+}
+"#
+);

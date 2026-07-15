@@ -1082,7 +1082,7 @@ GRAMMAR = [
          source=_prog('System.out.println(firstOf("a", "b"));',
                       '    static <T> T firstOf(T a, T b) { return a; }')),
     dict(id="g-bounded-type", category="Declarations", title="Bounded type parameter (<T extends Comparable<T>>)",
-         summary="It parses now; but the type variable erases to Object without its bound, so compareTo() is not found on it.", main="G",
+         summary="The type variable erases to its bound, so `compareTo()` resolves on it and `max(3, 5)` / `max(\"a\", \"b\")` work. (Assigning the result back to the argument's own type still needs a cast — return-type inference is a separate gap shared by every generic method.)", main="G",
          source=_prog('System.out.println(max(3, 5));',
                       '    static <T extends Comparable<T>> T max(T a, T b) {\n'
                       '        return a.compareTo(b) >= 0 ? a : b;\n    }')),

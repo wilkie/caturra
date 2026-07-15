@@ -56,7 +56,7 @@ pub struct ClassDecl {
     /// `extends` (class) or `implements` (interface).
     pub is_anonymous: bool,
     /// Generic type parameter names (`<T, U>`); erased to `Object`.
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<FieldDecl>,
     pub methods: Vec<MethodDecl>,
     /// `static { ... }` and instance `{ ... }` initializer blocks.
@@ -106,7 +106,7 @@ pub struct MethodDecl {
     /// Abstract or interface method — no body; `body` is empty.
     pub is_abstract: bool,
     /// Generic method type parameters (`<T> T identity(T x)`).
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
@@ -122,6 +122,14 @@ pub struct Annotation {
     pub name: String,
     pub int_arg: Option<i32>,
     pub str_arg: Option<String>,
+}
+
+/// A declared type parameter: `T`, or `T extends Bound` (`& Other` bounds are
+/// parsed but only the first is kept — erasure uses the leftmost bound).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: String,
+    pub bound: Option<TypeRef>,
 }
 
 /// A method parameter.

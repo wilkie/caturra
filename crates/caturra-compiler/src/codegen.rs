@@ -2041,6 +2041,19 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Object(id),
             ) if id == table.object_id
         )
+        // A `Comparable`-bounded type parameter (`<T extends Comparable<T>>`)
+        // erases to `Comparable`; every primitive wrapper and `String`
+        // implements it, and a primitive autoboxes to its wrapper first, so
+        // they satisfy the bound (user classes go through `is_subtype` above).
+        || matches!(
+            (from, to),
+            (
+                JType::Str | JType::Boxed(_)
+                    | JType::Int | JType::Long | JType::Double | JType::Float
+                    | JType::Short | JType::Byte | JType::Char | JType::Boolean,
+                JType::Object(id),
+            ) if table.class_id("Comparable") == Some(id)
+        )
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -15155,9 +15168,12 @@ impl BodyGen<'_> {
                 self.emit_box(elem);
                 return;
             }
-            if to == JType::Object(self.table.object_id)
+            if let JType::Object(id) = to
+                && (id == self.table.object_id || self.table.class_id("Comparable") == Some(id))
                 && let Some(elem) = boxable_primitive(from)
             {
+                // The wrapper both is the top `Object` and implements
+                // `Comparable`, so it satisfies a `Comparable`-bounded param.
                 self.emit_box(elem);
                 return;
             }
@@ -15179,6 +15195,10 @@ impl BodyGen<'_> {
             (JType::Object(sub), JType::Object(sup)) if self.table.is_subtype(sub, sup) => {}
             // Any reference type widens to the Object top type.
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
+            // A String already satisfies a `Comparable`-bounded param — it is a
+            // reference and implements Comparable (a boxed wrapper is boxed
+            // above; a primitive is boxed by the autoboxing rule).
+            (JType::Str, JType::Object(id)) if self.table.class_id("Comparable") == Some(id) => {}
             // A parameterized type and its raw class erase alike.
             (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
             // A LinkedList (its Queue/Deque face) or a TreeSet erases to a
