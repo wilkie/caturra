@@ -575,6 +575,40 @@ impl MethodTable {
                 fields: Vec::new(),
             },
         );
+        // `AutoCloseable` / `Closeable` — the interfaces a user resource class
+        // implements so it can appear in a try-with-resources. The single method
+        // is `close()`; the desugar just calls it, so this only has to make
+        // `implements AutoCloseable` resolve (and, being an interface, a variable
+        // of the type widen). `Closeable` IS-A `AutoCloseable`, but caturra does
+        // not need the inheritance edge for either to work here.
+        for (offset, name) in ["AutoCloseable", "Closeable"].into_iter().enumerate() {
+            let id = ClassId(2 + u16::try_from(offset).unwrap_or(0));
+            table.class_names.push(String::from(name));
+            table.classes.insert(
+                String::from(name),
+                ClassInfo {
+                    id,
+                    superclass: None,
+                    library_superclass: None,
+                    interfaces: Vec::new(),
+                    enclosing: None,
+                    is_abstract: true,
+                    is_interface: true,
+                    is_enum: false,
+                    type_param_count: 0,
+                    methods: vec![MethodSig {
+                        name: String::from("close"),
+                        params: Vec::new(),
+                        ret: None,
+                        is_static: false,
+                        is_private: false,
+                        is_abstract: true,
+                        is_varargs: false,
+                    }],
+                    fields: Vec::new(),
+                },
+            );
+        }
         for (_, unit) in units {
             for class in &unit.classes {
                 if table.classes.contains_key(&class.name) {
@@ -2814,6 +2848,16 @@ fn method_descriptor(
         span: SourceSpan,
     ) {
         match ty {
+            // `var` is local-only (JLS §14.4) — it never reaches a method
+            // signature — so this position is a diagnostic, not a descriptor.
+            TypeRef::Var => {
+                diagnostics.push(Diagnostic::error(
+                    path,
+                    String::from("'var' is not allowed here"),
+                    span,
+                ));
+                out.push_str("Ljava/lang/Object;");
+            }
             TypeRef::Void => out.push('V'),
             TypeRef::Int => out.push('I'),
             TypeRef::Double => out.push('D'),
@@ -7629,6 +7673,40 @@ impl BodyGen<'_> {
         declarators: &[LocalDeclarator],
         span: SourceSpan,
     ) {
+        // `var x = e;` — the type is the initializer's. It is local-only and needs
+        // exactly one declarator with an initializer that is neither `null`, an
+        // array literal, nor a lambda/method reference (javac cannot infer from any
+        // of those either), so those are honest errors rather than silent Objects.
+        if matches!(ty, TypeRef::Var) {
+            let [declarator] = declarators else {
+                self.error(span, "'var' declares exactly one variable");
+                return;
+            };
+            let Some(init) = &declarator.init else {
+                self.error(span, "cannot infer type for 'var' without an initializer");
+                return;
+            };
+            if matches!(
+                init,
+                Expr::ArrayLiteral { .. } | Expr::Lambda { .. } | Expr::MethodRef { .. }
+            ) {
+                self.error(
+                    init.span(),
+                    "cannot infer type for 'var' from this initializer",
+                );
+                return;
+            }
+            let inferred = self.type_of(init);
+            if matches!(inferred, JType::Null | JType::Error) {
+                self.error(
+                    init.span(),
+                    "cannot infer type for 'var' from this initializer",
+                );
+                return;
+            }
+            self.local_decl_resolved(inferred, is_final, declarator, span);
+            return;
+        }
         let Some(base_ty) = self.table.resolve_type(ty) else {
             self.error(span, unresolved_type_message(ty, self.table));
             return;
@@ -7702,6 +7780,50 @@ impl BodyGen<'_> {
                     },
                 ));
         }
+    }
+
+    /// Declare and initialize a single local whose type is already known — the
+    /// `var` path, where the type came from the initializer rather than the source.
+    fn local_decl_resolved(
+        &mut self,
+        var_ty: JType,
+        is_final: bool,
+        declarator: &LocalDeclarator,
+        span: SourceSpan,
+    ) {
+        if self.lookup(&declarator.name).is_some() {
+            self.error(
+                declarator.span,
+                format!(
+                    "variable '{}' is already defined in this method",
+                    declarator.name
+                ),
+            );
+            return;
+        }
+        let slot = self.next_slot;
+        self.next_slot += var_ty.width();
+        let init = declarator
+            .init
+            .as_ref()
+            .expect("var requires an initializer");
+        let init_ty = self.expr(init);
+        self.convert_for_assignment_const(init_ty, var_ty, init.span(), constant_int_value(init));
+        self.emit_store(slot, var_ty);
+        self.record_local_debug(&declarator.name, var_ty, slot);
+        let _ = span;
+        self.scopes
+            .last_mut()
+            .expect("scope stack is never empty")
+            .push((
+                declarator.name.clone(),
+                LocalVar {
+                    slot,
+                    ty: var_ty,
+                    is_final,
+                    assigned: true,
+                },
+            ));
     }
 
     #[allow(clippy::too_many_lines)] // one arm per target kind
@@ -10737,10 +10859,16 @@ impl BodyGen<'_> {
             }
             return;
         };
-        let Some(var_ty) = self.table.resolve_type(ty) else {
-            self.error(span, "unknown type for the for-each variable");
-            self.code.discard();
-            return;
+        // `for (var x : xs)` — the loop variable is the element type.
+        let var_ty = if matches!(ty, TypeRef::Var) {
+            element
+        } else {
+            let Some(resolved) = self.table.resolve_type(ty) else {
+                self.error(span, "unknown type for the for-each variable");
+                self.code.discard();
+                return;
+            };
+            resolved
         };
 
         // Synthetic slots for the array and the index.
@@ -10831,10 +10959,16 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) {
         let (class, _) = builtin_instance_table(iterable_ty).expect("an intrinsic collection");
-        let Some(var_ty) = self.table.resolve_type(ty) else {
-            self.error(span, "unknown type for the for-each variable");
-            self.code.discard();
-            return;
+        // `for (var x : xs)` — the loop variable is the element type.
+        let var_ty = if matches!(ty, TypeRef::Var) {
+            element
+        } else {
+            let Some(resolved) = self.table.resolve_type(ty) else {
+                self.error(span, "unknown type for the for-each variable");
+                self.code.discard();
+                return;
+            };
+            resolved
         };
 
         let list_slot = self.next_slot;

@@ -152,6 +152,10 @@ pub enum TypeRef {
     Byte,
     /// A class type by simple name, e.g. `String`.
     Named(String),
+    /// `var` (Java 10 local type inference): the real type is whatever the
+    /// initializer produces, resolved during codegen — there is nothing to infer
+    /// from at parse time.
+    Var,
     /// A generic type, e.g. `ArrayList<Integer>`.
     Generic {
         base: String,

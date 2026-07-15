@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-bu5opl6g/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-x2e8oysq/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-y9d9ffs5/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-3_r9px99/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-75s2n28n/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-xs7aea1i/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -379,8 +379,8 @@
     "summary": "`var count = 3;` \u2014 real Java 11, and caturra wants the type written out.",
     "main": "G",
     "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nvar count = 3;\n        var name = \"ada\";\n        System.out.println(count + name);\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "'var' is not supported by caturra; write the type explicitly"
+    "status": "supported",
+    "expected": "3ada\n"
   },
   {
     "id": "g-nested-class",
@@ -569,8 +569,8 @@
     "summary": "`try (PrintWriter w = ...) { }` \u2014 the resource closes itself.",
     "main": "G",
     "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\ntry (java.io.PrintWriter w = new java.io.PrintWriter(\"g.txt\")) {\n            w.println(\"x\");\n        }\n        System.out.println(\"closed\");\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "expected '{' after 'try'"
+    "status": "supported",
+    "expected": "closed\n"
   },
   {
     "id": "g-multicatch",

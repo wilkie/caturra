@@ -9019,3 +9019,107 @@ public class DiffTier {
 }
 "#
 );
+
+// `var` (Java 10 local type inference): the type is the initializer's, resolved at
+// codegen, over primitives, String, and generic collections — in a plain
+// declaration, a C-style for, and a for-each. javac and caturra must print the same.
+differential_test!(
+    diff_var_local_type_inference,
+    "DiffVar",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class DiffVar {
+    public static void main(String[] args) {
+        var n = 3;
+        var d = 2.5;
+        var s = "ada";
+        var flag = true;
+        System.out.println(n + " " + d + " " + s + " " + flag + " " + (n + 1));
+
+        var names = new ArrayList<String>();
+        names.add("carol");
+        names.add("al");
+        for (var name : names) {
+            System.out.println(name.toUpperCase());
+        }
+
+        var counts = new HashMap<String, Integer>();
+        counts.put("x", 1);
+        for (var entry : counts.entrySet()) {
+            System.out.println(entry.getKey() + "=" + entry.getValue());
+        }
+
+        var sum = 0;
+        for (var i = 0; i < 5; i++) {
+            sum += i;
+        }
+        System.out.println(sum);
+
+        List<Integer> boxed = new ArrayList<>();
+        boxed.add(10);
+        var first = boxed.get(0);
+        System.out.println(first + 5);
+        Map<String, Integer> ignored = counts;
+        System.out.println(ignored.size());
+    }
+}
+"#
+);
+
+// try-with-resources: the resource's close() runs on the way out — normally, on an
+// exception, and in REVERSE declaration order — which a user AutoCloseable makes
+// observable. (Suppressed-exception handling is the one thing the desugar does not
+// reproduce; caturra's real resources have a close() that does not throw.)
+differential_test!(
+    diff_try_with_resources,
+    "DiffResources",
+    r#"
+public class DiffResources {
+    static class Res implements AutoCloseable {
+        final String id;
+
+        Res(String id) {
+            this.id = id;
+            System.out.println("open " + id);
+        }
+
+        void use() {
+            System.out.println("use " + id);
+        }
+
+        @Override
+        public void close() {
+            System.out.println("close " + id);
+        }
+    }
+
+    public static void main(String[] args) {
+        try (Res a = new Res("a"); Res b = new Res("b")) {
+            a.use();
+            b.use();
+        }
+
+        try {
+            try (Res c = new Res("c")) {
+                c.use();
+                throw new RuntimeException("boom");
+            }
+        } catch (RuntimeException e) {
+            System.out.println("caught " + e.getMessage());
+        }
+
+        try (Res d = new Res("d")) {
+            d.use();
+        } catch (Exception e) {
+            System.out.println("unreachable");
+        } finally {
+            System.out.println("finally");
+        }
+    }
+}
+"#
+);

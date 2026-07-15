@@ -337,6 +337,8 @@ fn mock_body(key: &str, ret: &TypeRef) -> String {
 
 fn type_src(ty: &TypeRef) -> String {
     match ty {
+        // `var` is local-only; a mocked method never returns it.
+        TypeRef::Var => "var".into(),
         TypeRef::Void => "void".into(),
         TypeRef::Int => "int".into(),
         TypeRef::Double => "double".into(),

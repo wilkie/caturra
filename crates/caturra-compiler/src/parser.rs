@@ -36,6 +36,98 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
 /// The friendly message for statement-starting keywords caturra doesn't
 /// support yet; `None` when the keyword can begin a real statement.
 /// The source spelling of a primitive type keyword (for `int.class`).
+/// One resource in a `try (...)` header: `Type name = init`.
+struct Resource {
+    ty: TypeRef,
+    name: String,
+    init: Expr,
+    span: SourceSpan,
+}
+
+/// Desugar `try (resources) body catches finally` into the plain try/finally the
+/// JLS §14.20.3 specifies, so codegen never sees a resource at all:
+///
+/// ```text
+/// {
+///   RType r1 = init1;                    // implicitly final
+///   RType r2 = init2;
+///   try {                                // the ORIGINAL catches + finally
+///     try {                              // r1's auto-close
+///       try { body } finally { r2.close(); }   // r2 closes first (reverse order)
+///     } finally { r1.close(); }
+///   } catch (...) { ... } finally { ... }
+/// }
+/// ```
+///
+/// This is the common path exactly; what it does NOT reproduce is Java's
+/// suppressed-exception handling (if the body throws AND `close()` also throws,
+/// Java keeps the body's exception and attaches close's as suppressed — here
+/// close's would win). caturra's resources are `PrintWriter`/`Scanner`, whose
+/// `close()` does not throw, so the distinction never arises; a `throws`-ing
+/// close would be the only difference, and the honest note is better than the
+/// machinery.
+fn desugar_try_with_resources(
+    resources: Vec<Resource>,
+    body: Vec<Stmt>,
+    catches: Vec<CatchClause>,
+    finally_body: Option<Vec<Stmt>>,
+    span: SourceSpan,
+) -> Stmt {
+    let close_call = |name: &str| {
+        Stmt::Expr(Expr::Call {
+            receiver: Some(Box::new(Expr::Name {
+                path: vec![name.to_owned()],
+                span,
+            })),
+            method: String::from("close"),
+            args: Vec::new(),
+            span,
+        })
+    };
+
+    // Wrap the body in one auto-closing try per resource, innermost first — so the
+    // LAST resource declared is the FIRST closed (JLS reverse order).
+    let mut inner = body;
+    for resource in resources.iter().rev() {
+        inner = vec![Stmt::Try {
+            body: inner,
+            catches: Vec::new(),
+            finally_body: Some(vec![close_call(&resource.name)]),
+            span,
+        }];
+    }
+
+    // The original catches/finally apply to the whole resource block.
+    let guarded = if catches.is_empty() && finally_body.is_none() {
+        inner
+    } else {
+        vec![Stmt::Try {
+            body: inner,
+            catches,
+            finally_body,
+            span,
+        }]
+    };
+
+    // The resource declarations scope the whole thing.
+    let mut block = Vec::with_capacity(resources.len() + guarded.len());
+    for resource in resources {
+        block.push(Stmt::LocalDecl {
+            ty: resource.ty,
+            is_final: true,
+            declarators: vec![LocalDeclarator {
+                name: resource.name,
+                init: Some(resource.init),
+                span: resource.span,
+                extra_dims: 0,
+            }],
+            span,
+        });
+    }
+    block.extend(guarded);
+    Stmt::Block(block)
+}
+
 fn primitive_type_name(keyword: Keyword) -> Option<&'static str> {
     Some(match keyword {
         Keyword::Int => "int",
@@ -63,7 +155,6 @@ fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
         // Valid Java that caturra does not implement. These must say so: the
         // level generator keys off "caturra"/"not supported" to tell an engine
         // gap apart from a student's mistake.
-        Keyword::Var => Some("'var' is not supported by caturra; write the type explicitly"),
         Keyword::Class => Some(
             "a class declared inside a method (a local class) is not supported by caturra; \
              declare it at the top level",
@@ -96,7 +187,9 @@ fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
         | Keyword::Long
         | Keyword::Float
         | Keyword::Byte
-        | Keyword::Short => None,
+        | Keyword::Short
+        // `var x = e;` — a real declaration start, handled by local_declaration.
+        | Keyword::Var => None,
 
         // Everything else — modifiers, `import`, `extends`, `instanceof`, the
         // reserved-but-unused `goto`/`const` — is javac's generic case.
@@ -1450,6 +1543,14 @@ impl Parser<'_> {
     fn try_statement(&mut self) -> Parsed<Stmt> {
         let start = self.here();
         self.pos += 1; // 'try'
+        // `try (Resource r = init; ...)` — try-with-resources. Parsed here and
+        // desugared at the end into the plain try/finally the JLS specifies, so
+        // codegen never sees it.
+        let resources = if self.at_symbol("(") {
+            self.resource_specification()?
+        } else {
+            Vec::new()
+        };
         self.expect_symbol("{", "after 'try'")?;
         let body = self.block_body();
 
@@ -1487,22 +1588,69 @@ impl Parser<'_> {
         } else {
             None
         };
-        if catches.is_empty() && finally_body.is_none() {
+        // A resource-less try still needs a catch or a finally; a
+        // try-with-resources does not (its resources ARE the reason to try).
+        if resources.is_empty() && catches.is_empty() && finally_body.is_none() {
             self.error_at(
                 start,
                 "'try' needs at least one 'catch' clause or a 'finally' block",
             );
             return Err(Abort);
         }
-        Ok(Stmt::Try {
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        if resources.is_empty() {
+            return Ok(Stmt::Try {
+                body,
+                catches,
+                finally_body,
+                span,
+            });
+        }
+        Ok(desugar_try_with_resources(
+            resources,
             body,
             catches,
             finally_body,
-            span: SourceSpan {
-                start: start.start,
-                end: self.here().start,
-            },
-        })
+            span,
+        ))
+    }
+
+    /// `(Type name = init; ...)` after `try`. Each resource is a declaration;
+    /// caturra does not model the Java-9 "existing effectively-final variable"
+    /// form, which is vanishingly rare. Implicitly `final`, as the JLS makes them.
+    fn resource_specification(&mut self) -> Parsed<Vec<Resource>> {
+        self.expect_symbol("(", "to open the resource list")?;
+        let mut resources = Vec::new();
+        loop {
+            let _ = self.eat_keyword(Keyword::Final); // resources are final anyway
+            let ty = if self.eat_keyword(Keyword::Var) {
+                TypeRef::Var
+            } else {
+                self.type_ref()?
+            };
+            let (name, name_span) = self.expect_ident("for the resource")?;
+            self.expect_symbol("=", "after the resource name")?;
+            let init = self.expression()?;
+            resources.push(Resource {
+                ty,
+                name,
+                init,
+                span: name_span,
+            });
+            // A trailing `;` before `)` is allowed and separates resources.
+            if self.eat_symbol(";") {
+                if self.at_symbol(")") {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        self.expect_symbol(")", "to close the resource list")?;
+        Ok(resources)
     }
 
     /// `throw expr;`.
@@ -1556,7 +1704,11 @@ impl Parser<'_> {
 
         // `for (Type name : iterable) body` — the enhanced for.
         if self.header_contains_top_level_colon() {
-            let ty = self.type_ref()?;
+            let ty = if self.eat_keyword(Keyword::Var) {
+                TypeRef::Var
+            } else {
+                self.type_ref()?
+            };
             let (name, _) = self.expect_ident("for the loop variable")?;
             self.expect_symbol(":", "in the for-each header")?;
             let iterable = self.expression()?;
@@ -1705,6 +1857,7 @@ impl Parser<'_> {
                     | Keyword::Float
                     | Keyword::Byte
                     | Keyword::Short
+                    | Keyword::Var
             ))
         ) || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
             && matches!(self.peek_at(1), Some(TokenKind::Identifier(_))))
@@ -1785,7 +1938,11 @@ impl Parser<'_> {
     fn local_declaration(&mut self) -> Parsed<Stmt> {
         let start = self.here();
         let is_final = self.eat_keyword(Keyword::Final);
-        let ty = self.type_ref()?;
+        let ty = if self.eat_keyword(Keyword::Var) {
+            TypeRef::Var
+        } else {
+            self.type_ref()?
+        };
 
         let mut declarators = Vec::new();
         loop {
@@ -3599,12 +3756,7 @@ mod tests {
 
         // Valid Java that caturra does not implement DOES say so, so the corpus
         // tooling can recognise it as an engine gap.
-        for body in [
-            "var q = 1;",
-            "class Inner {}",
-            "assert 1 > 0;",
-            "synchronized (a) { }",
-        ] {
+        for body in ["class Inner {}", "assert 1 > 0;", "synchronized (a) { }"] {
             let errors = parse_errors(&in_main(body));
             let first = &errors.first().expect(body).message;
             assert!(
