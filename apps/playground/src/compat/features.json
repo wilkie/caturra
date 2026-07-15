@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-2tbknz90/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-ogpn2ois/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-xivr7ztz/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-z8tx0ywf/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-4uvtmt0v/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-m2a4z74i/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -596,11 +596,11 @@
     "id": "g-assert",
     "category": "Statements",
     "title": "assert",
-    "summary": "Real Java (off at runtime unless -ea), and caturra will not take it.",
+    "summary": "A runtime no-op \u2014 assertions are off by default (only `-ea` enables them) \u2014 but the condition is still type-checked, as javac does.",
     "main": "G",
     "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nassert 1 + 1 == 2 : \"math\";\n        System.out.println(\"asserted\");\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "'assert' is not supported by caturra"
+    "status": "supported",
+    "expected": "asserted\n"
   },
   {
     "id": "g-synchronized",

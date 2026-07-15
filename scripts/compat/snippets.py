@@ -1164,7 +1164,7 @@ GRAMMAR = [
                       '        } catch (IllegalStateException | IllegalArgumentException e) {\n'
                       '            System.out.println("caught " + e.getMessage());\n        }')),
     dict(id="g-assert", category="Statements", title="assert",
-         summary="Real Java (off at runtime unless -ea), and caturra will not take it.", main="G",
+         summary="A runtime no-op — assertions are off by default (only `-ea` enables them) — but the condition is still type-checked, as javac does.", main="G",
          source=_prog('assert 1 + 1 == 2 : "math";\n        System.out.println("asserted");')),
     dict(id="g-synchronized", category="Statements", title="synchronized",
          summary="A program here runs on one thread, in one WASM instance.", main="G",

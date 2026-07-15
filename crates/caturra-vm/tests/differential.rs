@@ -2306,6 +2306,31 @@ public class DiffJoin {
 "#
 );
 
+// `assert` — a runtime no-op, because assertions are off by default on a JVM
+// (only `-ea` enables them), so `java Main` neither throws nor evaluates the
+// condition. The condition and the message are still type-checked, matching
+// javac; here a `false` assertion does not throw and a side-effecting condition
+// never runs.
+differential_test!(
+    diff_assert,
+    "DiffAssert",
+    r#"
+public class DiffAssert {
+    static int calls = 0;
+    static boolean tick() { calls++; return false; }
+    public static void main(String[] args) {
+        assert 1 + 1 == 2;
+        assert "a".length() == 1 : "len";
+        assert false;                   // disabled: does not throw
+        assert tick() : "side effect";  // disabled: never evaluated
+        int x = 5;
+        assert x > 0 : "x=" + x;
+        System.out.println("done calls=" + calls);   // done calls=0
+    }
+}
+"#
+);
+
 differential_test!(
     diff_nested_classes,
     "DiffNested",

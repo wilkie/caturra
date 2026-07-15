@@ -160,7 +160,6 @@ fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
         // means a class in a non-block position (`if (c) class L {}`), which
         // javac rejects outright.
         Keyword::Class => Some("class, interface or enum declaration not allowed here"),
-        Keyword::Assert => Some("'assert' is not supported by caturra"),
         Keyword::Synchronized => {
             Some("'synchronized' is not supported by caturra; programs run single-threaded")
         }
@@ -1411,6 +1410,9 @@ impl Parser<'_> {
             Some(TokenKind::Keyword(Keyword::Throw)) => {
                 return self.throw_statement().map(Some);
             }
+            Some(TokenKind::Keyword(Keyword::Assert)) => {
+                return self.assert_statement().map(Some);
+            }
             _ => {}
         }
 
@@ -1789,6 +1791,67 @@ impl Parser<'_> {
                 start: start.start,
                 end: self.here().start,
             },
+        })
+    }
+
+    /// `assert cond;` / `assert cond : message;`. Assertions are DISABLED by
+    /// default on a JVM (only `-ea` enables them), so the statement is a runtime
+    /// no-op — but javac still type-checks the condition (boolean) and the
+    /// message (any non-void). Desugar to a dead `if (false)` block carrying
+    /// both: codegen type-checks a dead branch (a constant-`false` `if` is
+    /// reachable per JLS §14.21) yet never runs it, matching `java Main` exactly.
+    fn assert_statement(&mut self) -> Parsed<Stmt> {
+        let start = self.here();
+        self.pos += 1; // 'assert'
+        let cond = self.expression()?;
+        let message = if self.eat_symbol(":") {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.expect_symbol(";", "after the assert condition")?;
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        let decl = |name: &str, ty: TypeRef, init: Expr| Stmt::LocalDecl {
+            ty,
+            is_final: false,
+            declarators: vec![LocalDeclarator {
+                name: String::from(name),
+                init: Some(init),
+                span,
+                extra_dims: 0,
+            }],
+            span,
+        };
+        // `boolean __caturraAssert = (cond);` forces the condition to be boolean.
+        let mut body = vec![decl("__caturraAssert", TypeRef::Boolean, cond)];
+        // `String __caturraAssertMsg = "" + (message);` forces a non-void message.
+        if let Some(message) = message {
+            let concat = Expr::Binary {
+                op: BinaryOp::Add,
+                lhs: Box::new(Expr::Literal {
+                    value: Literal::Str(String::new()),
+                    span,
+                }),
+                rhs: Box::new(message),
+                span,
+            };
+            body.push(decl(
+                "__caturraAssertMsg",
+                TypeRef::Named(String::from("String")),
+                concat,
+            ));
+        }
+        Ok(Stmt::If {
+            cond: Expr::Literal {
+                value: Literal::Bool(false),
+                span,
+            },
+            then: Box::new(Stmt::Block(body)),
+            els: None,
+            span,
         })
     }
 
@@ -4251,15 +4314,18 @@ mod tests {
 
         // Valid Java that caturra does not implement DOES say so, so the corpus
         // tooling can recognise it as an engine gap.
-        for body in ["assert 1 > 0;", "synchronized (a) { }"] {
-            let errors = parse_errors(&in_main(body));
-            let first = &errors.first().expect(body).message;
-            assert!(
-                first.contains("caturra"),
-                "`{body}` is valid Java we don't implement; say so: {first}"
-            );
-        }
+        let sync = parse_errors(&in_main("synchronized (a) { }"));
+        assert!(
+            sync.first()
+                .expect("synchronized")
+                .message
+                .contains("caturra"),
+            "`synchronized` is valid Java we don't implement; say so"
+        );
 
+        // `assert` IS implemented now (a runtime no-op, assertions off) — it
+        // parses cleanly, and its condition is still type-checked.
+        assert!(parse_errors(&in_main("assert 1 > 0 : \"x\";")).is_empty());
         // A local class in a block IS implemented now — it parses cleanly.
         assert!(parse_errors(&in_main("class Inner {} new Inner();")).is_empty());
         // But a class in a non-block statement position is invalid Java, and the
