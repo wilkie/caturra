@@ -9255,3 +9255,54 @@ public class DiffIterator {
 }
 "#
 );
+
+// Nested generics parse now: the lexer produces `>>`/`>>>` as one shift token, so
+// `ArrayList<ArrayList<Integer>>` was rejected outright. Closing type arguments now
+// SPLITS a `>>`/`>>>` — one `>` per level. This fully enables the explicit
+// `Iterator<Map.Entry<K, V>>` declaration (an entrySet iterator) and lets nested
+// declarations compile and run.
+//
+// What parsing does NOT bring: the INNER type argument still erases to Object (a
+// list's element is one `ElemType`, which cannot hold a parameterized list), so
+// `grid.get(0).get(1)` on a `List<List<Integer>>` is a compile error — the value
+// comes back as Object. That, wildcard variance, and type-variable bounds are
+// separate type-system gaps, not parsing ones.
+differential_test!(
+    diff_nested_generics,
+    "DiffNested",
+    r#"
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+public class DiffNested {
+    public static void main(String[] args) {
+        Map<String, Integer> ages = new TreeMap<>();
+        ages.put("ada", 36);
+        ages.put("bea", 41);
+        Iterator<Map.Entry<String, Integer>> it = ages.entrySet().iterator();
+        int total = 0;
+        while (it.hasNext()) {
+            Map.Entry<String, Integer> e = it.next();
+            total += e.getValue();
+        }
+        System.out.println(total);
+
+        Map<String, List<Integer>> groups = new TreeMap<>();
+        List<Integer> evens = new ArrayList<>();
+        evens.add(2);
+        evens.add(4);
+        groups.put("evens", evens);
+        System.out.println(groups);
+
+        Map<String, Map<String, Integer>> nested = new TreeMap<>();
+        Map<String, Integer> inner = new TreeMap<>();
+        inner.put("x", 1);
+        nested.put("outer", inner);
+        System.out.println(nested);
+    }
+}
+"#
+);

@@ -1082,12 +1082,12 @@ GRAMMAR = [
          source=_prog('System.out.println(firstOf("a", "b"));',
                       '    static <T> T firstOf(T a, T b) { return a; }')),
     dict(id="g-bounded-type", category="Declarations", title="Bounded type parameter (<T extends Comparable<T>>)",
-         summary="The bound is itself generic, which caturra's erasure does not model.", main="G",
+         summary="It parses now; but the type variable erases to Object without its bound, so compareTo() is not found on it.", main="G",
          source=_prog('System.out.println(max(3, 5));',
                       '    static <T extends Comparable<T>> T max(T a, T b) {\n'
                       '        return a.compareTo(b) >= 0 ? a : b;\n    }')),
     dict(id="g-wildcard", category="Declarations", title="Wildcard generics (? extends)",
-         summary="`List<? extends Number>` as a parameter type.", main="G",
+         summary="`List<? extends Number>` parses now; the argument-variance rule that lets a List<Integer> match it is what is missing.", main="G",
          source=_prog('List<Integer> n = new ArrayList<>();\n        n.add(2);\n'
                       '        System.out.println(count(n));',
                       '    static int count(List<? extends Number> values) { return values.size(); }',

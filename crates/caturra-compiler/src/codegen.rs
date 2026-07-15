@@ -1836,6 +1836,12 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 other => table.class_id(other).map(ElemType::Object),
             }
         }
+        // A nested parameterized type argument (`List<List<Integer>>`,
+        // `List<? extends Number>`): the outer collection tracks one level, so the
+        // inner erases to `Object` — its own type arguments are lost, exactly as a
+        // raw type's are. Getting an element back returns `Object`, not the nested
+        // collection; that is the depth caturra models.
+        TypeRef::Generic { .. } => Some(ElemType::Object(table.object_id)),
         _ => None,
     }
 }

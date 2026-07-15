@@ -337,6 +337,33 @@ impl Parser<'_> {
         }
     }
 
+    /// Close one level of type arguments, consuming a single `>`.
+    ///
+    /// `ArrayList<ArrayList<Integer>>` ends in `>>`, which the lexer produces as
+    /// ONE right-shift token — so a naive `expect('>')` at the inner level fails,
+    /// and nested generics were rejected outright. The standard hand-parser trick
+    /// (JLS calls it out): a `>>`/`>>>` seen where a single `>` is expected is
+    /// SPLIT — one `>` closes this level, and the token is rewritten to the
+    /// remaining `>`/`>>` for the enclosing level to close. `>` is never a shift
+    /// operator inside a type, so this cannot mis-read `a >> b`.
+    fn close_type_args(&mut self) -> Parsed<()> {
+        let remainder = match self.peek() {
+            Some(TokenKind::Symbol(">")) => {
+                self.pos += 1;
+                return Ok(());
+            }
+            Some(TokenKind::Symbol(">>")) => ">",
+            Some(TokenKind::Symbol(">>>")) => ">>",
+            _ => {
+                self.error_here("expected '>' to close the type arguments");
+                return Err(Abort);
+            }
+        };
+        // Rewrite the shift token to its remaining `>`s, closing this level.
+        self.tokens[self.pos].kind = TokenKind::Symbol(remainder);
+        Ok(())
+    }
+
     fn expect_symbol(&mut self, symbol: &str, context: &str) -> Parsed<()> {
         if self.eat_symbol(symbol) {
             Ok(())
@@ -1075,6 +1102,7 @@ impl Parser<'_> {
                 TokenKind::Symbol("<") => depth += 1,
                 TokenKind::Symbol(">") => depth -= 1,
                 TokenKind::Symbol(">>") => depth -= 2,
+                // `>>>` closes three levels at once (`Map<K, List<Set<V>>>`).
                 TokenKind::Symbol(">>>") => depth -= 3,
                 _ => {}
             }
@@ -1187,14 +1215,7 @@ impl Parser<'_> {
                             }
                         }
                     }
-                    if self.at_symbol(">>") {
-                        self.error_here(
-                            "nested generic types (like ArrayList<ArrayList<...>>) are not \
-                             supported by caturra",
-                        );
-                        return Err(Abort);
-                    }
-                    self.expect_symbol(">", "to close the type arguments")?;
+                    self.close_type_args()?;
                     TypeRef::Generic { base: name, args }
                 } else {
                     TypeRef::Named(name)
@@ -1890,6 +1911,8 @@ impl Parser<'_> {
                 TokenKind::Symbol("<") => depth += 1,
                 TokenKind::Symbol(">") => depth -= 1,
                 TokenKind::Symbol(">>") => depth -= 2,
+                // `>>>` closes three levels at once (`Map<K, List<Set<V>>>`).
+                TokenKind::Symbol(">>>") => depth -= 3,
                 // Only type names, commas, dots, and nested `<>` appear
                 // in a type-argument list; anything else means this was
                 // a comparison expression.
