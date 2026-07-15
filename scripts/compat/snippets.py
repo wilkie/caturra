@@ -1044,10 +1044,12 @@ GRAMMAR = [
          source=_prog('System.out.println(new Inner().hi());',
                       '    static class Inner { String hi() { return "inner"; } }')),
     dict(id="g-inner-class", category="Declarations", title="Inner (non-static) class",
-         summary="`outer.new Inner()` — an instance bound to an enclosing one.", main="G",
-         source=_prog('G outer = new G();\n        G.Inner inner = outer.new Inner();\n'
-                      '        System.out.println(inner.hi());',
-                      '    class Inner { String hi() { return "inner"; } }')),
+         summary="`outer.new Inner()` — an instance bound to an enclosing one, reading the enclosing instance's fields by simple name.", main="G",
+         source=_prog('G outer = new G();\n        G.Inner inner = outer.new Inner(5);\n'
+                      '        System.out.println(inner.total());',
+                      '    int base = 10;\n'
+                      '    class Inner {\n        int bonus;\n        Inner(int b) { bonus = b; }\n'
+                      '        int total() { return base + bonus; }\n    }')),
     dict(id="g-local-class", category="Declarations", title="Local class (declared inside a method)",
          summary="A named class in a method body — captures an effectively-final local and reads the enclosing statics.", main="G",
          source=_prog('int factor = 3;\n'

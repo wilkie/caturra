@@ -61,6 +61,10 @@ pub struct ClassDecl {
     /// ordinary `extends`/`implements` resolution rather than the anonymous
     /// single-supertype form.
     pub is_local: bool,
+    /// Set for a non-static nested class (an inner class), bound to an enclosing
+    /// instance. A pass gives it a synthetic enclosing reference and threads
+    /// that instance through its constructors and its `new` sites.
+    pub is_inner: bool,
     /// Generic type parameter names (`<T, U>`); erased to `Object`.
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<FieldDecl>,
@@ -509,6 +513,10 @@ pub enum Expr {
         /// Generic type arguments (empty for the diamond `<>` or none).
         type_args: Vec<TypeRef>,
         args: Vec<Expr>,
+        /// The enclosing instance for a qualified inner-class creation
+        /// (`outer.new Inner()`); `None` for an ordinary `new`. A pass binds it
+        /// as the inner class's synthetic enclosing reference.
+        outer: Option<Box<Expr>>,
         span: SourceSpan,
     },
     /// `expr instanceof Type`.

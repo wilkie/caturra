@@ -395,6 +395,7 @@ struct FieldSig {
 }
 
 /// Everything call/field resolution knows about one class.
+#[allow(clippy::struct_excessive_bools)] // mirrors Java's declaration modifiers
 struct ClassInfo {
     id: ClassId,
     superclass: Option<ClassId>,
@@ -405,6 +406,11 @@ struct ClassInfo {
     is_abstract: bool,
     is_interface: bool,
     is_enum: bool,
+    /// A non-static nested class, bound to an enclosing instance through its
+    /// synthetic `__caturraOuter` field. Only these get the enclosing instance
+    /// supplied at a `new` site — a lambda/anonymous class also carries that
+    /// field, but the capture pass already threads its value in.
+    is_inner: bool,
     /// A synthesized anonymous/lambda class's enclosing class. Hoisting the
     /// body to the top level loses sight of that class's STATIC fields, so a
     /// bare name that resolves to none of the usual places tries them.
@@ -524,6 +530,7 @@ impl MethodTable {
                 is_abstract: false,
                 is_interface: false,
                 is_enum: false,
+                is_inner: false,
                 type_param_count: 0,
                 methods: vec![
                     MethodSig {
@@ -586,6 +593,7 @@ impl MethodTable {
                 is_abstract: true,
                 is_interface: true,
                 is_enum: false,
+                is_inner: false,
                 type_param_count: 1,
                 methods: vec![MethodSig {
                     name: String::from("compareTo"),
@@ -620,6 +628,7 @@ impl MethodTable {
                     is_abstract: true,
                     is_interface: true,
                     is_enum: false,
+                    is_inner: false,
                     type_param_count: 0,
                     methods: vec![MethodSig {
                         name: String::from("close"),
@@ -658,6 +667,7 @@ impl MethodTable {
                         // still resolve it as an interface.
                         is_interface: class.is_interface,
                         is_enum: false,
+                        is_inner: false,
                         type_param_count: 0,
                         methods: Vec::new(),
                         fields: Vec::new(),
@@ -836,6 +846,7 @@ impl MethodTable {
                 info.is_abstract = class.is_abstract;
                 info.is_interface = class.is_interface;
                 info.is_enum = class.is_enum;
+                info.is_inner = class.is_inner;
                 info.type_param_count = class.type_params.len();
             }
         }
@@ -7199,6 +7210,38 @@ impl BodyGen<'_> {
         }
     }
 
+    /// Inside a LAMBDA body, `this` denotes the enclosing instance (JLS
+    /// §15.27.2), captured as `__caturraOuter` — a lambda has no `this` of its
+    /// own. An inner (or anonymous/local) class DOES have its own `this`, even
+    /// though it also carries a `__caturraOuter`, so the reinterpretation is
+    /// gated to synthesized lambda classes.
+    fn lambda_enclosing(&self) -> Option<(FieldSig, ClassId)> {
+        if self.in_constructor
+            || !self
+                .table
+                .class_name(self.current_class_id)
+                .starts_with("Lambda$")
+        {
+            return None;
+        }
+        self.captured_outer()
+    }
+
+    /// The receiver expression that denotes the enclosing instance: `this`
+    /// itself inside a lambda (whose `this` already means the enclosing), or
+    /// `this.__caturraOuter` inside an inner class (whose `this` is its own).
+    fn enclosing_receiver(&self, span: SourceSpan) -> Expr {
+        if self.lambda_enclosing().is_some() {
+            Expr::This { span }
+        } else {
+            Expr::Field {
+                object: Box::new(Expr::This { span }),
+                name: String::from(crate::capture::OUTER_FIELD),
+                span,
+            }
+        }
+    }
+
     /// An INSTANCE field of the enclosing class, reached through the captured
     /// `__caturraOuter`. Reads/writes are live on the real enclosing object,
     /// which is what a lambda accessing `this.f` does.
@@ -8298,7 +8341,7 @@ impl BodyGen<'_> {
             // An instance field of the enclosing class, written live through
             // the captured `__caturraOuter` (which `this` now denotes).
             if let Some((_, field_owner, field)) = self.enclosing_instance_field(name) {
-                let outer = Expr::This { span };
+                let outer = self.enclosing_receiver(span);
                 self.assign_field(
                     field_owner,
                     &FieldReceiver::Object(&outer),
@@ -9170,6 +9213,73 @@ impl BodyGen<'_> {
 
     /// `new ClassName(args)` (or an intrinsic: Scanner, `ArrayList`).
     #[allow(clippy::too_many_lines)] // qualified-name + intrinsic dispatch
+    /// A `new C(...)` whose `C` may be an inner class — one carrying a synthetic
+    /// `__caturraOuter` field. Supplies the enclosing instance as the leading
+    /// constructor argument (the qualifier of `outer.new C()`, the current
+    /// `this` when we are inside the enclosing class, or a sibling inner class's
+    /// own `this.__caturraOuter`) and then delegates to [`Self::new_object`].
+    fn new_object_bound(
+        &mut self,
+        class_name: &str,
+        type_args: &[TypeRef],
+        args: &[Expr],
+        outer: Option<&Expr>,
+        span: SourceSpan,
+    ) -> JType {
+        // The simple name (a qualified `Outer.Inner` flattens to `Inner`).
+        let simple = class_name
+            .rsplit('.')
+            .next()
+            .filter(|last| self.table.class_id(last).is_some())
+            .unwrap_or(class_name);
+        // Only a genuine inner class needs its enclosing instance supplied here.
+        // A lambda/anonymous class also carries `__caturraOuter`, but the capture
+        // pass already threads its value in at the `new` site.
+        let is_inner = self
+            .table
+            .class_id(simple)
+            .and_then(|id| self.table.info_by_id(id))
+            .is_some_and(|info| info.is_inner);
+        if !is_inner {
+            return self.new_object(class_name, type_args, args, span);
+        }
+        let enclosing = match self.table.field(simple, crate::capture::OUTER_FIELD) {
+            Some((_, field)) => match field.ty {
+                JType::Object(enc) => enc,
+                _ => return self.new_object(class_name, type_args, args, span),
+            },
+            None => return self.new_object(class_name, type_args, args, span),
+        };
+        let bound: Option<Expr> = if let Some(o) = outer {
+            Some(o.clone())
+        } else if !self.in_static && self.current_class_id == enclosing {
+            // Inside the enclosing class: `new Inner()` binds to `this`.
+            Some(Expr::This { span })
+        } else if !self.in_static
+            && self
+                .captured_outer()
+                .is_some_and(|(_, enc)| enc == enclosing)
+        {
+            // Inside a sibling inner class (or a lambda) sharing the enclosing
+            // type: reuse its own captured enclosing instance.
+            Some(self.enclosing_receiver(span))
+        } else {
+            None
+        };
+        let Some(bound) = bound else {
+            self.error(
+                span,
+                format!("an enclosing instance that contains {simple} is required"),
+            );
+            return JType::Error;
+        };
+        let mut all = Vec::with_capacity(args.len() + 1);
+        all.push(bound);
+        all.extend(args.iter().cloned());
+        self.new_object(simple, type_args, &all, span)
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per built-in constructible type
     fn new_object(
         &mut self,
         class_name: &str,
@@ -11669,11 +11779,11 @@ impl BodyGen<'_> {
                 span,
             );
         }
-        // A bare call to an enclosing instance method, from inside a lambda:
-        // `() -> helper()` is `__caturraOuter.helper()`.
+        // A bare call to an enclosing instance method, from inside a lambda or
+        // inner class: `helper()` is `__caturraOuter.helper()`.
         if !matches!(own, Resolution::Found(_))
             && !self.in_constructor
-            && let Some((_, enclosing)) = self.captured_outer()
+            && let Some((outer, enclosing)) = self.captured_outer()
         {
             let enc_name = self.table.class_name(enclosing).to_owned();
             let found_instance = matches!(
@@ -11681,8 +11791,10 @@ impl BodyGen<'_> {
                 Resolution::Found(sig) if !sig.is_static
             );
             if found_instance {
-                let outer = Expr::This { span };
-                self.expr(&outer); // pushes the enclosing instance
+                // `this.__caturraOuter` — the enclosing instance, whether `this`
+                // is a lambda (whose own `this` already denotes the enclosing)
+                // or an inner class (whose `this` is its own object).
+                self.push_captured_outer(&outer);
                 return self.emit_virtual_call_on_stacked_receiver(enclosing, method, args, span);
             }
         }
@@ -13054,6 +13166,24 @@ impl BodyGen<'_> {
                         }
                     }
                 }
+                // A bare call to an ENCLOSING instance method, from inside a
+                // lambda or inner class (mirrors the emission path). type_of has
+                // to agree, or the concat/return it feeds is typed by a guess —
+                // the `type_of`/emit divergence trap.
+                if receiver.is_none()
+                    && !matches!(
+                        table.resolve(&class, method, &arg_types),
+                        Resolution::Found(_)
+                    )
+                    && let Some((_, enclosing)) = self.captured_outer()
+                {
+                    let enc_name = self.table.class_name(enclosing).to_owned();
+                    if let Resolution::Found(sig) =
+                        self.table.resolve(&enc_name, method, &arg_types)
+                    {
+                        return sig.ret.unwrap_or(JType::Error);
+                    }
+                }
                 match table.resolve(&class, method, &arg_types) {
                     Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
                     _ => {
@@ -13142,10 +13272,7 @@ impl BodyGen<'_> {
             Expr::This { .. } => {
                 if self.in_static {
                     JType::Error
-                } else if let Some((_, enclosing)) = (!self.in_constructor)
-                    .then(|| self.captured_outer())
-                    .flatten()
-                {
+                } else if let Some((_, enclosing)) = self.lambda_enclosing() {
                     JType::Object(enclosing)
                 } else {
                     JType::Object(self.current_class_id)
@@ -13275,11 +13402,9 @@ impl BodyGen<'_> {
                     return JType::Error;
                 }
                 // Inside a lambda, `this` is the ENCLOSING instance (JLS
-                // §15.27.2), captured as `__caturraOuter`. Not in the
-                // synthesized constructor, whose `this` is the lambda itself.
-                if !self.in_constructor
-                    && let Some((outer, enclosing)) = self.captured_outer()
-                {
+                // §15.27.2), captured as `__caturraOuter`. An inner class's
+                // `this` is its own, so this is gated to lambda bodies.
+                if let Some((outer, enclosing)) = self.lambda_enclosing() {
                     self.push_captured_outer(&outer);
                     return JType::Object(enclosing);
                 }
@@ -13305,8 +13430,9 @@ impl BodyGen<'_> {
                 class,
                 type_args,
                 args,
+                outer,
                 span,
-            } => self.new_object(class, type_args, args, *span),
+            } => self.new_object_bound(class, type_args, args, outer.as_deref(), *span),
             Expr::Ternary {
                 cond,
                 then,

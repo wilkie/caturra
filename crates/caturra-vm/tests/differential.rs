@@ -8703,6 +8703,64 @@ public class StricterLocalInstance {
 "#
 );
 
+// An inner (non-static nested) class is bound to an enclosing instance. It is
+// created qualified (`outer.new Inner()`), unqualified from the enclosing
+// class's own instance method (`new Inner()` binds to `this`), or from a sibling
+// inner class (reusing that sibling's enclosing instance). It reads the
+// enclosing instance's fields and methods by simple name, and `Outer.Inner`
+// names its type.
+differential_test!(
+    diff_inner_class,
+    "DiffInner",
+    r#"
+public class DiffInner {
+    private int base = 10;
+    private String tag = "T";
+    String greet() { return tag + "!"; }
+
+    class Inner {
+        int bonus;
+        Inner(int b) { bonus = b; }
+        String describe() { return greet() + (base + bonus); }   // enclosing field + method
+    }
+    Inner make(int b) { return new Inner(b); }                   // `new Inner()` binds to `this`
+
+    class Sibling {
+        String chain() { return new Inner(3).describe(); }       // sibling's enclosing instance
+    }
+
+    public static void main(String[] args) {
+        DiffInner outer = new DiffInner();
+        DiffInner.Inner a = outer.new Inner(5);                  // qualified new + Outer.Inner type
+        System.out.println(a.describe());                        // T!15
+        System.out.println(outer.make(2).describe());            // T!12
+        System.out.println(outer.new Sibling().chain());         // T!13
+
+        DiffInner other = new DiffInner();
+        other.base = 100;
+        System.out.println(other.new Inner(0).describe());       // T!100 — live on the real outer
+    }
+}
+"#
+);
+
+// Without an enclosing instance, an inner class cannot be built: `new Inner()`
+// in a static context is rejected, as javac rejects it.
+differential_reject!(
+    reject_inner_class_without_enclosing_instance,
+    "RejectInner",
+    r"
+public class RejectInner {
+    int base = 1;
+    class Inner { int v() { return base; } }
+    public static void main(String[] args) {
+        Inner i = new Inner();
+        System.out.println(i.v());
+    }
+}
+"
+);
+
 // `Method.invoke` checks the receiver and the arguments BEFORE it runs
 // anything: a receiver that is not an instance of the declaring class, or the
 // wrong number of arguments, is an IllegalArgumentException, not a call. caturra

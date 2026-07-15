@@ -819,6 +819,7 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                 type_args,
                 args,
                 span,
+                ..
             } => {
                 self.name(class, *span);
                 for arg in type_args {

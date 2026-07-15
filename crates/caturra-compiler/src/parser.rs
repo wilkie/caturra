@@ -757,6 +757,7 @@ impl Parser<'_> {
             is_enum: false,
             is_anonymous: false,
             is_local: false,
+            is_inner: false,
             type_params,
             fields,
             methods,
@@ -911,8 +912,11 @@ impl Parser<'_> {
         ) {
             // A nested type may be `public`; the file-name rule is top-level
             // only (JLS §7.6), so this is recorded and never checked.
-            let nested =
+            let mut nested =
                 self.type_after_modifiers(start, modifiers.is_abstract, modifiers.is_public)?;
+            // A non-static nested CLASS is an inner class, bound to an enclosing
+            // instance. Interfaces and enums are implicitly static.
+            nested.is_inner = !modifiers.is_static && !nested.is_interface && !nested.is_enum;
             return Ok(Member::Nested(nested));
         }
 
@@ -2662,6 +2666,26 @@ impl Parser<'_> {
                     };
                     continue;
                 }
+                // Qualified inner-class creation: `outer.new Inner(args)`. The
+                // enclosing instance rides in `outer`; a pass binds it.
+                if self.eat_keyword(Keyword::New) {
+                    let start = expr.span().start;
+                    let (name, _) = self.expect_ident("for the inner class after '.new'")?;
+                    self.skip_type_args();
+                    let args = self.arguments()?;
+                    let span = SourceSpan {
+                        start,
+                        end: self.here().start,
+                    };
+                    expr = Expr::NewObject {
+                        class: name,
+                        type_args: Vec::new(),
+                        args,
+                        outer: Some(Box::new(expr)),
+                        span,
+                    };
+                    continue;
+                }
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
                     let args = self.arguments()?;
@@ -2757,6 +2781,7 @@ impl Parser<'_> {
             // The super-constructor args ride along; the capture pass turns them
             // into a synthesized constructor that calls super(...).
             args,
+            outer: None,
             span,
         })
     }
@@ -2819,6 +2844,7 @@ impl Parser<'_> {
             is_enum: false,
             is_anonymous: true,
             is_local: false,
+            is_inner: false,
             type_params: Vec::new(),
             fields,
             methods,
@@ -2933,6 +2959,7 @@ impl Parser<'_> {
                 class,
                 type_args,
                 args,
+                outer: None,
                 span,
             });
         }
@@ -3293,6 +3320,7 @@ fn desugar_enum(
                 class,
                 type_args: Vec::new(),
                 args: ctor_args,
+                outer: None,
                 span: constant.span,
             }),
             order: index,
@@ -3479,6 +3507,7 @@ fn desugar_enum(
                     rhs: Box::new(var("__n")),
                     span: zero,
                 }],
+                outer: None,
                 span: zero,
             },
             span: zero,
@@ -3522,6 +3551,7 @@ fn desugar_enum(
         enclosing: None,
         is_anonymous: false,
         is_local: false,
+        is_inner: false,
         type_params: Vec::new(),
         fields: synth_fields,
         methods,
@@ -3903,10 +3933,9 @@ fn rename_class_in_stmts(stmts: &mut [Stmt], from: &str, to: &str) {
 
 fn rename_class_in_type(ty: &mut TypeRef, from: &str, to: &str) {
     match ty {
-        TypeRef::Named(name)
-            if name == from => {
-                to.clone_into(name);
-            }
+        TypeRef::Named(name) if name == from => {
+            to.clone_into(name);
+        }
         TypeRef::Array(inner) => rename_class_in_type(inner, from, to),
         TypeRef::Generic { base, args } => {
             if base == from {
@@ -4237,7 +4266,10 @@ mod tests {
         // message is javac's, with no mention of caturra.
         let bad_pos = parse_errors(&in_main("if (true) class L {}"));
         let first = &bad_pos.first().expect("if (true) class L {}").message;
-        assert_eq!(first, "class, interface or enum declaration not allowed here");
+        assert_eq!(
+            first,
+            "class, interface or enum declaration not allowed here"
+        );
         assert!(!first.contains("caturra"));
 
         // `new Foo();` IS a statement expression (JLS 14.8); `new int[3];` is

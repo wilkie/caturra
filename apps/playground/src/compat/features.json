@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-6i6sf1op/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-ar_hrrt5/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-7r_3w2bo/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-6d55ox_f/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-_x3fdg0o/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-hmn0r_lr/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -396,11 +396,11 @@
     "id": "g-inner-class",
     "category": "Declarations",
     "title": "Inner (non-static) class",
-    "summary": "`outer.new Inner()` \u2014 an instance bound to an enclosing one.",
+    "summary": "`outer.new Inner()` \u2014 an instance bound to an enclosing one, reading the enclosing instance's fields by simple name.",
     "main": "G",
-    "source": "public class G {\n    class Inner { String hi() { return \"inner\"; } }\n    public static void main(String[] args) throws Exception {\nG outer = new G();\n        G.Inner inner = outer.new Inner();\n        System.out.println(inner.hi());\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "expected a name after '.'"
+    "source": "public class G {\n    int base = 10;\n    class Inner {\n        int bonus;\n        Inner(int b) { bonus = b; }\n        int total() { return base + bonus; }\n    }\n    public static void main(String[] args) throws Exception {\nG outer = new G();\n        G.Inner inner = outer.new Inner(5);\n        System.out.println(inner.total());\n    }\n}\n",
+    "status": "supported",
+    "expected": "15\n"
   },
   {
     "id": "g-local-class",

@@ -912,6 +912,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &Ctx) -> Expr {
             class,
             type_args: Vec::new(),
             args: param_names.iter().map(|n| name_expr(n)).collect(),
+            outer: None,
             span,
         }
     } else if let Some(class) = qualifier_class {
@@ -1543,6 +1544,7 @@ fn build_erased_lambda(
         is_enum: false,
         is_anonymous: true,
         is_local: false,
+        is_inner: false,
         type_params: Vec::new(),
         fields: Vec::new(),
         methods: vec![MethodDecl {
@@ -1569,6 +1571,7 @@ fn build_erased_lambda(
         class: name,
         type_args: Vec::new(),
         args: Vec::new(),
+        outer: None,
         span,
     }
 }
@@ -1653,6 +1656,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         is_enum: false,
         is_anonymous: true,
         is_local: false,
+        is_inner: false,
         type_params: Vec::new(),
         fields: Vec::new(),
         methods: vec![method],
@@ -1665,6 +1669,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         class: name,
         type_args: Vec::new(),
         args: Vec::new(),
+        outer: None,
         span,
     }
 }

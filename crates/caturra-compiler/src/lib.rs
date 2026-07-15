@@ -11,6 +11,7 @@ mod capture;
 pub mod codegen;
 pub mod diagnostics;
 mod imports;
+mod inner;
 mod lambda;
 pub mod lexer;
 mod mock;
@@ -578,6 +579,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
+    inner::bind_inner_classes(&mut units);
     lambda::desugar_lambdas(&mut units);
     compilation
         .diagnostics
