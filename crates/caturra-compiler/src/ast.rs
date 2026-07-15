@@ -107,6 +107,14 @@ pub struct MethodDecl {
     pub is_abstract: bool,
     /// Generic method type parameters (`<T> T identity(T x)`).
     pub type_params: Vec<TypeParam>,
+    /// Return-type inference plan, filled in by `erase_type_vars`: `Some`
+    /// when the declared return type is a bare type variable that also
+    /// appears as one or more parameter types (`<T> T max(T a, T b)`),
+    /// holding those parameter indices. The call's actual return type is the
+    /// join of those arguments' types — recovering the type argument erasure
+    /// would otherwise drop. `None` when the return is not an inferable type
+    /// variable.
+    pub infer_return: Option<Vec<usize>>,
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,

@@ -171,6 +171,7 @@ fn emit_class(
             is_constructor: true,
             is_abstract: false,
             type_params: Vec::new(),
+            infer_return: None,
             return_type: TypeRef::Void,
             params: Vec::new(),
             body: Vec::new(),
@@ -355,6 +356,12 @@ struct MethodSig {
     /// The last parameter is `Type... name` — extra trailing arguments
     /// pack into the array.
     is_varargs: bool,
+    /// Return-type inference plan (see `ast::MethodDecl::infer_return`),
+    /// carried through from the erased AST: the parameter indices whose
+    /// argument types join to the actual (un-erased) return type. `None`
+    /// for a method whose return is not an inferable type variable, and for
+    /// every synthesized or library signature.
+    ret_infer: Option<Vec<usize>>,
 }
 
 impl MethodSig {
@@ -514,6 +521,7 @@ impl MethodTable {
                         is_private: false,
                         is_abstract: false,
                         is_varargs: false,
+                        ret_infer: None,
                     },
                     MethodSig {
                         name: String::from("getClass"),
@@ -523,6 +531,7 @@ impl MethodTable {
                         is_private: false,
                         is_abstract: false,
                         is_varargs: false,
+                        ret_infer: None,
                     },
                     MethodSig {
                         name: String::from("hashCode"),
@@ -532,6 +541,7 @@ impl MethodTable {
                         is_private: false,
                         is_abstract: false,
                         is_varargs: false,
+                        ret_infer: None,
                     },
                     MethodSig {
                         name: String::from("equals"),
@@ -541,6 +551,7 @@ impl MethodTable {
                         is_private: false,
                         is_abstract: false,
                         is_varargs: false,
+                        ret_infer: None,
                     },
                 ],
                 fields: Vec::new(),
@@ -571,6 +582,7 @@ impl MethodTable {
                     is_private: false,
                     is_abstract: true,
                     is_varargs: false,
+                    ret_infer: None,
                 }],
                 fields: Vec::new(),
             },
@@ -604,6 +616,7 @@ impl MethodTable {
                         is_private: false,
                         is_abstract: true,
                         is_varargs: false,
+                        ret_infer: None,
                     }],
                     fields: Vec::new(),
                 },
@@ -689,6 +702,7 @@ impl MethodTable {
                         is_private: method.is_private,
                         is_abstract: method.is_abstract,
                         is_varargs: method.params.last().is_some_and(|p| p.is_varargs),
+                        ret_infer: method.infer_return.clone(),
                     };
                     if methods
                         .iter()
@@ -720,6 +734,7 @@ impl MethodTable {
                         is_private: false,
                         is_abstract: false,
                         is_varargs: false,
+                        ret_infer: None,
                     });
                 }
 
@@ -1914,6 +1929,41 @@ fn functional_erased(name: &str) -> Option<&'static str> {
 /// Method-invocation / assignment widening (JLS §5.3 without boxing),
 /// including reference widening up the class hierarchy.
 #[allow(clippy::too_many_lines)] // one big disjunction of widening rules
+/// The actual return type of a resolved call, recovering the type argument a
+/// generic method's erased return would otherwise drop. When the signature
+/// carries a return-inference plan (its return was a type variable that also
+/// names some parameters), the return is the join of those arguments' types —
+/// a type variable is a reference, so a primitive argument joins as its
+/// wrapper (`max(3, 5)` returns `Integer`). Falls back to the erased return
+/// when there is no plan or the arguments disagree (then the caller sees
+/// `Object`/the bound, as before). The emitted bytecode is unchanged: only the
+/// STATIC type reported differs, exactly as an erased read of a type variable
+/// stays cast-free.
+fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
+    let Some(indices) = &sig.ret_infer else {
+        return sig.ret;
+    };
+    let mut joined: Option<JType> = None;
+    for &index in indices {
+        let Some(&arg) = arg_types.get(index) else {
+            return sig.ret;
+        };
+        let reference = match boxable_primitive(arg) {
+            Some(elem) => JType::Boxed(elem),
+            None => arg,
+        };
+        match joined {
+            None => joined = Some(reference),
+            Some(prev) if prev == reference => {}
+            // The arguments pin different types; their least upper bound is
+            // wider than either, so keep the erased return.
+            Some(_) => return sig.ret,
+        }
+    }
+    joined.map_or(sig.ret, Some)
+}
+
+#[allow(clippy::too_many_lines)] // one widening-conversion matrix (JLS §5.1.5/§5.2)
 fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
     from == to
         || matches!(
@@ -10709,7 +10759,7 @@ impl BodyGen<'_> {
             self.code
                 .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
             self.code.drop_stack(args_width);
-            return Some(sig.ret);
+            return Some(inferred_return(&sig, &arg_types));
         }
 
         let args_width = self.emit_call_args(args, &sig, span);
@@ -10719,7 +10769,7 @@ impl BodyGen<'_> {
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
-        Some(sig.ret)
+        Some(inferred_return(&sig, &arg_types))
     }
 
     /// Coerce a value on the stack into a `String` for printing or
@@ -11503,10 +11553,9 @@ impl BodyGen<'_> {
         self.code
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
         self.code.drop_stack(args_width);
-        // `Arrays.asList` is generic (`<T> List<T>`): the bundle returns a raw
-        // `ArrayList`, but type the result as a `List` of the argument array's
-        // element type so `List<String> x = Arrays.asList(strs)` type-checks.
-        Some(sig.ret)
+        // A generic method's erased return recovers its type argument from the
+        // arguments (`<T> T max(T, T)`); a non-generic one is unchanged.
+        Some(inferred_return(&sig, &arg_types))
     }
 
     /// `Optional.of(x)` / `Optional.ofNullable(x)` / `Optional.empty()`. The VM
@@ -13188,7 +13237,7 @@ impl BodyGen<'_> {
         self.code
             .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
-        Some(sig.ret)
+        Some(inferred_return(&sig, &arg_types))
     }
 
     /// Field access on a value: only `.length` on arrays exists so far.

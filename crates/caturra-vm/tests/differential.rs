@@ -9310,9 +9310,9 @@ public class DiffNested {
 // A `Comparable`-bounded type parameter erases to its bound (`Comparable`),
 // not to `Object`, so the type variable's own `compareTo` resolves — the
 // classic `max`/`min` over any Comparable. The wrappers and String satisfy
-// the bound (a primitive autoboxes first). The return still erases to the
-// bound, so its use here is `println(Object)`, not assignment back to the
-// argument's type (return-type inference is a separate generics gap).
+// the bound (a primitive autoboxes first). Here the return is used through
+// `println(Object)`; assigning it back to the argument's own type is
+// `diff_return_type_inference`.
 differential_test!(
     diff_type_variable_bounds,
     "DiffBounds",
@@ -9334,6 +9334,56 @@ public class DiffBounds {
         System.out.println(max(2.5, 1.5));
         System.out.println(max('a', 'z'));
         System.out.println(max(Integer.valueOf(8), 4));
+    }
+}
+"#
+);
+
+// A generic method's return recovers its type argument from the arguments,
+// so the erased `Object`/bound narrows back to the caller's type: `String s =
+// id("x")`, `Integer n = id(42)`, `Item hi = max(a, b)`. A primitive argument
+// joins as its wrapper (`int m = max(3, 5)` unboxes on the way out). When the
+// arguments pin different types (`firstOf("s", 3)`) inference falls back to
+// the erasure, and the value is used as `Object` — exactly as javac's LUB
+// would leave it.
+differential_test!(
+    diff_return_type_inference,
+    "DiffInfer",
+    r#"
+class Item implements Comparable<Item> {
+    final String name;
+    final int rank;
+    Item(String name, int rank) { this.name = name; this.rank = rank; }
+    public int compareTo(Item o) { return Integer.compare(rank, o.rank); }
+}
+
+public class DiffInfer {
+    static <T> T id(T x) { return x; }
+    static <T> T firstOf(T a, T b) { return a; }
+    static <T extends Comparable<T>> T max(T a, T b) {
+        return a.compareTo(b) >= 0 ? a : b;
+    }
+
+    public static void main(String[] args) {
+        String s = id("hello");
+        System.out.println(s.length());
+
+        Integer n = id(42);
+        System.out.println(n + 1);
+
+        String f = firstOf("x", "y");
+        System.out.println(f);
+
+        int m = max(3, 5);
+        System.out.println(m);
+
+        String word = max("apple", "banana");
+        System.out.println(word);
+
+        Item hi = max(new Item("lo", 1), new Item("hi", 9));
+        System.out.println(hi.name);
+
+        System.out.println(firstOf("s", 3));
     }
 }
 "#

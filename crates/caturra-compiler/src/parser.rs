@@ -929,6 +929,7 @@ impl Parser<'_> {
                 is_constructor: true,
                 is_abstract: false,
                 type_params: Vec::new(),
+                infer_return: None,
                 return_type: TypeRef::Void,
                 params,
                 body: body.unwrap_or_default(),
@@ -993,6 +994,7 @@ impl Parser<'_> {
             is_constructor: false,
             is_abstract,
             type_params: method_type_params,
+            infer_return: None,
             return_type: member_type,
             params,
             body: body.unwrap_or_default(),
@@ -3242,6 +3244,7 @@ fn desugar_enum(
             is_constructor: true,
             is_abstract: false,
             type_params: Vec::new(),
+            infer_return: None,
             return_type: TypeRef::Void,
             params: lead_params(),
             body: store_stmts(),
@@ -3297,6 +3300,7 @@ fn desugar_enum(
             is_constructor: false,
             is_abstract: false,
             type_params: Vec::new(),
+            infer_return: None,
             return_type: TypeRef::Array(Box::new(enum_ty.clone())),
             params: Vec::new(),
             body: vec![Stmt::Return {
@@ -3366,6 +3370,7 @@ fn desugar_enum(
             is_constructor: false,
             is_abstract: false,
             type_params: Vec::new(),
+            infer_return: None,
             return_type: enum_ty.clone(),
             params: vec![Param {
                 ty: str_ty,
@@ -3467,6 +3472,11 @@ fn erase_type_vars(class: &mut ClassDecl) {
     }
     for method in &mut class.methods {
         let (to_object, tracked) = scope(method);
+        // Record the return-type inference plan BEFORE erasing the types away:
+        // if the return is a bare type variable that also names one or more
+        // parameter types, the call site can recover the type argument as the
+        // join of those arguments (see `MethodDecl::infer_return`).
+        method.infer_return = infer_return_plan(method, &to_object);
         erase_in_type(&mut method.return_type, &to_object, tracked.as_deref());
         for param in &mut method.params {
             erase_in_type(&mut param.ty, &to_object, tracked.as_deref());
@@ -3480,6 +3490,32 @@ fn erase_type_vars(class: &mut ClassDecl) {
             erase_in_stmt(stmt, &class_erasures, tracked.as_deref());
         }
     }
+}
+
+/// The return-type inference plan for a method (see `MethodDecl::infer_return`):
+/// `Some(indices)` when the declared return type is exactly a type variable
+/// about to be erased (`erasures` names it) AND that same variable is the bare
+/// type of the parameters at `indices`. The call site joins those arguments'
+/// types to recover the type argument. A type variable that constrains no
+/// parameter (`<T> T empty()`) cannot be inferred, so it yields `None`.
+fn infer_return_plan(
+    method: &MethodDecl,
+    erasures: &std::collections::HashMap<String, TypeRef>,
+) -> Option<Vec<usize>> {
+    let TypeRef::Named(ret_var) = &method.return_type else {
+        return None;
+    };
+    if !erasures.contains_key(ret_var) {
+        return None;
+    }
+    let indices: Vec<usize> = method
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| matches!(&p.ty, TypeRef::Named(name) if name == ret_var))
+        .map(|(index, _)| index)
+        .collect();
+    (!indices.is_empty()).then_some(indices)
 }
 
 /// The erasure target of a type parameter: its bound's raw base type
@@ -3733,6 +3769,7 @@ fn simple_return_method(
         is_constructor: false,
         is_abstract: false,
         type_params: Vec::new(),
+        infer_return: None,
         return_type,
         params: Vec::new(),
         body: vec![Stmt::Return {

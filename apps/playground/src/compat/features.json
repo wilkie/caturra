@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-ivb2sod7/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-ehpmq46_/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-b0cszxnr/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-zp7yu7ll/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-zz5ptdqq/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-lk7k5jg4/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -475,22 +475,22 @@
   {
     "id": "g-generic-method",
     "category": "Declarations",
-    "title": "Generic method",
-    "summary": "`static <T> T firstOf(T a, T b)`.",
+    "title": "Generic method (with return-type inference)",
+    "summary": "`static <T> T firstOf(T a, T b)`. The return recovers its type argument from the arguments, so `String s = firstOf(\"a\", \"b\")` narrows back from the erased Object with no cast.",
     "main": "G",
-    "source": "public class G {\n    static <T> T firstOf(T a, T b) { return a; }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(firstOf(\"a\", \"b\"));\n    }\n}\n",
+    "source": "public class G {\n    static <T> T firstOf(T a, T b) { return a; }\n    public static void main(String[] args) throws Exception {\nString s = firstOf(\"a\", \"b\");\n        System.out.println(s.length());\n    }\n}\n",
     "status": "supported",
-    "expected": "a\n"
+    "expected": "1\n"
   },
   {
     "id": "g-bounded-type",
     "category": "Declarations",
     "title": "Bounded type parameter (<T extends Comparable<T>>)",
-    "summary": "The type variable erases to its bound, so `compareTo()` resolves on it and `max(3, 5)` / `max(\"a\", \"b\")` work. (Assigning the result back to the argument's own type still needs a cast \u2014 return-type inference is a separate gap shared by every generic method.)",
+    "summary": "The type variable erases to its bound, so `compareTo()` resolves on it; `max(3, 5)` and `max(\"a\", \"b\")` work, and the inferred return assigns straight back to the argument's own type.",
     "main": "G",
-    "source": "public class G {\n    static <T extends Comparable<T>> T max(T a, T b) {\n        return a.compareTo(b) >= 0 ? a : b;\n    }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(max(3, 5));\n    }\n}\n",
+    "source": "public class G {\n    static <T extends Comparable<T>> T max(T a, T b) {\n        return a.compareTo(b) >= 0 ? a : b;\n    }\n    public static void main(String[] args) throws Exception {\nString longer = max(\"a\", \"bb\");\n        System.out.println(longer);\n    }\n}\n",
     "status": "supported",
-    "expected": "5\n"
+    "expected": "bb\n"
   },
   {
     "id": "g-wildcard",

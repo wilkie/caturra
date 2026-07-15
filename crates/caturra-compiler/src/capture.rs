@@ -257,6 +257,7 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers
         is_constructor: true,
         is_abstract: false,
         type_params: Vec::new(),
+        infer_return: None,
         return_type: TypeRef::Void,
         params,
         body,
