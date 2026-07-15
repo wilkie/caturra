@@ -1214,7 +1214,21 @@ impl MethodTable {
                 {
                     elem_from_type_arg(&args[0], self).map(JType::TreeSet)
                 } else if simple == "Iterator" && args.len() == 1 && !self.has_class(simple) {
-                    elem_from_type_arg(&args[0], self).map(JType::Iterator)
+                    // `Iterator<Map.Entry<K, V>>` is an entrySet iterator; anything
+                    // else is a plain iterator over its element type.
+                    if let TypeRef::Generic {
+                        base,
+                        args: entry_args,
+                    } = &args[0]
+                        && matches!(base.as_str(), "Map.Entry" | "Entry" | "java.util.Map.Entry")
+                        && entry_args.len() == 2
+                    {
+                        let key = elem_from_type_arg(&entry_args[0], self)?;
+                        let value = elem_from_type_arg(&entry_args[1], self)?;
+                        Some(JType::EntryIterator { key, value })
+                    } else {
+                        elem_from_type_arg(&args[0], self).map(JType::Iterator)
+                    }
                 } else if simple == "Optional" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Optional)
                 } else if matches!(
@@ -2160,6 +2174,13 @@ enum JType {
     /// `hasNext()` a boolean, `remove()` is void. Erased at runtime to a live
     /// cursor over the source collection (see the VM's `HeapObject::Iterator`).
     Iterator(ElemType),
+    /// `Iterator<Map.Entry<K, V>>` — an `entrySet().iterator()`. Distinct from
+    /// `Iterator` because its `next()` returns a two-parameter `MapEntry`, which
+    /// an `ElemType` cannot carry.
+    EntryIterator {
+        key: ElemType,
+        value: ElemType,
+    },
     /// `java.util.Optional<E>` — a present-or-absent value; `get` returns `E`.
     Optional(ElemType),
     /// `java.util.OptionalInt` — `getAsInt` returns `int`.
@@ -2297,6 +2318,11 @@ impl JType {
             JType::Collector => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
             JType::Iterator(elem) => format!("Iterator<{}>", elem.base_type().describe(table)),
+            JType::EntryIterator { key, value } => format!(
+                "Iterator<Map.Entry<{}, {}>>",
+                key.base_type().describe(table),
+                value.base_type().describe(table)
+            ),
             JType::Optional(elem) => format!("Optional<{}>", elem.base_type().describe(table)),
             JType::OptionalInt => String::from("OptionalInt"),
             JType::OptionalDouble => String::from("OptionalDouble"),
@@ -2462,7 +2488,9 @@ impl JType {
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
-            JType::Iterator(_) => String::from("Ljava/util/Iterator;"),
+            JType::Iterator(_) | JType::EntryIterator { .. } => {
+                String::from("Ljava/util/Iterator;")
+            }
             JType::Optional(_) => String::from("Ljava/util/Optional;"),
             JType::OptionalInt => String::from("Ljava/util/OptionalInt;"),
             JType::OptionalDouble => String::from("Ljava/util/OptionalDouble;"),
@@ -3226,6 +3254,10 @@ enum BRet {
     Stream,
     /// `Iterator<E>` of the receiver's element type (`collection.iterator()`).
     Iterator,
+    /// `Iterator<Map.Entry<K, V>>` (`entrySet().iterator()`).
+    EntryIterator,
+    /// `Map.Entry<K, V>` of the receiver's key/value (`entryIterator.next()`).
+    Entry,
     /// `Stream<Object>` — an op (`map`) whose element type is erased.
     StreamErased,
     /// `IntStream` (`mapToInt`, and the `IntStream` intermediate ops).
@@ -4566,6 +4598,12 @@ const INTSTREAM_STATIC_METHODS: &[BuiltinMethod] = &[
 ];
 
 /// `java.util.Optional<E>` — `get`/`orElse`/`orElseThrow` yield the element.
+const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
+    bm("hasNext", &[], BRet::Boolean, "()Z"),
+    bm("next", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
+    bm("remove", &[], BRet::Void, "()V"),
+];
+
 const ITERATOR_METHODS: &[BuiltinMethod] = &[
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     // `BoxedElem`, not `Elem`: a list stores its elements unboxed and a set stores
@@ -6127,6 +6165,12 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
 
 /// `Set<Map.Entry<K, V>>` — a map's `entrySet()` view.
 const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
+    bm(
+        "iterator",
+        &[],
+        BRet::EntryIterator,
+        "()Ljava/util/Iterator;",
+    ),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -6165,6 +6209,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
         JType::Iterator(_) => Some(("java/util/Iterator", ITERATOR_METHODS)),
+        JType::EntryIterator { .. } => Some(("java/util/Iterator", ENTRY_ITERATOR_METHODS)),
         JType::Optional(_) => Some(("java/util/Optional", OPTIONAL_METHODS)),
         JType::OptionalInt => Some(("java/util/OptionalInt", OPTIONALINT_METHODS)),
         JType::OptionalDouble => Some(("java/util/OptionalDouble", OPTIONALDOUBLE_METHODS)),
@@ -6395,6 +6440,7 @@ impl TypeArgs {
             JType::Map { key, value }
             | JType::TreeMap { key, value }
             | JType::EntrySet { key, value }
+            | JType::EntryIterator { key, value }
             | JType::MapEntry { key, value } => Self {
                 first: Some(key),
                 second: Some(value),
@@ -6571,6 +6617,14 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Elem => Some(args.first.map_or(JType::Error, ElemType::base_type)),
         BRet::Stream => Some(args.first.map_or(JType::Error, JType::Stream)),
         BRet::Iterator => Some(args.first.map_or(JType::Error, JType::Iterator)),
+        BRet::EntryIterator => Some(match (args.first, args.second) {
+            (Some(key), Some(value)) => JType::EntryIterator { key, value },
+            _ => JType::Error,
+        }),
+        BRet::Entry => Some(match (args.first, args.second) {
+            (Some(key), Some(value)) => JType::MapEntry { key, value },
+            _ => JType::Error,
+        }),
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
         BRet::IntStream => Some(JType::IntStream),
         BRet::StreamInteger => Some(JType::Stream(ElemType::Int)),
@@ -10025,6 +10079,7 @@ impl BodyGen<'_> {
             | JType::Collector
             | JType::IntStream
             | JType::Iterator(_)
+            | JType::EntryIterator { .. }
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble
@@ -12242,6 +12297,7 @@ impl BodyGen<'_> {
             | JType::Collector
             | JType::IntStream
             | JType::Iterator(_)
+            | JType::EntryIterator { .. }
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble
@@ -12522,6 +12578,7 @@ impl BodyGen<'_> {
                         | JType::Collector
                         | JType::IntStream
                         | JType::Iterator(_)
+                        | JType::EntryIterator { .. }
                         | JType::Optional(_)
                         | JType::OptionalInt
                         | JType::OptionalDouble
@@ -14702,6 +14759,7 @@ impl BodyGen<'_> {
             | JType::Collector
             | JType::IntStream
             | JType::Iterator(_)
+            | JType::EntryIterator { .. }
             | JType::Optional(_)
             | JType::OptionalInt
             | JType::OptionalDouble

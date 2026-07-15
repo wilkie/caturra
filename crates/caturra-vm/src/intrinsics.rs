@@ -2027,10 +2027,7 @@ fn stack_method(
 /// The map a `keySet()`/`values()` view iterates, if `source` is one.
 fn view_map(heap: &Heap, source: HeapRef) -> Option<HeapRef> {
     match heap.get(source) {
-        Some(HeapObject::MapView {
-            map,
-            kind: MapViewKind::Keys | MapViewKind::Values,
-        }) => Some(*map),
+        Some(HeapObject::MapView { map, .. }) => Some(*map),
         _ => None,
     }
 }
@@ -2144,6 +2141,22 @@ fn iterator_method(
         "next" => {
             if index >= iterated_len(heap, source) {
                 return Err(throw("java.util.NoSuchElementException"));
+            }
+            // An `entrySet()` iterator returns a `Map.Entry` — a reference to the
+            // map and the key at this position — resolved live like the entries a
+            // for-each yields.
+            if let Some(HeapObject::MapView {
+                map,
+                kind: MapViewKind::Entries,
+            }) = heap.get(source)
+            {
+                let (map, key) = (*map, map_key_at(heap, *map, index));
+                let entry = heap.alloc(HeapObject::MapEntry { map, key });
+                if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
+                    *last = Some(*index);
+                    *index += 1;
+                }
+                return Ok(Some(JValue::Ref(Some(entry))));
             }
             // A list stores primitives unboxed; box one so `next()` returns the
             // wrapper for every collection alike (a set's element is already a

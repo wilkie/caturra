@@ -4589,10 +4589,7 @@ impl<'run> Interpreter<'run> {
                 Some(
                     HeapObject::HashSet(_)
                         | HeapObject::TreeSet { .. }
-                        | HeapObject::MapView {
-                            kind: MapViewKind::Keys | MapViewKind::Values,
-                            ..
-                        }
+                        | HeapObject::MapView { .. }
                 )
             )
         {

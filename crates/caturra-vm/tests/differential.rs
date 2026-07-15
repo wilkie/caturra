@@ -9235,6 +9235,22 @@ public class DiffIterator {
             }
         }
         System.out.println(ages);
+
+        // entrySet iteration via var, including remove-through.
+        java.util.Map<String, Integer> more = new java.util.TreeMap<>();
+        more.put("x", 1);
+        more.put("y", 2);
+        more.put("z", 3);
+        var entries = more.entrySet().iterator();
+        int total = 0;
+        while (entries.hasNext()) {
+            var entry = entries.next();
+            total += entry.getValue();
+            if (entry.getKey().equals("y")) {
+                entries.remove();
+            }
+        }
+        System.out.println(total + " " + more);
     }
 }
 "#

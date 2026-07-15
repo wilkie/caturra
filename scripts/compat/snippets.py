@@ -768,7 +768,9 @@ public class Reflect {
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 public class Iterate {
@@ -797,6 +799,17 @@ public class Iterate {
             sum += nums.next();
         }
         System.out.println("sum=" + sum);
+
+        // entrySet iteration, via var (the explicit Iterator<Map.Entry<K, V>>
+        // declaration is a nested generic, which caturra does not parse).
+        Map<String, Integer> ages = new TreeMap<>();
+        ages.put("ada", 36);
+        ages.put("bea", 41);
+        var entries = ages.entrySet().iterator();
+        while (entries.hasNext()) {
+            var e = entries.next();
+            System.out.println(e.getKey() + " is " + e.getValue());
+        }
     }
 }
 ''',
