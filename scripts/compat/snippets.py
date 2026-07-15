@@ -814,6 +814,31 @@ public class Iterate {
 }
 ''',
     ),
+    dict(
+        id="method-ref-stream",
+        category="Library",
+        title="Method references in a stream",
+        summary="A method reference stands in for a stream lambda: `map(String::toUpperCase)`, `mapToInt(String::length)`, `filter(String::isEmpty)`. Each desugars to the one-parameter lambda it denotes.",
+        main="MethodRef",
+        source='''
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class MethodRef {
+    public static void main(String[] args) {
+        List<String> names = new ArrayList<>();
+        names.add("ada");
+        names.add("grace");
+        List<String> shouted = names.stream()
+            .map(String::toUpperCase)
+            .collect(Collectors.toList());
+        System.out.println(shouted);
+        System.out.println(names.stream().mapToInt(String::length).sum());
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -831,29 +856,6 @@ public class Join {
     public static void main(String[] args) {
         String[] parts = { "a", "b", "c" };
         System.out.println(String.join(",", parts));
-    }
-}
-''',
-    ),
-    dict(
-        id="method-ref-stream",
-        category="Library",
-        title="Method references in a stream",
-        summary="A lambda works (`map(s -> s.toUpperCase())`), and a Comparator key extractor must BE a method reference — but `map(String::toUpperCase)` is not modelled.",
-        main="MethodRef",
-        source='''
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
-
-public class MethodRef {
-    public static void main(String[] args) {
-        List<String> names = new ArrayList<>();
-        names.add("ada");
-        List<String> shouted = names.stream()
-            .map(String::toUpperCase)
-            .collect(Collectors.toList());
-        System.out.println(shouted);
     }
 }
 ''',

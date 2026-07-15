@@ -240,6 +240,16 @@
     "expected": "[ada, alan]\nsum=6\nada is 36\nbea is 41\n"
   },
   {
+    "id": "method-ref-stream",
+    "category": "Library",
+    "title": "Method references in a stream",
+    "summary": "A method reference stands in for a stream lambda: `map(String::toUpperCase)`, `mapToInt(String::length)`, `filter(String::isEmpty)`. Each desugars to the one-parameter lambda it denotes.",
+    "main": "MethodRef",
+    "source": "import java.util.ArrayList;\nimport java.util.List;\nimport java.util.stream.Collectors;\n\npublic class MethodRef {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        names.add(\"grace\");\n        List<String> shouted = names.stream()\n            .map(String::toUpperCase)\n            .collect(Collectors.toList());\n        System.out.println(shouted);\n        System.out.println(names.stream().mapToInt(String::length).sum());\n    }\n}\n",
+    "status": "supported",
+    "expected": "[ADA, GRACE]\n8\n"
+  },
+  {
     "id": "varargs-library",
     "category": "Library",
     "title": "Varargs library methods (String.join)",
@@ -248,16 +258,6 @@
     "source": "public class Join {\n    public static void main(String[] args) {\n        String[] parts = { \"a\", \"b\", \"c\" };\n        System.out.println(String.join(\",\", parts));\n    }\n}\n",
     "status": "unsupported",
     "reason": "String.join exists in Java, but varargs are not supported by caturra"
-  },
-  {
-    "id": "method-ref-stream",
-    "category": "Library",
-    "title": "Method references in a stream",
-    "summary": "A lambda works (`map(s -> s.toUpperCase())`), and a Comparator key extractor must BE a method reference \u2014 but `map(String::toUpperCase)` is not modelled.",
-    "main": "MethodRef",
-    "source": "import java.util.ArrayList;\nimport java.util.List;\nimport java.util.stream.Collectors;\n\npublic class MethodRef {\n    public static void main(String[] args) {\n        List<String> names = new ArrayList<>();\n        names.add(\"ada\");\n        List<String> shouted = names.stream()\n            .map(String::toUpperCase)\n            .collect(Collectors.toList());\n        System.out.println(shouted);\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "a lambda or method reference is only allowed where a functional-interface type is expected"
   },
   {
     "id": "vector",
@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-c6tk9hik/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-tw9me7kv/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-7zdshuve/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-s7ezhz2t/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-a2py8xsf/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-b9m6veqn/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

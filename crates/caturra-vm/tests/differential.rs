@@ -6896,6 +6896,73 @@ public class DiffIntStream {
 "#
 );
 
+// A method reference stands in for a stream lambda: `map(String::toUpperCase)`.
+// Each reference form (unbound-instance, static, bound-instance) desugars to the
+// one-parameter lambda it denotes, then erases exactly like a written lambda.
+differential_test!(
+    diff_stream_method_ref,
+    "DiffStreamMethodRef",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class DiffStreamMethodRef {
+    static class Person {
+        String name;
+        int age;
+        Person(String n, int a) { name = n; age = a; }
+        boolean isAdult() { return age >= 18; }
+        String label() { return name + "(" + age + ")"; }
+    }
+
+    static String shout(String s) { return s + "!"; }
+
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<>(Arrays.asList("fig", "apple", "banana"));
+
+        // unbound-instance ref in map: String::toUpperCase
+        List<String> upper = words.stream()
+            .map(String::toUpperCase)
+            .collect(Collectors.toList());
+        System.out.println(upper);                 // [FIG, APPLE, BANANA]
+
+        // unbound-instance ref producing int via mapToInt: String::length
+        System.out.println(words.stream().mapToInt(String::length).sum());   // 14
+
+        // static ref in map: DiffStreamMethodRef::shout
+        List<String> shouted = words.stream()
+            .map(DiffStreamMethodRef::shout)
+            .collect(Collectors.toList());
+        System.out.println(shouted);               // [fig!, apple!, banana!]
+
+        // unbound-instance ref returning Integer, then sorted
+        List<Integer> lens = words.stream()
+            .map(String::length)
+            .sorted()
+            .collect(Collectors.toList());
+        System.out.println(lens);                  // [3, 5, 6]
+
+        List<Person> people = new ArrayList<>();
+        people.add(new Person("Alice", 25));
+        people.add(new Person("Kid", 10));
+        people.add(new Person("Bob", 40));
+
+        // filter with an unbound-instance boolean ref: Person::isAdult
+        List<String> adults = people.stream()
+            .filter(Person::isAdult)
+            .map(Person::label)
+            .collect(Collectors.toList());
+        System.out.println(adults);                // [Alice(25), Bob(40)]
+
+        // forEach with a bound-instance ref: System.out::println
+        words.stream().map(String::toUpperCase).forEach(System.out::println);
+    }
+}
+"#
+);
+
 // ---------------------------------------------------------------------------
 // java.util.PriorityQueue — a real binary min-heap, so peek/poll return the
 // least element while iteration/toString show the heap-array order. The exact

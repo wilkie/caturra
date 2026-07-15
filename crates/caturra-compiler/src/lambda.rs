@@ -694,10 +694,25 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     }
                     _ => None,
                 };
+                // The argument is either a single-parameter lambda or a method
+                // reference (`map(String::toUpperCase)`). A reference first
+                // becomes the equivalent one-parameter lambda — its SAM element
+                // is the stream's current element — then goes through the same
+                // erasure as a written lambda.
+                let is_lambda =
+                    matches!(&args[0..], [Expr::Lambda { params, .. }] if params.len() == 1);
+                let is_method_ref = matches!(&args[0..], [Expr::MethodRef { .. }]);
                 if let Some((iface, sam, ret)) = single
-                    && args.len() == 1
-                    && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
+                    && (is_lambda || is_method_ref)
                 {
+                    if is_method_ref {
+                        let synth = Sam {
+                            method: sam.to_owned(),
+                            params: vec![elem.clone()],
+                            ret: ret.clone(),
+                        };
+                        args[0] = method_ref_to_lambda(&args[0], &synth, ctx);
+                    }
                     args[0] =
                         build_erased_lambda(&mut args[0], iface, sam, &ret, &[elem], None, ctx);
                     return;
