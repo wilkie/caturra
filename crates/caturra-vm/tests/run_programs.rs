@@ -7881,10 +7881,6 @@ fn try_catch_compile_errors_match_javac() {
             "String.replaceAll exists in Java, but regular expressions are not supported",
         ),
         (
-            r#"class M { static void f() { String s = String.join(",", "a", "b"); } }"#,
-            "String.join exists in Java, but varargs are not supported by caturra",
-        ),
-        (
             r#"class M { static void f() { "abc".lines(); } }"#,
             "String.lines exists in Java, but streams are not supported by caturra",
         ),

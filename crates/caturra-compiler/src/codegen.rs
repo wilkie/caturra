@@ -4009,7 +4009,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "chars", "streams are not supported by caturra"),
     ("String", "codePoints", "streams are not supported by caturra"),
     ("String", "lines", "streams are not supported by caturra"),
-    ("String", "join", "varargs are not supported by caturra"),
     ("StringBuilder", "capacity", "caturra does not model a builder's capacity, only its contents"),
     ("StringBuilder", "chars", "streams are not supported by caturra"),
     ("StringBuilder", "codePoints", "streams are not supported by caturra"),
@@ -10965,6 +10964,74 @@ impl BodyGen<'_> {
         Some((tags, width))
     }
 
+    /// `String.join(delimiter, ...)` — variadic like `format`. The elements are
+    /// a single `String[]`, a single `List` of strings, or individual strings;
+    /// the shape is recorded in the descriptor so the VM reads argument 1
+    /// correctly (a null element and a null array are indistinguishable at
+    /// runtime otherwise).
+    #[allow(clippy::option_option)] // matches builtin_static_call's return shape
+    fn emit_string_join(&mut self, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
+        let [delimiter, rest @ ..] = args else {
+            self.error(span, "no suitable method found for join() in class String");
+            return None;
+        };
+        let delim_ty = self.expr(delimiter);
+        if delim_ty != JType::Str && delim_ty != JType::Error {
+            self.error(
+                delimiter.span(),
+                format!(
+                    "incompatible types: {} cannot be converted to CharSequence",
+                    delim_ty.describe(self.table)
+                ),
+            );
+        }
+        let mut width: u16 = 1;
+        // A single array/list argument is the elements themselves; anything else
+        // is a list of individual `CharSequence` elements.
+        let elements = if let [single] = rest
+            && matches!(
+                self.type_of(single),
+                JType::Array {
+                    elem: ElemType::Str,
+                    dims: 1
+                } | JType::List(_)
+                    | JType::Collection(_)
+            ) {
+            let ty = self.expr(single);
+            width += 1;
+            if matches!(ty, JType::Array { .. }) {
+                String::from("[Ljava/lang/String;")
+            } else {
+                String::from("Ljava/util/List;")
+            }
+        } else {
+            let mut tags = String::new();
+            for arg in rest {
+                let ty = self.expr(arg);
+                if ty != JType::Str && ty != JType::Null && ty != JType::Error {
+                    self.error(
+                        arg.span(),
+                        format!(
+                            "incompatible types: {} cannot be converted to CharSequence",
+                            ty.describe(self.table)
+                        ),
+                    );
+                }
+                if ty == JType::Error {
+                    return None;
+                }
+                tags.push_str("Ljava/lang/String;");
+                width += 1;
+            }
+            tags
+        };
+        let descriptor = format!("(Ljava/lang/String;{elements})Ljava/lang/String;");
+        let method_ref = intern_method_ref(self.pool, "java/lang/String", "join", &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(width);
+        Some(Some(JType::Str))
+    }
+
     /// Emit an intrinsic static call (`Math.abs(...)`, ...).
     #[allow(clippy::option_option)]
     fn builtin_static_call(
@@ -10984,6 +11051,10 @@ impl BodyGen<'_> {
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             self.code.drop_stack(width);
             return Some(Some(JType::Str));
+        }
+        // `String.join` is variadic the same way (`join(",", parts)`).
+        if class == "String" && method == "join" {
+            return self.emit_string_join(args, span);
         }
         let (jvm_class, methods) = builtin_static_table(class).expect("caller checked");
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
@@ -12967,7 +13038,7 @@ impl BodyGen<'_> {
                         // `String.format` is variadic and special-cased in the
                         // emission path (not in the static table); it returns
                         // String. Mirror that here so it can be an argument.
-                        if path[0] == "String" && method == "format" {
+                        if path[0] == "String" && matches!(method.as_str(), "format" | "join") {
                             return JType::Str;
                         }
                         // Intrinsic static (Math.abs, ...).

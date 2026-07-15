@@ -2275,6 +2275,37 @@ public class DiffVarargs {
 "#
 );
 
+// `String.join` is the library's own varargs, modelled like `String.format`:
+// its elements are a String array, a List, or individual strings — the shape
+// rides in the descriptor. A null element joins as "null".
+differential_test!(
+    diff_string_join,
+    "DiffJoin",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class DiffJoin {
+    public static void main(String[] args) {
+        String[] parts = { "a", "b", "c" };
+        System.out.println(String.join(",", parts));          // array
+        System.out.println(String.join("-", "x", "y", "z"));  // individual
+        System.out.println(String.join("|", "solo"));         // one element
+        System.out.println("[" + String.join(",") + "]");     // no elements -> empty
+
+        List<String> list = new ArrayList<>(Arrays.asList("one", "two", "three"));
+        System.out.println(String.join(" ", list));           // Iterable (List)
+
+        System.out.println(String.join(",", "a", null, "b")); // null element -> "null"
+
+        String[] empty = {};
+        System.out.println("[" + String.join(",", empty) + "]");
+    }
+}
+"#
+);
+
 differential_test!(
     diff_nested_classes,
     "DiffNested",

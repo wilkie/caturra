@@ -3880,6 +3880,9 @@ fn string_static(
         let reference = heap.alloc_string(&text);
         return Ok(Some(JValue::Ref(Some(reference))));
     }
+    if method == "join" {
+        return string_join(heap, descriptor, args);
+    }
     match (method, args) {
         ("valueOf" | "copyValueOf", [value]) => {
             // The descriptor disambiguates int/char/boolean, which all
@@ -3914,6 +3917,58 @@ fn string_static(
         }
         _ => Err(VmError::UnknownIntrinsic(format!("String.{method}"))),
     }
+}
+
+/// `String.join(delimiter, ...)`. The codegen descriptor says how argument 1 is
+/// shaped: a `String[]`, a `List`, or the first of individual `CharSequence`
+/// arguments. A null delimiter or a null array/iterable throws; a null element
+/// joins as the text `null`, as `StringJoiner` produces.
+fn string_join(
+    heap: &mut Heap,
+    descriptor: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let delimiter = match args.first() {
+        Some(JValue::Ref(Some(reference))) => heap.string_text(*reference).unwrap_or_default(),
+        Some(JValue::Ref(None)) => {
+            return Err(throw("java.lang.NullPointerException: delimiter is null"));
+        }
+        _ => String::new(),
+    };
+    let shape = descriptor
+        .strip_prefix("(Ljava/lang/String;")
+        .and_then(|rest| rest.strip_suffix(")Ljava/lang/String;"))
+        .unwrap_or("");
+    let elements: Vec<JValue> = if shape.starts_with('[') {
+        match args.get(1) {
+            Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
+                Some(HeapObject::RefArray(_, values)) => values.clone(),
+                _ => return Err(throw("java.lang.NullPointerException")),
+            },
+            _ => return Err(throw("java.lang.NullPointerException: elements are null")),
+        }
+    } else if shape.starts_with("Ljava/util/List;") {
+        match args.get(1) {
+            Some(JValue::Ref(Some(reference))) => heap
+                .list_values(*reference)
+                .cloned()
+                .ok_or_else(|| throw("java.lang.NullPointerException"))?,
+            _ => return Err(throw("java.lang.NullPointerException: elements are null")),
+        }
+    } else {
+        args.get(1..).unwrap_or(&[]).to_vec()
+    };
+    let parts: Vec<String> = elements
+        .iter()
+        .map(|value| match value {
+            JValue::Ref(Some(reference)) => heap
+                .string_text(*reference)
+                .unwrap_or_else(|| String::from("null")),
+            _ => String::from("null"),
+        })
+        .collect();
+    let reference = heap.alloc_string(&parts.join(&delimiter));
+    Ok(Some(JValue::Ref(Some(reference))))
 }
 
 /// Render a `StringBuilder.append` argument the way Java would.

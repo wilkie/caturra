@@ -839,27 +839,33 @@ public class MethodRef {
 }
 ''',
     ),
+    dict(
+        id="varargs-library",
+        category="Library",
+        title="Varargs library methods (String.join)",
+        summary="`String.join` — a String array, a List, or individual strings. Modelled like `String.format`: the argument shape rides in the descriptor.",
+        main="Join",
+        source='''
+import java.util.Arrays;
+import java.util.List;
+
+public class Join {
+    public static void main(String[] args) {
+        String[] parts = { "a", "b", "c" };
+        System.out.println(String.join(",", parts));
+        System.out.println(String.join("-", "x", "y", "z"));
+        List<String> words = Arrays.asList("one", "two", "three");
+        System.out.println(String.join(" ", words));
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
 # makes them an honest gap rather than an invented one — and caturra must reject
 # them with a reason that says so.
 GAPS = [
-    dict(
-        id="varargs-library",
-        category="Library",
-        title="Varargs library methods (String.join)",
-        summary="A varargs method YOU write works; the library's own varargs (String.join) are not modelled.",
-        main="Join",
-        source='''
-public class Join {
-    public static void main(String[] args) {
-        String[] parts = { "a", "b", "c" };
-        System.out.println(String.join(",", parts));
-    }
-}
-''',
-    ),
     dict(
         id="vector",
         category="Collections",

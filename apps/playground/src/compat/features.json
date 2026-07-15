@@ -253,11 +253,11 @@
     "id": "varargs-library",
     "category": "Library",
     "title": "Varargs library methods (String.join)",
-    "summary": "A varargs method YOU write works; the library's own varargs (String.join) are not modelled.",
+    "summary": "`String.join` \u2014 a String array, a List, or individual strings. Modelled like `String.format`: the argument shape rides in the descriptor.",
     "main": "Join",
-    "source": "public class Join {\n    public static void main(String[] args) {\n        String[] parts = { \"a\", \"b\", \"c\" };\n        System.out.println(String.join(\",\", parts));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "String.join exists in Java, but varargs are not supported by caturra"
+    "source": "import java.util.Arrays;\nimport java.util.List;\n\npublic class Join {\n    public static void main(String[] args) {\n        String[] parts = { \"a\", \"b\", \"c\" };\n        System.out.println(String.join(\",\", parts));\n        System.out.println(String.join(\"-\", \"x\", \"y\", \"z\"));\n        List<String> words = Arrays.asList(\"one\", \"two\", \"three\");\n        System.out.println(String.join(\" \", words));\n    }\n}\n",
+    "status": "supported",
+    "expected": "a,b,c\nx-y-z\none two three\n"
   },
   {
     "id": "vector",
@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-ar_hrrt5/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-2tbknz90/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-6d55ox_f/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-xivr7ztz/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-hmn0r_lr/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-4uvtmt0v/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
