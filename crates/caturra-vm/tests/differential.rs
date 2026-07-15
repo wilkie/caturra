@@ -9123,3 +9123,46 @@ public class DiffResources {
 }
 "#
 );
+
+// java.util.function: Function/Predicate/Supplier/Consumer/BiFunction, from a
+// lambda and from a method reference. They alias the bundled erased interfaces
+// (Function -> __UnaryOperator, ...) and the lambda pass casts the parameters
+// back to the type arguments — the same machinery Comparator uses.
+//
+// What is NOT claimed (the one-type-parameter-per-class erasure wall streams and
+// Optional share): the value `apply(x)`/`get()` returns erases to Object, so it
+// prints and passes on fine but cannot feed integer arithmetic or a nested
+// `apply(apply(x))`; and the default methods (`andThen`/`negate`) are absent.
+differential_test!(
+    diff_java_util_function,
+    "DiffFunction",
+    r#"
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+
+public class DiffFunction {
+    public static void main(String[] args) {
+        Function<Integer, Integer> twice = n -> n * 2;
+        System.out.println(twice.apply(4));
+
+        Function<String, Integer> len = String::length;
+        System.out.println(len.apply("hello"));
+
+        Predicate<String> nonEmpty = s -> !s.isEmpty();
+        System.out.println(nonEmpty.test("hi") + " " + nonEmpty.test(""));
+
+        Supplier<String> greet = () -> "hello";
+        System.out.println(greet.get());
+
+        Consumer<String> shout = s -> System.out.println(s + "!");
+        shout.accept("go");
+
+        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;
+        System.out.println(add.apply(2, 3));
+    }
+}
+"#
+);

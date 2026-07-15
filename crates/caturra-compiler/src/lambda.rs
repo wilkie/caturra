@@ -420,7 +420,20 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
 fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
     // A method reference in a target-typed position becomes a lambda.
     if matches!(expr, Expr::MethodRef { .. }) {
+        // A `java.util.function` target (`Function<String, Integer> len =
+        // String::length`): synthesize the SAM from the type arguments, turn the
+        // reference into a lambda, and fall through to the erased-lambda branch.
         if let Some(target) = expected
+            && !user_defined_functional(target, ctx)
+            && let Some(spec) = functional_lambda_spec(target)
+        {
+            let sam = Sam {
+                method: spec.method.to_owned(),
+                params: spec.params.clone(),
+                ret: spec.result.clone().unwrap_or(spec.ret),
+            };
+            *expr = method_ref_to_lambda(expr, &sam, ctx);
+        } else if let Some(target) = expected
             && let Some(name) = interface_name(target)
             && let Some(sam) = ctx.sams.get(name).cloned()
         {
@@ -449,6 +462,26 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             &TypeRef::Int,
             &[elem.clone(), elem],
             None,
+            ctx,
+        );
+        return;
+    }
+    // A lambda in a `java.util.function` position (`Function<A, B>`,
+    // `Predicate<A>`, `Supplier<A>`, ...): the same erased-SAM treatment as
+    // `Comparator`, with the parameter and result types read from the target's
+    // type arguments rather than a receiver's element.
+    if let Expr::Lambda { .. } = expr
+        && let Some(target) = expected
+        && !user_defined_functional(target, ctx)
+        && let Some(spec) = functional_lambda_spec(target)
+    {
+        *expr = build_erased_lambda(
+            expr,
+            spec.interface,
+            spec.method,
+            &spec.ret,
+            &spec.params,
+            spec.result.as_ref(),
             ctx,
         );
         return;
@@ -992,6 +1025,99 @@ fn sorted_ctor_elem(target: &TypeRef) -> Option<TypeRef> {
     )
     .then(|| args.first().cloned())
     .flatten()
+}
+
+/// How a lambda targeting a `java.util.function` interface desugars: which erased
+/// bundled interface and SAM it implements, and — read from the target's type
+/// arguments — the parameter types to cast to and the result type to coerce to.
+struct FunctionalSpec {
+    interface: &'static str,
+    method: &'static str,
+    /// The synthesized method's return type: the erased SAM's own return
+    /// (`Object`, `boolean`, or `void`).
+    ret: TypeRef,
+    /// The parameter types the erased `Object` arguments cast back to.
+    params: Vec<TypeRef>,
+    /// The declared result type the body must coerce to, when the SAM returns a
+    /// value that erases to `Object` (`apply`/`get`). `None` for `test`/`accept`,
+    /// whose return is concrete.
+    result: Option<TypeRef>,
+}
+
+/// Whether the user defined a class/interface of the target's name — in which
+/// case theirs wins, and the `java.util.function` aliasing must stand aside (a
+/// user `interface Function<A, B>` is common). The bundled interfaces are all
+/// `__`-prefixed, so a bare `Function` in the name set is the user's.
+fn user_defined_functional(target: &TypeRef, ctx: &Ctx) -> bool {
+    let name = match target {
+        TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => name.as_str(),
+        _ => return false,
+    };
+    let simple = name.rsplit('.').next().unwrap_or(name);
+    ctx.class_names.contains(simple)
+}
+
+fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
+    let TypeRef::Generic { base, args } = target else {
+        return None;
+    };
+    let object = || TypeRef::Named(String::from("Object"));
+    let simple = base.rsplit('.').next().unwrap_or(base);
+    let (interface, method, ret, params, result): (_, _, _, Vec<TypeRef>, Option<TypeRef>) =
+        match (simple, args.as_slice()) {
+            ("Function", [a, b]) => (
+                "__UnaryOperator",
+                "apply",
+                object(),
+                vec![a.clone()],
+                Some(b.clone()),
+            ),
+            ("UnaryOperator", [a]) => (
+                "__UnaryOperator",
+                "apply",
+                object(),
+                vec![a.clone()],
+                Some(a.clone()),
+            ),
+            ("Predicate", [a]) => (
+                "__Predicate",
+                "test",
+                TypeRef::Boolean,
+                vec![a.clone()],
+                None,
+            ),
+            ("Consumer", [a]) => ("__Consumer", "accept", TypeRef::Void, vec![a.clone()], None),
+            ("Supplier", [a]) => ("__Supplier", "get", object(), Vec::new(), Some(a.clone())),
+            ("BiFunction", [a, b, c]) => (
+                "__BiFunction",
+                "apply",
+                object(),
+                vec![a.clone(), b.clone()],
+                Some(c.clone()),
+            ),
+            ("BinaryOperator", [a]) => (
+                "__BiFunction",
+                "apply",
+                object(),
+                vec![a.clone(), a.clone()],
+                Some(a.clone()),
+            ),
+            ("BiConsumer", [a, b]) => (
+                "__BiConsumer",
+                "accept",
+                TypeRef::Void,
+                vec![a.clone(), b.clone()],
+                None,
+            ),
+            _ => return None,
+        };
+    Some(FunctionalSpec {
+        interface,
+        method,
+        ret,
+        params,
+        result,
+    })
 }
 
 /// The element type `E` of a `Comparator<E>` target type, for casting a

@@ -513,6 +513,12 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // `Collections.reverseOrder()` also yields one without naming it.
             || s.text.contains("Comparator")
             || s.text.contains("reverseOrder")
+            // The `java.util.function` interfaces alias the bundled erased ones.
+            || s.text.contains("java.util.function")
+            || s.text.contains("Function")
+            || s.text.contains("Predicate")
+            || s.text.contains("Supplier")
+            || s.text.contains("Consumer")
             // A comparator lambda in a sorted collection's constructor
             // (`new PriorityQueue<>((a, b) -> ...)`) needs `__Comparator` too,
             // without ever naming it — trigger on the pair.

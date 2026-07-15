@@ -1170,10 +1170,27 @@ GRAMMAR = [
                       '            @Override public int compare(String a, String b) { return a.compareTo(b); }\n'
                       '        };\n        System.out.println(c.compare("a", "b"));',
                       '', 'import java.util.Comparator;')),
-    dict(id="g-function-package", category="Expressions", title="java.util.function (Function, Predicate, Supplier)",
-         summary="The JDK's own functional interfaces. Your OWN functional interface works.", main="G",
-         source=_prog('java.util.function.Function<Integer, Integer> twice = n -> n * 2;\n'
-                      '        System.out.println(twice.apply(4));')),
+    dict(id="g-function-package", category="Expressions",
+         title="java.util.function (Function, Predicate, Supplier, Consumer)",
+         summary="The JDK's standard functional interfaces, from a lambda or a method reference.",
+         main="G",
+         source=_prog('Function<Integer, Integer> twice = n -> n * 2;\n'
+                      '        System.out.println(twice.apply(4));\n'
+                      '        Function<String, Integer> len = String::length;\n'
+                      '        System.out.println(len.apply("hello"));\n'
+                      '        Predicate<String> nonEmpty = s -> !s.isEmpty();\n'
+                      '        System.out.println(nonEmpty.test("hi") + " " + nonEmpty.test(""));\n'
+                      '        Supplier<String> greet = () -> "hello";\n'
+                      '        System.out.println(greet.get());\n'
+                      '        Consumer<String> shout = s -> System.out.println(s + "!");\n'
+                      '        shout.accept("go");\n'
+                      '        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;\n'
+                      '        System.out.println(add.apply(2, 3));',
+                      '', 'import java.util.function.BiFunction;\n'
+                      'import java.util.function.Consumer;\n'
+                      'import java.util.function.Function;\n'
+                      'import java.util.function.Predicate;\n'
+                      'import java.util.function.Supplier;')),
     dict(id="g-shadowing", category="Expressions", title="Shadowing, this, and super",
          summary="A local shadowing a field, `this.x`, and `super.method()`.", main="G",
          source=_prog('System.out.println(new G(5).show());\n        System.out.println(new Child().describe());',

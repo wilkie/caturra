@@ -23,6 +23,10 @@ interface __UnaryOperator {
   Object apply(Object element);
 }
 
+interface __BiFunction {
+  Object apply(Object left, Object right);
+}
+
 interface __Supplier {
   Object get();
 }

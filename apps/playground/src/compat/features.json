@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-x2e8oysq/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-k1kr63ek/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-3_r9px99/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-tl2nbnny/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-xs7aea1i/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-fljop_8u/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -685,12 +685,12 @@
   {
     "id": "g-function-package",
     "category": "Expressions",
-    "title": "java.util.function (Function, Predicate, Supplier)",
-    "summary": "The JDK's own functional interfaces. Your OWN functional interface works.",
+    "title": "java.util.function (Function, Predicate, Supplier, Consumer)",
+    "summary": "The JDK's standard functional interfaces, from a lambda or a method reference.",
     "main": "G",
-    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\njava.util.function.Function<Integer, Integer> twice = n -> n * 2;\n        System.out.println(twice.apply(4));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "package java.util.function is not supported by caturra (the class library covers the AP CS A subset)"
+    "source": "import java.util.function.BiFunction;\nimport java.util.function.Consumer;\nimport java.util.function.Function;\nimport java.util.function.Predicate;\nimport java.util.function.Supplier;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nFunction<Integer, Integer> twice = n -> n * 2;\n        System.out.println(twice.apply(4));\n        Function<String, Integer> len = String::length;\n        System.out.println(len.apply(\"hello\"));\n        Predicate<String> nonEmpty = s -> !s.isEmpty();\n        System.out.println(nonEmpty.test(\"hi\") + \" \" + nonEmpty.test(\"\"));\n        Supplier<String> greet = () -> \"hello\";\n        System.out.println(greet.get());\n        Consumer<String> shout = s -> System.out.println(s + \"!\");\n        shout.accept(\"go\");\n        BiFunction<Integer, Integer, Integer> add = (a, b) -> a + b;\n        System.out.println(add.apply(2, 3));\n    }\n}\n",
+    "status": "supported",
+    "expected": "8\n5\ntrue false\nhello\ngo!\n5\n"
   },
   {
     "id": "g-shadowing",

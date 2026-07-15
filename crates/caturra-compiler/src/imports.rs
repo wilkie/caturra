@@ -57,6 +57,18 @@ const JAVA_IO: &[&str] = &[
     "FileNotFoundException",
     "IOException",
 ];
+/// `java.util.function` — the standard functional interfaces. They alias the
+/// bundled erased `__`-interfaces (see `functional_erased` in codegen).
+const JAVA_UTIL_FUNCTION: &[&str] = &[
+    "Function",
+    "BiFunction",
+    "UnaryOperator",
+    "BinaryOperator",
+    "Predicate",
+    "Consumer",
+    "BiConsumer",
+    "Supplier",
+];
 /// `java.util.stream` — the Stream pipeline and its collectors.
 const JAVA_UTIL_STREAM: &[&str] = &[
     "Stream",
@@ -148,7 +160,6 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
     "java.text",
     "java.math",
     "java.sql",
-    "java.util.function",
     "java.util.regex",
     "java.util.concurrent",
 ];
@@ -176,6 +187,14 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Stack",
     "Collection",
     "Comparator",
+    "Function",
+    "BiFunction",
+    "UnaryOperator",
+    "BinaryOperator",
+    "Predicate",
+    "Consumer",
+    "BiConsumer",
+    "Supplier",
     "Collectors",
     "Stream",
     "File",
@@ -199,7 +218,7 @@ const REQUIRES_IMPORT: &[&str] = &[
 pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     let (package, class) = dotted.rsplit_once('.')?;
     let known = match package {
-        "java.util" | "java.io" | "java.lang" => package_classes(package)?,
+        "java.util" | "java.io" | "java.lang" | "java.util.function" => package_classes(package)?,
         _ => return None,
     };
     known.iter().find(|name| **name == class).copied()
@@ -245,6 +264,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
     match package {
         "java.util" => Some(JAVA_UTIL),
         "java.util.stream" => Some(JAVA_UTIL_STREAM),
+        "java.util.function" => Some(JAVA_UTIL_FUNCTION),
         "java.io" => Some(JAVA_IO),
         "java.lang" => Some(JAVA_LANG),
         // Bundled clean-room library (auto-injected in `compile`); the

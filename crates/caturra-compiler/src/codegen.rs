@@ -756,8 +756,13 @@ impl MethodTable {
                     .iter()
                     .filter_map(|name| {
                         // `implements Comparator<T>` implements the bundled
-                        // erased `__Comparator` (a student-facing alias).
-                        let name = comparator_alias(name);
+                        // erased `__Comparator` — unless the user defined that
+                        // interface themselves, in which case theirs wins.
+                        let name = if table.class_id(name).is_some() {
+                            name.as_str()
+                        } else {
+                            comparator_alias(name)
+                        };
                         let id = table.class_id(name);
                         if id.is_none() {
                             diagnostics.push(Diagnostic::error(
@@ -1111,10 +1116,11 @@ impl MethodTable {
                 {
                     return Some(JType::Object(id));
                 }
-                // `Comparator` aliases the bundled erased `__Comparator`.
-                if (name == "Comparator" || name == "java.util.Comparator")
-                    && !self.has_class("Comparator")
-                    && let Some(id) = self.class_id("__Comparator")
+                // `Comparator` and the `java.util.function` interfaces alias their
+                // bundled erased forms (`__Comparator`, `__UnaryOperator`, ...).
+                if let Some(erased) = functional_erased(name)
+                    && !self.has_class(name.rsplit('.').next().unwrap_or(name))
+                    && let Some(id) = self.class_id(erased)
                 {
                     return Some(JType::Object(id));
                 }
@@ -1233,11 +1239,12 @@ impl MethodTable {
                     let key = elem_from_type_arg(&args[0], self)?;
                     let value = elem_from_type_arg(&args[1], self)?;
                     Some(JType::MapEntry { key, value })
-                } else if matches!(simple, "Comparator")
-                    && !self.has_class("Comparator")
-                    && let Some(id) = self.class_id("__Comparator")
+                } else if let Some(erased) = functional_erased(simple)
+                    && !self.has_class(simple)
+                    && let Some(id) = self.class_id(erased)
                 {
-                    // `Comparator<T>` erases to the bundled `__Comparator`.
+                    // `Comparator<T>` / `Function<T, R>` / … erase to their bundled
+                    // `__`-interface, dropping the type arguments.
                     Some(JType::Object(id))
                 } else if !self.has_class(base)
                     && matches!(simple, "Class" | "Constructor" | "Field")
@@ -1857,10 +1864,29 @@ fn collection_element_type(ty: JType) -> Option<ElemType> {
 /// (its `compare(Object, Object)` reaches a user `compare(T, T)` through the
 /// VM's erasure bridge, exactly as `Comparable.compareTo` does).
 fn comparator_alias(name: &str) -> &str {
-    match name {
-        "Comparator" | "java.util.Comparator" => "__Comparator",
-        other => other,
-    }
+    functional_erased(name).unwrap_or(name)
+}
+
+/// The bundled erased interface a `java.util.function` type (or `Comparator`)
+/// aliases to. Generics erase, and caturra models one type parameter per class,
+/// so `Function<T, R>`, `UnaryOperator<T>` and the rest all collapse onto a
+/// handful of `Object`-typed SAMs; the lambda pass casts the parameters back to
+/// the declared type arguments (see [`build_erased_lambda`]).
+///
+/// `None` for anything that is not one of these — a user class of the same name
+/// shadows it, checked by the caller with `has_class`.
+fn functional_erased(name: &str) -> Option<&'static str> {
+    let simple = name.rsplit('.').next().unwrap_or(name);
+    Some(match simple {
+        "Comparator" => "__Comparator",
+        "Function" | "UnaryOperator" => "__UnaryOperator",
+        "BiFunction" | "BinaryOperator" => "__BiFunction",
+        "Predicate" => "__Predicate",
+        "Consumer" => "__Consumer",
+        "BiConsumer" => "__BiConsumer",
+        "Supplier" => "__Supplier",
+        _ => return None,
+    })
 }
 
 /// Method-invocation / assignment widening (JLS §5.3 without boxing),
@@ -2930,6 +2956,15 @@ fn method_descriptor(
                     out.push_str("Ljava/lang/reflect/Constructor;");
                 } else if !table.has_class(base) && simple == "Field" {
                     out.push_str("Ljava/lang/reflect/Field;");
+                } else if let Some(erased) = functional_erased(base)
+                    && !table.has_class(base)
+                {
+                    // `Comparator<T>` / `Function<T, R>` as a parameter/return/field
+                    // type — erases to the bundled `__`-interface. Without this even
+                    // `Comparator<String>` could not be a method parameter.
+                    out.push('L');
+                    out.push_str(erased);
+                    out.push(';');
                 } else {
                     let message = crate::imports::unsupported_class_reason(base)
                         .filter(|_| !table.has_class(base))
