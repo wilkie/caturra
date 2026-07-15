@@ -84,6 +84,23 @@ pub fn resolve_captures(
                     &mutations,
                 );
             }
+            // Field initializers hold `new Anon(){...}` too — both a field like
+            // `Runnable r = new Runnable(){...};` and, crucially, an enum
+            // constant's synthesized `new Anon$N("NAME", ordinal, ...)`. Without
+            // this the anon class never gets its super-forwarding constructor.
+            for field in &class.fields {
+                if let Some(init) = &field.init {
+                    let mut scope: Vec<HashMap<String, TypeRef>> = vec![HashMap::new()];
+                    find_in_expr(
+                        init,
+                        &mut scope,
+                        &anon_bodies,
+                        &mut found,
+                        &class.name,
+                        &Mutations::default(),
+                    );
+                }
+            }
         }
         diagnostics.extend(
             found

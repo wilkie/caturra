@@ -787,7 +787,7 @@ impl Parser<'_> {
 
         // Constants: `NAME`, `NAME(args)`, comma-separated, ended by
         // `;` (if members follow) or `}`.
-        let mut constants: Vec<(String, Vec<Expr>, SourceSpan)> = Vec::new();
+        let mut constants: Vec<EnumConstant> = Vec::new();
         while let Some(TokenKind::Identifier(_)) = self.peek() {
             let (const_name, const_span) = self.expect_ident("for the enum constant")?;
             let args = if self.at_symbol("(") {
@@ -795,7 +795,20 @@ impl Parser<'_> {
             } else {
                 Vec::new()
             };
-            constants.push((const_name, args, const_span));
+            // A constant-specific body (`PLUS { int apply(...) {...} }`) becomes
+            // a synthesized subclass of the enum; the constant is an instance of
+            // that subclass rather than of the enum itself.
+            let body = if self.at_symbol("{") {
+                Some(self.synth_class_from_body(&name, const_span)?)
+            } else {
+                None
+            };
+            constants.push(EnumConstant {
+                name: const_name,
+                args,
+                body,
+                span: const_span,
+            });
             if !self.eat_symbol(",") {
                 break;
             }
@@ -2662,6 +2675,28 @@ impl Parser<'_> {
         args: Vec<Expr>,
         start: SourceSpan,
     ) -> Parsed<Expr> {
+        let name = self.synth_class_from_body(supertype, start)?;
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        Ok(Expr::NewObject {
+            class: name,
+            type_args: Vec::new(),
+            // The super-constructor args ride along; the capture pass turns them
+            // into a synthesized constructor that calls super(...).
+            args,
+            span,
+        })
+    }
+
+    /// Parse a `{ ...members... }` class body (positioned at the `{`) into a
+    /// synthesized top-level class that extends/implements `supertype`, hoisted
+    /// to top level like an anonymous class. Returns the synthesized name. Used
+    /// both for anonymous classes (`new T(){...}`) and for enum constants that
+    /// carry a body (`PLUS { int apply(...) {...} }`).
+    #[allow(clippy::unnecessary_wraps)] // Parsed<_> for symmetry with the caller
+    fn synth_class_from_body(&mut self, supertype: &str, start: SourceSpan) -> Parsed<String> {
         self.pos += 1; // '{'
         let mut methods = Vec::new();
         let mut fields = Vec::new();
@@ -2699,7 +2734,7 @@ impl Parser<'_> {
             start: start.start,
             end: self.here().start,
         };
-        let mut anon = ClassDecl {
+        self.anon_classes.push(ClassDecl {
             name: name.clone(),
             is_public: false,
             is_nested: false,
@@ -2716,19 +2751,10 @@ impl Parser<'_> {
             fields,
             methods,
             init_blocks,
-            nested: Vec::new(),
+            nested,
             span,
-        };
-        anon.nested = nested;
-        self.anon_classes.push(anon);
-        Ok(Expr::NewObject {
-            class: name,
-            type_args: Vec::new(),
-            // The super-constructor args ride along; the capture pass turns them
-            // into a synthesized constructor that calls super(...).
-            args,
-            span,
-        })
+        });
+        Ok(name)
     }
 
     #[allow(clippy::too_many_lines)] // one arm per constructible form
@@ -3091,6 +3117,16 @@ impl Parser<'_> {
     }
 }
 
+/// One parsed enum constant: its name, its constructor arguments, and — for a
+/// constant with a body (`PLUS { ... }`) — the name of the synthesized subclass
+/// the constant instantiates.
+struct EnumConstant {
+    name: String,
+    args: Vec<Expr>,
+    body: Option<String>,
+    span: SourceSpan,
+}
+
 /// Build the synthesized class for an `enum`. Each constant becomes a
 /// `static final E` field initialized with `new E("NAME", ordinal,
 /// args...)`; the enum gets hidden `__name`/`__ordinal` instance
@@ -3106,7 +3142,7 @@ impl Parser<'_> {
 fn desugar_enum(
     name: String,
     interfaces: Vec<String>,
-    constants: Vec<(String, Vec<Expr>, SourceSpan)>,
+    constants: Vec<EnumConstant>,
     mut fields: Vec<FieldDecl>,
     mut methods: Vec<MethodDecl>,
     init_blocks: Vec<InitBlock>,
@@ -3166,26 +3202,29 @@ fn desugar_enum(
 
     // One `static final E NAME = new E("NAME", i, args...);` per
     // constant, in source order.
-    for (index, (const_name, args, const_span)) in constants.iter().enumerate() {
+    for (index, constant) in constants.iter().enumerate() {
         let mut ctor_args = vec![
-            lit_str(const_name),
+            lit_str(&constant.name),
             lit_int(i64::try_from(index).unwrap_or(i64::MAX)),
         ];
-        ctor_args.extend(args.iter().cloned());
+        ctor_args.extend(constant.args.iter().cloned());
+        // A constant with a body is an instance of its synthesized subclass;
+        // one without is an instance of the enum class directly.
+        let class = constant.body.clone().unwrap_or_else(|| name.clone());
         synth_fields.push(FieldDecl {
-            name: const_name.clone(),
+            name: constant.name.clone(),
             ty: enum_ty.clone(),
             is_static: true,
             is_private: false,
             is_final: true,
             init: Some(Expr::NewObject {
-                class: name.clone(),
+                class,
                 type_args: Vec::new(),
                 args: ctor_args,
-                span: *const_span,
+                span: constant.span,
             }),
             order: index,
-            span: *const_span,
+            span: constant.span,
         });
     }
 
@@ -3295,7 +3334,7 @@ fn desugar_enum(
 
     // `static E[] values() { return new E[]{ A, B, ... }; }`
     if !defines(&methods, "values") {
-        let elements: Vec<Expr> = constants.iter().map(|(n, _, _)| var(n)).collect();
+        let elements: Vec<Expr> = constants.iter().map(|c| var(&c.name)).collect();
         let values_body = Expr::NewArray {
             elem: enum_ty.clone(),
             dims: vec![None],
@@ -3394,11 +3433,16 @@ fn desugar_enum(
         });
     }
 
+    // An enum that declares an abstract method is implicitly abstract (every
+    // constant supplies a body, so the enum class itself is never instantiated
+    // directly — only its per-constant subclasses are).
+    let is_abstract = methods.iter().any(|m| m.is_abstract);
+
     ClassDecl {
         name,
         superclass: None,
         interfaces,
-        is_abstract: false,
+        is_abstract,
         is_interface: false,
         is_enum: true,
         is_public: false,

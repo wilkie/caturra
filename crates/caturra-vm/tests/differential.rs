@@ -2155,6 +2155,66 @@ public class DiffEnumFields {
 "#
 );
 
+// Constant-specific class bodies. Each constant with a `{ ... }` body becomes an
+// anonymous subclass of the enum; an `abstract` method forces every constant to
+// supply one and makes the enum itself abstract. Bodies also override a concrete
+// method, and can mix with body-less constants.
+differential_test!(
+    diff_enum_constant_body,
+    "DiffEnumBody",
+    r#"
+public class DiffEnumBody {
+    // Abstract method: every constant implements it, enum is abstract.
+    enum Op {
+        PLUS("+") { int apply(int a, int b) { return a + b; } },
+        TIMES("*") { int apply(int a, int b) { return a * b; } };
+        final String glyph;
+        Op(String g) { glyph = g; }
+        abstract int apply(int a, int b);
+    }
+
+    // A body overrides a concrete method; one constant keeps the default.
+    enum Light {
+        RED { String action() { return "stop"; } },
+        YELLOW,
+        GREEN { String action() { return "go"; } };
+        String action() { return "wait"; }
+    }
+
+    public static void main(String[] args) {
+        for (Op op : Op.values()) {
+            System.out.println(op + " " + op.glyph + " " + op.apply(6, 7));
+        }
+        System.out.println(Op.valueOf("PLUS").apply(2, 3));
+        System.out.println(Op.TIMES.ordinal());
+
+        for (Light l : Light.values()) {
+            System.out.println(l + ": " + l.action());
+        }
+    }
+}
+"#
+);
+
+// javac 11: an enum with an abstract method whose constant has no body cannot
+// be built (the enum is abstract, and that constant would instantiate it).
+differential_reject!(
+    reject_abstract_enum_missing_body,
+    "RejectEnumBody",
+    r"
+public class RejectEnumBody {
+    enum Op {
+        PLUS { int apply(int a, int b) { return a + b; } },
+        MINUS;
+        abstract int apply(int a, int b);
+    }
+    public static void main(String[] args) {
+        System.out.println(Op.PLUS.apply(2, 3));
+    }
+}
+"
+);
+
 differential_test!(
     diff_varargs,
     "DiffVarargs",
