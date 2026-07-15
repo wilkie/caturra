@@ -1542,6 +1542,7 @@ fn build_erased_lambda(
         is_interface: false,
         is_enum: false,
         is_anonymous: true,
+        is_local: false,
         type_params: Vec::new(),
         fields: Vec::new(),
         methods: vec![MethodDecl {
@@ -1651,6 +1652,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         is_interface: false,
         is_enum: false,
         is_anonymous: true,
+        is_local: false,
         type_params: Vec::new(),
         fields: Vec::new(),
         methods: vec![method],

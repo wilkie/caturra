@@ -1049,9 +1049,10 @@ GRAMMAR = [
                       '        System.out.println(inner.hi());',
                       '    class Inner { String hi() { return "inner"; } }')),
     dict(id="g-local-class", category="Declarations", title="Local class (declared inside a method)",
-         summary="A named class in a method body.", main="G",
-         source=_prog('class Local { String hi() { return "local"; } }\n'
-                      '        System.out.println(new Local().hi());')),
+         summary="A named class in a method body — captures an effectively-final local and reads the enclosing statics.", main="G",
+         source=_prog('int factor = 3;\n'
+                      '        class Scaler { int of(int n) { return n * factor; } }\n'
+                      '        System.out.println(new Scaler().of(4));')),
     dict(id="g-init-blocks", category="Declarations", title="Static and instance initializer blocks",
          summary="`static { ... }` and `{ ... }`.", main="G",
          source=_prog('System.out.println(VALUE + " " + new G().value);',

@@ -55,6 +55,12 @@ pub struct ClassDecl {
     /// the named supertype, which the compiler resolves to an
     /// `extends` (class) or `implements` (interface).
     pub is_anonymous: bool,
+    /// Set for a local class (declared inside a method body) after it is
+    /// mangled and hoisted to the top level. Like an anonymous class it can
+    /// capture enclosing locals, so it joins the capture pass — but it keeps
+    /// ordinary `extends`/`implements` resolution rather than the anonymous
+    /// single-supertype form.
+    pub is_local: bool,
     /// Generic type parameter names (`<T, U>`); erased to `Object`.
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<FieldDecl>,

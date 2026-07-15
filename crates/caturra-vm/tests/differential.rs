@@ -8601,6 +8601,108 @@ public class RejectNested {
 "
 );
 
+// A local class: declared in a method body, mangled and hoisted. It captures an
+// effectively-final local, reads an enclosing static, implements an interface,
+// has its own constructor, recurses, and — declared in two blocks under the same
+// source name — does not collide, nor leak its name to a sibling method.
+differential_test!(
+    diff_local_class,
+    "DiffLocalClass",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+class Shape { String kind() { return "top-level Shape"; } }
+
+public class DiffLocalClass {
+    static int BASE = 100;
+    interface Greeter { String hi(); }
+
+    static int countdown(int start) {
+        class Rec {
+            String go(int k) { return k <= 0 ? "." : k + new Rec().go(k - 1); }
+        }
+        return new Rec().go(start).length();
+    }
+
+    public static void main(String[] args) {
+        class Shape { String kind() { return "local Shape"; } }   // shadows the top-level
+        System.out.println(new Shape().kind());
+
+        int bump = 5;
+        class Counter implements Greeter {
+            int n;
+            Counter(int start) { n = start; }
+            void add() { n += bump; }
+            public String hi() { return "n=" + (n + BASE); }
+        }
+        Counter c = new Counter(10);
+        c.add();
+        c.add();
+        Greeter g = c;
+        System.out.println(g.hi());
+
+        List<String> tags = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            final int idx = i;
+            class Tag { String v() { return "t" + idx; } }
+            tags.add(new Tag().v());
+        }
+        System.out.println(tags);
+        System.out.println(countdown(4));
+    }
+
+    static String elsewhere() {
+        return new Shape().kind();   // the top-level Shape; the local one is out of scope
+    }
+}
+"#
+);
+
+// A local class's source name is scoped to its block: a sibling method cannot
+// see it, exactly as javac says "cannot find symbol".
+differential_reject!(
+    reject_local_class_out_of_scope,
+    "RejectLocalScope",
+    r"
+public class RejectLocalScope {
+    static void declare() {
+        class Secret { int x() { return 1; } }
+        System.out.println(new Secret().x());
+    }
+    static void use() {
+        System.out.println(new Secret().x());
+    }
+    public static void main(String[] args) {
+        declare();
+        use();
+    }
+}
+"
+);
+
+// A local class in an INSTANCE method reading an enclosing instance member needs
+// an enclosing `this`, the same machinery an inner class would — which caturra
+// does not model. javac accepts it; caturra is stricter (it refuses rather than
+// silently miscompute). Capturing locals and reading enclosing statics, above,
+// is the supported subset.
+stricter_than_javac!(
+    local_class_reads_enclosing_instance,
+    "StricterLocalInstance",
+    r#"
+public class StricterLocalInstance {
+    int seed = 7;
+    String work() {
+        class Probe { int v() { return seed * 2; } }
+        return "v=" + new Probe().v();
+    }
+    public static void main(String[] args) {
+        System.out.println(new StricterLocalInstance().work());
+    }
+}
+"#
+);
+
 // `Method.invoke` checks the receiver and the arguments BEFORE it runs
 // anything: a receiver that is not an instance of the declaring class, or the
 // wrong number of arguments, is an IllegalArgumentException, not a call. caturra

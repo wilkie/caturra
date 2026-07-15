@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-ii6cdh83/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-6i6sf1op/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-g_bspkpo/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-7r_3w2bo/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-6wnr92s7/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-_x3fdg0o/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -406,11 +406,11 @@
     "id": "g-local-class",
     "category": "Declarations",
     "title": "Local class (declared inside a method)",
-    "summary": "A named class in a method body.",
+    "summary": "A named class in a method body \u2014 captures an effectively-final local and reads the enclosing statics.",
     "main": "G",
-    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nclass Local { String hi() { return \"local\"; } }\n        System.out.println(new Local().hi());\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "a class declared inside a method (a local class) is not supported by caturra; declare it at the top level"
+    "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nint factor = 3;\n        class Scaler { int of(int n) { return n * factor; } }\n        System.out.println(new Scaler().of(4));\n    }\n}\n",
+    "status": "supported",
+    "expected": "12\n"
   },
   {
     "id": "g-init-blocks",

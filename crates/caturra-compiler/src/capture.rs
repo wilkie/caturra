@@ -27,6 +27,7 @@ use crate::ast::{
 use crate::diagnostics::SourceSpan;
 
 /// Resolve captures for all anonymous classes in the compilation.
+#[allow(clippy::too_many_lines)] // one linear pass with clearly labelled phases
 pub fn resolve_captures(
     units: &mut [(String, CompilationUnit)],
 ) -> Vec<crate::diagnostics::Diagnostic> {
@@ -34,7 +35,9 @@ pub fn resolve_captures(
     let anon_bodies: HashMap<String, ClassDecl> = units
         .iter()
         .flat_map(|(_, unit)| unit.classes.iter())
-        .filter(|c| c.is_anonymous)
+        // Local classes join too: they capture enclosing locals and read the
+        // enclosing statics just as anonymous classes do.
+        .filter(|c| c.is_anonymous || c.is_local)
         .map(|c| (c.name.clone(), c.clone()))
         .collect();
     if anon_bodies.is_empty() {
@@ -120,6 +123,15 @@ pub fn resolve_captures(
     for (_, unit) in units.iter_mut() {
         for class in &mut unit.classes {
             let caps = captures.get(&class.name).cloned().unwrap_or_default();
+            if class.is_local {
+                // A local class keeps its own constructors (its `new` args are
+                // its own, not a superclass's). Thread the captures through
+                // them as trailing parameters instead of forwarding to super.
+                if !caps.is_empty() {
+                    augment_local_ctors(class, &caps);
+                }
+                continue;
+            }
             let supers = super_args.get(&class.name).cloned().unwrap_or_default();
             if !caps.is_empty() || !supers.is_empty() {
                 add_capture_members(class, &caps, &supers);
@@ -281,6 +293,90 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers
         annotations: Vec::new(),
         span: zero,
     });
+}
+
+/// Thread captured locals through a LOCAL class's constructors. Unlike an
+/// anonymous class, a local class has its own constructor(s) and its own
+/// `new` arguments, so the captures become trailing parameters on each
+/// constructor (matching the values appended at every `new` site) rather than
+/// a fresh super-forwarding constructor. The stores go right after a leading
+/// `super(...)`/`this(...)` so the body can already read the captured fields.
+fn augment_local_ctors(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
+    let zero = class.span;
+    for (name, ty) in caps {
+        class.fields.push(FieldDecl {
+            name: name.clone(),
+            ty: ty.clone(),
+            is_static: false,
+            is_private: true,
+            is_final: true,
+            init: None,
+            order: 0,
+            span: zero,
+        });
+    }
+    let cap_params: Vec<Param> = caps
+        .iter()
+        .map(|(name, ty)| Param {
+            ty: ty.clone(),
+            name: name.clone(),
+            is_varargs: false,
+            is_final: false,
+        })
+        .collect();
+    let stores = || -> Vec<Stmt> {
+        caps.iter()
+            .map(|(name, _)| Stmt::Assign {
+                target: crate::ast::AssignTarget::Field {
+                    object: Box::new(Expr::This { span: zero }),
+                    name: name.clone(),
+                },
+                op: None,
+                value: Expr::Name {
+                    path: vec![name.clone()],
+                    span: zero,
+                },
+                span: zero,
+            })
+            .collect()
+    };
+
+    let ctors: Vec<&mut MethodDecl> = class
+        .methods
+        .iter_mut()
+        .filter(|m| m.is_constructor)
+        .collect();
+    if ctors.is_empty() {
+        // No explicit constructor: synthesize one taking just the captures.
+        // codegen prepends the implicit `super()`.
+        class.methods.push(MethodDecl {
+            name: class.name.clone(),
+            is_static: false,
+            is_public: false,
+            is_private: false,
+            is_constructor: true,
+            is_abstract: false,
+            type_params: Vec::new(),
+            infer_return: None,
+            return_type: TypeRef::Void,
+            params: cap_params,
+            body: stores(),
+            annotations: Vec::new(),
+            span: zero,
+        });
+        return;
+    }
+    for ctor in ctors {
+        ctor.params.extend(cap_params.iter().cloned());
+        // `super(...)`/`this(...)` must stay first; the stores follow it.
+        let after = usize::from(matches!(
+            ctor.body.first(),
+            Some(Stmt::SuperCall { .. } | Stmt::ThisCall { .. })
+        ));
+        let mut rest = ctor.body.split_off(after);
+        ctor.body.append(&mut stores());
+        ctor.body.append(&mut rest);
+    }
 }
 
 // ----- Phase 1: find captures -----

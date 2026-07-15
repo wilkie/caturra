@@ -27,6 +27,7 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
         diagnostics: Vec::new(),
         anon_classes: Vec::new(),
         anon_counter: 0,
+        local_counter: 0,
         pending_annotations: Vec::new(),
     };
     let unit = parser.compilation_unit();
@@ -155,10 +156,10 @@ fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
         // Valid Java that caturra does not implement. These must say so: the
         // level generator keys off "caturra"/"not supported" to tell an engine
         // gap apart from a student's mistake.
-        Keyword::Class => Some(
-            "a class declared inside a method (a local class) is not supported by caturra; \
-             declare it at the top level",
-        ),
+        // A local class in a block is handled before `statement`; reaching here
+        // means a class in a non-block position (`if (c) class L {}`), which
+        // javac rejects outright.
+        Keyword::Class => Some("class, interface or enum declaration not allowed here"),
         Keyword::Assert => Some("'assert' is not supported by caturra"),
         Keyword::Synchronized => {
             Some("'synchronized' is not supported by caturra; programs run single-threaded")
@@ -288,6 +289,9 @@ struct Parser<'a> {
     /// Synthesized anonymous-class declarations, hoisted to top level.
     anon_classes: Vec<ClassDecl>,
     anon_counter: usize,
+    /// Distinguishes local classes so two methods can each declare a `class
+    /// Local` without their hoisted names colliding.
+    local_counter: usize,
     pending_annotations: Vec<Annotation>,
 }
 
@@ -752,6 +756,7 @@ impl Parser<'_> {
             is_interface,
             is_enum: false,
             is_anonymous: false,
+            is_local: false,
             type_params,
             fields,
             methods,
@@ -1264,10 +1269,23 @@ impl Parser<'_> {
 
     fn block_body(&mut self) -> Vec<Stmt> {
         let mut statements = Vec::new();
+        // Local classes declared in this block: (index in `statements` where
+        // the declaration sat, its source name, its mangled hoisted decl).
+        let mut locals: Vec<(usize, String, ClassDecl)> = Vec::new();
         while !self.at_symbol("}") {
             if self.peek().is_none() {
                 self.error_here("expected '}' to close the block");
                 break;
+            }
+            // A local class (`class C { ... }` in statement position) is not a
+            // runtime statement: it is mangled, hoisted to the top level, and
+            // references to it in the rest of this block are rewritten below.
+            if self.at_local_class_start() {
+                match self.local_class_decl() {
+                    Ok((name, decl)) => locals.push((statements.len(), name, decl)),
+                    Err(Abort) => self.recover_to_statement_boundary(),
+                }
+                continue;
             }
             match self.statement() {
                 Ok(Some(stmt)) => statements.push(stmt),
@@ -1280,7 +1298,60 @@ impl Parser<'_> {
             }
         }
         self.eat_symbol("}");
+
+        // A local class is in scope from its declaration to the end of the
+        // block (JLS §6.3), so rewrite its source name to the mangled one in
+        // the statements that follow it, in its own body (recursion), and in
+        // any later local class's body — then hoist it to the top level.
+        for k in 0..locals.len() {
+            let (at, name, mangled) = (locals[k].0, locals[k].1.clone(), locals[k].2.name.clone());
+            rename_class_in_stmts(&mut statements[at..], &name, &mangled);
+            for later in &mut locals[k..] {
+                rename_class_in_class(&mut later.2, &name, &mangled);
+            }
+        }
+        for (_, _, decl) in locals {
+            self.anon_classes.push(decl);
+        }
         statements
+    }
+
+    /// Whether the upcoming tokens begin a local class: optional
+    /// `final`/`abstract`/`strictfp` modifiers, then `class`. (A local
+    /// `interface` or `enum` is not legal Java 11 and stays an error.)
+    fn at_local_class_start(&self) -> bool {
+        let mut i = self.pos;
+        loop {
+            match self.tokens.get(i).map(|t| &t.kind) {
+                Some(TokenKind::Keyword(
+                    Keyword::Final | Keyword::Abstract | Keyword::Strictfp,
+                )) => i += 1,
+                Some(TokenKind::Keyword(Keyword::Class)) => return true,
+                _ => return false,
+            }
+        }
+    }
+
+    /// Parse a local class, giving it a mangled top-level name. Returns its
+    /// source name (for rewriting references in the enclosing block) and the
+    /// hoisted declaration.
+    fn local_class_decl(&mut self) -> Parsed<(String, ClassDecl)> {
+        let start = self.here();
+        let mut is_abstract = false;
+        while let Some(TokenKind::Keyword(kw)) = self.peek() {
+            match kw {
+                Keyword::Abstract => is_abstract = true,
+                Keyword::Final | Keyword::Strictfp => {}
+                _ => break,
+            }
+            self.pos += 1;
+        }
+        let mut decl = self.type_after_modifiers(start, is_abstract, false)?;
+        let name = decl.name.clone();
+        self.local_counter += 1;
+        decl.name = format!("{name}$Local{}", self.local_counter);
+        decl.is_local = true;
+        Ok((name, decl))
     }
 
     /// Parse one statement. `Ok(None)` means an empty statement (`;`).
@@ -2747,6 +2818,7 @@ impl Parser<'_> {
             is_interface: false,
             is_enum: false,
             is_anonymous: true,
+            is_local: false,
             type_params: Vec::new(),
             fields,
             methods,
@@ -3449,6 +3521,7 @@ fn desugar_enum(
         is_nested: false,
         enclosing: None,
         is_anonymous: false,
+        is_local: false,
         type_params: Vec::new(),
         fields: synth_fields,
         methods,
@@ -3819,6 +3892,253 @@ fn erase_in_expr(
     }
 }
 
+/// Rewrite every reference to the simple type name `from` (a local class's
+/// source name) to its mangled hoisted name `to`, across a run of statements —
+/// the tail of the block the class was declared in.
+fn rename_class_in_stmts(stmts: &mut [Stmt], from: &str, to: &str) {
+    for s in stmts {
+        rename_class_in_stmt(s, from, to);
+    }
+}
+
+fn rename_class_in_type(ty: &mut TypeRef, from: &str, to: &str) {
+    match ty {
+        TypeRef::Named(name)
+            if name == from => {
+                to.clone_into(name);
+            }
+        TypeRef::Array(inner) => rename_class_in_type(inner, from, to),
+        TypeRef::Generic { base, args } => {
+            if base == from {
+                to.clone_into(base);
+            }
+            for arg in args {
+                rename_class_in_type(arg, from, to);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rename_class_in_stmt(stmt: &mut Stmt, from: &str, to: &str) {
+    match stmt {
+        Stmt::Block(stmts) => rename_class_in_stmts(stmts, from, to),
+        Stmt::LocalDecl {
+            ty, declarators, ..
+        } => {
+            rename_class_in_type(ty, from, to);
+            for d in declarators {
+                if let Some(init) = &mut d.init {
+                    rename_class_in_expr(init, from, to);
+                }
+            }
+        }
+        Stmt::Expr(e)
+        | Stmt::Throw { value: e, .. }
+        | Stmt::Assign { value: e, .. }
+        | Stmt::Return { value: Some(e), .. } => rename_class_in_expr(e, from, to),
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        Stmt::If {
+            cond, then, els, ..
+        } => {
+            rename_class_in_expr(cond, from, to);
+            rename_class_in_stmt(then, from, to);
+            if let Some(e) = els {
+                rename_class_in_stmt(e, from, to);
+            }
+        }
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
+            rename_class_in_expr(cond, from, to);
+            rename_class_in_stmt(body, from, to);
+        }
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } => {
+            if let Some(s) = init {
+                rename_class_in_stmt(s, from, to);
+            }
+            if let Some(c) = cond {
+                rename_class_in_expr(c, from, to);
+            }
+            for s in update {
+                rename_class_in_stmt(s, from, to);
+            }
+            rename_class_in_stmt(body, from, to);
+        }
+        Stmt::ForEach {
+            ty, iterable, body, ..
+        } => {
+            rename_class_in_type(ty, from, to);
+            rename_class_in_expr(iterable, from, to);
+            rename_class_in_stmt(body, from, to);
+        }
+        Stmt::Switch { selector, arms, .. } => {
+            rename_class_in_expr(selector, from, to);
+            for arm in arms {
+                for label in arm.labels.iter_mut().flatten() {
+                    rename_class_in_expr(label, from, to);
+                }
+                rename_class_in_stmts(&mut arm.body, from, to);
+            }
+        }
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            rename_class_in_stmts(body, from, to);
+            for c in catches {
+                for t in &mut c.types {
+                    rename_class_in_type(t, from, to);
+                }
+                rename_class_in_stmts(&mut c.body, from, to);
+            }
+            if let Some(fin) = finally_body {
+                rename_class_in_stmts(fin, from, to);
+            }
+        }
+        Stmt::Labeled { body, .. } => rename_class_in_stmt(body, from, to),
+        Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
+            for a in args {
+                rename_class_in_expr(a, from, to);
+            }
+        }
+    }
+}
+
+fn rename_class_in_expr(expr: &mut Expr, from: &str, to: &str) {
+    match expr {
+        Expr::Cast { ty, operand, .. } => {
+            rename_class_in_type(ty, from, to);
+            rename_class_in_expr(operand, from, to);
+        }
+        Expr::InstanceOf { value, ty, .. } => {
+            rename_class_in_type(ty, from, to);
+            rename_class_in_expr(value, from, to);
+        }
+        Expr::NewArray {
+            elem, dims, init, ..
+        } => {
+            rename_class_in_type(elem, from, to);
+            for d in dims.iter_mut().flatten() {
+                rename_class_in_expr(d, from, to);
+            }
+            if let Some(elements) = init {
+                for e in elements {
+                    rename_class_in_expr(e, from, to);
+                }
+            }
+        }
+        Expr::NewObject {
+            class,
+            type_args,
+            args,
+            ..
+        } => {
+            if class == from {
+                to.clone_into(class);
+            }
+            for t in type_args {
+                rename_class_in_type(t, from, to);
+            }
+            for a in args {
+                rename_class_in_expr(a, from, to);
+            }
+        }
+        Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                rename_class_in_expr(a, from, to);
+            }
+        }
+        Expr::Call { receiver, args, .. } => {
+            if let Some(r) = receiver {
+                rename_class_in_expr(r, from, to);
+            }
+            for a in args {
+                rename_class_in_expr(a, from, to);
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            rename_class_in_expr(lhs, from, to);
+            rename_class_in_expr(rhs, from, to);
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Field {
+            object: operand, ..
+        } => {
+            rename_class_in_expr(operand, from, to);
+        }
+        Expr::Index { array, index, .. } => {
+            rename_class_in_expr(array, from, to);
+            rename_class_in_expr(index, from, to);
+        }
+        Expr::Ternary {
+            cond, then, els, ..
+        } => {
+            rename_class_in_expr(cond, from, to);
+            rename_class_in_expr(then, from, to);
+            rename_class_in_expr(els, from, to);
+        }
+        Expr::IncDec { target, .. } => rename_class_in_expr(target, from, to),
+        Expr::ArrayLiteral { elements, .. } => {
+            for e in elements {
+                rename_class_in_expr(e, from, to);
+            }
+        }
+        Expr::MethodRef { qualifier, .. } => rename_class_in_expr(qualifier, from, to),
+        Expr::Lambda { params, body, .. } => {
+            for p in params.iter_mut() {
+                if let Some(ty) = &mut p.ty {
+                    rename_class_in_type(ty, from, to);
+                }
+            }
+            match body {
+                LambdaBody::Expr(e) => rename_class_in_expr(e, from, to),
+                LambdaBody::Block(stmts) => rename_class_in_stmts(stmts, from, to),
+            }
+        }
+        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
+    }
+}
+
+/// Rewrite `from` to `to` inside a class declaration — its supertypes, member
+/// signatures, and method/initializer bodies — so a local class can name itself
+/// (recursion) or an earlier sibling local class.
+fn rename_class_in_class(class: &mut ClassDecl, from: &str, to: &str) {
+    if class.superclass.as_deref() == Some(from) {
+        class.superclass = Some(to.to_owned());
+    }
+    for iface in &mut class.interfaces {
+        if iface == from {
+            to.clone_into(iface);
+        }
+    }
+    for f in &mut class.fields {
+        rename_class_in_type(&mut f.ty, from, to);
+        if let Some(init) = &mut f.init {
+            rename_class_in_expr(init, from, to);
+        }
+    }
+    for m in &mut class.methods {
+        for p in &mut m.params {
+            rename_class_in_type(&mut p.ty, from, to);
+        }
+        rename_class_in_type(&mut m.return_type, from, to);
+        rename_class_in_stmts(&mut m.body, from, to);
+    }
+    for b in &mut class.init_blocks {
+        rename_class_in_stmts(&mut b.body, from, to);
+    }
+    for n in &mut class.nested {
+        rename_class_in_class(n, from, to);
+    }
+}
+
 /// A `Type m() { return expr; }` helper for synthesized enum methods.
 fn simple_return_method(
     name: &str,
@@ -3902,7 +4222,7 @@ mod tests {
 
         // Valid Java that caturra does not implement DOES say so, so the corpus
         // tooling can recognise it as an engine gap.
-        for body in ["class Inner {}", "assert 1 > 0;", "synchronized (a) { }"] {
+        for body in ["assert 1 > 0;", "synchronized (a) { }"] {
             let errors = parse_errors(&in_main(body));
             let first = &errors.first().expect(body).message;
             assert!(
@@ -3910,6 +4230,15 @@ mod tests {
                 "`{body}` is valid Java we don't implement; say so: {first}"
             );
         }
+
+        // A local class in a block IS implemented now — it parses cleanly.
+        assert!(parse_errors(&in_main("class Inner {} new Inner();")).is_empty());
+        // But a class in a non-block statement position is invalid Java, and the
+        // message is javac's, with no mention of caturra.
+        let bad_pos = parse_errors(&in_main("if (true) class L {}"));
+        let first = &bad_pos.first().expect("if (true) class L {}").message;
+        assert_eq!(first, "class, interface or enum declaration not allowed here");
+        assert!(!first.contains("caturra"));
 
         // `new Foo();` IS a statement expression (JLS 14.8); `new int[3];` is
         // not, and javac rejects it too.
