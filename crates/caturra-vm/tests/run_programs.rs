@@ -4622,14 +4622,15 @@ fn junit_validation_runner_reports_pass_and_fail() {
 }
 
 #[test]
-fn junit_validator_static_import_and_relaxed_access() {
-    // The validation "Test" mode: `import static Assertions.*` makes
-    // assertX unqualified, org.junit relaxes private access so a validator
-    // can read internals, and assertions throw on failure.
+fn junit_validator_static_import_and_assertions() {
+    // The validation "Test" mode: `import static Assertions.*` makes assertX
+    // unqualified, and an assertion throws on failure. (Access is NOT relaxed:
+    // a validator reads a student's state through public members / getters, as
+    // javac requires — `n` here is package-visible, not private.)
     let out = run_stdout(
         r#"
         import static org.junit.jupiter.api.Assertions.*;
-        class Box { private int n = 3; }
+        class Box { int n = 3; }
         public class Main {
             public static void main(String[] args) {
                 Box b = new Box();
@@ -7904,6 +7905,35 @@ fn try_catch_compile_errors_match_javac() {
             result.diagnostics
         );
     }
+}
+
+/// A `JUnit` test that reaches a student's PRIVATE field is a compile error on the
+/// real grader (`javac` + `JUnit` compile together). caturra used to relax the
+/// private-access check whenever a source imported `org.junit`, so it silently
+/// compiled and PASSED the student where Code.org would have failed to build —
+/// the exact playground-passes / grader-fails divergence this project fights.
+/// Found by the corpus compile-status cross-tab (CSA-frq-2023-BoxOfCandy).
+#[test]
+fn private_access_is_enforced_even_with_org_junit_imported() {
+    let source = "import org.junit.Test; \
+                  class Owner { private int box = 1; } \
+                  class OwnerTest { void poke() { Owner o = new Owner(); o.box = 2; } }";
+    let result = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+        path: "Owner.java".into(),
+        text: source.into(),
+    }]);
+    assert!(
+        !result.success(),
+        "private access under an org.junit import must be refused, not relaxed"
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("box has private access in Owner")),
+        "expected a private-access error, got: {:?}",
+        result.diagnostics
+    );
 }
 
 #[test]

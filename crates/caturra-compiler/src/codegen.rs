@@ -442,10 +442,6 @@ struct MethodTable {
     /// Classes brought in by `import static` (e.g. `JUnit` `Assertions`) —
     /// unqualified calls fall back to their statics.
     static_imports: Vec<StaticImport>,
-    /// Validation ("Test") mode: private-access checks are relaxed so a
-    /// `JUnit` validator can reach the student's internals. Set when a
-    /// source imports `org.junit`.
-    relax_access: bool,
     /// Interned inner types for nested parameterized collections
     /// (`List<List<Integer>>`): the element `ElemType`, being `Copy`, cannot
     /// hold a parameterized type inline, so it holds an index into this arena.
@@ -478,16 +474,10 @@ impl MethodTable {
     fn build(units: &[(String, CompilationUnit)], diagnostics: &mut Vec<Diagnostic>) -> Self {
         // Pass 1: class names get ids so member types can refer to any
         // class regardless of declaration order.
-        // Static imports (`import static X.*`) and validation mode.
+        // Static imports (`import static X.*`).
         let mut static_imports = Vec::new();
-        let mut relax_access = false;
         for (_, unit) in units {
             for import in &unit.imports {
-                if import.path.first().map(String::as_str) == Some("org")
-                    && import.path.get(1).map(String::as_str) == Some("junit")
-                {
-                    relax_access = true;
-                }
                 if import.is_static {
                     // `import static X.*` names the class last; `import static
                     // X.m` names the MEMBER last and the class before it.
@@ -511,7 +501,6 @@ impl MethodTable {
             classes: std::collections::HashMap::new(),
             object_id: ClassId(0),
             static_imports,
-            relax_access,
             nested: std::cell::RefCell::default(),
         };
         // The synthetic top type: `Object`. It carries the universal
@@ -9096,7 +9085,7 @@ impl BodyGen<'_> {
             return None;
         };
         let field = field.clone();
-        if field.is_private && owner != self.current_class_id && !self.table.relax_access {
+        if field.is_private && owner != self.current_class_id {
             self.error(
                 span,
                 format!(
@@ -9458,7 +9447,7 @@ impl BodyGen<'_> {
                 return JType::Error;
             }
         };
-        if sig.is_private && class_id != self.current_class_id && !self.table.relax_access {
+        if sig.is_private && class_id != self.current_class_id {
             self.error(
                 span,
                 format!("{class_name}() has private access in {class_name}"),
@@ -11396,7 +11385,7 @@ impl BodyGen<'_> {
                 return None;
             }
         };
-        if sig.is_private && class_id != self.current_class_id && !self.table.relax_access {
+        if sig.is_private && class_id != self.current_class_id {
             self.error(
                 span,
                 format!("{method}() has private access in {class_name}"),
@@ -13475,11 +13464,16 @@ impl BodyGen<'_> {
                 // `java.nio.file` static returns — mirror `emit_nio_call`.
                 if matches!(class.as_str(), "Path" | "Paths" | "Files") {
                     match (class.as_str(), method.as_str()) {
-                        ("Path", "of") | ("Paths", "get") |
-("Files", "writeString" | "write" | "createFile" | "createDirectory") => return JType::Path,
+                        ("Path", "of")
+                        | ("Paths", "get")
+                        | ("Files", "writeString" | "write" | "createFile" | "createDirectory") => {
+                            return JType::Path;
+                        }
                         ("Files", "readString") => return JType::Str,
                         ("Files", "readAllLines") => return JType::List(ElemType::Str),
-                        ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => return JType::Boolean,
+                        ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => {
+                            return JType::Boolean;
+                        }
                         _ => {}
                     }
                 }
