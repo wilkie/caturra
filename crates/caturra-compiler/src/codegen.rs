@@ -1225,6 +1225,7 @@ impl MethodTable {
                     "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => {
                         Some(JType::Reader)
                     }
+                    "Path" => Some(JType::Path),
                     "OptionalInt" if !self.has_class(simple) => Some(JType::OptionalInt),
                     "OptionalDouble" if !self.has_class(simple) => Some(JType::OptionalDouble),
                     "Class" => Some(JType::Class),
@@ -2468,6 +2469,9 @@ enum JType {
     /// One reader kind: a file reader slurps the file, a `System.in` reader
     /// pulls console lines. `readLine`/`read` hand them out.
     Reader,
+    /// `java.nio.file.Path` (intrinsic) — a filesystem path, from `Path.of` /
+    /// `Paths.get`, read and written through `Files`.
+    Path,
     /// `java.util.ArrayList<E>` (intrinsic; E tracked at compile time,
     /// erased at runtime).
     List(ElemType),
@@ -2698,6 +2702,7 @@ impl JType {
             JType::File => String::from("File"),
             JType::Writer => String::from("PrintWriter"),
             JType::Reader => String::from("BufferedReader"),
+            JType::Path => String::from("Path"),
             JType::List(elem) => {
                 format!("ArrayList<{}>", wrapper_name(elem, table))
             }
@@ -2733,6 +2738,7 @@ impl JType {
                 | JType::File
                 | JType::Writer
                 | JType::Reader
+                | JType::Path
                 | JType::List(_)
                 | JType::Stack(_)
                 | JType::LinkedList { .. }
@@ -2841,6 +2847,7 @@ impl JType {
             JType::File => String::from("Ljava/io/File;"),
             JType::Writer => String::from("Ljava/io/PrintWriter;"),
             JType::Reader => String::from("Ljava/io/BufferedReader;"),
+            JType::Path => String::from("Ljava/nio/file/Path;"),
             JType::List(_) => String::from("Ljava/util/ArrayList;"),
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
@@ -3655,6 +3662,8 @@ enum BRet {
     Values,
     /// `Set<Map.Entry<K, V>>` (`map.entrySet()`).
     Entries,
+    /// `java.nio.file.Path` (`Path.of`, `path.getFileName()`).
+    Path,
 }
 
 /// One intrinsic method signature the compiler knows about.
@@ -4173,6 +4182,12 @@ const READER_METHODS: &[BuiltinMethod] = &[
     bm("read", &[], BRet::Int, "()I"),
     bm("ready", &[], BRet::Boolean, "()Z"),
     bm("close", &[], BRet::Void, "()V"),
+];
+
+const PATH_METHODS: &[BuiltinMethod] = &[
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getFileName", &[], BRet::Path, "()Ljava/nio/file/Path;"),
+    bm("getParent", &[], BRet::Path, "()Ljava/nio/file/Path;"),
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
@@ -6537,6 +6552,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Exception(id) => Some((exception_internal(id), EXCEPTION_METHODS)),
         JType::Writer => Some(("java/io/PrintWriter", WRITER_METHODS)),
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
+        JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
@@ -6954,6 +6970,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
         BRet::Writer => Some(JType::Writer),
+        BRet::Path => Some(JType::Path),
         BRet::Int => Some(JType::Int),
         BRet::Double => Some(JType::Double),
         BRet::Long => Some(JType::Long),
@@ -10587,6 +10604,7 @@ impl BodyGen<'_> {
             | JType::File
             | JType::Writer
             | JType::Reader
+            | JType::Path
             | JType::List(_)
             | JType::Stack(_)
             | JType::LinkedList { .. }
@@ -11117,6 +11135,124 @@ impl BodyGen<'_> {
         Some(Some(JType::Str))
     }
 
+    /// `java.nio.file` static calls. `Path.of`/`Paths.get` make a `Path`;
+    /// `Files.readString`/`writeString`/`readAllLines`/`write`/`exists`/`delete`
+    /// read and write it through the VM's virtual filesystem. Each emits an
+    /// `INVOKESTATIC` the VM answers, the shape being fixed enough not to need a
+    /// method table.
+    #[allow(clippy::option_option, clippy::too_many_lines, clippy::type_complexity)]
+    fn emit_nio_call(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        // (internal name, argument descriptors + types, return descriptor, JType)
+        let plan: Option<(&str, &[(JType, &str)], &str, Option<JType>)> = match (class, method) {
+            ("Path", "of") | ("Paths", "get") => Some((
+                if class == "Path" {
+                    "java/nio/file/Path"
+                } else {
+                    "java/nio/file/Paths"
+                },
+                &[(JType::Str, "Ljava/lang/String;")],
+                "Ljava/nio/file/Path;",
+                Some(JType::Path),
+            )),
+            ("Files", "readString") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "Ljava/lang/String;",
+                Some(JType::Str),
+            )),
+            ("Files", "writeString") => Some((
+                "java/nio/file/Files",
+                &[
+                    (JType::Path, "Ljava/nio/file/Path;"),
+                    (JType::Str, "Ljava/lang/CharSequence;"),
+                ],
+                "Ljava/nio/file/Path;",
+                Some(JType::Path),
+            )),
+            ("Files", "readAllLines") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "Ljava/util/List;",
+                Some(JType::List(ElemType::Str)),
+            )),
+            ("Files", "write") => Some((
+                "java/nio/file/Files",
+                &[
+                    (JType::Path, "Ljava/nio/file/Path;"),
+                    (JType::List(ElemType::Str), "Ljava/lang/Iterable;"),
+                ],
+                "Ljava/nio/file/Path;",
+                Some(JType::Path),
+            )),
+            ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                "Z",
+                Some(JType::Boolean),
+            )),
+            ("Files", "delete" | "createFile" | "createDirectory") => Some((
+                "java/nio/file/Files",
+                &[(JType::Path, "Ljava/nio/file/Path;")],
+                if method == "delete" {
+                    "V"
+                } else {
+                    "Ljava/nio/file/Path;"
+                },
+                if method == "delete" {
+                    None
+                } else {
+                    Some(JType::Path)
+                },
+            )),
+            _ => None,
+        };
+        let Some((internal, params, ret_desc, ret_ty)) = plan else {
+            self.no_suitable_library_method(class, method, args, span);
+            return None;
+        };
+        if args.len() != params.len() {
+            self.no_suitable_library_method(class, method, args, span);
+            return None;
+        }
+        let mut arg_descriptor = String::new();
+        for (arg, (want, desc)) in args.iter().zip(params) {
+            let got = self.expr(arg);
+            if got == JType::Error {
+                return None;
+            }
+            // A String is accepted for a CharSequence parameter, and Files.write
+            // takes any list of strings.
+            let ok = got == *want
+                || (*want == JType::Str && got == JType::Str)
+                || matches!((want, got), (JType::List(_), JType::List(_)));
+            if !ok {
+                self.error(
+                    arg.span(),
+                    format!(
+                        "incompatible types: {} cannot be converted to {}",
+                        got.describe(self.table),
+                        want.describe(self.table)
+                    ),
+                );
+                return None;
+            }
+            arg_descriptor.push_str(desc);
+        }
+        let descriptor = format!("({arg_descriptor}){ret_desc}");
+        let method_ref = intern_method_ref(self.pool, internal, method, &descriptor);
+        let ret_width = ret_ty.as_ref().map_or(0, |t| t.width());
+        self.code
+            .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
+        self.code.drop_stack(descriptor_arg_width(&descriptor));
+        Some(ret_ty)
+    }
+
     /// Emit an intrinsic static call (`Math.abs(...)`, ...).
     #[allow(clippy::option_option)]
     fn builtin_static_call(
@@ -11313,6 +11449,17 @@ impl BodyGen<'_> {
             let method_ref = intern_method_ref(
                 self.pool,
                 "java/io/File",
+                "toString",
+                "()Ljava/lang/String;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(1);
+            return JType::Str;
+        }
+        if ty == JType::Path {
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/nio/file/Path",
                 "toString",
                 "()Ljava/lang/String;",
             );
@@ -11823,9 +11970,10 @@ impl BodyGen<'_> {
                     } else if self.table.has_class(single)
                         || builtin_static_table(single).is_some()
                         // `Optional` holds static factories (`of`/`empty`/
-                        // `ofNullable`) but is not a bundled class nor in a fixed
-                        // static table — its return type is argument-dependent.
-                        || single == "Optional"
+                        // `ofNullable`), and `Path`/`Paths`/`Files` hold the
+                        // `java.nio.file` ones — none a bundled class nor in a
+                        // fixed static table (their returns are handled inline).
+                        || matches!(single, "Optional" | "Path" | "Paths" | "Files")
                     {
                         Some(CallTarget::Static(single.to_owned()))
                     } else if self.table.field(self.current_class, single).is_some()
@@ -11973,6 +12121,11 @@ impl BodyGen<'_> {
     ) -> Option<Option<JType>> {
         if !self.table.has_class(class) && builtin_static_table(class).is_some() {
             return self.builtin_static_call(class, method, args, span);
+        }
+        // `java.nio.file`: `Path.of` / `Paths.get` build a Path, `Files.*`
+        // reads/writes it through the virtual filesystem.
+        if matches!(class, "Path" | "Paths" | "Files") && !self.table.has_class(class) {
+            return self.emit_nio_call(class, method, args, span);
         }
         // `Arrays.asList` is variadic (`<T> List<T> asList(T...)`): a lone
         // array argument is the varargs array; anything else packs into one.
@@ -12919,7 +13072,8 @@ impl BodyGen<'_> {
             | JType::List(_)
             | JType::Stack(_)
             | JType::Exception(_)
-            | JType::File => Some(String::from("(Ljava/lang/String;)V")),
+            | JType::File
+            | JType::Path => Some(String::from("(Ljava/lang/String;)V")),
             JType::Scanner | JType::Writer | JType::Reader => {
                 self.error(
                     span,
@@ -13160,6 +13314,16 @@ impl BodyGen<'_> {
                         .and_then(|m| bret_type(m.ret, TypeArgs::default(), self.table))
                         .unwrap_or(JType::Error);
                     }
+                    // `Path`/`Paths`/`Files` are static-call classes handled
+                    // inline (not in a table), so name them here as the emit
+                    // path does — else their result would be typed by a guess.
+                    Some(Expr::Name { path, .. })
+                        if path.len() == 1
+                            && self.lookup(&path[0]).is_none()
+                            && matches!(path[0].as_str(), "Path" | "Paths" | "Files") =>
+                    {
+                        path[0].clone()
+                    }
                     Some(other) => match self.type_of(other) {
                         JType::Object(id) => self.table.class_name(id).to_owned(),
                         // A wrapper method on a primitive/boxed receiver
@@ -13181,6 +13345,7 @@ impl BodyGen<'_> {
                         | JType::File
                         | JType::Writer
                         | JType::Reader
+                        | JType::Path
                         | JType::List(_)
                         | JType::Stack(_)
                         | JType::LinkedList { .. }
@@ -13304,6 +13469,17 @@ impl BodyGen<'_> {
                         "binarySearch" => return JType::Int,
                         // `fill` is void, which `type_of` spells `Error`.
                         "fill" => return JType::Error,
+                        _ => {}
+                    }
+                }
+                // `java.nio.file` static returns — mirror `emit_nio_call`.
+                if matches!(class.as_str(), "Path" | "Paths" | "Files") {
+                    match (class.as_str(), method.as_str()) {
+                        ("Path", "of") | ("Paths", "get") |
+("Files", "writeString" | "write" | "createFile" | "createDirectory") => return JType::Path,
+                        ("Files", "readString") => return JType::Str,
+                        ("Files", "readAllLines") => return JType::List(ElemType::Str),
+                        ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => return JType::Boolean,
                         _ => {}
                     }
                 }
@@ -15452,6 +15628,7 @@ impl BodyGen<'_> {
             | JType::List(_)
             | JType::Stack(_)
             | JType::File
+            | JType::Path
             | JType::Exception(_) => "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
             JType::Scanner | JType::Writer | JType::Reader => {
                 self.error(

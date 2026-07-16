@@ -512,6 +512,7 @@ pub fn invoke_virtual(
             None => list_method(heap, receiver, method, descriptor, args),
         },
         (HeapObject::File(_), _) => file_method(heap, vfs, receiver, method),
+        (HeapObject::Path(_), _) => path_method(heap, receiver, method),
         (
             HeapObject::Exception {
                 class_name,
@@ -2617,6 +2618,33 @@ fn file_method(
     }
 }
 
+/// `java.nio.file.Path` methods. `getFileName`/`getParent` return a `Path`;
+/// `getParent` is null when the path has no directory part.
+fn path_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    method: &str,
+) -> Result<Option<JValue>, VmError> {
+    let path = match heap.get(receiver) {
+        Some(HeapObject::Path(path)) => path.clone(),
+        _ => unreachable!("receiver kind checked by caller"),
+    };
+    match method {
+        "toString" => Ok(Some(JValue::Ref(Some(heap.alloc_string(&path))))),
+        "getFileName" => {
+            let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Path(name))))))
+        }
+        "getParent" => match path.rsplit_once('/') {
+            Some((parent, _)) if !parent.is_empty() => Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::Path(parent.to_owned())),
+            )))),
+            _ => Ok(Some(JValue::Ref(None))),
+        },
+        _ => Err(VmError::UnknownIntrinsic(format!("Path.{method}"))),
+    }
+}
+
 /// `java.io.PrintWriter` methods: formatting matches `PrintStream`, but
 /// output appends to the writer's file in the virtual filesystem.
 /// The single character a `write(int)`/`append(char)` code denotes — its low 16
@@ -3163,7 +3191,103 @@ pub fn invoke_static(
             _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
         },
         "java/lang/String" => string_static(heap, method, descriptor, args),
+        // `Path.of` / `Paths.get` — wrap a path string as a Path.
+        "java/nio/file/Path" | "java/nio/file/Paths" => {
+            let text = arg_string(heap, &args[0])?;
+            Ok(Some(JValue::Ref(Some(heap.alloc(HeapObject::Path(text))))))
+        }
+        "java/nio/file/Files" => files_static(heap, vfs, method, args),
         _ => Err(VmError::UnknownIntrinsic(format!("{class}.{method}"))),
+    }
+}
+
+/// The text of a `String` argument (null throws NPE).
+fn arg_string(heap: &Heap, value: &JValue) -> Result<String, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => Ok(heap.string_text(*reference).unwrap_or_default()),
+        JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+        _ => Err(throw("java.lang.VerifyError: expected a String argument")),
+    }
+}
+
+/// The path string behind a `java.nio.file.Path` argument.
+fn path_arg(heap: &Heap, value: &JValue) -> Result<String, VmError> {
+    match value {
+        JValue::Ref(Some(reference)) => match heap.get(*reference) {
+            Some(HeapObject::Path(path)) => Ok(path.clone()),
+            _ => Err(throw("java.lang.ClassCastException: not a Path")),
+        },
+        JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
+        _ => Err(throw("java.lang.VerifyError: expected a Path argument")),
+    }
+}
+
+/// `java.nio.file.Files` static methods, over the virtual filesystem.
+fn files_static(
+    heap: &mut Heap,
+    vfs: &mut VirtualFileSystem,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let path = path_arg(heap, &args[0])?;
+    let not_found = || throw(format!("java.nio.file.NoSuchFileException: {path}"));
+    match method {
+        "readString" => {
+            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let text = String::from_utf8_lossy(&content).into_owned();
+            Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
+        }
+        "readAllLines" => {
+            let content = vfs.read_file(&path).map_err(|_| not_found())?.to_vec();
+            let text = String::from_utf8_lossy(&content).into_owned();
+            let lines: Vec<JValue> = text
+                .lines()
+                .map(|line| JValue::Ref(Some(heap.alloc_string(line))))
+                .collect();
+            Ok(Some(JValue::Ref(Some(
+                heap.alloc(HeapObject::ArrayList(lines)),
+            ))))
+        }
+        "writeString" => {
+            let text = arg_string(heap, &args[1])?;
+            vfs.write_file(&path, text.into_bytes())
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(Some(args[0]))
+        }
+        "write" => {
+            let lines = match args.get(1) {
+                Some(JValue::Ref(Some(reference))) => heap.list_values(*reference).cloned(),
+                _ => None,
+            }
+            .ok_or_else(|| throw("java.lang.NullPointerException"))?;
+            let mut text = String::new();
+            for line in &lines {
+                if let JValue::Ref(Some(reference)) = line {
+                    text.push_str(&heap.string_text(*reference).unwrap_or_default());
+                }
+                text.push('\n');
+            }
+            vfs.write_file(&path, text.into_bytes())
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(Some(args[0]))
+        }
+        "exists" | "isRegularFile" => Ok(Some(JValue::Int(i32::from(vfs.exists(&path))))),
+        "notExists" => Ok(Some(JValue::Int(i32::from(!vfs.exists(&path))))),
+        "isDirectory" => Ok(Some(JValue::Int(i32::from(vfs.is_directory(&path))))),
+        "delete" => {
+            vfs.remove(&path).map_err(|_| not_found())?;
+            Ok(None)
+        }
+        "createFile" => {
+            vfs.write_file(&path, Vec::new())
+                .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
+            Ok(Some(args[0]))
+        }
+        "createDirectory" => {
+            let _ = vfs.mkdir(&path);
+            Ok(Some(args[0]))
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("Files.{method}"))),
     }
 }
 

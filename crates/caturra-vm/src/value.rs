@@ -332,6 +332,9 @@ pub enum HeapObject {
     InputStream,
     /// A `java.io.File`: a path into the virtual filesystem.
     File(String),
+    /// A `java.nio.file.Path`: a filesystem path (from `Path.of`/`Paths.get`),
+    /// read and written through `Files`.
+    Path(String),
     /// A `java.io.PrintWriter` into the virtual filesystem
     /// (write-through: output is durable without `close()`).
     Writer { path: String },

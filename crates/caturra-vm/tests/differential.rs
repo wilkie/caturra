@@ -984,6 +984,43 @@ public class DiffReaderIn {
     );
 }
 
+// The java.nio.file slice: `Path.of`/`Paths.get` build a path; `Files` reads and
+// writes it, including Java 11's `writeString`/`readString`.
+differential_test!(
+    diff_nio_files,
+    "DiffNio",
+    r#"
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.List;
+
+public class DiffNio {
+    public static void main(String[] args) throws IOException {
+        Path path = Path.of("nio.txt");
+        Files.writeString(path, "alpha\nbeta\n");
+        System.out.print(Files.readString(path));
+        System.out.println("exists=" + Files.exists(path));
+        System.out.println("name=" + path.getFileName());
+
+        List<String> lines = Files.readAllLines(path);
+        System.out.println(lines);
+
+        Path deep = Paths.get("a/b/c.txt");
+        System.out.println(deep.getFileName() + " in " + deep.getParent());
+
+        Files.write(Paths.get("out.txt"), Arrays.asList("x", "y", "z"));
+        System.out.println(Files.readAllLines(Paths.get("out.txt")));
+
+        Files.delete(path);
+        System.out.println("gone=" + Files.notExists(path));
+    }
+}
+"#
+);
+
 differential_test!(
     diff_deep_recursion,
     "DiffDeep",

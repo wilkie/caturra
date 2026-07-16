@@ -270,6 +270,16 @@
     "expected": "first line\nsecond line\n"
   },
   {
+    "id": "nio-files",
+    "category": "Library",
+    "title": "java.nio.file",
+    "summary": "`Path.of`, `Files.writeString`/`readString`/`readAllLines` \u2014 the java.nio.file slice, including Java 11's string helpers.",
+    "main": "Nio",
+    "source": "import java.io.IOException;\nimport java.nio.file.Files;\nimport java.nio.file.Path;\n\npublic class Nio {\n    public static void main(String[] args) throws IOException {\n        Path path = Path.of(\"notes.txt\");\n        Files.writeString(path, \"first line\\nsecond line\\n\");\n        System.out.println(Files.readString(path));\n        System.out.println(Files.readAllLines(path));\n    }\n}\n",
+    "status": "supported",
+    "expected": "first line\nsecond line\n\n[first line, second line]\n"
+  },
+  {
     "id": "vector",
     "category": "Collections",
     "title": "Vector and Hashtable",
@@ -290,16 +300,6 @@
     "reason": "java.lang.Thread is not supported by caturra (the class library covers the AP CS A subset)"
   },
   {
-    "id": "nio-files",
-    "category": "Library",
-    "title": "java.nio.file",
-    "summary": "Files/Paths, including Java 11's Files.readString.",
-    "main": "Nio",
-    "source": "import java.io.IOException;\nimport java.nio.file.Files;\nimport java.nio.file.Path;\n\npublic class Nio {\n    public static void main(String[] args) throws IOException {\n        Path path = Path.of(\"notes.txt\");\n        System.out.println(Files.readString(path));\n    }\n}\n",
-    "status": "unsupported",
-    "reason": "package java.nio.file does not exist"
-  },
-  {
     "id": "records",
     "category": "Beyond Java 11",
     "title": "Records (Java 16)",
@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-fa1lbbxq/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-txh_lh40/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-vxlfm_j9/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-k_pznp86/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-a10bx_xh/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-ppbg3g5f/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",

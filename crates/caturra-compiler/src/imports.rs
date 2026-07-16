@@ -61,6 +61,9 @@ const JAVA_IO: &[&str] = &[
     "FileNotFoundException",
     "IOException",
 ];
+/// `java.nio.file` — the modeled slice: build a `Path` and read/write it through
+/// `Files`. The rest of `java.nio` stays unsupported.
+const JAVA_NIO_FILE: &[&str] = &["Files", "Path", "Paths"];
 /// `java.util.function` — the standard functional interfaces. They alias the
 /// bundled erased `__`-interfaces (see `functional_erased` in codegen).
 const JAVA_UTIL_FUNCTION: &[&str] = &[
@@ -204,6 +207,9 @@ const REQUIRES_IMPORT: &[&str] = &[
     "BufferedReader",
     "FileReader",
     "InputStreamReader",
+    "Files",
+    "Path",
+    "Paths",
     "InputMismatchException",
     "NoSuchElementException",
     "IOException",
@@ -223,7 +229,9 @@ const REQUIRES_IMPORT: &[&str] = &[
 pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     let (package, class) = dotted.rsplit_once('.')?;
     let known = match package {
-        "java.util" | "java.io" | "java.lang" | "java.util.function" => package_classes(package)?,
+        "java.util" | "java.io" | "java.lang" | "java.util.function" | "java.nio.file" => {
+            package_classes(package)?
+        }
         _ => return None,
     };
     known.iter().find(|name| **name == class).copied()
@@ -271,6 +279,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
         "java.util.stream" => Some(JAVA_UTIL_STREAM),
         "java.util.function" => Some(JAVA_UTIL_FUNCTION),
         "java.io" => Some(JAVA_IO),
+        "java.nio.file" => Some(JAVA_NIO_FILE),
         "java.lang" => Some(JAVA_LANG),
         // Bundled clean-room library (auto-injected in `compile`); the
         // classes resolve like user classes, the import just validates.

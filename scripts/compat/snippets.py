@@ -889,6 +889,27 @@ public class Reader {
 }
 ''',
     ),
+    dict(
+        id="nio-files",
+        category="Library",
+        title="java.nio.file",
+        summary="`Path.of`, `Files.writeString`/`readString`/`readAllLines` — the java.nio.file slice, including Java 11's string helpers.",
+        main="Nio",
+        source='''
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+public class Nio {
+    public static void main(String[] args) throws IOException {
+        Path path = Path.of("notes.txt");
+        Files.writeString(path, "first line\\nsecond line\\n");
+        System.out.println(Files.readString(path));
+        System.out.println(Files.readAllLines(path));
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -925,25 +946,6 @@ public class Threads {
         Thread worker = new Thread(() -> System.out.println("working"));
         worker.start();
         worker.join();
-    }
-}
-''',
-    ),
-    dict(
-        id="nio-files",
-        category="Library",
-        title="java.nio.file",
-        summary="Files/Paths, including Java 11's Files.readString.",
-        main="Nio",
-        source='''
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
-public class Nio {
-    public static void main(String[] args) throws IOException {
-        Path path = Path.of("notes.txt");
-        System.out.println(Files.readString(path));
     }
 }
 ''',
