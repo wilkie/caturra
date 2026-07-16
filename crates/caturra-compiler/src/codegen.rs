@@ -11773,10 +11773,13 @@ impl BodyGen<'_> {
             Expr::SuperMethodCall { method, args, span } => {
                 self.super_method_call(method, args, *span)
             }
-            // `new Foo();` — a class instance creation is a statement
-            // expression (JLS §14.8). Run the constructor for its effects and
-            // drop the reference, which the discard below does.
-            Expr::NewObject { .. } => Some(Some(self.expr(expr))),
+            // `new Foo();` is a class-instance-creation statement expression;
+            // assignment and `++`/`--` are statement expressions too (JLS §14.8,
+            // the last two reached as a lambda's single-expression body like
+            // `n -> sum[0] += n`). Run each for effect; the value is discarded.
+            Expr::NewObject { .. } | Expr::Assign { .. } | Expr::IncDec { .. } => {
+                Some(Some(self.expr(expr)))
+            }
             _ => {
                 self.error(expr.span(), "this expression is not a statement in Java");
                 return;
@@ -12957,6 +12960,24 @@ impl BodyGen<'_> {
                 Literal::Bool(_) => JType::Boolean,
                 Literal::Null => JType::Null,
             },
+            // An assignment expression has the type of its target (JLS §15.26) —
+            // mirror `expr`, which reads the target back.
+            Expr::Assign { target, span, .. } => match target {
+                AssignTarget::Var(name) => self.type_of(&Expr::Name {
+                    path: vec![name.clone()],
+                    span: *span,
+                }),
+                AssignTarget::Index { array, index } => self.type_of(&Expr::Index {
+                    array: array.clone(),
+                    index: index.clone(),
+                    span: *span,
+                }),
+                AssignTarget::Field { object, name } => self.type_of(&Expr::Field {
+                    object: object.clone(),
+                    name: name.clone(),
+                    span: *span,
+                }),
+            },
             Expr::Name { path, span } if self.strip_package_prefix(path).is_some() => {
                 let short = self.strip_package_prefix(path).expect("checked in guard");
                 self.type_of(&Expr::Name {
@@ -13493,6 +13514,41 @@ impl BodyGen<'_> {
                 );
                 JType::Error
             }
+            // An assignment expression (JLS §15.26): store, then read the target
+            // back — its value IS the value of the assignment. A plain variable
+            // or bare field re-reads with no side effect (the common case,
+            // `(line = in.readLine())`); an explicit object/index target is
+            // evaluated a second time.
+            Expr::Assign {
+                target,
+                op,
+                value,
+                span,
+            } => match target {
+                AssignTarget::Var(name) => {
+                    self.assign(name, *op, value, *span);
+                    self.expr(&Expr::Name {
+                        path: vec![name.clone()],
+                        span: *span,
+                    })
+                }
+                AssignTarget::Index { array, index } => {
+                    self.assign_element(array, index, *op, value, *span);
+                    self.expr(&Expr::Index {
+                        array: array.clone(),
+                        index: index.clone(),
+                        span: *span,
+                    })
+                }
+                AssignTarget::Field { object, name } => {
+                    self.assign_field_target(object, name, *op, value, *span);
+                    self.expr(&Expr::Field {
+                        object: object.clone(),
+                        name: name.clone(),
+                        span: *span,
+                    })
+                }
+            },
             Expr::Call {
                 receiver,
                 method,

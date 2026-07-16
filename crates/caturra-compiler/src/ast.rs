@@ -565,6 +565,17 @@ pub enum Expr {
         prefix: bool,
         span: SourceSpan,
     },
+    /// `x = e` / `a[i] += e` in expression position — assignment is an
+    /// expression in Java (JLS §15.26) whose value is what was stored. A bare
+    /// `x = e;` statement stays a [`Stmt::Assign`]; this is the nested use
+    /// (`while ((s = in.readLine()) != null)`, `println(x = 7)`).
+    Assign {
+        target: AssignTarget,
+        /// `None` for plain `=`, `Some(op)` for a compound form (`+=`).
+        op: Option<BinaryOp>,
+        value: Box<Expr>,
+        span: SourceSpan,
+    },
 }
 
 impl Expr {
@@ -589,7 +600,8 @@ impl Expr {
             | Expr::Ternary { span, .. }
             | Expr::Lambda { span, .. }
             | Expr::MethodRef { span, .. }
-            | Expr::IncDec { span, .. } => *span,
+            | Expr::IncDec { span, .. }
+            | Expr::Assign { span, .. } => *span,
         }
     }
 }

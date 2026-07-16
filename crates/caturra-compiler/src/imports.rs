@@ -858,6 +858,17 @@ impl<F: FnMut(String, SourceSpan)> UseCheck<'_, F> {
                     }
                 }
             },
+            Expr::Assign { target, value, .. } => {
+                match target {
+                    crate::ast::AssignTarget::Index { array, index } => {
+                        self.expr(array);
+                        self.expr(index);
+                    }
+                    crate::ast::AssignTarget::Field { object, .. } => self.expr(object),
+                    crate::ast::AssignTarget::Var(_) => {}
+                }
+                self.expr(value);
+            }
         }
     }
 }

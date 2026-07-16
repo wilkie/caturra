@@ -692,6 +692,19 @@ fn find_in_expr(
                 }
             }
         },
+        Expr::Assign { target, value, .. } => {
+            match target {
+                crate::ast::AssignTarget::Index { array, index } => {
+                    find_in_expr(array, scope, anon, out, owner, mutations);
+                    find_in_expr(index, scope, anon, out, owner, mutations);
+                }
+                crate::ast::AssignTarget::Field { object, .. } => {
+                    find_in_expr(object, scope, anon, out, owner, mutations);
+                }
+                crate::ast::AssignTarget::Var(_) => {}
+            }
+            find_in_expr(value, scope, anon, out, owner, mutations);
+        }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
@@ -939,6 +952,10 @@ fn free_in_expr(expr: &Expr, bound: &mut HashSet<String>, free: &mut HashSet<Str
                 }
             }
         },
+        Expr::Assign { target, value, .. } => {
+            free_in_target(target, bound, free);
+            free_in_expr(value, bound, free);
+        }
         Expr::Literal { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
@@ -1122,6 +1139,17 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 f(e);
             }
         }
+        Expr::Assign { target, value, .. } => {
+            match target {
+                crate::ast::AssignTarget::Index { array, index } => {
+                    f(array);
+                    f(index);
+                }
+                crate::ast::AssignTarget::Field { object, .. } => f(object),
+                crate::ast::AssignTarget::Var(_) => {}
+            }
+            f(value);
+        }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
@@ -1153,10 +1181,11 @@ impl Mutations {
     }
 }
 
-/// Every assignment target and initialized declaration in `stmts`. Assignments
-/// are statements in caturra (value-position `++` is rejected by the parser),
-/// and lambda bodies are already hoisted into their own classes, so statement
-/// recursion sees everything without descending into expressions.
+/// Every assignment target and initialized declaration in `stmts`. Assignment
+/// is an EXPRESSION in Java (`while ((n = next()) != null)`, `f(x = 5)`), so
+/// this descends into expressions too — otherwise a captured local mutated
+/// inside an expression would look effectively final and be wrongly accepted.
+/// (Lambda bodies are already hoisted into their own classes by this point.)
 fn mutations_in_stmts(stmts: &[Stmt], out: &mut Mutations) {
     for stmt in stmts {
         mutations_in_stmt(stmt, out);
@@ -1169,36 +1198,59 @@ fn mutations_in_stmt(stmt: &Stmt, out: &mut Mutations) {
         Stmt::Block(body) => mutations_in_stmts(body, out),
         Stmt::LocalDecl { declarators, .. } => {
             for d in declarators {
-                if d.init.is_some() {
+                if let Some(init) = &d.init {
                     out.initialized.insert(d.name.clone());
+                    mutations_in_expr(init, out);
                 }
             }
         }
-        Stmt::Assign {
-            target: crate::ast::AssignTarget::Var(name),
-            ..
-        } => {
-            *out.assigns.entry(name.clone()).or_default() += 1;
+        Stmt::Assign { target, value, .. } => {
+            if let crate::ast::AssignTarget::Var(name) = target {
+                *out.assigns.entry(name.clone()).or_default() += 1;
+            } else {
+                mutations_in_target(target, out);
+            }
+            mutations_in_expr(value, out);
         }
-        Stmt::If { then, els, .. } => {
+        Stmt::Expr(e) | Stmt::Throw { value: e, .. } | Stmt::Return { value: Some(e), .. } => {
+            mutations_in_expr(e, out);
+        }
+        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        Stmt::If {
+            cond, then, els, ..
+        } => {
+            mutations_in_expr(cond, out);
             mutations_in_stmt(then, out);
             if let Some(e) = els {
                 mutations_in_stmt(e, out);
             }
         }
-        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => mutations_in_stmt(body, out),
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
+            mutations_in_expr(cond, out);
+            mutations_in_stmt(body, out);
+        }
         Stmt::For {
-            init, update, body, ..
+            init,
+            cond,
+            update,
+            body,
+            ..
         } => {
             if let Some(s) = init {
                 mutations_in_stmt(s, out);
+            }
+            if let Some(c) = cond {
+                mutations_in_expr(c, out);
             }
             for s in update {
                 mutations_in_stmt(s, out);
             }
             mutations_in_stmt(body, out);
         }
-        Stmt::ForEach { body, .. } => mutations_in_stmt(body, out),
+        Stmt::ForEach { iterable, body, .. } => {
+            mutations_in_expr(iterable, out);
+            mutations_in_stmt(body, out);
+        }
         Stmt::Labeled { body, .. } => mutations_in_stmt(body, out),
         Stmt::Try {
             body,
@@ -1214,12 +1266,110 @@ fn mutations_in_stmt(stmt: &Stmt, out: &mut Mutations) {
                 mutations_in_stmts(f, out);
             }
         }
-        Stmt::Switch { arms, .. } => {
+        Stmt::Switch { selector, arms, .. } => {
+            mutations_in_expr(selector, out);
             for arm in arms {
+                for label in arm.labels.iter().flatten() {
+                    mutations_in_expr(label, out);
+                }
                 mutations_in_stmts(&arm.body, out);
             }
         }
-        _ => {}
+        Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
+            for a in args {
+                mutations_in_expr(a, out);
+            }
+        }
+    }
+}
+
+fn mutations_in_target(target: &crate::ast::AssignTarget, out: &mut Mutations) {
+    match target {
+        crate::ast::AssignTarget::Index { array, index } => {
+            mutations_in_expr(array, out);
+            mutations_in_expr(index, out);
+        }
+        crate::ast::AssignTarget::Field { object, .. } => mutations_in_expr(object, out),
+        crate::ast::AssignTarget::Var(_) => {}
+    }
+}
+
+/// Count assignments to bare locals that appear inside an EXPRESSION — a nested
+/// assignment (`f(x = 5)`) or an increment used for its value (`a[i++]`).
+fn mutations_in_expr(expr: &Expr, out: &mut Mutations) {
+    match expr {
+        Expr::Assign { target, value, .. } => {
+            if let crate::ast::AssignTarget::Var(name) = target {
+                *out.assigns.entry(name.clone()).or_default() += 1;
+            }
+            mutations_in_target(target, out);
+            mutations_in_expr(value, out);
+        }
+        Expr::IncDec { target, .. } => {
+            if let Expr::Name { path, .. } = target.as_ref()
+                && path.len() == 1
+            {
+                *out.assigns.entry(path[0].clone()).or_default() += 1;
+            }
+            mutations_in_expr(target, out);
+        }
+        Expr::Call { receiver, args, .. } => {
+            if let Some(r) = receiver {
+                mutations_in_expr(r, out);
+            }
+            for a in args {
+                mutations_in_expr(a, out);
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            mutations_in_expr(lhs, out);
+            mutations_in_expr(rhs, out);
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Cast { operand, .. }
+        | Expr::Field {
+            object: operand, ..
+        }
+        | Expr::InstanceOf { value: operand, .. } => mutations_in_expr(operand, out),
+        Expr::Index { array, index, .. } => {
+            mutations_in_expr(array, out);
+            mutations_in_expr(index, out);
+        }
+        Expr::Ternary {
+            cond, then, els, ..
+        } => {
+            mutations_in_expr(cond, out);
+            mutations_in_expr(then, out);
+            mutations_in_expr(els, out);
+        }
+        Expr::NewArray { dims, init, .. } => {
+            for d in dims.iter().flatten() {
+                mutations_in_expr(d, out);
+            }
+            if let Some(elems) = init {
+                for e in elems {
+                    mutations_in_expr(e, out);
+                }
+            }
+        }
+        Expr::ArrayLiteral { elements, .. } => {
+            for e in elements {
+                mutations_in_expr(e, out);
+            }
+        }
+        Expr::NewObject { args, .. } | Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                mutations_in_expr(a, out);
+            }
+        }
+        Expr::MethodRef { qualifier, .. } => mutations_in_expr(qualifier, out),
+        // A lambda here would be un-desugared, which does not happen at this
+        // point; its body is a separate scope regardless.
+        Expr::Lambda { .. }
+        | Expr::Literal { .. }
+        | Expr::Name { .. }
+        | Expr::This { .. }
+        | Expr::Super { .. } => {}
     }
 }
 

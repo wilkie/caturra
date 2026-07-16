@@ -864,6 +864,20 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 desugar_expr(e, None, ctx);
             }
         }
+        Expr::Assign { target, value, .. } => {
+            match target {
+                crate::ast::AssignTarget::Index { array, index } => {
+                    desugar_expr(array, None, ctx);
+                    desugar_expr(index, None, ctx);
+                }
+                crate::ast::AssignTarget::Field { object, .. } => desugar_expr(object, None, ctx),
+                crate::ast::AssignTarget::Var(_) => {}
+            }
+            // The value takes the target's type, so `f = () -> ...` finds its
+            // functional interface just as `f = ...` in a declaration does.
+            let expected = assign_target_type(target, ctx);
+            desugar_expr(value, expected.as_ref(), ctx);
+        }
         Expr::Lambda { .. }
         | Expr::MethodRef { .. }
         | Expr::Literal { .. }

@@ -617,6 +617,17 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 f(e);
             }
         }
+        Expr::Assign { target, value, .. } => {
+            match target {
+                crate::ast::AssignTarget::Index { array, index } => {
+                    f(array);
+                    f(index);
+                }
+                crate::ast::AssignTarget::Field { object, .. } => f(object),
+                crate::ast::AssignTarget::Var(_) => {}
+            }
+            f(value);
+        }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }

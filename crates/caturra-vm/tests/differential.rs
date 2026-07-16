@@ -2390,6 +2390,66 @@ public class DiffAssert {
 "#
 );
 
+// Assignment is an expression (JLS §15.26): its value is what was stored, it is
+// right-associative, and it nests in arguments and loop conditions — the idiom
+// `while ((line = ...) != null)`.
+differential_test!(
+    diff_assignment_expression,
+    "DiffAssignExpr",
+    r#"
+public class DiffAssignExpr {
+    static class Box { int v; }
+    static int n = 0;
+    static String next() { n++; return n <= 3 ? "v" + n : null; }
+
+    public static void main(String[] args) {
+        int a, b, c;
+        a = b = c = 5;                       // right-associative chain
+        System.out.println(a + " " + b + " " + c);
+
+        int x = 10;
+        System.out.println(x += 3);          // compound expression -> 13
+        System.out.println(x);
+
+        int[] arr = new int[3];
+        System.out.println(arr[1] = 99);     // array-element target
+        Box box = new Box();
+        System.out.println(box.v = 42);      // field target
+
+        int sum = 0, m;
+        for (int i = 0; (m = i * 2) < 6; i++) sum += m;   // assignment in a condition
+        System.out.println(sum);
+
+        String line;
+        StringBuilder sb = new StringBuilder();
+        while ((line = next()) != null) {    // the read-loop idiom
+            sb.append(line);
+        }
+        System.out.println(sb);
+    }
+}
+"#
+);
+
+// The other side of the coin: a local mutated by an assignment EXPRESSION is not
+// effectively final, so a lambda capturing it is refused — as javac refuses it.
+differential_reject!(
+    reject_capture_mutated_by_assignment_expression,
+    "RejectAssignCapture",
+    r"
+public class RejectAssignCapture {
+    interface Task { void run(); }
+    public static void main(String[] args) {
+        int x = 0;
+        Task t = () -> System.out.println(x);
+        int y;
+        y = x = 5;
+        t.run();
+    }
+}
+"
+);
+
 differential_test!(
     diff_nested_classes,
     "DiffNested",

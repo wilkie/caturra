@@ -864,7 +864,7 @@ public class Join {
         id="buffered-reader",
         category="Library",
         title="BufferedReader",
-        summary="`new BufferedReader(new FileReader(path))` and `readLine()` — the java.io reader stack, over a file or `System.in`.",
+        summary="`new BufferedReader(new FileReader(path))` and the `while ((line = reader.readLine()) != null)` read loop — the java.io reader stack, over a file or `System.in`.",
         main="Reader",
         source='''
 import java.io.BufferedReader;
@@ -880,9 +880,10 @@ public class Reader {
         writer.close();
 
         BufferedReader reader = new BufferedReader(new FileReader("notes.txt"));
-        System.out.println(reader.readLine());
-        System.out.println(reader.readLine());
-        System.out.println(reader.readLine());
+        String line;
+        while ((line = reader.readLine()) != null) {
+            System.out.println(line);
+        }
         reader.close();
     }
 }

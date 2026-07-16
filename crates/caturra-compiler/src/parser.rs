@@ -1477,6 +1477,27 @@ impl Parser<'_> {
 
         let expr = self.expression()?;
 
+        // A bare assignment statement (`x = e;`) stays a `Stmt::Assign` — the
+        // expression parser produced an `Expr::Assign`, which is unwrapped here
+        // so nothing downstream sees an assignment expression in statement
+        // position and its definite-assignment analysis is unchanged.
+        if let Expr::Assign {
+            target,
+            op,
+            value,
+            span,
+        } = expr
+        {
+            // `simple_statement` never consumes the trailing `;` — its caller and
+            // the `for` header do — so unwrap without eating one.
+            return Ok(Stmt::Assign {
+                target,
+                op,
+                value: *value,
+                span,
+            });
+        }
+
         // `x++;` parses as a postfix expression; as a statement it
         // lowers to the compound assignment like before.
         if let Expr::IncDec {
@@ -1499,26 +1520,6 @@ impl Parser<'_> {
                 "++/-- can only be applied to a variable or array element",
             );
             return Err(Abort);
-        }
-
-        if let Some(op) = self.assignment_operator() {
-            let Some(target) = assignment_target(&expr) else {
-                self.error_at(
-                    expr.span(),
-                    "the left side of an assignment must be a variable or array element",
-                );
-                return Err(Abort);
-            };
-            let start = expr.span().start;
-            self.pos += 1;
-            let value = self.expression()?;
-            let end = value.span().end;
-            return Ok(Stmt::Assign {
-                target,
-                op,
-                value,
-                span: SourceSpan { start, end },
-            });
         }
 
         if self.at_symbol("++") || self.at_symbol("--") {
@@ -1571,14 +1572,13 @@ impl Parser<'_> {
         }
     }
 
-    /// `( condition )` with a hint for the classic `=` vs `==` typo.
+    /// `( condition )`. An assignment is a legal condition in Java
+    /// (`while ((line = in.readLine()) != null)`), so the parse simply takes
+    /// the expression; a non-boolean condition (`if (x = 2)`) is a type error
+    /// codegen reports, exactly as javac does.
     fn paren_condition(&mut self, context: &str) -> Parsed<Expr> {
         self.expect_symbol("(", &format!("after '{context}'"))?;
         let cond = self.expression()?;
-        if self.at_symbol("=") {
-            self.error_here("assignment is not a condition — did you mean '=='?");
-            return Err(Abort);
-        }
         self.expect_symbol(")", "to close the condition")?;
         Ok(cond)
     }
@@ -2178,7 +2178,38 @@ impl Parser<'_> {
         if let Some(lambda) = self.try_lambda()? {
             return Ok(lambda);
         }
-        self.ternary()
+        self.assignment()
+    }
+
+    /// Assignment is the lowest-precedence expression and right-associative
+    /// (JLS §15.26): `a = b = c` is `a = (b = c)`, and its value is what was
+    /// stored. The left side must be an assignable target. A bare `x = e;`
+    /// statement is recognized here too and unwrapped to a `Stmt::Assign` by
+    /// the statement parser, so its definite-assignment analysis is unchanged.
+    fn assignment(&mut self) -> Parsed<Expr> {
+        let lhs = self.ternary()?;
+        let Some(op) = self.assignment_operator() else {
+            return Ok(lhs);
+        };
+        let Some(target) = assignment_target(&lhs) else {
+            self.error_at(
+                lhs.span(),
+                "the left side of an assignment must be a variable or array element",
+            );
+            return Err(Abort);
+        };
+        self.pos += 1; // the assignment operator
+        let value = self.expression()?; // right-associative; a lambda may follow
+        let span = SourceSpan {
+            start: lhs.span().start,
+            end: value.span().end,
+        };
+        Ok(Expr::Assign {
+            target,
+            op,
+            value: Box::new(value),
+            span,
+        })
     }
 
     /// Detect and parse a lambda: `x -> body`, `(a, b) -> body`, or
@@ -2259,10 +2290,12 @@ impl Parser<'_> {
         Ok(Expr::Lambda { params, body, span })
     }
 
-    /// A non-block lambda body. In Java this is any expression, and assignment
-    /// and `++`/`--` are expressions — but caturra models them as statements,
-    /// so `n -> total[0] += n` and `() -> count++` become a one-statement
-    /// block. A plain value expression (`x -> x + 1`) stays an expression body.
+    /// A non-block lambda body. In Java this is any expression; assignment and
+    /// `++`/`--` are expressions, but as a lambda body they run for effect, so
+    /// they become a one-statement block (a `Stmt::Assign`) that reuses the
+    /// statement-assignment path — the one that routes a bare name to an
+    /// enclosing field. A plain value expression (`x -> x + 1`) stays an
+    /// expression body.
     fn lambda_expression_body(&mut self) -> Parsed<LambdaBody> {
         // Prefix `++x` / `--x`.
         if self.at_symbol("++") || self.at_symbol("--") {
@@ -2280,7 +2313,7 @@ impl Parser<'_> {
 
         let expr = self.expression()?;
 
-        // `x -> count++`: a postfix increment.
+        // `x -> count++`: a postfix increment used for effect.
         if let Expr::IncDec {
             target,
             increment,
@@ -2293,24 +2326,20 @@ impl Parser<'_> {
             return Ok(LambdaBody::Block(vec![stmt]));
         }
 
-        // `x -> total += x`: an assignment expression.
-        if let Some(op) = self.assignment_operator() {
-            let Some(target) = assignment_target(&expr) else {
-                self.error_at(
-                    expr.span(),
-                    "the left side of an assignment must be a variable or array element",
-                );
-                return Err(Abort);
-            };
-            let start = expr.span().start;
-            self.pos += 1;
-            let value = self.expression()?;
-            let end = value.span().end;
+        // `n -> total[0] += n`: an assignment, unwrapped to a statement so it
+        // takes the same code path a bare `total[0] += n;` would.
+        if let Expr::Assign {
+            target,
+            op,
+            value,
+            span,
+        } = expr
+        {
             return Ok(LambdaBody::Block(vec![Stmt::Assign {
                 target,
                 op,
-                value,
-                span: SourceSpan { start, end },
+                value: *value,
+                span,
             }]));
         }
 
@@ -3981,6 +4010,17 @@ fn erase_in_expr(
                 }
             }
         }
+        Expr::Assign { target, value, .. } => {
+            match target {
+                AssignTarget::Index { array, index } => {
+                    erase_in_expr(array, to_object, tracked);
+                    erase_in_expr(index, to_object, tracked);
+                }
+                AssignTarget::Field { object, .. } => erase_in_expr(object, to_object, tracked),
+                AssignTarget::Var(_) => {}
+            }
+            erase_in_expr(value, to_object, tracked);
+        }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
@@ -4103,6 +4143,7 @@ fn rename_class_in_stmt(stmt: &mut Stmt, from: &str, to: &str) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per expression kind
 fn rename_class_in_expr(expr: &mut Expr, from: &str, to: &str) {
     match expr {
         Expr::Cast { ty, operand, .. } => {
@@ -4193,6 +4234,17 @@ fn rename_class_in_expr(expr: &mut Expr, from: &str, to: &str) {
                 LambdaBody::Expr(e) => rename_class_in_expr(e, from, to),
                 LambdaBody::Block(stmts) => rename_class_in_stmts(stmts, from, to),
             }
+        }
+        Expr::Assign { target, value, .. } => {
+            match target {
+                AssignTarget::Index { array, index } => {
+                    rename_class_in_expr(array, from, to);
+                    rename_class_in_expr(index, from, to);
+                }
+                AssignTarget::Field { object, .. } => rename_class_in_expr(object, from, to),
+                AssignTarget::Var(_) => {}
+            }
+            rename_class_in_expr(value, from, to);
         }
         Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
@@ -4508,12 +4560,20 @@ mod tests {
     }
 
     #[test]
-    fn assignment_in_condition_gets_a_hint() {
-        let errors = parse_errors(r"class M { static void f() { int x = 1; if (x = 2) { } } }");
-        assert!(
-            errors[0].message.contains("did you mean '=='"),
-            "{}",
-            errors[0].message
+    fn assignment_is_an_expression() {
+        // Assignment is an expression (JLS §15.26): it parses as an argument and
+        // in a loop condition, and `a = b = c` is right-associative.
+        parse_ok(
+            r"class M {
+                static void f() {
+                    int a, b, c;
+                    a = b = c = 5;
+                    System.out.println(a = 7);
+                    String s;
+                    while ((s = next()) != null) { }
+                }
+                static String next() { return null; }
+            }",
         );
     }
 
