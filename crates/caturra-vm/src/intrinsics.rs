@@ -3818,6 +3818,10 @@ fn integer_static(
             }
             i((a.cast_unsigned() % b.cast_unsigned()).cast_signed())
         }
+        // The int's 32 bits as an unsigned value in a long (no sign extension).
+        ("toUnsignedLong", [JValue::Int(v)]) => {
+            Ok(Some(JValue::Long(i64::from(v.cast_unsigned()))))
+        }
         _ => Err(VmError::UnknownIntrinsic(format!("Integer.{method}"))),
     }
 }
@@ -4143,6 +4147,55 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
         }
         ("reverse", [JValue::Long(v)]) => l(v.reverse_bits()),
         ("reverseBytes", [JValue::Long(v)]) => l(v.swap_bytes()),
+        ("highestOneBit", [JValue::Long(v)]) => l(if *v == 0 {
+            0
+        } else {
+            1i64.wrapping_shl(v.cast_unsigned().ilog2())
+        }),
+        ("lowestOneBit", [JValue::Long(v)]) => l(v & v.wrapping_neg()),
+        // Rotation distance is used modulo 64 (JLS / the JDK).
+        ("rotateLeft", [JValue::Long(v), JValue::Int(d)]) => {
+            l(v.rotate_left((d & 63).cast_unsigned()))
+        }
+        ("rotateRight", [JValue::Long(v), JValue::Int(d)]) => {
+            l(v.rotate_right((d & 63).cast_unsigned()))
+        }
+        ("divideUnsigned", [JValue::Long(a), JValue::Long(b)]) => {
+            if *b == 0 {
+                return Err(throw("java.lang.ArithmeticException: / by zero"));
+            }
+            l((a.cast_unsigned() / b.cast_unsigned()).cast_signed())
+        }
+        ("remainderUnsigned", [JValue::Long(a), JValue::Long(b)]) => {
+            if *b == 0 {
+                return Err(throw("java.lang.ArithmeticException: / by zero"));
+            }
+            l((a.cast_unsigned() % b.cast_unsigned()).cast_signed())
+        }
+        ("compareUnsigned", [JValue::Long(a), JValue::Long(b)]) => {
+            i(match a.cast_unsigned().cmp(&b.cast_unsigned()) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })
+        }
+        ("toUnsignedString", [JValue::Long(v)]) => s(heap, v.cast_unsigned().to_string()),
+        ("toUnsignedString", [JValue::Long(v), JValue::Int(radix)]) => {
+            let radix = if (2..=36).contains(radix) { *radix } else { 10 };
+            let radix = u64::try_from(radix).expect("radix in range");
+            let mut magnitude = v.cast_unsigned();
+            let mut digits = Vec::new();
+            loop {
+                let digit = u32::try_from(magnitude % radix).expect("digit < radix");
+                let radix32 = u32::try_from(radix).expect("radix in range");
+                digits.push(char::from_digit(digit, radix32).expect("valid digit"));
+                magnitude /= radix;
+                if magnitude == 0 {
+                    break;
+                }
+            }
+            s(heap, digits.iter().rev().collect())
+        }
         _ => Err(VmError::UnknownIntrinsic(format!("Long.{method}"))),
     }
 }

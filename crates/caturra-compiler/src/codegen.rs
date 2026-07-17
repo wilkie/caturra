@@ -5556,6 +5556,7 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     bm("rotateRight", &[I, I], BRet::Int, "(II)I"),
     bm("parseUnsignedInt", &[S], BRet::Int, "(Ljava/lang/String;)I"),
     bm("toUnsignedString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
+    bm("toUnsignedLong", &[I], BRet::Long, "(I)J"),
     bm(
         "toUnsignedString",
         &[I, I],
@@ -5769,6 +5770,20 @@ const LONG_METHODS: &[BuiltinMethod] = &[
     bm("numberOfTrailingZeros", &[L], BRet::Int, "(J)I"),
     bm("reverse", &[L], BRet::Long, "(J)J"),
     bm("reverseBytes", &[L], BRet::Long, "(J)J"),
+    bm("highestOneBit", &[L], BRet::Long, "(J)J"),
+    bm("lowestOneBit", &[L], BRet::Long, "(J)J"),
+    bm("rotateLeft", &[L, I], BRet::Long, "(JI)J"),
+    bm("rotateRight", &[L, I], BRet::Long, "(JI)J"),
+    bm("divideUnsigned", &[L, L], BRet::Long, "(JJ)J"),
+    bm("remainderUnsigned", &[L, L], BRet::Long, "(JJ)J"),
+    bm("compareUnsigned", &[L, L], BRet::Int, "(JJ)I"),
+    bm("toUnsignedString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
+    bm(
+        "toUnsignedString",
+        &[L, I],
+        BRet::Str,
+        "(JI)Ljava/lang/String;",
+    ),
 ];
 
 const SYSTEM_METHODS: &[BuiltinMethod] = &[

@@ -10698,3 +10698,24 @@ public class DiffMissingApis {
 }
 "#
 );
+
+// The Long/Integer unsigned and bit family the audit found missing:
+// Integer.toUnsignedLong, Long.divideUnsigned/remainderUnsigned/
+// toUnsignedString(/radix)/compareUnsigned, and Long.rotateLeft/rotateRight
+// (distance mod 64) / highestOneBit / lowestOneBit.
+differential_test!(
+    diff_long_unsigned_and_bit_ops,
+    "DiffLongBits",
+    r#"
+public class DiffLongBits {
+    public static void main(String[] args) {
+        System.out.println(Integer.toUnsignedLong(-1));
+        System.out.println(Long.divideUnsigned(-1L, 2L) + " " + Long.remainderUnsigned(-1L, 3L));
+        System.out.println(Long.toUnsignedString(-1L) + " " + Long.toUnsignedString(255L, 16));
+        System.out.println(Long.rotateLeft(1L, 4) + " " + Long.rotateRight(1L, 1) + " " + Long.rotateLeft(1L, -1));
+        System.out.println(Long.highestOneBit(100L) + " " + Long.lowestOneBit(12L) + " " + Long.highestOneBit(0L));
+        System.out.println(Long.compareUnsigned(-1L, 1L) + " " + Long.compareUnsigned(1L, -1L));
+    }
+}
+"#
+);
