@@ -2093,10 +2093,24 @@ impl Parser<'_> {
                 // Only type names, commas, dots, and nested `<>` appear
                 // in a type-argument list; anything else means this was
                 // a comparison expression.
-                // ...plus wildcards (`Class<?>`, `List<? extends T>`).
+                // ...plus wildcards (`Class<?>`, `List<? extends T>`) and array
+                // type arguments, incl. primitive ones (`List<int[]>`,
+                // `List<String[]>`). A bare primitive (`List<int>`) parses here
+                // and is rejected during type resolution, as javac does.
                 TokenKind::Identifier(_)
-                | TokenKind::Symbol("," | "." | "?")
-                | TokenKind::Keyword(Keyword::Extends | Keyword::Super) => {}
+                | TokenKind::Symbol("," | "." | "?" | "[" | "]")
+                | TokenKind::Keyword(
+                    Keyword::Extends
+                    | Keyword::Super
+                    | Keyword::Int
+                    | Keyword::Double
+                    | Keyword::Boolean
+                    | Keyword::Char
+                    | Keyword::Long
+                    | Keyword::Float
+                    | Keyword::Short
+                    | Keyword::Byte,
+                ) => {}
                 _ => return false,
             }
             if depth <= 0 {

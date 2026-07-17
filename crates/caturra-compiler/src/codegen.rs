@@ -1958,6 +1958,17 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
             }
         }
         TypeRef::Generic { .. } => Some(ElemType::Object(table.object_id)),
+        // An array element (`List<int[]>`, `List<String[]>`): intern the array
+        // type so getting an element back returns the array (not `Object`), and
+        // `add`/`get` type against it. Erased to `Object` for storage, like the
+        // nested-collection case — arrays are references.
+        TypeRef::Array(_) => match table.resolve_type(arg) {
+            Some(inner @ JType::Array { .. }) => Some(ElemType::Nested {
+                inner: table.intern_nested(inner),
+                read: table.object_id,
+            }),
+            _ => None,
+        },
         _ => None,
     }
 }

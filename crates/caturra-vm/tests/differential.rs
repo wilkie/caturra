@@ -10593,6 +10593,61 @@ public class RejectForwardRef {
 "
 );
 
+// Collections with an ARRAY element type — `List<int[]>`, `List<String[]>`,
+// `List<int[][]>`, `Map<String, int[]>` — parse (the generic-vs-comparison
+// disambiguation admits a primitive/array type argument) and flow: add stores
+// the array, get/for-each return it as the array type so it can be indexed.
+differential_test!(
+    diff_collection_array_elements,
+    "DiffArrElem",
+    r#"
+import java.util.*;
+
+public class DiffArrElem {
+    public static void main(String[] args) {
+        List<int[]> rows = new ArrayList<>();
+        rows.add(new int[]{1, 2, 3});
+        rows.add(new int[]{4, 5});
+        int sum = 0;
+        for (int[] row : rows) {
+            for (int v : row) sum += v;
+        }
+        System.out.println(sum + " " + rows.get(0)[2] + " " + rows.get(1).length);
+
+        List<String[]> names = new ArrayList<>();
+        names.add(new String[]{"a", "b"});
+        System.out.println(names.get(0)[1] + " " + names.get(0).length);
+
+        List<int[][]> grids = new ArrayList<>();
+        grids.add(new int[][]{{1, 2}, {3, 4}});
+        System.out.println(grids.get(0)[1][0]);
+
+        Map<String, int[]> m = new HashMap<>();
+        m.put("x", new int[]{10, 20});
+        System.out.println(m.get("x")[1] + " " + m.size());
+    }
+}
+"#
+);
+
+// A bare primitive type argument (`List<int>`) is still a compile error, as
+// javac refuses it — the fix admits `int[]`, not `int`.
+differential_reject!(
+    reject_primitive_type_argument,
+    "RejectPrimTypeArg",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class RejectPrimTypeArg {
+    public static void main(String[] args) {
+        List<int> x = new ArrayList<>();
+        System.out.println(x.size());
+    }
+}
+"
+);
+
 // A read of a `static final` compile-time constant is INLINED as its value
 // (JLS §13.4.9), of every primitive type and String. The visible effect: an
 // enum constructor reading such a static gets the real value, even though the
