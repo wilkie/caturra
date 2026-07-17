@@ -10513,6 +10513,45 @@ public class DiffIntern {
 "#
 );
 
+// Array covariance (JLS §10.5): storing a value that does not fit the array's
+// RUNTIME element type throws ArrayStoreException, naming the value's class.
+// `Object[] a = new String[1]; a[0] = 1;` compiles but is fatal at run time;
+// caturra used to accept it silently. A monomorphic array and an `Object[]`
+// (which accepts anything) never throw.
+differential_test!(
+    diff_array_store_exception,
+    "DiffArrayStore",
+    r#"
+class Animal { public String toString() { return "animal"; } }
+class Dog extends Animal {}
+class Cat extends Animal {}
+
+public class DiffArrayStore {
+    public static void main(String[] args) {
+        Object[] arr = new String[2];
+        arr[0] = "ok";
+        System.out.println(arr[0]);
+        try { arr[1] = Integer.valueOf(1); System.out.println("no throw"); }
+        catch (ArrayStoreException e) { System.out.println("ASE " + e.getMessage()); }
+
+        Animal[] pets = new Dog[2];
+        pets[0] = new Dog();
+        try { pets[1] = new Cat(); System.out.println("no throw"); }
+        catch (ArrayStoreException e) { System.out.println("ASE " + e.getMessage()); }
+
+        Object[] objs = new Object[1];
+        objs[0] = Integer.valueOf(5);
+        System.out.println(objs[0]);
+
+        Animal[] animals = new Animal[2];
+        animals[0] = new Dog();
+        animals[1] = new Cat();
+        System.out.println("animal array ok");
+    }
+}
+"#
+);
+
 // `Arrays.sort(double[])` / `sort(float[])` order NaN LAST (a `>` comparison
 // never moves NaN) and -0.0 before 0.0, per Double.compare — caturra's
 // insertion sort used `>` and left NaN in place while treating -0.0 == 0.0.

@@ -2074,6 +2074,9 @@ impl<'run> Interpreter<'run> {
                         op::AASTORE => {
                             let value = frame.pop()?;
                             let (reference, index) = frame.pop_array_access()?;
+                            // Array covariance: a store whose value does not fit
+                            // the array's runtime element type throws (JLS §10.5).
+                            self.array_store_check(reference, value)?;
                             let Some(crate::value::HeapObject::RefArray(_, values)) =
                                 self.heap.get_mut(reference)
                             else {
@@ -2946,6 +2949,66 @@ impl<'run> Interpreter<'run> {
 
     /// Whether `sub` (a user class name) is `sup` or inherits from it,
     /// walking `extends` and `implements` edges.
+    /// The `aastore` array-covariance check (JLS §10.5 / §6.5): storing a
+    /// value into a reference array whose runtime element type it is NOT
+    /// assignable to throws `ArrayStoreException`. `Object[] a = new String[1];
+    /// a[0] = 1;` is the classic case — legal to compile, fatal at run time.
+    ///
+    /// Conservative by design: it throws only when SURE of a violation (a
+    /// user-class element with a known hierarchy, or a final library element
+    /// like `String`/a wrapper that only an exact match fits). For an element
+    /// whose subtypes it cannot enumerate it stays silent — a missed throw is
+    /// tolerable, a spurious one on valid code is not.
+    fn array_store_check(&self, array: HeapRef, value: JValue) -> Result<(), VmError> {
+        // A null store never throws; a bare primitive only reaches an
+        // `Object[]`, which accepts anything.
+        let JValue::Ref(Some(value_ref)) = value else {
+            return Ok(());
+        };
+        let Some(crate::value::HeapObject::RefArray(array_class, _)) = self.heap.get(array) else {
+            return Ok(());
+        };
+        // Class elements only (`[L...;`); a nested-array element is left alone.
+        let Some(element) = array_class
+            .strip_prefix("[L")
+            .and_then(|s| s.strip_suffix(';'))
+        else {
+            return Ok(());
+        };
+        if element == "java/lang/Object" {
+            return Ok(());
+        }
+        let element = element.to_owned();
+        let value_class = self.object_class_name(value_ref);
+        if value_class == element {
+            return Ok(());
+        }
+        let assignable = if self.classes.contains_key(&element) {
+            // A user-class/interface element: the whole hierarchy is known.
+            self.is_runtime_subtype(&value_class, &element)
+        } else if is_final_library_class(&element) {
+            // A final library element (String, a wrapper): only an exact match
+            // fits, and that already returned above — so this is a violation.
+            false
+        } else if value_class == "java/lang/String"
+            && (element == "java/lang/CharSequence" || is_comparable(&element))
+        {
+            true
+        } else {
+            // An element whose subtypes we cannot enumerate: do not risk a
+            // spurious throw on code a JDK would accept.
+            true
+        };
+        if assignable {
+            Ok(())
+        } else {
+            Err(VmError::UncaughtException(format!(
+                "java.lang.ArrayStoreException: {}",
+                value_class.replace('/', ".")
+            )))
+        }
+    }
+
     fn is_runtime_subtype(&self, sub: &str, sup: &str) -> bool {
         if sub == sup {
             return true;
@@ -11025,6 +11088,26 @@ fn wrapper_is(wrapper: &str, target: &str) -> bool {
 /// `java/lang/Comparable`.
 fn is_comparable(target: &str) -> bool {
     matches!(target, "Comparable" | "java/lang/Comparable")
+}
+
+/// A `final` library class caturra models — one with no subtypes, so an array
+/// of it accepts ONLY that exact class (used by the `aastore` covariance check
+/// to know a mismatch is a genuine `ArrayStoreException`, not an unknown
+/// relationship).
+fn is_final_library_class(internal: &str) -> bool {
+    matches!(
+        internal,
+        "java/lang/String"
+            | "java/lang/Integer"
+            | "java/lang/Long"
+            | "java/lang/Double"
+            | "java/lang/Float"
+            | "java/lang/Short"
+            | "java/lang/Byte"
+            | "java/lang/Character"
+            | "java/lang/Boolean"
+            | "java/lang/StringBuilder"
+    )
 }
 
 /// The `ClassCastException` a failed cast raises, named the way Java names it:
