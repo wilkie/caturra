@@ -3031,6 +3031,32 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
 
 /// A compile-time constant int/char case label (literals, optionally
 /// negated).
+/// The compile-time constant String value of an expression (JLS §15.28): a
+/// String literal, or a `+` whose operands are both constant Strings. Folding
+/// such a concatenation to one interned literal is what makes `"ab" == "a" +
+/// "b"` true. Deliberately narrow — a constant `final String` variable or a
+/// primitive operand is NOT folded (that needs constant propagation, or risks
+/// a string-form mismatch), so those keep their correct runtime concatenation.
+fn constant_string_value(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Literal {
+            value: Literal::Str(s),
+            ..
+        } => Some(s.clone()),
+        Expr::Binary {
+            op: BinaryOp::Add,
+            lhs,
+            rhs,
+            ..
+        } => Some(format!(
+            "{}{}",
+            constant_string_value(lhs)?,
+            constant_string_value(rhs)?
+        )),
+        _ => None,
+    }
+}
+
 fn constant_int_value(expr: &Expr) -> Option<i64> {
     match expr {
         Expr::Literal {
@@ -15863,6 +15889,18 @@ impl BodyGen<'_> {
     }
 
     fn concat(&mut self, lhs: &Expr, rhs: &Expr) -> JType {
+        // A compile-time constant string concatenation (JLS §15.28) folds to a
+        // SINGLE interned constant, so `"ab" == "a" + "b"` compares equal, as
+        // on a JDK. Only string operands fold — `"a" + 5` keeps its runtime
+        // path (correct output; just not interned), avoiding any risk of a
+        // primitive's string form differing from the runtime's.
+        if let (Some(l), Some(r)) = (constant_string_value(lhs), constant_string_value(rhs)) {
+            let folded = format!("{l}{r}");
+            let utf8 = self.pool.intern_utf8(&folded);
+            let index = self.pool.intern(Constant::String { string_index: utf8 });
+            self.code.push_ldc(index);
+            return JType::Str;
+        }
         let mut parts = Vec::new();
         self.flatten_concat(lhs, &mut parts);
         self.flatten_concat(rhs, &mut parts);

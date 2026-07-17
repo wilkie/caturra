@@ -10488,3 +10488,27 @@ public class DiffExcMsg {
 }
 "#
 );
+
+// A compile-time constant String concatenation (JLS §15.28) is one interned
+// constant, so `"ab" == "a" + "b"` is true — where a RUNTIME concatenation
+// (`q + "b"` with a non-final `q`) makes a fresh String and is false. Both
+// the identity and the value are checked.
+differential_test!(
+    diff_constant_string_interning,
+    "DiffIntern",
+    r#"
+public class DiffIntern {
+    public static void main(String[] args) {
+        String x = "ab";
+        System.out.println("ab" == "ab");            // interned literals: true
+        System.out.println(x == "ab");               // true
+        System.out.println("ab" == "a" + "b");       // constant fold: true
+        System.out.println("abc" == "a" + "b" + "c"); // nested fold: true
+        String q = "a";
+        System.out.println("ab" == q + "b");         // runtime concat: false
+        System.out.println(("a" + "b").equals("ab")); // value still correct: true
+        System.out.println("a" + "b" + "c");         // abc
+    }
+}
+"#
+);
