@@ -10513,6 +10513,29 @@ public class DiffIntern {
 "#
 );
 
+// `Arrays.sort(double[])` / `sort(float[])` order NaN LAST (a `>` comparison
+// never moves NaN) and -0.0 before 0.0, per Double.compare — caturra's
+// insertion sort used `>` and left NaN in place while treating -0.0 == 0.0.
+differential_test!(
+    diff_arrays_sort_float_nan,
+    "DiffSortNaN",
+    r"
+import java.util.Arrays;
+
+public class DiffSortNaN {
+    public static void main(String[] args) {
+        double[] d = {3.0, Double.NaN, -0.0, 0.0, 1.0,
+                      Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY, -2.0};
+        Arrays.sort(d);
+        System.out.println(Arrays.toString(d));
+        float[] f = {2.0f, Float.NaN, -0.0f, 0.0f, -1.0f};
+        Arrays.sort(f);
+        System.out.println(Arrays.toString(f));
+    }
+}
+"
+);
+
 // Valid Java 11 APIs the audit found caturra rejecting at compile time:
 // `Character.toString(int)` (a code point, incl. one above the BMP),
 // `String.contentEquals(StringBuilder)` (a CharSequence argument), and the

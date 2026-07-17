@@ -79,10 +79,12 @@ class Arrays {
     }
   }
   public static void sort(double[] a) {
+    // Double.compare, not `>`: NaN sorts last (NaN > x is always false) and
+    // -0.0 sorts before 0.0, matching java.util.Arrays.
     for (int i = 1; i < a.length; i++) {
       double key = a[i];
       int j = i - 1;
-      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      while (j >= 0 && Double.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
@@ -103,10 +105,11 @@ class Arrays {
     }
   }
   public static void sort(float[] a) {
+    // Float.compare, not `>`: NaN sorts last and -0.0f before 0.0f.
     for (int i = 1; i < a.length; i++) {
       float key = a[i];
       int j = i - 1;
-      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      while (j >= 0 && Float.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
