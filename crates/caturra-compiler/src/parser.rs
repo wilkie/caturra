@@ -3524,6 +3524,44 @@ fn desugar_enum(
         ));
     }
 
+    // `int compareTo(E __other) { return __ordinal - __other.__ordinal; }` —
+    // Enum implements Comparable by declaration order, which is the ordinal.
+    // (`__other.__ordinal` is a private field of the same class, so the access
+    // is legal.) A user cannot override compareTo on an enum (javac forbids
+    // it), so this is unconditional.
+    methods.push(MethodDecl {
+        name: String::from("compareTo"),
+        is_static: false,
+        is_public: true,
+        is_private: false,
+        is_constructor: false,
+        is_abstract: false,
+        type_params: Vec::new(),
+        infer_return: None,
+        return_type: TypeRef::Int,
+        params: vec![Param {
+            ty: enum_ty.clone(),
+            name: String::from("__other"),
+            is_varargs: false,
+            is_final: false,
+        }],
+        body: vec![Stmt::Return {
+            value: Some(Expr::Binary {
+                op: BinaryOp::Sub,
+                lhs: Box::new(var("__ordinal")),
+                rhs: Box::new(Expr::Field {
+                    object: Box::new(var("__other")),
+                    name: String::from("__ordinal"),
+                    span: zero,
+                }),
+                span: zero,
+            }),
+            span: zero,
+        }],
+        annotations: Vec::new(),
+        span: zero,
+    });
+
     // `static E[] values() { return new E[]{ A, B, ... }; }`
     if !defines(&methods, "values") {
         let elements: Vec<Expr> = constants.iter().map(|c| var(&c.name)).collect();

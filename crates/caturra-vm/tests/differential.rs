@@ -10341,3 +10341,62 @@ public class DiffCondType {
 }
 "
 );
+
+// An enum is Comparable by its ordinal; a boxed integral (Integer/Character/
+// Byte) is a legal `switch` selector (javac unboxes it); and a constant int
+// that fits a narrower wrapper narrows then boxes (`Byte b = 3`). All three
+// are valid Java that caturra used to reject — found by the differential
+// audit across the boxing/char/static-final dimensions.
+differential_test!(
+    diff_enum_compare_switch_boxed_narrowing,
+    "DiffBoxedValid",
+    r#"
+public class DiffBoxedValid {
+    enum Rank { LOW, MID, HIGH }
+    public static void main(String[] args) {
+        System.out.println(Rank.LOW.compareTo(Rank.HIGH));   // -2
+        System.out.println(Rank.HIGH.compareTo(Rank.LOW));   // 2
+        System.out.println(Rank.MID.compareTo(Rank.MID));    // 0
+
+        Integer n = 2;
+        switch (n) {
+            case 1: System.out.println("one"); break;
+            case 2: System.out.println("two"); break;
+            default: System.out.println("many");
+        }
+        Character c = 'b';
+        switch (c) {
+            case 'a': System.out.println("A"); break;
+            case 'b': System.out.println("B"); break;
+            default: System.out.println("?");
+        }
+
+        Byte b = 3;
+        Short s = 300;
+        Character ch = 65;
+        Byte nb = -5;
+        System.out.println(b + " " + s + " " + ch + " " + nb);  // 3 300 A -5
+        switch (b) {
+            case 3: System.out.println("three"); break;
+            default: System.out.println("d");
+        }
+    }
+}
+"#
+);
+
+// The narrowing is bounded by the constant's VALUE: 300 does not fit Byte, so
+// `Byte b = 300` stays a compile error, exactly as javac refuses it. (Guards
+// against the fix widening into accepting what it shouldn't.)
+differential_reject!(
+    reject_boxed_narrowing_out_of_range,
+    "RejectBoxNarrow",
+    r"
+public class RejectBoxNarrow {
+    public static void main(String[] args) {
+        Byte b = 300;
+        System.out.println(b);
+    }
+}
+"
+);

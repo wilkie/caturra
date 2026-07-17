@@ -7644,6 +7644,18 @@ impl BodyGen<'_> {
     #[allow(clippy::too_many_lines)] // one lowering plan
     fn switch_statement(&mut self, selector: &Expr, arms: &[SwitchArm], span: SourceSpan) {
         let selector_ty = self.expr(selector);
+        // A boxed integral selector (Integer/Character/Short/Byte) unboxes to
+        // its primitive, exactly as javac does — `switch (boxedInt) { ... }`.
+        let selector_ty = if let JType::Boxed(elem) = selector_ty
+            && matches!(
+                elem.base_type(),
+                JType::Int | JType::Char | JType::Short | JType::Byte
+            ) {
+            self.emit_unbox(elem);
+            elem.base_type()
+        } else {
+            selector_ty
+        };
         let is_string = selector_ty == JType::Str;
         let is_int = matches!(
             selector_ty,
@@ -16153,6 +16165,20 @@ impl BodyGen<'_> {
             if in_range {
                 return;
             }
+        }
+        // A constant int that fits a NARROWER wrapper narrows then boxes:
+        // `Byte b = 3;` is `Byte.valueOf((byte) 3)`. javac allows it; without
+        // this the assignment read as int -> Byte and was rejected. The value
+        // already fits, so the int on the stack needs no narrowing opcode
+        // (the verifier treats a byte/short/char parameter as int).
+        if from == JType::Int
+            && let JType::Boxed(elem) = to
+            && let Some(value) = constant
+            && matches!(elem.base_type(), JType::Byte | JType::Short | JType::Char)
+            && int_fits(value, elem.base_type())
+        {
+            self.emit_box(elem);
+            return;
         }
         // Autoboxing / auto-unboxing (JLS §5.1.7 / §5.1.8).
         if from != to {

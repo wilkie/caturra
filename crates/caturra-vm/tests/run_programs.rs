@@ -4955,6 +4955,34 @@ fn enums_singletons_values_and_switch() {
     assert_eq!(out, "41 4\nDIME 2 10\nsilver true\n");
 }
 
+/// Valid Java that caturra used to reject, found by the differential audit:
+/// an enum is `Comparable` by ordinal (`compareTo`), a boxed integral is a
+/// legal `switch` selector (unboxed like javac), and a constant int that fits
+/// a narrower wrapper narrows then boxes (`Byte b = 3`). JDK-free pin; the
+/// byte-for-byte JDK match is `diff_enum_compare_switch_boxed_narrowing`.
+#[test]
+fn enum_compare_switch_boxed_and_narrowing_compile_and_run() {
+    let out = run_stdout(
+        r#"
+        public class B {
+            enum Rank { LOW, MID, HIGH }
+            public static void main(String[] args) {
+                System.out.println(Rank.LOW.compareTo(Rank.HIGH) + " " + Rank.HIGH.compareTo(Rank.LOW));
+                Integer n = 2;
+                switch (n) { case 1: System.out.println("one"); break; case 2: System.out.println("two"); break; }
+                Byte b = 3;
+                Short s = 300;
+                Character ch = 65;
+                System.out.println(b + " " + s + " " + ch);
+                switch (b) { case 3: System.out.println("three"); break; default: System.out.println("d"); }
+            }
+        }
+        "#,
+        "B",
+    );
+    assert_eq!(out, "-2 2\ntwo\n3 300 A\nthree\n");
+}
+
 #[test]
 fn arithmetic_follows_java_semantics() {
     let out = run_stdout(
