@@ -3557,7 +3557,15 @@ fn math_static(
         ("abs", [JValue::Double(v)]) => d(v.abs()),
         ("sqrt", [JValue::Double(v)]) => d(v.sqrt()),
         ("cbrt", [JValue::Double(v)]) => d(v.cbrt()),
-        ("pow", [JValue::Double(a), JValue::Double(b)]) => d(a.powf(*b)),
+        // Java deviates from IEEE `pow` in one case: |x| == 1 with an infinite
+        // exponent is NaN (IEEE, and Rust's `powf`, give 1.0).
+        ("pow", [JValue::Double(a), JValue::Double(b)]) => {
+            if a.abs() == 1.0 && b.is_infinite() {
+                d(f64::NAN)
+            } else {
+                d(a.powf(*b))
+            }
+        }
         ("hypot", [JValue::Double(a), JValue::Double(b)]) => d(a.hypot(*b)),
         ("max", [JValue::Int(a), JValue::Int(b)]) => i((*a).max(*b)),
         ("max", [JValue::Double(a), JValue::Double(b)]) => d(java_double_max(*a, *b)),
@@ -3609,6 +3617,8 @@ fn math_static(
         }
         ("nextUp", [JValue::Double(v)]) => d(v.next_up()),
         ("nextDown", [JValue::Double(v)]) => d(v.next_down()),
+        ("nextUp", [JValue::Float(v)]) => Ok(Some(JValue::Float(v.next_up()))),
+        ("nextDown", [JValue::Float(v)]) => Ok(Some(JValue::Float(v.next_down()))),
         ("nextAfter", [JValue::Double(start), JValue::Double(direction)]) => {
             d(if start.is_nan() || direction.is_nan() {
                 f64::NAN

@@ -10699,6 +10699,31 @@ public class DiffMissingApis {
 "#
 );
 
+// Math corner cases: `Math.pow(x, ±inf)` with |x| == 1 is NaN (Java deviates
+// from IEEE, which gives 1.0); and the `nextUp`/`nextDown` FLOAT overloads
+// stay float, so `nextUp(Float.MAX_VALUE)` overflows to Infinity instead of
+// widening to a finite double.
+differential_test!(
+    diff_math_pow_and_nextup,
+    "DiffMathCorners",
+    r#"
+public class DiffMathCorners {
+    public static void main(String[] args) {
+        double inf = Double.POSITIVE_INFINITY;
+        System.out.println(Math.pow(-1.0, inf));
+        System.out.println(Math.pow(1.0, inf));
+        System.out.println(Math.pow(-1.0, -inf));
+        System.out.println(Math.pow(2.0, inf));
+        System.out.println(Math.pow(0.5, inf));
+        System.out.println(Math.pow(2.0, 10.0));
+        System.out.println(Math.nextUp(Float.MAX_VALUE));
+        System.out.println(Math.nextUp(1.0f) + " " + Math.nextDown(1.0f));
+        System.out.println(Math.nextUp(2.0));
+    }
+}
+"#
+);
+
 // Array APIs the audit found caturra rejecting: `instanceof` against an array
 // type (`o instanceof int[]`, `String[]`, `int[][]`), `array.clone()` (a
 // shallow copy of the same runtime type — a 2D clone shares its rows), and

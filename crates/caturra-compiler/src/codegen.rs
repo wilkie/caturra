@@ -5482,6 +5482,10 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("nextUp", &[D], BRet::Double, "(D)D"),
     bm("nextDown", &[D], BRet::Double, "(D)D"),
     bm("nextAfter", &[D, D], BRet::Double, "(DD)D"),
+    // The float overloads return a float (so `nextUp(Float.MAX_VALUE)`
+    // overflows to Float.POSITIVE_INFINITY rather than widening to a double).
+    bm("nextUp", &[F], BRet::Float, "(F)F"),
+    bm("nextDown", &[F], BRet::Float, "(F)F"),
     bm("fma", &[D, D, D], BRet::Double, "(DDD)D"),
     bm("IEEEremainder", &[D, D], BRet::Double, "(DD)D"),
     bm("getExponent", &[D], BRet::Int, "(D)I"),
