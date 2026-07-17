@@ -10593,6 +10593,39 @@ public class RejectForwardRef {
 "
 );
 
+// A read of a `static final` compile-time constant is INLINED as its value
+// (JLS §13.4.9), of every primitive type and String. The visible effect: an
+// enum constructor reading such a static gets the real value, even though the
+// field's own initializer has not run yet (the constants are built first) —
+// caturra used to read the default via getstatic.
+differential_test!(
+    diff_constant_inlining,
+    "DiffConstInline",
+    r#"
+enum E {
+    A, B;
+    static final int I = 100;
+    static final long L = 7L;
+    static final double D = 3.5;
+    static final float F = 1.5f;
+    static final boolean BO = true;
+    static final char C = 'z';
+    static final String S = "cst";
+    static final int NEG = -9;
+    final String tag;
+    E() { tag = I + "/" + L + "/" + D + "/" + F + "/" + BO + "/" + C + "/" + S + "/" + NEG; }
+    String tag() { return tag; }
+}
+
+public class DiffConstInline {
+    public static void main(String[] args) {
+        System.out.println(E.A.tag());
+        System.out.println(E.I + " " + E.L + " " + E.D + " " + E.F + " " + E.BO + " " + E.C + " " + E.S + " " + E.NEG);
+    }
+}
+"#
+);
+
 // JLS §8.9.2: an enum's constructor may not reference a non-constant static
 // field of the enum (the constants are built before it is initialized) —
 // javac: "illegal reference to static field from initializer". caturra used to

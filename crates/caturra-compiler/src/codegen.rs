@@ -394,10 +394,11 @@ struct FieldSig {
     is_static: bool,
     is_private: bool,
     is_final: bool,
-    /// The compile-time constant value of a `static final` integral field with
-    /// a constant initializer (`static final int LIMIT = 3;`) — what lets it
-    /// stand in as a `case` label. `None` for a non-constant field.
-    const_int: Option<i64>,
+    /// The compile-time constant a `static final` field denotes, coerced to its
+    /// type (`static final int LIMIT = 3;`, `static final String S = "x";`).
+    /// A read of the field is INLINED as this literal (JLS §13.4.9), and an
+    /// integral one may stand in as a `case` label. `None` when non-constant.
+    const_literal: Option<Literal>,
 }
 
 /// Everything call/field resolution knows about one class.
@@ -680,24 +681,23 @@ impl MethodTable {
 
                 for field in &class.fields {
                     let field_ty = table.resolve_type(&field.ty).unwrap_or(JType::Unsupported);
-                    // A `static final` integral field with a constant int
-                    // initializer is a compile-time constant (usable as a case
-                    // label). char/byte/short/int all live as int here.
-                    let const_int = (field.is_static
-                        && field.is_final
-                        && matches!(
-                            field_ty,
-                            JType::Int | JType::Char | JType::Short | JType::Byte
-                        ))
-                    .then(|| field.init.as_ref().and_then(constant_int_value))
-                    .flatten();
+                    // A `static final` field with a constant initializer is a
+                    // compile-time constant: its reads are inlined.
+                    let const_literal = (field.is_static && field.is_final)
+                        .then(|| {
+                            field
+                                .init
+                                .as_ref()
+                                .and_then(|init| constant_field_literal(field_ty, init))
+                        })
+                        .flatten();
                     let sig = FieldSig {
                         name: field.name.clone(),
                         ty: field_ty,
                         is_static: field.is_static,
                         is_private: field.is_private,
                         is_final: field.is_final,
-                        const_int,
+                        const_literal,
                     };
                     if fields.iter().any(|f: &FieldSig| f.name == sig.name) {
                         diagnostics.push(Diagnostic::error(
@@ -3176,11 +3176,9 @@ fn enum_check_stmt(
                 enum_check_stmt(s, restricted, enum_name, shadowed, report);
             }
         }
-        Stmt::Expr(e)
-        | Stmt::Throw { value: e, .. }
-        | Stmt::Return {
-            value: Some(e), ..
-        } => expr(e, report),
+        Stmt::Expr(e) | Stmt::Throw { value: e, .. } | Stmt::Return { value: Some(e), .. } => {
+            expr(e, report);
+        }
         Stmt::LocalDecl { declarators, .. } => {
             for d in declarators {
                 if let Some(init) = &d.init {
@@ -3475,6 +3473,112 @@ fn constant_string_value(expr: &Expr) -> Option<String> {
             constant_string_value(lhs)?,
             constant_string_value(rhs)?
         )),
+        _ => None,
+    }
+}
+
+/// The compile-time constant a `static final` field initializer denotes,
+/// coerced to the field's declared type (JLS §13.4.9): reading such a field is
+/// replaced by this literal in the bytecode, so the value is available even
+/// before the field's own initializer runs (an enum constructor reading a
+/// static declared after the constants). `None` for a non-constant field or a
+/// non-primitive/String type.
+fn constant_field_literal(field_ty: JType, init: &Expr) -> Option<Literal> {
+    match field_ty {
+        JType::Str => match init {
+            Expr::Literal {
+                value: Literal::Str(s),
+                ..
+            } => Some(Literal::Str(s.clone())),
+            _ => None,
+        },
+        JType::Boolean => match init {
+            Expr::Literal {
+                value: Literal::Bool(b),
+                ..
+            } => Some(Literal::Bool(*b)),
+            _ => None,
+        },
+        JType::Char => {
+            let code = u32::try_from(constant_int_value(init)?).ok()?;
+            char::from_u32(code).map(Literal::Char)
+        }
+        JType::Int | JType::Short | JType::Byte => constant_int_value(init).map(Literal::Int),
+        JType::Long => constant_long_value(init).map(Literal::Long),
+        JType::Double => constant_double_value(init).map(Literal::Double),
+        JType::Float => constant_float_value(init).map(Literal::Float),
+        _ => None,
+    }
+}
+
+fn constant_long_value(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::Literal {
+            value: Literal::Long(v) | Literal::Int(v),
+            ..
+        } => Some(*v),
+        Expr::Literal {
+            value: Literal::Char(c),
+            ..
+        } => Some(i64::from(u32::from(*c))),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => constant_long_value(operand).map(|v| -v),
+        _ => None,
+    }
+}
+
+#[allow(clippy::cast_precision_loss)] // a compile-time constant's exact value
+fn constant_double_value(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Literal {
+            value: Literal::Double(v),
+            ..
+        } => Some(*v),
+        Expr::Literal {
+            value: Literal::Float(v),
+            ..
+        } => Some(f64::from(*v)),
+        Expr::Literal {
+            value: Literal::Int(v) | Literal::Long(v),
+            ..
+        } => Some(*v as f64),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => constant_double_value(operand).map(|v| -v),
+        _ => None,
+    }
+}
+
+#[allow(clippy::cast_precision_loss)] // a compile-time constant's exact value
+fn constant_float_value(expr: &Expr) -> Option<f32> {
+    match expr {
+        Expr::Literal {
+            value: Literal::Float(v),
+            ..
+        } => Some(*v),
+        Expr::Literal {
+            value: Literal::Int(v),
+            ..
+        } => i32::try_from(*v).ok().map(|v| v as f32),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+            ..
+        } => constant_float_value(operand).map(|v| -v),
+        _ => None,
+    }
+}
+
+/// The int value of a constant-field literal for a `case` label (char/int/…).
+fn const_literal_as_int(lit: &Literal) -> Option<i64> {
+    match lit {
+        Literal::Int(v) => Some(*v),
+        Literal::Char(c) => Some(i64::from(u32::from(*c))),
         _ => None,
     }
 }
@@ -8172,7 +8276,7 @@ impl BodyGen<'_> {
             },
             _ => None,
         };
-        field.and_then(|(_, sig)| sig.const_int)
+        field.and_then(|(_, sig)| sig.const_literal.as_ref().and_then(const_literal_as_int))
     }
 
     #[allow(clippy::too_many_lines)] // one lowering plan
@@ -9841,6 +9945,16 @@ impl BodyGen<'_> {
     /// Emit a read of a field of the current class through the implicit
     /// or explicit receiver already handled by the caller.
     fn emit_getfield(&mut self, class_id: ClassId, field: &FieldSig) -> JType {
+        // A read of a compile-time constant is INLINED as its value (JLS
+        // §13.4.9) — no `getstatic`, so the value is right even before the
+        // field's initializer runs (an enum ctor reading a later static), and
+        // there is no dependency on the declaring class being initialized.
+        if field.is_static
+            && let Some(literal) = field.const_literal.clone()
+        {
+            self.emit_const_literal(&literal);
+            return field.ty;
+        }
         let class_name = self.table.class_name(class_id).to_owned();
         let field_ref = intern_field_ref(
             self.pool,
@@ -9857,6 +9971,49 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
         }
         field.ty
+    }
+
+    /// Emit an already-validated constant literal (from a `static final` field
+    /// being inlined) — like [`Self::literal`] but with no error path, since
+    /// the value was checked when the field was registered.
+    fn emit_const_literal(&mut self, literal: &Literal) {
+        match literal {
+            Literal::Int(v) => self.push_int(i32::try_from(*v).unwrap_or_default()),
+            Literal::Char(c) => self.push_int(i32::from(u16::try_from(*c as u32).unwrap_or(0))),
+            Literal::Bool(b) => self
+                .code
+                .push_op(if *b { op::ICONST_1 } else { op::ICONST_0 }, 1),
+            Literal::Long(v) => match *v {
+                0 => self.code.push_op(op::LCONST_0, 2),
+                1 => self.code.push_op(op::LCONST_1, 2),
+                other => {
+                    let index = self.pool.intern(Constant::Long(other));
+                    self.code.push_op_u16(op::LDC2_W, index, 2);
+                }
+            },
+            Literal::Double(v) => {
+                let index = self.pool.intern(Constant::Double(*v));
+                self.code.push_op_u16(op::LDC2_W, index, 2);
+            }
+            Literal::Float(v) => {
+                if v.to_bits() == 0.0f32.to_bits() {
+                    self.code.push_op(op::FCONST_0, 1);
+                } else if v.to_bits() == 1.0f32.to_bits() {
+                    self.code.push_op(op::FCONST_1, 1);
+                } else if v.to_bits() == 2.0f32.to_bits() {
+                    self.code.push_op(op::FCONST_2, 1);
+                } else {
+                    let index = self.pool.intern(Constant::Float(*v));
+                    self.code.push_ldc(index);
+                }
+            }
+            Literal::Str(s) => {
+                let utf8 = self.pool.intern_utf8(s);
+                let index = self.pool.intern(Constant::String { string_index: utf8 });
+                self.code.push_ldc(index);
+            }
+            Literal::Null => self.code.push_op(op::ACONST_NULL, 1),
+        }
     }
 
     /// The static type of a `new` expression (pure).
