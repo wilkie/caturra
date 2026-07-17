@@ -2927,6 +2927,69 @@ fn promote(a: JType, b: JType) -> JType {
     }
 }
 
+/// A numeric wrapper's primitive (`Integer` → `int`), else the type unchanged.
+/// Conditional-expression typing (JLS 15.25) unboxes before comparing.
+fn unbox_numeric(ty: JType) -> JType {
+    match ty {
+        JType::Boxed(elem) if elem.base_type().is_numeric() => elem.base_type(),
+        other => other,
+    }
+}
+
+/// Whether an `int` constant `value` is representable in the narrower integral
+/// type `narrow` (byte/short/char), for JLS 15.25's constant-branch rule.
+fn int_fits(value: i64, narrow: JType) -> bool {
+    match narrow {
+        JType::Byte => i8::try_from(value).is_ok(),
+        JType::Short => i16::try_from(value).is_ok(),
+        JType::Char => (0..=i64::from(u16::MAX)).contains(&value),
+        _ => false,
+    }
+}
+
+/// The type of `cond ? then : els` when the branches are numeric (or numeric
+/// wrappers), per JLS 15.25 — the cases plain binary promotion misses:
+/// `byte`+`short` → `short`; a `char`/`byte`/`short` branch paired with a
+/// *constant* `int` that fits it keeps the narrower type (so `t ? 'A' : 0`
+/// stays `char` and prints the letter, not the code point). `None` when the
+/// branches are not both numeric — the caller handles reference/null cases.
+fn conditional_numeric_type(
+    then_ty: JType,
+    els_ty: JType,
+    then: &Expr,
+    els: &Expr,
+) -> Option<JType> {
+    let p_then = unbox_numeric(then_ty);
+    let p_els = unbox_numeric(els_ty);
+    if !p_then.is_numeric() || !p_els.is_numeric() {
+        return None;
+    }
+    if p_then == p_els {
+        return Some(p_then);
+    }
+    if matches!(
+        (p_then, p_els),
+        (JType::Byte, JType::Short) | (JType::Short, JType::Byte)
+    ) {
+        return Some(JType::Short);
+    }
+    // A narrower branch paired with a fitting constant `int` (only when the
+    // int side is a *primitive* int literal, not a boxed Integer).
+    for (narrow, wide, wide_ty, wide_expr) in
+        [(p_then, p_els, els_ty, els), (p_els, p_then, then_ty, then)]
+    {
+        if matches!(narrow, JType::Char | JType::Byte | JType::Short)
+            && wide == JType::Int
+            && wide_ty == JType::Int
+            && let Some(value) = constant_int_value(wide_expr)
+            && int_fits(value, narrow)
+        {
+            return Some(narrow);
+        }
+    }
+    Some(promote(p_then, p_els))
+}
+
 fn type_from_ref(ty: &TypeRef) -> Option<JType> {
     match ty {
         TypeRef::Int => Some(JType::Int),
@@ -13714,13 +13777,25 @@ impl BodyGen<'_> {
             Expr::NewObject {
                 class, type_args, ..
             } => self.type_of_new_object(class, type_args),
+            // Mirrors `ternary`'s target computation (JLS 15.25) — kept in
+            // step so a ternary nested in another expression types the same
+            // whether or not it is being emitted.
             Expr::Ternary { then, els, .. } => {
                 let then_ty = self.type_of(then);
                 let els_ty = self.type_of(els);
+                let boxed_of = |primitive: JType| boxable_primitive(primitive).map(JType::Boxed);
                 if then_ty == els_ty {
                     then_ty
-                } else if then_ty.is_numeric() && els_ty.is_numeric() {
-                    promote(then_ty, els_ty)
+                } else if let Some(ty) = conditional_numeric_type(then_ty, els_ty, then, els) {
+                    ty
+                } else if then_ty == JType::Null
+                    && let Some(ty) = boxed_of(els_ty)
+                {
+                    ty
+                } else if els_ty == JType::Null
+                    && let Some(ty) = boxed_of(then_ty)
+                {
+                    ty
                 } else if then_ty == JType::Null {
                     els_ty
                 } else if els_ty == JType::Null {
@@ -15055,12 +15130,24 @@ impl BodyGen<'_> {
         let then_ty = self.type_of(then);
         let els_ty = self.type_of(els);
         let table = self.table;
+        // JLS 15.25: the `null` branch boxes a primitive counterpart, so
+        // `cond ? 1 : null` is `Integer` (not an error). A boolean/char boxes
+        // to Boolean/Character.
+        let boxed_of = |primitive: JType| boxable_primitive(primitive).map(JType::Boxed);
         let target = if then_ty == JType::Error || els_ty == JType::Error {
             JType::Error
         } else if then_ty == els_ty {
             then_ty
-        } else if then_ty.is_numeric() && els_ty.is_numeric() {
-            promote(then_ty, els_ty)
+        } else if let Some(ty) = conditional_numeric_type(then_ty, els_ty, then, els) {
+            ty
+        } else if then_ty == JType::Null
+            && let Some(ty) = boxed_of(els_ty)
+        {
+            ty
+        } else if els_ty == JType::Null
+            && let Some(ty) = boxed_of(then_ty)
+        {
+            ty
         } else if then_ty == JType::Null && els_ty.is_reference() {
             els_ty
         } else if els_ty == JType::Null && then_ty.is_reference() {
@@ -15091,21 +15178,25 @@ impl BodyGen<'_> {
                 ),
             );
         }
+        // Coerce a branch's value to the conditional's type: widen a numeric,
+        // or box a primitive when the type is a wrapper (`cond ? 1 : null`).
+        // A `null` branch under a wrapper target needs nothing.
+        let coerce = |emitter: &mut Self, actual: JType| match target {
+            JType::Boxed(elem) if actual == elem.base_type() => emitter.emit_box(elem),
+            t if t.is_numeric() => emitter.numeric_conversion(actual, t),
+            _ => {}
+        };
         let else_label = self.code.new_label();
         let end = self.code.new_label();
         self.code.branch(op::IFEQ, else_label, 1);
         let actual = self.expr(then);
-        if target.is_numeric() {
-            self.numeric_conversion(actual, target);
-        }
+        coerce(self, actual);
         self.code.branch(op::GOTO, end, 0);
         // The stack model tracks a single path; rewind for the else.
         self.code.drop_stack(target.width());
         self.code.bind(else_label);
         let actual = self.expr(els);
-        if target.is_numeric() {
-            self.numeric_conversion(actual, target);
-        }
+        coerce(self, actual);
         self.code.bind(end);
         target
     }

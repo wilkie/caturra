@@ -10308,3 +10308,36 @@ public class RejectInvariant {
 }
 "
 );
+
+// JLS 15.25: a conditional expression's TYPE, in the cases plain binary
+// promotion misses. A char/byte/short branch paired with a CONSTANT int that
+// fits it keeps the narrower type — so `t ? 'A' : 0` is a char and prints the
+// letter, not the code point 65. byte+short is short; a boxed Integer and a
+// boxed Double promote to double; a primitive paired with `null` boxes (so
+// `t ? 1 : null` is Integer); a constant that does NOT fit falls back to int.
+differential_test!(
+    diff_conditional_type_jls_15_25,
+    "DiffCondType",
+    r"
+public class DiffCondType {
+    public static void main(String[] args) {
+        boolean t = args.length == 0;
+        System.out.println(t ? 'A' : 'B');    // char : char -> char
+        System.out.println(t ? 'A' : 0);      // char : const-int(fits) -> char
+        System.out.println(t ? 'X' : 66);     // char : const-int(fits) -> char
+        char c = 'C';
+        System.out.println(t ? c : 5);        // char-var : const-int(fits) -> char
+        byte b = 10;
+        System.out.println(t ? b : 3);        // byte : const-int(fits) -> byte
+        short sh = 300;
+        System.out.println(t ? sh : b);       // short : byte -> short
+        Integer bi = 7;
+        Double bd = 2.5;
+        System.out.println(t ? bi : bd);      // Integer : Double -> double
+        System.out.println(t ? 1 : null);     // int : null -> Integer
+        System.out.println(t ? 'A' : 70000);  // const does NOT fit char -> int
+        System.out.println(t ? 100 : 200L);   // int : long -> long
+    }
+}
+"
+);
