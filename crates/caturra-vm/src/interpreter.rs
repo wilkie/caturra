@@ -1824,7 +1824,13 @@ impl<'run> Interpreter<'run> {
                         // ----- arrays -----
                         op::NEWARRAY => {
                             let atype = read_u8(bytes, &mut pc, &malformed)?;
-                            let length = check_array_size(frame.pop_int()?)?;
+                            let element_bytes = match atype {
+                                op::T_DOUBLE | op::T_LONG => 8,
+                                op::T_SHORT => 2,
+                                op::T_BYTE => 1,
+                                _ => 4,
+                            };
+                            let length = check_array_size(frame.pop_int()?, element_bytes)?;
                             let object = match atype {
                                 op::T_INT => crate::value::HeapObject::IntArray(
                                     crate::value::IntKind::Int,
@@ -1868,7 +1874,8 @@ impl<'run> Interpreter<'run> {
                                     || malformed(format!("bad class ref at pool {class_index}")),
                                 )?;
                             let array_class = array_class_of(element);
-                            let length = check_array_size(frame.pop_int()?)?;
+                            let length =
+                                check_array_size(frame.pop_int()?, size_of::<JValue>())?;
                             let reference = self.heap.alloc(crate::value::HeapObject::RefArray(
                                 array_class,
                                 vec![JValue::NULL; length],
@@ -1890,6 +1897,19 @@ impl<'run> Interpreter<'run> {
                                 counts.push(frame.pop_int()?);
                             }
                             counts.reverse();
+                            // The whole structure's storage is the PRODUCT of the
+                            // dimensions times the leaf width; per-row checks in
+                            // `alloc_multi_array` cannot see it.
+                            let leaf = element_storage_bytes(descriptor.trim_start_matches('['));
+                            let mut total = leaf as u128;
+                            for &count in &counts {
+                                if count > 0 {
+                                    total = total.saturating_mul(u128::from(count.unsigned_abs()));
+                                }
+                            }
+                            if total > u128::from(MAX_ARRAY_BYTES) {
+                                return Err(out_of_memory());
+                            }
                             let reference =
                                 self.alloc_multi_array(&descriptor, &counts, &malformed)?;
                             frame.stack.push(JValue::Ref(Some(reference)));
@@ -3690,6 +3710,12 @@ impl<'run> Interpreter<'run> {
             let available = values.len().saturating_sub(from).min(length);
             copy[..available].copy_from_slice(&values[from..from + available]);
             copy
+        }
+        // `Arrays.copyOf(arr, hugeN)` is `new T[hugeN]` in one call — cap it
+        // exactly as the array-creation opcodes are capped (conservatively at
+        // the widest element; a JVM answers with OutOfMemoryError, not a crash).
+        if (length as u64).saturating_mul(size_of::<JValue>() as u64) > MAX_ARRAY_BYTES {
+            return Err(out_of_memory());
         }
         let object = match self.heap.get(source) {
             Some(Object::IntArray(kind, values)) => {
@@ -6435,10 +6461,19 @@ impl<'run> Interpreter<'run> {
         let (first, rest_counts) = counts
             .split_first()
             .ok_or_else(|| malformed(String::from("multianewarray with zero dimensions")))?;
-        let length = check_array_size(*first)?;
         let element_descriptor = descriptor
             .strip_prefix('[')
             .ok_or_else(|| malformed(format!("bad array descriptor {descriptor}")))?;
+        // Each level is one allocation of rows (JValues) or, at the leaf, of the
+        // element storage. The PRODUCT across dimensions is capped by the caller
+        // (`new long[100_000][100_000]` is 80 GB of small rows, each of which
+        // would pass a per-allocation check alone).
+        let element_bytes = if rest_counts.is_empty() {
+            element_storage_bytes(element_descriptor)
+        } else {
+            size_of::<JValue>()
+        };
+        let length = check_array_size(*first, element_bytes)?;
 
         if rest_counts.is_empty() {
             use crate::value::{HeapObject, IntKind};
@@ -10393,10 +10428,37 @@ fn null_array() -> VmError {
 
 /// Validate an array creation size (JVMS: negative →
 /// `NegativeArraySizeException`).
-fn check_array_size(size: i32) -> Result<usize, VmError> {
-    usize::try_from(size).map_err(|_| {
+/// A single array allocation may not exceed this many bytes of storage. The
+/// production VM is a browser WASM instance whose entire memory tops out around
+/// 2–4 GiB, so a larger request can never succeed there — and letting Rust try
+/// ABORTS the process (a dead worker, not a Java error). A real JVM answers the
+/// same request with a catchable `OutOfMemoryError`; so does this one.
+const MAX_ARRAY_BYTES: u64 = 1 << 30;
+
+fn out_of_memory() -> VmError {
+    VmError::UncaughtException(String::from("java.lang.OutOfMemoryError: Java heap space"))
+}
+
+fn check_array_size(size: i32, element_bytes: usize) -> Result<usize, VmError> {
+    let length = usize::try_from(size).map_err(|_| {
         VmError::UncaughtException(format!("java.lang.NegativeArraySizeException: {size}"))
-    })
+    })?;
+    if (length as u64).saturating_mul(element_bytes as u64) > MAX_ARRAY_BYTES {
+        return Err(out_of_memory());
+    }
+    Ok(length)
+}
+
+/// The bytes one element of an array with this element descriptor occupies in
+/// the VM's storage (`IntArray` keeps boolean/char as `i32`).
+fn element_storage_bytes(element_descriptor: &str) -> usize {
+    match element_descriptor {
+        "D" | "J" => 8,
+        "S" => 2,
+        "B" => 1,
+        "I" | "Z" | "C" | "F" => 4,
+        _ => size_of::<JValue>(),
+    }
 }
 
 /// Bounds-checked array element access with Java 11's exception

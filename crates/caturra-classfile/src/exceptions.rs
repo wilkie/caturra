@@ -95,7 +95,17 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/lang/NumberFormatException",
         "java/lang/IllegalArgumentException",
     ),
-    ("java/lang/StackOverflowError", "java/lang/Error"),
+    // The VM-condition errors sit under VirtualMachineError, as the JDK's do —
+    // `catch (VirtualMachineError e)` catches both on a real JVM.
+    ("java/lang/VirtualMachineError", "java/lang/Error"),
+    (
+        "java/lang/StackOverflowError",
+        "java/lang/VirtualMachineError",
+    ),
+    (
+        "java/lang/OutOfMemoryError",
+        "java/lang/VirtualMachineError",
+    ),
     (
         "java/util/NoSuchElementException",
         "java/lang/RuntimeException",

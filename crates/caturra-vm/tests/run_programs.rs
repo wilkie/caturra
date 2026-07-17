@@ -7936,6 +7936,43 @@ fn private_access_is_enforced_even_with_org_junit_imported() {
     );
 }
 
+/// An impossible array allocation must be a CATCHABLE `OutOfMemoryError`
+/// ("Java heap space", as a JVM words it) and the VM must survive it — it used
+/// to let Rust attempt the allocation and ABORT the whole process, which in the
+/// browser is a dead worker with no Java error at all. One corpus level
+/// (CSA U4L2-L7d_alt, a seconds-vs-samples unit mismatch between the solution
+/// and its own validator) reaches this with one line, as can any student
+/// writing `new double[2_000_000_000]`. The threshold is the VM's own memory
+/// budget (a JVM's is -Xmx), so the throw is pinned here rather than in a
+/// machine-dependent differential; the wording and catchability were verified
+/// against a live `java -Xmx256m`.
+#[test]
+fn impossible_array_allocation_is_a_catchable_out_of_memory_error() {
+    let out = run_stdout(
+        r#"
+        import java.util.Arrays;
+        public class Main {
+            public static void main(String[] args) {
+                try { double[] big = new double[2000000000]; System.out.println(big.length); }
+                catch (OutOfMemoryError e) { System.out.println("1d: " + e.getMessage()); }
+                try { long[][] grid = new long[100000][100000]; System.out.println(grid.length); }
+                catch (OutOfMemoryError e) { System.out.println("2d: " + e.getMessage()); }
+                try { int[] copy = Arrays.copyOf(new int[]{1}, 2000000000); System.out.println(copy.length); }
+                catch (OutOfMemoryError e) { System.out.println("copyOf: " + e.getMessage()); }
+                int[][] normal = new int[400][400];
+                normal[399][399] = 7;
+                System.out.println("still running " + normal[399][399]);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert_eq!(
+        out,
+        "1d: Java heap space\n2d: Java heap space\ncopyOf: Java heap space\nstill running 7\n"
+    );
+}
+
 #[test]
 fn labeled_break_continue_errors_match_javac() {
     let cases: &[(&str, &str)] = &[

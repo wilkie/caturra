@@ -4040,6 +4040,36 @@ public class DiffToStringEdges {
 "#
 );
 
+// StackOverflowError sits under VirtualMachineError (as the JDK's does), so a
+// `catch (VirtualMachineError e)` takes it — and OutOfMemoryError is nameable
+// in the same family (its threshold is heap-dependent, so the throw itself is
+// pinned caturra-side in run_programs).
+differential_test!(
+    diff_virtual_machine_error_hierarchy,
+    "DiffVmError",
+    r#"
+public class DiffVmError {
+    static int dive(int n) { return dive(n + 1); }
+
+    public static void main(String[] args) {
+        try {
+            dive(0);
+        } catch (VirtualMachineError e) {
+            System.out.println("caught as VirtualMachineError");
+        }
+        try {
+            dive(0);
+        } catch (OutOfMemoryError e) {
+            System.out.println("wrong handler");
+        } catch (StackOverflowError e) {
+            System.out.println("caught as StackOverflowError");
+        }
+        System.out.println("still running");
+    }
+}
+"#
+);
+
 differential_test!(
     diff_collections_sort_uses_compare_to,
     "DiffSort",
