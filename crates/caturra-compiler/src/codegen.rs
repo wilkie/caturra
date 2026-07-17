@@ -22,7 +22,7 @@ use caturra_classfile::{
 use crate::CompiledClass;
 use crate::ast::{
     AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, InitBlock,
-    Literal, LocalDeclarator, MethodDecl, Stmt, SwitchArm, TypeRef, UnaryOp,
+    LambdaBody, Literal, LocalDeclarator, MethodDecl, Stmt, SwitchArm, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
@@ -39,6 +39,7 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
     let mut classes = Vec::new();
     for (path, unit) in units {
         for class in &unit.classes {
+            check_enum_static_references(class, path, &mut diagnostics);
             classes.push(CompiledClass {
                 binary_name: class.name.clone(),
                 class_file: emit_class(path, &mut diagnostics, &table, class),
@@ -3018,6 +3019,397 @@ fn conditional_numeric_type(
         }
     }
     Some(promote(p_then, p_els))
+}
+
+/// A `static final` field whose initializer is a compile-time constant (a
+/// "constant variable", JLS §4.12.4) — the enum static-reference rule exempts
+/// these, since they are inlined and have no initialization ordering.
+fn is_constant_static_field(field: &FieldDecl) -> bool {
+    if !field.is_static || !field.is_final {
+        return false;
+    }
+    match &field.init {
+        Some(init) => {
+            constant_int_value(init).is_some()
+                || matches!(
+                    init,
+                    Expr::Literal {
+                        value: Literal::Str(_)
+                            | Literal::Long(_)
+                            | Literal::Double(_)
+                            | Literal::Float(_)
+                            | Literal::Bool(_),
+                        ..
+                    }
+                )
+        }
+        None => false,
+    }
+}
+
+/// JLS §8.9.2: an enum's constructor, instance initializer block, or instance
+/// variable initializer may not refer to a NON-CONSTANT static field of the
+/// enum — the constants are constructed (in `<clinit>`) before those fields
+/// are initialized, so the reference would read a default. javac: "illegal
+/// reference to static field from initializer". A regular method, a compile-
+/// time constant static, and another class's static are all exempt.
+fn check_enum_static_references(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if !decl.is_enum {
+        return;
+    }
+    let restricted: std::collections::HashSet<&str> = decl
+        .fields
+        .iter()
+        .filter(|f| f.is_static && !is_constant_static_field(f))
+        .map(|f| f.name.as_str())
+        .collect();
+    if restricted.is_empty() {
+        return;
+    }
+    let mut report = |span: SourceSpan| {
+        diagnostics.push(Diagnostic::error(
+            path,
+            "illegal reference to static field from initializer",
+            span,
+        ));
+    };
+    // Each restricted context excludes the names shadowed by its own
+    // parameters/locals — a `counter` local or parameter refers to that, not
+    // the static (over-approximated across the whole body, which only ever
+    // MISSES an error, never invents one).
+    for method in decl.methods.iter().filter(|m| m.is_constructor) {
+        let mut shadowed: std::collections::HashSet<String> =
+            method.params.iter().map(|p| p.name.clone()).collect();
+        collect_local_names(&method.body, &mut shadowed);
+        for stmt in &method.body {
+            enum_check_stmt(stmt, &restricted, &decl.name, &shadowed, &mut report);
+        }
+    }
+    for block in decl.init_blocks.iter().filter(|b| !b.is_static) {
+        let mut shadowed = std::collections::HashSet::new();
+        collect_local_names(&block.body, &mut shadowed);
+        for stmt in &block.body {
+            enum_check_stmt(stmt, &restricted, &decl.name, &shadowed, &mut report);
+        }
+    }
+    for field in decl.fields.iter().filter(|f| !f.is_static) {
+        if let Some(init) = &field.init {
+            let shadowed = std::collections::HashSet::new();
+            enum_check_expr(init, &restricted, &decl.name, &shadowed, &mut report);
+        }
+    }
+}
+
+/// Collect every local-variable / for-each / for-init name declared anywhere in
+/// `stmts` (nested blocks included) — used to over-approximate which names are
+/// shadowed and so do NOT refer to a static field.
+fn collect_local_names(stmts: &[Stmt], out: &mut std::collections::HashSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::LocalDecl { declarators, .. } => {
+                for d in declarators {
+                    out.insert(d.name.clone());
+                }
+            }
+            Stmt::ForEach { name, body, .. } => {
+                out.insert(name.clone());
+                collect_local_names(std::slice::from_ref(body), out);
+            }
+            Stmt::Block(body) => collect_local_names(body, out),
+            Stmt::If { then, els, .. } => {
+                collect_local_names(std::slice::from_ref(then), out);
+                if let Some(e) = els {
+                    collect_local_names(std::slice::from_ref(e), out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::Labeled { body, .. } => {
+                collect_local_names(std::slice::from_ref(body), out);
+            }
+            Stmt::For {
+                init, update, body, ..
+            } => {
+                if let Some(i) = init {
+                    collect_local_names(std::slice::from_ref(i), out);
+                }
+                collect_local_names(update, out);
+                collect_local_names(std::slice::from_ref(body), out);
+            }
+            Stmt::Try {
+                body,
+                catches,
+                finally_body,
+                ..
+            } => {
+                collect_local_names(body, out);
+                for c in catches {
+                    out.insert(c.name.clone());
+                    collect_local_names(&c.body, out);
+                }
+                if let Some(f) = finally_body {
+                    collect_local_names(f, out);
+                }
+            }
+            Stmt::Switch { arms, .. } => {
+                for arm in arms {
+                    collect_local_names(&arm.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per statement kind
+fn enum_check_stmt(
+    stmt: &Stmt,
+    restricted: &std::collections::HashSet<&str>,
+    enum_name: &str,
+    shadowed: &std::collections::HashSet<String>,
+    report: &mut dyn FnMut(SourceSpan),
+) {
+    let expr = |e: &Expr, r: &mut dyn FnMut(SourceSpan)| {
+        enum_check_expr(e, restricted, enum_name, shadowed, r);
+    };
+    match stmt {
+        Stmt::Block(body) => {
+            for s in body {
+                enum_check_stmt(s, restricted, enum_name, shadowed, report);
+            }
+        }
+        Stmt::Expr(e)
+        | Stmt::Throw { value: e, .. }
+        | Stmt::Return {
+            value: Some(e), ..
+        } => expr(e, report),
+        Stmt::LocalDecl { declarators, .. } => {
+            for d in declarators {
+                if let Some(init) = &d.init {
+                    expr(init, report);
+                }
+            }
+        }
+        Stmt::Assign {
+            target,
+            value,
+            span,
+            ..
+        } => {
+            enum_check_target(*span, target, restricted, enum_name, shadowed, report);
+            expr(value, report);
+        }
+        Stmt::ForEach { iterable, body, .. } => {
+            expr(iterable, report);
+            enum_check_stmt(body, restricted, enum_name, shadowed, report);
+        }
+        Stmt::If {
+            cond, then, els, ..
+        } => {
+            expr(cond, report);
+            enum_check_stmt(then, restricted, enum_name, shadowed, report);
+            if let Some(e) = els {
+                enum_check_stmt(e, restricted, enum_name, shadowed, report);
+            }
+        }
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
+            expr(cond, report);
+            enum_check_stmt(body, restricted, enum_name, shadowed, report);
+        }
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } => {
+            if let Some(i) = init {
+                enum_check_stmt(i, restricted, enum_name, shadowed, report);
+            }
+            if let Some(c) = cond {
+                expr(c, report);
+            }
+            for u in update {
+                enum_check_stmt(u, restricted, enum_name, shadowed, report);
+            }
+            enum_check_stmt(body, restricted, enum_name, shadowed, report);
+        }
+        Stmt::Labeled { body, .. } => {
+            enum_check_stmt(body, restricted, enum_name, shadowed, report);
+        }
+        Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
+            for a in args {
+                expr(a, report);
+            }
+        }
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            for s in body {
+                enum_check_stmt(s, restricted, enum_name, shadowed, report);
+            }
+            for c in catches {
+                for s in &c.body {
+                    enum_check_stmt(s, restricted, enum_name, shadowed, report);
+                }
+            }
+            if let Some(f) = finally_body {
+                for s in f {
+                    enum_check_stmt(s, restricted, enum_name, shadowed, report);
+                }
+            }
+        }
+        Stmt::Switch { selector, arms, .. } => {
+            expr(selector, report);
+            for arm in arms {
+                for s in &arm.body {
+                    enum_check_stmt(s, restricted, enum_name, shadowed, report);
+                }
+            }
+        }
+        Stmt::Return { value: None, .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
+    }
+}
+
+fn enum_check_target(
+    span: SourceSpan,
+    target: &AssignTarget,
+    restricted: &std::collections::HashSet<&str>,
+    enum_name: &str,
+    shadowed: &std::collections::HashSet<String>,
+    report: &mut dyn FnMut(SourceSpan),
+) {
+    match target {
+        AssignTarget::Var(name) => {
+            if restricted.contains(name.as_str()) && !shadowed.contains(name) {
+                report(span);
+            }
+        }
+        AssignTarget::Index { array, index } => {
+            enum_check_expr(array, restricted, enum_name, shadowed, report);
+            enum_check_expr(index, restricted, enum_name, shadowed, report);
+        }
+        AssignTarget::Field { object, name } => {
+            if let Expr::Name { path, .. } = object.as_ref()
+                && path.len() == 1
+                && path[0] == enum_name
+                && restricted.contains(name.as_str())
+            {
+                report(span);
+            }
+            enum_check_expr(object, restricted, enum_name, shadowed, report);
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per expression kind
+fn enum_check_expr(
+    expr: &Expr,
+    restricted: &std::collections::HashSet<&str>,
+    enum_name: &str,
+    shadowed: &std::collections::HashSet<String>,
+    report: &mut dyn FnMut(SourceSpan),
+) {
+    let recur = |e: &Expr, r: &mut dyn FnMut(SourceSpan)| {
+        enum_check_expr(e, restricted, enum_name, shadowed, r);
+    };
+    match expr {
+        Expr::Name { path, span } => {
+            let hit = (path.len() == 1
+                && restricted.contains(path[0].as_str())
+                && !shadowed.contains(&path[0]))
+                || (path.len() == 2
+                    && path[0] == enum_name
+                    && restricted.contains(path[1].as_str()));
+            if hit {
+                report(*span);
+            }
+        }
+        Expr::Literal { .. } | Expr::This { .. } | Expr::Super { .. } => {}
+        Expr::Call { receiver, args, .. } => {
+            if let Some(r) = receiver {
+                recur(r, report);
+            }
+            for a in args {
+                recur(a, report);
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            recur(lhs, report);
+            recur(rhs, report);
+        }
+        Expr::Unary { operand, .. } | Expr::Cast { operand, .. } => recur(operand, report),
+        Expr::Index { array, index, .. } => {
+            recur(array, report);
+            recur(index, report);
+        }
+        Expr::Field { object, name, span } => {
+            if let Expr::Name { path, .. } = object.as_ref()
+                && path.len() == 1
+                && path[0] == enum_name
+                && restricted.contains(name.as_str())
+            {
+                report(*span);
+            }
+            recur(object, report);
+        }
+        Expr::NewArray { dims, init, .. } => {
+            for d in dims.iter().flatten() {
+                recur(d, report);
+            }
+            if let Some(elems) = init {
+                for e in elems {
+                    recur(e, report);
+                }
+            }
+        }
+        Expr::ArrayLiteral { elements, .. } => {
+            for e in elements {
+                recur(e, report);
+            }
+        }
+        Expr::NewObject { args, outer, .. } => {
+            for a in args {
+                recur(a, report);
+            }
+            if let Some(o) = outer {
+                recur(o, report);
+            }
+        }
+        Expr::InstanceOf { value, .. } => recur(value, report),
+        Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                recur(a, report);
+            }
+        }
+        Expr::Ternary {
+            cond, then, els, ..
+        } => {
+            recur(cond, report);
+            recur(then, report);
+            recur(els, report);
+        }
+        Expr::MethodRef { qualifier, .. } => recur(qualifier, report),
+        Expr::Lambda { body, .. } => match body {
+            LambdaBody::Expr(e) => recur(e, report),
+            LambdaBody::Block(stmts) => {
+                for s in stmts {
+                    enum_check_stmt(s, restricted, enum_name, shadowed, report);
+                }
+            }
+        },
+        Expr::IncDec { target, .. } => recur(target, report),
+        Expr::Assign {
+            target,
+            value,
+            span,
+            ..
+        } => {
+            enum_check_target(*span, target, restricted, enum_name, shadowed, report);
+            recur(value, report);
+        }
+    }
 }
 
 fn type_from_ref(ty: &TypeRef) -> Option<JType> {

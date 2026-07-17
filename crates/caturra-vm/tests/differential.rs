@@ -10593,6 +10593,77 @@ public class RejectForwardRef {
 "
 );
 
+// JLS §8.9.2: an enum's constructor may not reference a non-constant static
+// field of the enum (the constants are built before it is initialized) —
+// javac: "illegal reference to static field from initializer". caturra used to
+// accept it and read the default.
+differential_reject!(
+    reject_enum_ctor_static_reference,
+    "RejectEnumStatic",
+    r"
+enum RejectEnumStatic {
+    A, B;
+    static int counter = 0;
+    RejectEnumStatic() { counter++; }
+    public static void main(String[] args) {
+        System.out.println(counter);
+    }
+}
+"
+);
+
+// The rule is narrow, and these valid patterns must still compile and run: a
+// regular METHOD may read the enum's static, a STATIC block may, another
+// class's static is fine, and a constructor PARAMETER that shadows the name is
+// not the field.
+differential_test!(
+    diff_enum_static_reference_allowed,
+    "DiffEnumStaticOk",
+    r#"
+class Helper { static int shared = 42; }
+
+enum Coin {
+    PENNY(1), NICKEL(5);
+    private final int cents;
+    Coin(int cents) { this.cents = cents; }    // param `cents` shadows nothing here, ok
+    int total() { return cents + Coin.count; }  // METHOD reads a static, ok
+    int fromOther() { return Helper.shared; }   // another class's static, ok
+    static int count = 2;
+    static { count = values().length; }         // STATIC block reads a static, ok
+}
+
+public class DiffEnumStaticOk {
+    public static void main(String[] args) {
+        System.out.println(Coin.PENNY.total() + " " + Coin.NICKEL.total() + " "
+            + Coin.count + " " + Coin.NICKEL.fromOther());
+    }
+}
+"#
+);
+
+// A constructor PARAMETER named like the enum's static field refers to the
+// parameter, not the field — so it is NOT an illegal reference and must
+// compile (guards the shadowing exclusion against a spurious rejection).
+differential_test!(
+    diff_enum_static_shadowed_by_param,
+    "DiffEnumShadow",
+    r#"
+enum Level {
+    LOW(1), HIGH(9);
+    static int total = 0;
+    private final int total_;
+    Level(int total) { this.total_ = total; }   // `total` is the param, not the static
+    int value() { return total_; }
+}
+
+public class DiffEnumShadow {
+    public static void main(String[] args) {
+        System.out.println(Level.LOW.value() + " " + Level.HIGH.value());
+    }
+}
+"#
+);
+
 // The forward-reference check does not over-reach: a BACKWARD reference, a
 // method call, and a QUALIFIED forward reference (`Main.d`, which reads the
 // not-yet-initialized default) are all legal and must still compile.
