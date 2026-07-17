@@ -94,6 +94,7 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
             continue;
         }
         let spec = parse_spec(&chars, &mut at)?;
+        validate_spec(&spec)?;
         match spec.conversion {
             '%' => out.push_str(&pad(&spec, "%")),
             'n' => out.push('\n'),
@@ -208,6 +209,87 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
     spec.conversion = conversion;
     spec.text = chars[start..*at].iter().collect();
     Ok(spec)
+}
+
+/// Reject flag / precision combinations Java's Formatter rejects at run time
+/// (before the argument is even looked at), with its exact exception types and
+/// messages. caturra used to render these silently — the accept-invalid
+/// direction. Only the widely-hit rules are enforced; an omission renders as
+/// before, never a spurious throw.
+fn validate_spec(spec: &Spec) -> Result<(), VmError> {
+    let c = spec.conversion;
+    if c == 'n' || c == '%' {
+        return Ok(());
+    }
+    let lower = c.to_ascii_lowercase();
+
+    // Mutually exclusive flag pairs (checked on the flags alone).
+    if spec.left_justify && spec.zero_pad {
+        return Err(illegal_format_flags("-0"));
+    }
+    if spec.plus && spec.space {
+        return Err(illegal_format_flags("+ "));
+    }
+
+    let mismatch = |flag: char| -> VmError {
+        throw(
+            "java.util.FormatFlagsConversionMismatchException",
+            &format!("Conversion = {c}, Flags = {flag}"),
+        )
+    };
+
+    // General ('s'/'b'/'h') and character ('c') conversions accept only '-'
+    // (and, for 's', '#' when the arg is Formattable — caturra has none, so a
+    // '#' there is a mismatch, as a JDK reports for a plain String).
+    if matches!(lower, 's' | 'b' | 'h' | 'c') {
+        for (present, flag) in [
+            (spec.grouping, ','),
+            (spec.plus, '+'),
+            (spec.space, ' '),
+            (spec.parentheses, '('),
+            (spec.zero_pad, '0'),
+            (spec.alternate, '#'),
+        ] {
+            if present {
+                return Err(mismatch(flag));
+            }
+        }
+    }
+    // Unsigned integer radixes ('o'/'x') reject the signed-numeric flags.
+    if matches!(lower, 'o' | 'x') {
+        for (present, flag) in [
+            (spec.grouping, ','),
+            (spec.plus, '+'),
+            (spec.space, ' '),
+            (spec.parentheses, '('),
+        ] {
+            if present {
+                return Err(mismatch(flag));
+            }
+        }
+    }
+    // Decimal 'd' takes every numeric flag except '#'.
+    if lower == 'd' && spec.alternate {
+        return Err(mismatch('#'));
+    }
+
+    // Precision is meaningless for the integer and character conversions.
+    if let Some(precision) = spec.precision
+        && matches!(lower, 'd' | 'o' | 'x' | 'c')
+    {
+        return Err(throw(
+            "java.util.IllegalFormatPrecisionException",
+            &precision.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn illegal_format_flags(flags: &str) -> VmError {
+    throw(
+        "java.util.IllegalFormatFlagsException",
+        &format!("Flags = '{flags}'"),
+    )
 }
 
 /// Apply width padding (spaces; the numeric zero-pad happens earlier).

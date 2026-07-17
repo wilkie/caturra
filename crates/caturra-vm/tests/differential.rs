@@ -10406,6 +10406,40 @@ public class DiffCondType {
 // that fits a narrower wrapper narrows then boxes (`Byte b = 3`). All three
 // are valid Java that caturra used to reject — found by the differential
 // audit across the boxing/char/static-final dimensions.
+// Invalid flag / precision / conversion combinations throw at run time, with
+// Java's exact exception types and messages, BEFORE the argument is examined —
+// caturra used to render them silently (the accept-invalid direction). A run
+// of valid specs confirms the check adds no spurious throw.
+differential_test!(
+    diff_format_flag_validation,
+    "DiffFmtValidate",
+    r#"
+public class DiffFmtValidate {
+    static void bad(String f, Object v) {
+        try { String.format(f, v); System.out.println(f + " NO THROW"); }
+        catch (Exception e) { System.out.println(f + " " + e.getClass().getSimpleName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        bad("%,s", "hi");      // grouping on a string
+        bad("%+s", "hi");      // sign flag on a string
+        bad("%(s", "hi");      // paren flag on a string
+        bad("%#s", "hi");      // alt flag on a non-Formattable string
+        bad("%,c", 'a');       // grouping on a char
+        bad("%,x", 255);       // grouping on a hex int
+        bad("%+x", 255);       // sign flag on a hex int
+        bad("%#d", 5);         // alt flag on a decimal
+        bad("%.3d", 5);        // precision on a decimal
+        bad("%.2x", 255);      // precision on a hex int
+        bad("%-08d", 5);       // '-' and '0' together
+        bad("%+ d", 5);        // '+' and ' ' together
+        // Valid specs still render (no spurious throw):
+        System.out.println(String.format("[%,d][%(d][%#x][%8.3s][%.2f][% d]",
+                                         1234567, -5, 255, "truncate", 3.14159, 7));
+    }
+}
+"#
+);
+
 differential_test!(
     diff_enum_compare_switch_boxed_narrowing,
     "DiffBoxedValid",
