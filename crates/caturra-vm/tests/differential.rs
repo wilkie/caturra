@@ -7706,6 +7706,108 @@ public class DiffRemoveIf {
 "#
 );
 
+// The whole mutable Collection face — add/remove/clear/addAll/removeAll/
+// retainAll/containsAll/stream — over EVERY backing it can hold (both element
+// storage families), with bulk arguments crossing families (list.addAll(set)),
+// a values() view writing entries through (add refuses with UOE), a TreeMap
+// view clearing through, and an unmodifiable backing refusing everything.
+differential_test!(
+    diff_collection_face,
+    "DiffCollectionFace",
+    r#"
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.PriorityQueue;
+import java.util.Stack;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class DiffCollectionFace {
+    static void exercise(String name, Collection<Integer> c) {
+        System.out.println(name + " add " + c.add(42) + " " + c.add(7) + " -> " + c);
+        System.out.println(name + " remove " + c.remove(42) + " " + c.remove(999) + " -> " + c);
+        ArrayList<Integer> more = new ArrayList<>();
+        more.add(1); more.add(2);
+        System.out.println(name + " addAll " + c.addAll(more) + " -> " + c);
+        System.out.println(name + " containsAll " + c.containsAll(more));
+        System.out.println(name + " removeAll " + c.removeAll(more) + " -> " + c);
+        ArrayList<Integer> keep = new ArrayList<>();
+        keep.add(7);
+        System.out.println(name + " retainAll " + c.retainAll(keep) + " -> " + c);
+        System.out.println(name + " stream " + c.stream().map(x -> x * 2).count());
+        c.clear();
+        System.out.println(name + " clear -> " + c + " " + c.isEmpty());
+    }
+
+    public static void main(String[] args) {
+        exercise("list", new ArrayList<Integer>());
+        exercise("linked", new LinkedList<Integer>());
+        exercise("hashset", new HashSet<Integer>());
+        exercise("treeset", new TreeSet<Integer>());
+        exercise("pq", new PriorityQueue<Integer>());
+        exercise("stack", new Stack<Integer>());
+        exercise("deque", new ArrayDeque<Integer>());
+
+        // A list takes a SET argument for the bulk operations.
+        ArrayList<Integer> li = new ArrayList<>();
+        li.add(1); li.add(2); li.add(3);
+        HashSet<Integer> hs = new HashSet<>();
+        hs.add(2); hs.add(9);
+        System.out.println("mixed addAll " + li.addAll(hs) + " -> " + li);
+        System.out.println("mixed removeAll " + li.removeAll(hs) + " -> " + li);
+        System.out.println("mixed containsAll " + li.containsAll(hs));
+
+        // The values() view: add refuses, the rest write ENTRIES through.
+        HashMap<String, Integer> m = new HashMap<>();
+        m.put("a", 10); m.put("b", 25); m.put("c", 10); m.put("d", 30);
+        Collection<Integer> vs = m.values();
+        try { vs.add(5); System.out.println("view add no throw"); }
+        catch (UnsupportedOperationException e) { System.out.println("view add UOE"); }
+        System.out.println("view remove " + vs.remove(10) + " -> " + m);
+        ArrayList<Integer> tens = new ArrayList<>();
+        tens.add(10); tens.add(25);
+        System.out.println("view removeAll " + vs.removeAll(tens) + " -> " + m);
+        m.put("e", 40);
+        ArrayList<Integer> forty = new ArrayList<>();
+        forty.add(40);
+        System.out.println("view retainAll " + vs.retainAll(forty) + " -> " + m);
+        vs.clear();
+        System.out.println("view clear -> " + m);
+
+        // TreeMap views clear through too.
+        TreeMap<String, Integer> tm = new TreeMap<>();
+        tm.put("x", 1); tm.put("y", 2);
+        tm.keySet().clear();
+        System.out.println("treemap keyset clear -> " + tm);
+
+        // Set faces over a TreeSet still do bulk operations.
+        TreeSet<Integer> ts = new TreeSet<>();
+        ts.add(5); ts.add(1); ts.add(9); ts.add(3);
+        ArrayList<Integer> odds = new ArrayList<>();
+        odds.add(1); odds.add(9);
+        System.out.println("treeset removeAll " + ts.removeAll(odds) + " -> " + ts);
+        TreeSet<Integer> ts2 = new TreeSet<>();
+        ts2.add(5); ts2.add(1); ts2.add(9);
+        System.out.println("treeset retainAll " + ts2.retainAll(odds) + " -> " + ts2);
+
+        // Unmodifiable backing refuses every mutator through the face.
+        ArrayList<Integer> base = new ArrayList<>();
+        base.add(6);
+        Collection<Integer> frozen = Collections.unmodifiableList(base);
+        try { frozen.add(1); System.out.println("frozen add no throw"); }
+        catch (UnsupportedOperationException e) { System.out.println("frozen add UOE"); }
+        try { frozen.clear(); System.out.println("frozen clear no throw"); }
+        catch (UnsupportedOperationException e) { System.out.println("frozen clear UOE " + base); }
+    }
+}
+"#
+);
+
 // removeIf on the faces the plain diff_remove_if cannot reach: a
 // PriorityQueue replays JDK 11's bulkRemove (test all in heap-array order,
 // compact survivors STABLY, re-heapify — NOT the JDK 8 iterator-with-removeAt

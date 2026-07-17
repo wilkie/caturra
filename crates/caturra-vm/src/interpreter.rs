@@ -4271,23 +4271,6 @@ impl<'run> Interpreter<'run> {
         Ok(self.list_index_of(list, probe, false)? >= 0)
     }
 
-    /// The `ArrayList` argument of `addAll`/`containsAll`/`removeAll`/
-    /// `retainAll`, seen through any unmodifiable view.
-    fn list_argument(&self, argument: JValue) -> Result<HeapRef, VmError> {
-        let JValue::Ref(Some(other)) = argument else {
-            return Err(VmError::UncaughtException(String::from(
-                "java.lang.NullPointerException",
-            )));
-        };
-        let other = self.backing_list(other);
-        if self.heap.list_values(other).is_none() {
-            return Err(VmError::UncaughtException(String::from(
-                "java.lang.ClassCastException: not a Collection",
-            )));
-        }
-        Ok(other)
-    }
-
     /// `list.indexOf(probe)`: Java asks the *probe* whether it equals each
     /// element, so an asymmetric `equals` behaves as it does on a real JVM.
     fn list_index_of(
@@ -4392,12 +4375,26 @@ impl<'run> Interpreter<'run> {
                 }
                 JValue::Int(i32::from(equal))
             }
+            // `addAll(collection)` — intercepted here rather than left to the
+            // intrinsic layer's list-only arm, so ANY collection argument
+            // (`list.addAll(set)`, a queue, a map view) appends in its own
+            // iteration order. The positional `addAll(int, c)` form has two
+            // arguments and falls through untouched.
+            ("addAll", "(Ljava/util/Collection;)Z", [other]) => {
+                let incoming = self.collection_elements(collection_argument(*other)?);
+                let changed = !incoming.is_empty();
+                if let Some(values) = self.heap.list_values_mut(receiver) {
+                    values.extend(incoming);
+                }
+                JValue::Int(i32::from(changed))
+            }
             // `AbstractCollection.containsAll` asks *this* list whether it
             // contains each of the other's elements, so the probe is theirs.
+            // The other side may be ANY collection, not only a list.
             ("containsAll", _, [other]) => {
-                let other = self.list_argument(*other)?;
+                let others = self.collection_elements(collection_argument(*other)?);
                 let mut all = true;
-                for theirs in self.list_items(other) {
+                for theirs in others {
                     if !self.list_contains(receiver, theirs)? {
                         all = false;
                         break;
@@ -4409,12 +4406,19 @@ impl<'run> Interpreter<'run> {
             // contains each of ours, so here the probe is ours. Both report
             // whether the list changed.
             ("removeAll" | "retainAll", _, [other]) => {
-                let other = self.list_argument(*other)?;
+                let others = self.collection_elements(collection_argument(*other)?);
                 let keep_when_present = method_name == "retainAll";
                 let ours = self.list_items(receiver);
                 let mut kept = Vec::with_capacity(ours.len());
                 for item in ours {
-                    if self.list_contains(other, item)? == keep_when_present {
+                    let mut present = false;
+                    for candidate in &others {
+                        if self.java_equals(item, *candidate)? {
+                            present = true;
+                            break;
+                        }
+                    }
+                    if present == keep_when_present {
                         kept.push(item);
                     }
                 }
@@ -5175,6 +5179,34 @@ impl<'run> Interpreter<'run> {
                 }
                 JValue::Int(i32::from(all))
             }
+            // Drop (or keep only) the elements the argument contains. The kept
+            // elements stay in sorted order, so the vector writes back whole.
+            ("removeAll" | "retainAll", [other]) => {
+                let keep_when_present = method_name == "retainAll";
+                let others = self.collection_elements(collection_argument(*other)?);
+                let mut kept = Vec::new();
+                let mut changed = false;
+                for element in self.tree_set_values(receiver) {
+                    let mut present = false;
+                    for candidate in &others {
+                        if self.java_equals(element, *candidate)? {
+                            present = true;
+                            break;
+                        }
+                    }
+                    if present == keep_when_present {
+                        kept.push(element);
+                    } else {
+                        changed = true;
+                    }
+                }
+                if changed
+                    && let Some(HeapObject::TreeSet { values, .. }) = self.heap.get_mut(receiver)
+                {
+                    *values = kept;
+                }
+                JValue::Int(i32::from(changed))
+            }
             // The two ends. Empty throws `NoSuchElementException`.
             ("first" | "last", []) => {
                 let values = self.tree_set_values(receiver);
@@ -5519,6 +5551,7 @@ impl<'run> Interpreter<'run> {
 
     /// `java.util.PriorityQueue`. A real binary min-heap so `peek`/`poll` return
     /// the least element and the heap-array iteration order matches a JVM's.
+    #[allow(clippy::too_many_lines)] // one method table
     fn priority_queue_intrinsic(
         &mut self,
         receiver: HeapRef,
@@ -5583,6 +5616,49 @@ impl<'run> Interpreter<'run> {
                     changed = true;
                 }
                 JValue::Int(i32::from(changed))
+            }
+            // JDK 11 routes removeAll/retainAll through the same `bulkRemove`
+            // as removeIf (stable compaction + heapify), with membership in
+            // the argument as the predicate.
+            ("removeAll" | "retainAll", [other]) => {
+                let keep_when_present = method_name == "retainAll";
+                let others = self.collection_elements(collection_argument(*other)?);
+                let mut survivors = Vec::new();
+                let mut removed = false;
+                for element in self.pq_heap(receiver) {
+                    let mut present = false;
+                    for candidate in &others {
+                        if self.java_equals(element, *candidate)? {
+                            present = true;
+                            break;
+                        }
+                    }
+                    if present == keep_when_present {
+                        survivors.push(element);
+                    } else {
+                        removed = true;
+                    }
+                }
+                if removed {
+                    self.set_pq_heap(receiver, survivors);
+                    self.pq_heapify(receiver)?;
+                }
+                JValue::Int(i32::from(removed))
+            }
+            ("containsAll", [other]) => {
+                let others = self.collection_elements(collection_argument(*other)?);
+                let mine = self.pq_heap(receiver);
+                let mut all = true;
+                'others: for candidate in others {
+                    for element in &mine {
+                        if self.java_equals(candidate, *element)? {
+                            continue 'others;
+                        }
+                    }
+                    all = false;
+                    break;
+                }
+                JValue::Int(i32::from(all))
             }
             ("forEach", [JValue::Ref(Some(consumer))]) => {
                 // Heap-array order, as Java's iterator yields.
@@ -6304,8 +6380,12 @@ impl<'run> Interpreter<'run> {
             }
             // `remove`/`clear` on a view DO write through to the map, as Java's.
             ("clear", []) => {
-                if let Some(HeapObject::HashMap(entries)) = self.heap.get_mut(map) {
-                    entries.clear();
+                match self.heap.get_mut(map) {
+                    Some(HeapObject::HashMap(entries)) => entries.clear(),
+                    // A TreeMap's view clears its sorted entry vector — this
+                    // used to fall through and clear NOTHING, silently.
+                    Some(HeapObject::TreeMap { entries, .. }) => entries.clear(),
+                    _ => {}
                 }
                 return Ok(Answered::Void);
             }
@@ -6386,6 +6466,34 @@ impl<'run> Interpreter<'run> {
                     if !found && let Some(at) = self.map_find(map, key)? {
                         self.map_remove_at(map, at);
                         changed = true;
+                    }
+                }
+                JValue::Int(i32::from(changed))
+            }
+            // `values().removeAll`/`retainAll` write through by VALUE: every
+            // entry whose value is (or is not) in the argument goes.
+            ("removeAll" | "retainAll", [JValue::Ref(Some(source))])
+                if kind == MapViewKind::Values =>
+            {
+                let keep_when_present = method_name == "retainAll";
+                let others = self.collection_elements(*source);
+                let mut doomed = Vec::new();
+                for (key, value) in self.map_entries(map) {
+                    let mut present = false;
+                    for candidate in &others {
+                        if self.java_equals(value, *candidate)? {
+                            present = true;
+                            break;
+                        }
+                    }
+                    if present != keep_when_present {
+                        doomed.push(key);
+                    }
+                }
+                let changed = !doomed.is_empty();
+                for key in doomed {
+                    if let Some(at) = self.map_find(map, key)? {
+                        self.map_remove_at(map, at);
                     }
                 }
                 JValue::Int(i32::from(changed))
@@ -10642,6 +10750,17 @@ fn null_array() -> VmError {
 /// ABORTS the process (a dead worker, not a Java error). A real JVM answers the
 /// same request with a catchable `OutOfMemoryError`; so does this one.
 const MAX_ARRAY_BYTES: u64 = 1 << 30;
+
+/// Any collection argument — the reference `collection_elements` walks.
+/// Null throws, as Java's bulk operations do.
+fn collection_argument(argument: JValue) -> Result<HeapRef, VmError> {
+    match argument {
+        JValue::Ref(Some(reference)) => Ok(reference),
+        _ => Err(VmError::UncaughtException(String::from(
+            "java.lang.NullPointerException",
+        ))),
+    }
+}
 
 fn out_of_memory() -> VmError {
     VmError::UncaughtException(String::from("java.lang.OutOfMemoryError: Java heap space"))

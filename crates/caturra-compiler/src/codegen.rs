@@ -4072,9 +4072,7 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("LinkedList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("LinkedList", "descendingIterator", "iterators are not supported by caturra"),
     ("LinkedList", "toArray", "Object arrays are not supported by caturra"),
-    ("Collection", "add", "a map's values() does not support add — Java throws UnsupportedOperationException"),
-    ("Collection", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
-    ("Collection", "clear", "clearing through a map's view is not supported by caturra (clear the map itself)"),
+    ("Collection", "toArray", "Object arrays are not supported by caturra"),
 ];
 
 /// The source-level class name of a receiver that [`UNSUPPORTED_MEMBERS`]
@@ -4281,25 +4279,25 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "addAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "containsAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "removeAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -4421,25 +4419,25 @@ const STACK_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "addAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "containsAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "removeAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
     bm(
         "retainAll",
-        &[BParam::SelfList],
+        &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
@@ -6360,6 +6358,53 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
+    // The mutators dispatch on the runtime backing: a list appends, a set
+    // dedups, a PriorityQueue sifts, a `values()` view refuses `add`/`addAll`
+    // (UnsupportedOperationException, as Java's does) and writes `remove`/
+    // `clear` through to its map's entries. Elements pass UNBOXED (`Elem`,
+    // the storage convention everywhere but a map) — a TreeSet's comparison
+    // lookup needs the bare value, and `remove` cannot be mistaken for the
+    // list family's remove-by-index because the interpreter's
+    // remove-by-object arm keys on this entry's `(Ljava/lang/Object;)Z`
+    // descriptor and runs first.
+    bm(
+        "add",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "remove",
+        &[BParam::Elem],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("clear", &[], BRet::Void, "()V"),
+    bm(
+        "addAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "containsAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
@@ -6472,6 +6517,18 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "containsAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "removeAll",
+        &[BParam::SelfCollection],
+        BRet::Boolean,
+        "(Ljava/util/Collection;)Z",
+    ),
+    bm(
+        "retainAll",
         &[BParam::SelfCollection],
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
@@ -6942,6 +6999,7 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
                 | JType::Set(elem)
                 | JType::TreeSet(elem)
                 | JType::Collection(elem)
+                | JType::Stack(elem)
                 | JType::LinkedList { elem, .. },
                 Some(want),
             ) => widens(elem.base_type(), want.base_type(), table),

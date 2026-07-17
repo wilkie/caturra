@@ -9264,6 +9264,78 @@ fn remove_if_drops_matching_across_collections() {
     );
 }
 
+/// The mutable `Collection` face over representative backings from both
+/// element-storage families, bulk arguments crossing families
+/// (`list.addAll(set)`), a `values()` view writing entries through (and
+/// refusing `add`), a `TreeMap` view clearing through, and an unmodifiable
+/// backing refusing mutators. Pinned JDK-free; the byte-for-byte JDK match
+/// over EVERY backing is in `diff_collection_face`.
+#[test]
+fn collection_face_mutates_every_backing() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class C {
+            static void exercise(String name, Collection<Integer> c) {
+                c.add(42);
+                c.add(7);
+                ArrayList<Integer> more = new ArrayList<>();
+                more.add(1); more.add(2);
+                c.addAll(more);
+                c.remove(42);
+                System.out.println(name + " " + c + " " + c.containsAll(more));
+                c.removeAll(more);
+                System.out.println(name + " " + c + " " + c.stream().count());
+                c.clear();
+                System.out.println(name + " " + c.isEmpty());
+            }
+            public static void main(String[] args) {
+                exercise("list", new ArrayList<Integer>());
+                exercise("treeset", new TreeSet<Integer>());
+                exercise("pq", new PriorityQueue<Integer>());
+
+                ArrayList<Integer> li = new ArrayList<>();
+                li.add(1); li.add(2); li.add(3);
+                HashSet<Integer> hs = new HashSet<>();
+                hs.add(2); hs.add(9);
+                li.addAll(hs);
+                li.removeAll(hs);
+                System.out.println("mixed " + li);
+
+                HashMap<String, Integer> m = new HashMap<>();
+                m.put("a", 10); m.put("b", 25);
+                Collection<Integer> vs = m.values();
+                try { vs.add(5); } catch (UnsupportedOperationException e) { System.out.println("view add UOE"); }
+                vs.remove(10);
+                System.out.println("view " + m);
+
+                TreeMap<String, Integer> tm = new TreeMap<>();
+                tm.put("x", 1);
+                tm.keySet().clear();
+                System.out.println("treemap " + tm);
+            }
+        }
+        "#,
+        "C",
+    );
+    assert_eq!(
+        out,
+        "list [7, 1, 2] true\n\
+         list [7] 1\n\
+         list true\n\
+         treeset [1, 2, 7] true\n\
+         treeset [7] 1\n\
+         treeset true\n\
+         pq [1, 2, 7] true\n\
+         pq [7] 1\n\
+         pq true\n\
+         mixed [1, 3]\n\
+         view add UOE\n\
+         view {b=25}\n\
+         treemap {}\n"
+    );
+}
+
 /// `removeIf` on the faces the plain test cannot reach: `PriorityQueue`
 /// (JDK 11's `bulkRemove` — stable compaction + re-heapify, so the surviving
 /// heap ARRAY is pinned, not just the set), the `Queue` face over both
@@ -9613,8 +9685,8 @@ fn unsupported_map_members_explain_themselves() {
             "HashMap.merge exists in Java, but lambdas are not supported by caturra",
         ),
         (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().add(3); } }",
-            "Collection.add exists in Java, but a map's values() does not support add",
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().toArray(); } }",
+            "Collection.toArray exists in Java, but Object arrays are not supported by caturra",
         ),
     ] {
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
