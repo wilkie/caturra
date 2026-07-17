@@ -10459,3 +10459,32 @@ public class RejectBoxNarrow {
 }
 "
 );
+
+// Exception MESSAGES and TYPES match JDK 11 exactly (caturra had drifted to
+// several newer-JDK wordings). The single-arg `substring(int)` reports
+// "String index out of range: N" (the two-arg form keeps "begin/end/length");
+// `parseDouble("")` is "empty String"; `parseInt(null)`/`parseLong(null)` is
+// "null"; `parseUnsignedInt("-1")` names the illegal minus; `parseDouble(null)`
+// is a NullPointerException, not a NumberFormatException.
+differential_test!(
+    diff_jdk11_exception_messages,
+    "DiffExcMsg",
+    r#"
+public class DiffExcMsg {
+    static void show(String tag, Object o) { System.out.println(tag + ": " + o); }
+    public static void main(String[] args) {
+        try { "hi".substring(6); } catch (StringIndexOutOfBoundsException e) { show("s6", e.getMessage()); }
+        try { "hi".substring(-1); } catch (StringIndexOutOfBoundsException e) { show("sm1", e.getMessage()); }
+        try { "hi".substring(1, 5); } catch (StringIndexOutOfBoundsException e) { show("s15", e.getMessage()); }
+        try { "hi".charAt(9); } catch (StringIndexOutOfBoundsException e) { show("c9", e.getMessage()); }
+        try { Double.parseDouble(""); } catch (NumberFormatException e) { show("pd", e.getMessage()); }
+        try { Float.parseFloat("  "); } catch (NumberFormatException e) { show("pf", e.getMessage()); }
+        try { Integer.parseInt(null); } catch (NumberFormatException e) { show("pin", e.getMessage()); }
+        try { Long.parseLong(null); } catch (NumberFormatException e) { show("pln", e.getMessage()); }
+        try { Integer.parseUnsignedInt("-1"); } catch (NumberFormatException e) { show("pu", e.getMessage()); }
+        try { Double.parseDouble(null); } catch (Throwable e) { show("pdn", e.getClass().getSimpleName()); }
+        try { Integer.parseInt("abc"); } catch (NumberFormatException e) { show("bad", e.getMessage()); }
+    }
+}
+"#
+);

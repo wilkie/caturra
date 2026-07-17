@@ -1360,12 +1360,22 @@ fn substring(
     begin: i32,
     len: i32,
 ) -> Result<Option<JValue>, VmError> {
-    let begin_usize = usize::try_from(begin).ok().filter(|b| *b <= units.len());
-    let Some(begin_usize) = begin_usize else {
+    // JDK 11's single-arg `substring(beginIndex)` reports "String index out of
+    // range: N": a negative beginIndex reports beginIndex itself, and an
+    // over-long one reports the negative subLen (`length - beginIndex`). This
+    // differs from the two-arg form's "begin/end/length" wording.
+    if begin < 0 {
         return Err(throw(format!(
-            "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {len}, length {len}"
+            "java.lang.StringIndexOutOfBoundsException: String index out of range: {begin}"
         )));
-    };
+    }
+    let sub_len = len - begin;
+    if sub_len < 0 {
+        return Err(throw(format!(
+            "java.lang.StringIndexOutOfBoundsException: String index out of range: {sub_len}"
+        )));
+    }
+    let begin_usize = usize::try_from(begin).unwrap_or(0).min(units.len());
     let reference = heap.alloc(HeapObject::JavaString(units[begin_usize..].to_vec()));
     Ok(Some(JValue::Ref(Some(reference))))
 }
@@ -3660,9 +3670,8 @@ fn parse_int_text(heap: &Heap, value: &JValue) -> Result<String, VmError> {
         JValue::Ref(Some(reference)) => heap
             .string_text(*reference)
             .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
-        JValue::Ref(None) => Err(throw(
-            "java.lang.NumberFormatException: Cannot parse null string",
-        )),
+        // JDK 11's message for a null string is literally "null".
+        JValue::Ref(None) => Err(throw("java.lang.NumberFormatException: null")),
         _ => Err(throw("java.lang.VerifyError: expected a String argument")),
     }
 }
@@ -3699,6 +3708,14 @@ fn integer_static(
         }
         ("parseUnsignedInt", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
+            // JDK 11 rejects a leading minus with its own message, before the
+            // general "For input string" one.
+            if text.starts_with('-') {
+                return Err(throw(format!(
+                    "java.lang.NumberFormatException: Illegal leading minus sign \
+                     on unsigned string {text}."
+                )));
+            }
             text.parse::<u32>()
                 .map_or_else(|_| Err(number_format(&text)), |v| i(v.cast_signed()))
         }
@@ -3835,8 +3852,17 @@ fn double_static(
     let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     match (method, args) {
         ("parseDouble" | "valueOf", [text @ JValue::Ref(_)]) => {
+            // JDK 11 `parseDouble(null)` is a NullPointerException (it reads
+            // the null string's length), not a NumberFormatException.
+            if matches!(text, JValue::Ref(None)) {
+                return Err(throw("java.lang.NullPointerException"));
+            }
             let text = parse_int_text(heap, text)?;
-            text.trim()
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Err(throw("java.lang.NumberFormatException: empty String"));
+            }
+            trimmed
                 .parse()
                 .map_or_else(|_| Err(number_format(&text)), d)
         }
@@ -4149,8 +4175,16 @@ fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option
     let b = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     match (method, args) {
         ("parseFloat" | "valueOf", [text @ JValue::Ref(_)]) => {
+            // Like Double: null NPEs, an empty/blank string is "empty String".
+            if matches!(text, JValue::Ref(None)) {
+                return Err(throw("java.lang.NullPointerException"));
+            }
             let text = parse_int_text(heap, text)?;
-            text.trim()
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Err(throw("java.lang.NumberFormatException: empty String"));
+            }
+            trimmed
                 .parse()
                 .map_or_else(|_| Err(number_format(&text)), f)
         }
