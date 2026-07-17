@@ -1589,6 +1589,18 @@ public class DiffFormat {
         // %h hash rendering.
         System.out.println(String.format("%h|%H", "hello", "hello"));
 
+        // Boxed arguments: unboxed and formatted by the natural conversion
+        // (used to be a "cannot format Boolean/Integer" compile error).
+        Boolean bb = false;
+        Integer ii = 5;
+        Double dd = 3.5;
+        System.out.println(String.format("%b|%d|%s|%f", bb, ii, ii, dd));
+        // `%<` reuses the previous specifier's argument (was a crash).
+        System.out.println(String.format("%d %<d %<x", 255));
+        // The `(` paren flag with `0` zero-pad fills INSIDE the parens, for
+        // both integers and floats.
+        System.out.println(String.format("[%(08d][%(08.2f][%(10.2f]", -42, -3.5, -3.5));
+
         // printf on streams.
         System.out.printf("printf: %d %s %.3f%n", 7, "seven", 7.0 / 3.0);
         System.out.printf("no args%n");

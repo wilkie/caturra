@@ -64,6 +64,8 @@ struct Spec {
     /// The original source text (for error messages).
     text: String,
     arg_index: Option<usize>,
+    /// The `<` relative index: reuse the previous specifier's argument.
+    relative: bool,
     left_justify: bool,
     plus: bool,
     space: bool,
@@ -82,6 +84,8 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
     let mut out = String::new();
     let mut at = 0;
     let mut next_arg = 0usize;
+    // The index the previous conversion consumed, for the `<` relative index.
+    let mut last_index = 0usize;
 
     while at < chars.len() {
         if chars[at] != '%' {
@@ -94,13 +98,16 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
             '%' => out.push_str(&pad(&spec, "%")),
             'n' => out.push('\n'),
             _ => {
-                let index = if let Some(explicit) = spec.arg_index {
+                let index = if spec.relative {
+                    last_index
+                } else if let Some(explicit) = spec.arg_index {
                     explicit
                 } else {
                     let index = next_arg;
                     next_arg += 1;
                     index
                 };
+                last_index = index;
                 let arg = *args.get(index).ok_or_else(|| {
                     throw(
                         "java.util.MissingFormatArgumentException",
@@ -120,6 +127,7 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
     let mut spec = Spec {
         text: String::new(),
         arg_index: None,
+        relative: false,
         left_justify: false,
         plus: false,
         space: false,
@@ -159,6 +167,8 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
             Some(',') => spec.grouping = true,
             Some('(') => spec.parentheses = true,
             Some('#') => spec.alternate = true,
+            // `%<d` reuses the previous specifier's argument.
+            Some('<') => spec.relative = true,
             _ => break,
         }
         *at += 1;
@@ -360,6 +370,14 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 magnitude = group_digits(&magnitude);
             }
             if negative && spec.parentheses {
+                // Zero-padding fills INSIDE the parens (`%(08d` of -42 is
+                // `(000042)`), which the plain width `pad` would not do.
+                let width = spec.width.unwrap_or(0);
+                let body_len = 2 + magnitude.chars().count();
+                if spec.zero_pad && !spec.left_justify && body_len < width {
+                    let zeros = "0".repeat(width - body_len);
+                    return Ok(format!("({zeros}{magnitude})"));
+                }
                 return Ok(pad(spec, &format!("({magnitude})")));
             }
             let sign = if negative {
@@ -423,6 +441,12 @@ fn pad_sign_aware(spec: &Spec, _negative: bool, body: &str) -> String {
         let width = spec.width.unwrap_or(0);
         let len = body.chars().count();
         if len < width {
+            let zeros = "0".repeat(width - len);
+            // A parenthesized negative (`%(08.2f` of -3.5) fills INSIDE the
+            // parens: `(003.50)`, not `00(3.50)`.
+            if let Some(inner) = body.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+                return format!("({zeros}{inner})");
+            }
             let (sign, magnitude) = if let Some(rest) = body.strip_prefix('-') {
                 ("-", rest)
             } else if let Some(rest) = body.strip_prefix('+') {
@@ -430,7 +454,6 @@ fn pad_sign_aware(spec: &Spec, _negative: bool, body: &str) -> String {
             } else {
                 ("", body)
             };
-            let zeros = "0".repeat(width - len);
             return format!("{sign}{zeros}{magnitude}");
         }
     }

@@ -11160,6 +11160,17 @@ impl BodyGen<'_> {
         let mut width: u16 = 1;
         for arg in rest {
             let ty = self.expr(arg);
+            // A boxed primitive unboxes to its primitive and is formatted by
+            // the natural conversion — `%b` of a Boolean is its value, `%d` of
+            // an Integer its number, `%s` its decimal — matching Java, which
+            // inspects the wrapped value. Without this a boxed arg was a
+            // "cannot format Boolean/Integer" compile error.
+            let ty = if let JType::Boxed(elem) = ty {
+                self.emit_unbox(elem);
+                elem.base_type()
+            } else {
+                ty
+            };
             // Objects format via toString, like Java's %s.
             let ty = match ty {
                 JType::Object(_)
