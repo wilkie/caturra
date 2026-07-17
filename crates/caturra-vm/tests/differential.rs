@@ -10722,6 +10722,12 @@ public class DiffExcCause {
             RuntimeException wrap = new RuntimeException(ise);
             System.out.println(wrap.getMessage() + " / " + wrap.getCause().getMessage());
             System.out.println(new RuntimeException(ise).getMessage());
+            // Printing a null throwable renders "null" (via String.valueOf),
+            // not an NPE from toString.
+            System.out.println(new RuntimeException("solo").getCause());
+            System.out.println("cause=" + new RuntimeException("solo").getCause());
+            // getSuppressed() is an empty Throwable[].
+            System.out.println(wrap.getSuppressed().length);
         }
 
         // A specific exception widens to a wider throwable variable/parameter,
@@ -10738,6 +10744,7 @@ public class DiffExcCause {
         } catch (AppException e) {
             Throwable c = e.getCause();
             System.out.println(e.getMessage() + " <- " + c.getClass().getSimpleName() + ": " + c.getMessage());
+            System.out.println(e.getSuppressed().length);
         }
     }
 

@@ -5380,6 +5380,14 @@ const EXCEPTION_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Throwable,
         descriptor: "()Ljava/lang/Throwable;",
     },
+    // `getSuppressed()` — an empty `Throwable[]` (none modelled), typed as
+    // `Object[]` (enough for `.length`).
+    BuiltinMethod {
+        name: "getSuppressed",
+        params: &[],
+        ret: BRet::ObjectArray,
+        descriptor: "()[Ljava/lang/Throwable;",
+    },
 ];
 
 const MATH_METHODS: &[BuiltinMethod] = &[
@@ -11718,7 +11726,7 @@ impl BodyGen<'_> {
 
     /// The receiver object is already on the stack; resolve the
     /// overload, emit arguments, and invoke.
-    #[allow(clippy::option_option)]
+    #[allow(clippy::option_option, clippy::too_many_lines)]
     fn emit_virtual_call_on_stacked_receiver(
         &mut self,
         class_id: ClassId,
@@ -11761,6 +11769,21 @@ impl BodyGen<'_> {
                     self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
                     self.code.drop_stack(1);
                     return Some(Some(JType::Exception(0)));
+                }
+                if self.table.is_throwable(class_id) && method == "getSuppressed" && args.is_empty()
+                {
+                    let method_ref = intern_method_ref(
+                        self.pool,
+                        &class_name,
+                        "getSuppressed",
+                        "()[Ljava/lang/Throwable;",
+                    );
+                    self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+                    self.code.drop_stack(1);
+                    return Some(Some(JType::Array {
+                        elem: ElemType::Object(self.table.object_id),
+                        dims: 1,
+                    }));
                 }
                 self.error(
                     span,
@@ -11829,16 +11852,28 @@ impl BodyGen<'_> {
     /// Coerce a value on the stack into a `String` for printing or
     /// concatenation: objects go through their `toString()` (the VM
     /// supplies `ClassName@hex` when a class doesn't define one).
+    #[allow(clippy::too_many_lines)] // one coercion per printable type
     fn coerce_to_string_for_output(&mut self, ty: JType) -> JType {
         if let JType::Exception(id) = ty {
-            let method_ref = intern_method_ref(
-                self.pool,
-                exception_internal(id),
-                "toString",
-                "()Ljava/lang/String;",
-            );
+            // String.valueOf semantics: a null throwable (a `getCause()` with
+            // no cause) prints as "null" rather than NPEing on toString.
+            let internal = exception_internal(id).to_owned();
+            let null_case = self.code.new_label();
+            let done = self.code.new_label();
+            self.code.push_op(op::DUP, 1);
+            self.code.branch(op::IFNULL, null_case, 1);
+            let method_ref =
+                intern_method_ref(self.pool, &internal, "toString", "()Ljava/lang/String;");
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
             self.code.drop_stack(1);
+            self.code.branch(op::GOTO, done, 0);
+            self.code.bind(null_case);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+            let utf8 = self.pool.intern_utf8("null");
+            let index = self.pool.intern(Constant::String { string_index: utf8 });
+            self.code.push_ldc(index);
+            self.code.bind(done);
             return JType::Str;
         }
         if ty == JType::File {

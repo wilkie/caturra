@@ -6675,6 +6675,17 @@ impl<'run> Interpreter<'run> {
                     .unwrap_or(JValue::NULL);
                 return Ok(UserDispatch::Value(Some(cause)));
             }
+            // `getSuppressed()` — an empty `Throwable[]` (none are modelled).
+            if self.instance_is_throwable(instance_class)
+                && method_name == "getSuppressed"
+                && descriptor == "()[Ljava/lang/Throwable;"
+            {
+                let array = self.heap.alloc(crate::value::HeapObject::RefArray(
+                    String::from("[Ljava/lang/Throwable;"),
+                    Vec::new(),
+                ));
+                return Ok(UserDispatch::Value(Some(JValue::Ref(Some(array)))));
+            }
             // Object.toString() default: "ClassName@<hex>".
             if method_name == "toString" && descriptor == "()Ljava/lang/String;" {
                 let text = format!("{instance_class}@{receiver:x}");
