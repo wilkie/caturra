@@ -1,13 +1,16 @@
 //! The library exception hierarchy, shared by the compiler (catch
 //! typing, unreachable-catch checks) and the VM (handler matching).
 //!
-//! Internal (slash) names. User-defined exception classes are not yet
-//! supported, so this closed table is the whole catchable world.
+//! Internal (slash) names. User-defined exception classes live outside
+//! this table: their superclass chains are walked class-file by class-file
+//! and cross into it at the first `java/...` superclass (the VM's
+//! `thrown_matches`/`instance_is_throwable`), so the table is the whole
+//! catchable world only for LIBRARY classes.
 
 /// `(class, superclass)` pairs; `java/lang/Throwable` is the root.
 ///
-/// **A class missing from this table is not merely unnamed in a `catch` — it is
-/// UNCATCHABLE, and kills the run.** The VM's unwinder consults this to decide
+/// **A library class missing from this table is not merely unnamed in a
+/// `catch` — it is UNCATCHABLE, and kills the run.** The VM's unwinder consults this to decide
 /// whether a thrown class is a throwable at all, so an exception it does not
 /// know escapes even `catch (Throwable)`. The reflective exceptions below were
 /// missing, and the Unit 2 constructor/attribute validators throw them: the

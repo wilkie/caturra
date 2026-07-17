@@ -7067,6 +7067,75 @@ public class DiffOptionalLambda {
 "#
 );
 
+// orElse on a PRIMITIVE-element Optional: both arms must yield the unboxed
+// element (present value and fallback alike), so `println(opt.orElse(-1))`
+// dispatches `(I)V` and works whichever arm runs. The fallback used to cross
+// boxed while the present value crossed unboxed, and the empty case died.
+differential_test!(
+    diff_optional_or_else_primitive,
+    "DiffOptionalOrElse",
+    r#"
+import java.util.ArrayList;
+import java.util.Optional;
+
+public class DiffOptionalOrElse {
+    public static void main(String[] args) {
+        ArrayList<Integer> nums = new ArrayList<>();
+        nums.add(5);
+        nums.add(12);
+        Optional<Integer> found = nums.stream().filter(n -> n > 10).findFirst();
+        Optional<Integer> missing = nums.stream().filter(n -> n > 100).findFirst();
+        System.out.println(found.orElse(-1));
+        System.out.println(missing.orElse(-1));
+        int got = missing.orElse(-1);
+        System.out.println(got + 1);
+
+        ArrayList<Double> ds = new ArrayList<>();
+        ds.add(2.5);
+        System.out.println(ds.stream().filter(x -> x > 3.0).findFirst().orElse(-1.5));
+
+        // The erased Optional<Object> a map() produces takes a REFERENCE default.
+        Optional<String> word = Optional.of("apple");
+        Optional<String> none = Optional.empty();
+        System.out.println(word.map(w -> w + "!").orElse("empty"));
+        System.out.println(none.map(w -> w + "!").orElse("empty"));
+    }
+}
+"#
+);
+
+// A CHAINED Optional receiver types its lambdas: `filter` keeps the element,
+// `map` erases it to Object, and a stream's findFirst/max/min terminal
+// carries the stream's element into the Optional it returns — so
+// `list.stream().filter(p).findFirst().ifPresent(x -> ...)` compiles instead
+// of only working when the Optional is first parked in a variable.
+differential_test!(
+    diff_optional_chained_receivers,
+    "DiffOptionalChain",
+    r#"
+import java.util.ArrayList;
+import java.util.Optional;
+
+public class DiffOptionalChain {
+    public static void main(String[] args) {
+        Optional<String> word = Optional.of("apple");
+        System.out.println(word.filter(w -> w.length() > 3).filter(w -> w.startsWith("a")).orElse("no"));
+        System.out.println(word.filter(w -> w.length() > 3).filter(w -> w.startsWith("z")).orElse("no"));
+        word.filter(w -> w.length() > 3).ifPresent(w -> System.out.println("hit " + w));
+
+        ArrayList<Integer> nums = new ArrayList<>();
+        nums.add(4);
+        nums.add(11);
+        nums.stream().filter(n -> n > 10).findFirst().ifPresent(n -> System.out.println("first " + (n + 1)));
+        nums.stream().max((a, b) -> a - b).ifPresent(n -> System.out.println("max " + n));
+        nums.stream().min((a, b) -> a - b).map(n -> n * 2).ifPresent(n -> System.out.println("min2 " + n));
+
+        word.map(w -> w + "!").filter(o -> o.toString().length() > 5).ifPresent(o -> System.out.println("obj " + o));
+    }
+}
+"#
+);
+
 // The Optional factories: of(x)/ofNullable(x) build a present Optional,
 // empty() an absent one, so a method can construct and return an Optional
 // rather than only receive one from a stream terminal.
@@ -7632,6 +7701,69 @@ public class DiffRemoveIf {
         TreeSet<Integer> s2 = new TreeSet<>(Arrays.asList(10, 20, 30));
         System.out.println(s2.removeIf(x -> x > 100) + " " + s2);
         System.out.println(s2.removeIf(x -> x == 20) + " " + s2);
+    }
+}
+"#
+);
+
+// removeIf on the faces the plain diff_remove_if cannot reach: a
+// PriorityQueue replays JDK 11's bulkRemove (test all in heap-array order,
+// compact survivors STABLY, re-heapify — NOT the JDK 8 iterator-with-removeAt
+// loop, which leaves a visibly different heap array); the Queue face works
+// over both backings; a map's key/value views write ENTRIES through; a
+// Collection can hold a widened List; and an unmodifiable list refuses.
+differential_test!(
+    diff_remove_if_queue_and_views,
+    "DiffRemoveIfQV",
+    r#"
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.PriorityQueue;
+import java.util.Queue;
+import java.util.Set;
+
+public class DiffRemoveIfQV {
+    public static void main(String[] args) {
+        PriorityQueue<Integer> pq = new PriorityQueue<>();
+        int[] seed = {41, 17, 63, 5, 88, 29, 71, 12, 55, 34, 96, 8, 47, 23, 60};
+        for (int s : seed) pq.offer(s);
+        System.out.println(pq.removeIf(n -> n % 3 == 0) + " " + pq);
+        System.out.println(pq.removeIf(n -> n > 1000) + " " + pq);
+        // A removal pattern whose re-heapify visibly rearranges the array.
+        PriorityQueue<Integer> pq2 = new PriorityQueue<>();
+        int[] seed2 = {50, 90, 10, 95, 91, 30, 20, 96, 97, 92, 93, 35, 31, 25, 21};
+        for (int s : seed2) pq2.offer(s);
+        System.out.println(pq2.removeIf(n -> n >= 90) + " " + pq2);
+
+        Queue<Integer> q1 = new LinkedList<>();
+        q1.add(3); q1.add(14); q1.add(15); q1.add(9);
+        System.out.println(q1.removeIf(n -> n > 10) + " " + q1);
+        Queue<Integer> q2 = new PriorityQueue<>();
+        q2.add(30); q2.add(1); q2.add(40); q2.add(11);
+        System.out.println(q2.removeIf(n -> n > 10) + " " + q2);
+
+        HashMap<String, Integer> m = new HashMap<>();
+        m.put("apple", 1); m.put("fig", 2); m.put("banana", 3);
+        Set<String> ks = m.keySet();
+        System.out.println(ks.removeIf(k -> k.length() > 3) + " " + m);
+        HashMap<String, Integer> m2 = new HashMap<>();
+        m2.put("a", 10); m2.put("b", 25); m2.put("c", 10);
+        Collection<Integer> vs = m2.values();
+        System.out.println(vs.removeIf(v -> v == 10) + " " + m2);
+
+        ArrayList<Integer> cl = new ArrayList<>();
+        cl.add(2); cl.add(4); cl.add(7);
+        Collection<Integer> c = cl;
+        System.out.println(c.removeIf(n -> n % 2 == 0) + " " + c);
+
+        ArrayList<Integer> base = new ArrayList<>();
+        base.add(6);
+        Collection<Integer> frozen = Collections.unmodifiableList(base);
+        try { frozen.removeIf(n -> n > 0); System.out.println("no throw"); }
+        catch (UnsupportedOperationException e) { System.out.println("UOE"); }
     }
 }
 "#

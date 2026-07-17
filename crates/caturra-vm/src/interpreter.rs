@@ -1874,8 +1874,7 @@ impl<'run> Interpreter<'run> {
                                     || malformed(format!("bad class ref at pool {class_index}")),
                                 )?;
                             let array_class = array_class_of(element);
-                            let length =
-                                check_array_size(frame.pop_int()?, size_of::<JValue>())?;
+                            let length = check_array_size(frame.pop_int()?, size_of::<JValue>())?;
                             let reference = self.heap.alloc(crate::value::HeapObject::RefArray(
                                 array_class,
                                 vec![JValue::NULL; length],
@@ -5415,9 +5414,45 @@ impl<'run> Interpreter<'run> {
         Ok(result)
     }
 
+    /// Java's `PriorityQueue.removeAt(i)`, over a detached heap vector: move
+    /// the last element into the hole, sift it down, and — if it did not move —
+    /// sift it up. Returns the moved element ONLY when it sifted UP (above the
+    /// hole, into territory an iterator has already visited) — exactly the
+    /// JDK's contract, which its iterator uses to know what it will miss.
+    fn pq_remove_at(
+        &mut self,
+        heap: &mut Vec<JValue>,
+        comparator: Option<HeapRef>,
+        i: usize,
+    ) -> Result<Option<JValue>, VmError> {
+        let last = heap.len() - 1;
+        if i == last {
+            heap.pop();
+            return Ok(None);
+        }
+        let moved = heap.pop().expect("non-empty");
+        heap[i] = moved;
+        self.pq_sift_down(heap, comparator, i)?;
+        if heap[i] == moved {
+            // It did not sift down; try sifting it up.
+            let mut k = i;
+            while k > 0 {
+                let parent = (k - 1) >> 1;
+                if self.compare_with(heap[k], heap[parent], comparator)? >= 0 {
+                    break;
+                }
+                heap.swap(k, parent);
+                k = parent;
+            }
+            if heap[i] != moved {
+                return Ok(Some(moved));
+            }
+        }
+        Ok(None)
+    }
+
     /// `queue.remove(o)`: drop the first element that `equals` `o`, then repair
-    /// the heap the way Java's `removeAt` does (move the last element into the
-    /// hole, sift it down, and — if it did not move — sift it up).
+    /// the heap the way Java's `removeAt` does.
     fn pq_remove_object(&mut self, pq: HeapRef, probe: JValue) -> Result<bool, VmError> {
         let comparator = self.pq_comparator(pq);
         let mut heap = self.pq_heap(pq);
@@ -5431,28 +5466,32 @@ impl<'run> Interpreter<'run> {
         let Some(i) = at else {
             return Ok(false);
         };
-        let last = heap.len() - 1;
-        if i == last {
-            heap.pop();
-        } else {
-            let moved = heap.pop().expect("non-empty");
-            heap[i] = moved;
-            self.pq_sift_down(&mut heap, comparator, i)?;
-            if heap[i] == moved {
-                // It did not sift down; try sifting it up.
-                let mut k = i;
-                while k > 0 {
-                    let parent = (k - 1) >> 1;
-                    if self.compare_with(heap[k], heap[parent], comparator)? >= 0 {
-                        break;
-                    }
-                    heap.swap(k, parent);
-                    k = parent;
-                }
-            }
-        }
+        self.pq_remove_at(&mut heap, comparator, i)?;
         self.set_pq_heap(pq, heap);
         Ok(true)
+    }
+
+    /// `queue.removeIf(predicate)`. JDK 11's `PriorityQueue` overrides it with
+    /// `bulkRemove` — NOT the inherited iterator-with-`removeAt` loop (that is
+    /// JDK 8): every element is tested in heap-array order, the survivors are
+    /// compacted STABLY, and the whole array is re-`heapify`d. Verified against
+    /// a live JDK 11 (and against jdk11u's own source) — the two models leave
+    /// visibly different heap arrays.
+    fn pq_remove_if(&mut self, pq: HeapRef, predicate: HeapRef) -> Result<bool, VmError> {
+        let mut removed = false;
+        let mut survivors = Vec::new();
+        for element in self.pq_heap(pq) {
+            if self.call_test(predicate, element)? {
+                removed = true;
+            } else {
+                survivors.push(element);
+            }
+        }
+        if removed {
+            self.set_pq_heap(pq, survivors);
+            self.pq_heapify(pq)?;
+        }
+        Ok(removed)
     }
 
     /// Build a valid heap from an arbitrary vector (Java's `heapify`: sift down
@@ -5515,6 +5554,9 @@ impl<'run> Interpreter<'run> {
                 self.pq_poll(receiver)?
             }
             ("remove", [probe]) => JValue::Int(i32::from(self.pq_remove_object(receiver, *probe)?)),
+            ("removeIf", [JValue::Ref(Some(predicate))]) => {
+                JValue::Int(i32::from(self.pq_remove_if(receiver, *predicate)?))
+            }
             ("contains", [probe]) => {
                 let mut found = false;
                 for element in self.pq_heap(receiver) {
@@ -6287,6 +6329,28 @@ impl<'run> Interpreter<'run> {
                         )));
                     }
                 };
+                JValue::Int(i32::from(removed))
+            }
+            // `removeIf` on a key or value view writes through: it drops every
+            // ENTRY whose key (or value) the predicate accepts, as removing
+            // through Java's view iterators does.
+            ("removeIf", [JValue::Ref(Some(predicate))]) if kind != MapViewKind::Entries => {
+                let mut doomed = Vec::new();
+                for (key, value) in self.map_entries(map) {
+                    let probe = match kind {
+                        MapViewKind::Keys => key,
+                        _ => value,
+                    };
+                    if self.call_test(*predicate, probe)? {
+                        doomed.push(key);
+                    }
+                }
+                let removed = !doomed.is_empty();
+                for key in doomed {
+                    if let Some(at) = self.map_find(map, key)? {
+                        self.map_remove_at(map, at);
+                    }
+                }
                 JValue::Int(i32::from(removed))
             }
             ("removeAll", [JValue::Ref(Some(source))]) if kind == MapViewKind::Keys => {
@@ -9249,6 +9313,9 @@ const LIST_MUTATORS: &[&str] = &[
     "addAll",
     "removeAll",
     "retainAll",
+    "removeIf",
+    "replaceAll",
+    "sort",
 ];
 
 /// Java's marker for a container that holds itself, instead of recursing.

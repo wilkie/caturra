@@ -2185,6 +2185,12 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::LinkedList { elem: a, .. }, JType::Collection(b)) if a == b
         )
+        // A List or a Set is a Collection of its element type:
+        // `Collection<E> c = list`.
+        || matches!(
+            (from, to),
+            (JType::List(a) | JType::Set(a), JType::Collection(b)) if a == b
+        )
         // A Stack is a List (it extends Vector), and so a Collection, of its
         // element type: `List<E> l = new Stack<>()`.
         || matches!(
@@ -4049,7 +4055,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("HashMap", "clone", "clone is not supported by caturra"),
     ("HashMap", "of", "varargs are not supported by caturra"),
     ("HashMap", "ofEntries", "varargs are not supported by caturra"),
-    ("Set", "removeIf", "Set.removeIf is not supported by caturra"),
     ("TreeMap", "clone", "clone is not supported by caturra"),
     ("TreeMap", "headMap", "TreeMap range views are not supported by caturra"),
     ("TreeMap", "tailMap", "TreeMap range views are not supported by caturra"),
@@ -4061,15 +4066,12 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("TreeMap", "pollLastEntry", "TreeMap entry views are not supported by caturra"),
     ("TreeSet", "descendingIterator", "iterators are not supported by caturra"),
     ("TreeSet", "descendingSet", "TreeSet.descendingSet is not supported by caturra"),
-    ("TreeSet", "removeIf", "TreeSet.removeIf is not supported by caturra"),
     ("TreeSet", "headSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "tailSet", "TreeSet range views are not supported by caturra"),
     ("TreeSet", "subSet", "TreeSet range views are not supported by caturra"),
     ("LinkedList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("LinkedList", "descendingIterator", "iterators are not supported by caturra"),
-    ("LinkedList", "removeIf", "LinkedList.removeIf is not supported by caturra"),
     ("LinkedList", "toArray", "Object arrays are not supported by caturra"),
-    ("Collection", "removeIf", "lambdas are not supported by caturra"),
     ("Collection", "add", "a map's values() does not support add — Java throws UnsupportedOperationException"),
     ("Collection", "remove", "removing through a map's view is not supported by caturra (remove from the map itself)"),
     ("Collection", "clear", "clearing through a map's view is not supported by caturra (clear the map itself)"),
@@ -4497,6 +4499,16 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
         &[BParam::Consumer],
         BRet::Void,
         "(Ljava/lang/Object;)V",
+    ),
+    // Sound on EVERY Queue backing: a LinkedList/ArrayDeque filters its element
+    // vector in order, and a PriorityQueue replays JDK 11's `bulkRemove`
+    // (stable compaction + heapify, `pq_remove_if`), so the surviving heap
+    // array matches.
+    bm(
+        "removeIf",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
     ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
@@ -4955,9 +4967,15 @@ const OPTIONAL_METHODS: &[BuiltinMethod] = &[
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("get", &[], BRet::Elem, "()Ljava/lang/Object;"),
     bm("orElseThrow", &[], BRet::Elem, "()Ljava/lang/Object;"),
+    // `BParam::Elem`, not `Key`: an Optional stores its value UNBOXED (like a
+    // list element), and `orElse` returns `BRet::Elem` — the unboxed element.
+    // A boxed fallback (`Key`) made the two arms of `orElse` disagree: a
+    // present `Optional<Integer>` yielded an `Int`, an empty one the boxed
+    // fallback reference, and `println(opt.orElse(-1))` — dispatched `(I)V` by
+    // the compile-time type — died on the reference at runtime.
     bm(
         "orElse",
-        &[BParam::Key],
+        &[BParam::Elem],
         BRet::Elem,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
@@ -6330,6 +6348,15 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
     bm(
         "contains",
         &[BParam::Key],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    // Sound on every backing this face can hold: the concrete collections all
+    // implement it, and a map's `values()` view writes through (dropping the
+    // matching ENTRIES, as removing through Java's view iterator does).
+    bm(
+        "removeIf",
+        &[BParam::Predicate],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -16022,10 +16049,19 @@ impl BodyGen<'_> {
             (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
             // Two erasures that need no code when `widens` (which gated the
             // call) allows them: a LinkedList/TreeSet/TreeMap widening to a
-            // wider face, `List`/`Set`/`Collection` of the same element; and a
-            // collection passed to a wildcard-typed parameter (`List<Integer>`
-            // -> `List<? extends Number>`), which erase identically.
-            (JType::LinkedList { .. } | JType::TreeSet(_) | JType::TreeMap { .. }, _)
+            // wider face, a List/Set/Stack widening to `Collection`, of the
+            // same element; and a collection passed to a wildcard-typed
+            // parameter (`List<Integer>` -> `List<? extends Number>`), which
+            // erase identically.
+            (
+                JType::LinkedList { .. }
+                | JType::TreeSet(_)
+                | JType::TreeMap { .. }
+                | JType::List(_)
+                | JType::Set(_)
+                | JType::Stack(_),
+                _,
+            )
             | (
                 _,
                 JType::List(ElemType::Wildcard { .. })

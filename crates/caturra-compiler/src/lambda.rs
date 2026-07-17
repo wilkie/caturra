@@ -1272,9 +1272,29 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 }
 
 /// The element type `E` of a receiver declared `Optional<E>` — for typing the
-/// lambda parameter of `ifPresent`/`filter`. Resolves a variable, a `this`
-/// field, or an inline `new`, the same shapes `list_elem_type` handles.
+/// lambda parameter of `ifPresent`/`filter`. Resolves a variable or a `this`
+/// field, and walks a CHAINED receiver: `filter` keeps the element, `map`
+/// erases it to `Object`, and a stream's `findFirst`/`max`/`min` terminal
+/// carries the stream's element — so
+/// `list.stream().filter(p).findFirst().ifPresent(x -> ...)` types its lambda.
 fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
+    if let Expr::Call {
+        receiver: Some(prev),
+        method,
+        ..
+    } = receiver
+    {
+        return match method.as_str() {
+            // Optional.filter: same element. (A STREAM's filter resolves to
+            // None here — its chain never bottoms out in an Optional.)
+            "filter" => optional_elem_type(prev, ctx),
+            // Optional.map erases its element, exactly like a stream's map —
+            // but only when the receiver IS an Optional.
+            "map" => optional_elem_type(prev, ctx).map(|_| TypeRef::Named(String::from("Object"))),
+            "findFirst" | "max" | "min" => stream_elem_type(prev, ctx),
+            _ => None,
+        };
+    }
     let ty = match receiver {
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {

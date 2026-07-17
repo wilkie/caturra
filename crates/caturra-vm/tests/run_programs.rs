@@ -9264,6 +9264,55 @@ fn remove_if_drops_matching_across_collections() {
     );
 }
 
+/// `removeIf` on the faces the plain test cannot reach: `PriorityQueue`
+/// (JDK 11's `bulkRemove` — stable compaction + re-heapify, so the surviving
+/// heap ARRAY is pinned, not just the set), the `Queue` face over both
+/// backings, a map's key/value views (entries write through), and an
+/// unmodifiable list (refuses). Pinned JDK-free; the byte-for-byte JDK match
+/// is in `diff_remove_if_queue_and_views`.
+#[test]
+fn remove_if_on_queues_and_views() {
+    let out = run_stdout(
+        r#"
+        import java.util.*;
+        public class R {
+            public static void main(String[] args) {
+                PriorityQueue<Integer> pq = new PriorityQueue<>();
+                int[] seed = {50, 90, 10, 95, 91, 30, 20, 96, 97, 92, 93, 35, 31, 25, 21};
+                for (int s : seed) pq.offer(s);
+                System.out.println(pq.removeIf(n -> n >= 90) + " " + pq);
+
+                Queue<Integer> q = new PriorityQueue<>();
+                q.add(30); q.add(1); q.add(40); q.add(11);
+                System.out.println(q.removeIf(n -> n > 10) + " " + q);
+
+                HashMap<String, Integer> m = new HashMap<>();
+                m.put("apple", 1); m.put("fig", 2); m.put("banana", 3);
+                System.out.println(m.keySet().removeIf(k -> k.length() > 3) + " " + m);
+                HashMap<String, Integer> m2 = new HashMap<>();
+                m2.put("a", 10); m2.put("b", 25); m2.put("c", 10);
+                System.out.println(m2.values().removeIf(v -> v == 10) + " " + m2);
+
+                ArrayList<Integer> base = new ArrayList<>();
+                base.add(6);
+                Collection<Integer> frozen = Collections.unmodifiableList(base);
+                try { frozen.removeIf(n -> n > 0); System.out.println("no throw"); }
+                catch (UnsupportedOperationException e) { System.out.println("UOE " + base); }
+            }
+        }
+        "#,
+        "R",
+    );
+    assert_eq!(
+        out,
+        "true [10, 20, 30, 21, 50, 35, 31, 25]\n\
+         true [1]\n\
+         true {fig=2}\n\
+         true {b=25}\n\
+         UOE [6]\n"
+    );
+}
+
 /// `java.util.ArrayDeque` is a `Deque` and `Queue` (not a `List`): head-based
 /// `push`/`pop`/`peekFirst`, tail-based `offer`/`peekLast`, usable as a stack or
 /// a FIFO queue, with a copy constructor and for-each. Pinned JDK-free for CI;
@@ -9564,8 +9613,8 @@ fn unsupported_map_members_explain_themselves() {
             "HashMap.merge exists in Java, but lambdas are not supported by caturra",
         ),
         (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().removeIf(x -> true); } }",
-            "Collection.removeIf exists in Java, but lambdas are not supported by caturra",
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().add(3); } }",
+            "Collection.add exists in Java, but a map's values() does not support add",
         ),
     ] {
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
