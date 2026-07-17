@@ -1496,6 +1496,44 @@ public class DiffWrapFull {
 "#
 );
 
+// Character methods use Java's Unicode tables, not Rust's char semantics:
+// toUpperCase/toLowerCase are the *simple* (single-char) case mappings, and
+// isDigit/digit/getNumericValue recognise every Unicode decimal-digit (Nd)
+// script, not just ASCII.
+differential_test!(
+    diff_character_unicode_tables,
+    "DiffCharUni",
+    r#"
+public class DiffCharUni {
+    static void show(int cp) {
+        char c = (char) cp;
+        System.out.println(String.format(
+            "U+%04X d=%b l=%b up=%d lo=%d nv=%d d10=%d d16=%d",
+            cp, Character.isDigit(c), Character.isLetter(c),
+            (int) Character.toUpperCase(c), (int) Character.toLowerCase(c),
+            Character.getNumericValue(c), Character.digit(c, 10), Character.digit(c, 16)));
+    }
+    public static void main(String[] args) {
+        // German sharp s (upper is "SS" -> stays), dotted capital I (lower is
+        // "i" via the simple mapping), a Greek letter with ypogegrammeni.
+        show(0x00DF);
+        show(0x0130);
+        show(0x1FB3);
+        show(0xFB00);
+        // ASCII letters/digits keep their numeric values.
+        show('I');
+        show('a');
+        show('5');
+        // Non-ASCII decimal digits: Arabic-Indic, fullwidth, Devanagari, Tamil.
+        show(0x0665);
+        show(0xFF15);
+        show(0x096B);
+        show(0x0BE7);
+    }
+}
+"#
+);
+
 differential_test!(
     diff_list_full_api,
     "DiffListFull",

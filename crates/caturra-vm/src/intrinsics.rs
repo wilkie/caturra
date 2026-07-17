@@ -4108,6 +4108,49 @@ fn java_is_space_char(c: char) -> bool {
     )
 }
 
+/// Start code point of every Unicode decimal-digit (category `Nd`) run in the
+/// BMP, one per script. Each run is exactly ten contiguous code points valued
+/// 0..=9 (Unicode 10.0, matching JDK 11). Extracted directly from a real JVM.
+const ND_STARTS: [u32; 37] = [
+    0x0030, 0x0660, 0x06F0, 0x07C0, 0x0966, 0x09E6, 0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6,
+    0x0D66, 0x0DE6, 0x0E50, 0x0ED0, 0x0F20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80,
+    0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0,
+    0xFF10,
+];
+
+/// Java's Unicode decimal-digit value (category `Nd`): 0..=9, or `None`.
+/// Rust's `char::to_digit` is ASCII-only, so Arabic-Indic '٠', fullwidth '０',
+/// Devanagari '५' etc. all need this table.
+fn nd_digit_value(c: char) -> Option<u32> {
+    let cp = u32::from(c);
+    ND_STARTS
+        .iter()
+        .find_map(|&s| (cp >= s && cp <= s + 9).then_some(cp - s))
+}
+
+/// Java's `Character.toUpperCase(char)`: the *simple* (single-char) uppercase
+/// mapping. Rust's `char::to_uppercase` is the *full* mapping, multi-char for
+/// ~100 BMP chars. Where the full mapping is one char it equals the simple one;
+/// where it is multi-char the simple mapping is either the char itself (ß,
+/// ligatures) or, for 27 polytonic-Greek letters with ypogegrammeni, a specific
+/// char in the 1F88.. titlecase block.
+fn java_simple_upper(c: char) -> char {
+    let mut it = c.to_uppercase();
+    let first = it.next().unwrap_or(c);
+    if it.next().is_none() {
+        return first;
+    }
+    match c {
+        '\u{1F80}'..='\u{1F87}' | '\u{1F90}'..='\u{1F97}' | '\u{1FA0}'..='\u{1FA7}' => {
+            char::from_u32(u32::from(c) + 8).unwrap_or(c)
+        }
+        '\u{1FB3}' => '\u{1FBC}',
+        '\u{1FC3}' => '\u{1FCC}',
+        '\u{1FF3}' => '\u{1FFC}',
+        _ => c,
+    }
+}
+
 #[allow(clippy::too_many_lines)] // one arm per documented method
 #[allow(clippy::many_single_char_names)]
 fn character_static(
@@ -4123,11 +4166,11 @@ fn character_static(
         )))
     };
     match (method, args) {
-        ("isDigit", [JValue::Int(v)]) => z(c_of(v).is_ascii_digit()),
+        ("isDigit", [JValue::Int(v)]) => z(nd_digit_value(c_of(v)).is_some()),
 
         ("isLetterOrDigit", [JValue::Int(v)]) => {
             let c = c_of(v);
-            z(c.is_alphabetic() || c.is_ascii_digit())
+            z(c.is_alphabetic() || nd_digit_value(c).is_some())
         }
         // isAlphabetic is a superset of isLetter in real Java (letter
         // numbers); identical under this approximation.
@@ -4154,35 +4197,36 @@ fn character_static(
             let lower = c.to_lowercase().next().unwrap_or(c);
             z(upper != c && lower != c)
         }
-        ("toTitleCase" | "toUpperCase", [JValue::Int(v)]) => {
-            let c = c_of(v);
-            ch_ret(c.to_uppercase().next().unwrap_or(c))
-        }
+        // toTitleCase reuses the simple-uppercase mapping; the ~30 chars whose
+        // titlecase differs from their uppercase remain approximated.
+        ("toTitleCase" | "toUpperCase", [JValue::Int(v)]) => ch_ret(java_simple_upper(c_of(v))),
         ("toLowerCase", [JValue::Int(v)]) => {
+            // The first char of Rust's full lowercase equals Java's simple
+            // lowercase across the whole BMP (verified against a real JVM).
             let c = c_of(v);
             ch_ret(c.to_lowercase().next().unwrap_or(c))
         }
         ("getNumericValue", [JValue::Int(v)]) => {
             let c = c_of(v);
-            let value = c.to_digit(10).map_or_else(
-                || {
-                    if c.is_ascii_alphabetic() {
-                        i32::try_from(u32::from(c.to_ascii_lowercase()) - u32::from('a'))
-                            .unwrap_or(-1)
-                            + 10
-                    } else {
-                        -1
-                    }
-                },
-                |d| i32::try_from(d).unwrap_or(-1),
-            );
+            // Nd decimal value (0..=9), else a Latin letter's 10..=35 value.
+            // The letter-number/other-number specials (Roman numerals -> value,
+            // fractions -> -2, superscripts) remain approximated as -1.
+            let value = nd_digit_value(c)
+                .or_else(|| c.to_digit(36))
+                .and_then(|d| i32::try_from(d).ok())
+                .unwrap_or(-1);
             Ok(Some(JValue::Int(value)))
         }
         ("digit", [JValue::Int(v), JValue::Int(radix)]) => {
+            let c = c_of(v);
             let value = u32::try_from(*radix)
                 .ok()
                 .filter(|r| (2..=36).contains(r))
-                .and_then(|r| c_of(v).to_digit(r))
+                .and_then(|r| {
+                    nd_digit_value(c)
+                        .filter(|&d| d < r)
+                        .or_else(|| c.to_digit(r))
+                })
                 .and_then(|d| i32::try_from(d).ok())
                 .unwrap_or(-1);
             Ok(Some(JValue::Int(value)))
