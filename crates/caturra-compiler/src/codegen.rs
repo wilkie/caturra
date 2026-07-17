@@ -5352,13 +5352,21 @@ const MATH_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Double,
         descriptor: "(D)D",
     },
-    // Java returns long; caturra surfaces int (documented deviation —
-    // the classroom idiom is `(int) Math.round(x)` anyway).
+    // `Math.round(double)` returns `long`, `Math.round(float)` returns `int`
+    // (JLS / the JDK). Surfacing the double form as `int` was LOOSER than
+    // javac — `int r = Math.round(2.5)` compiled here but not on a JDK (it
+    // needs `(int)`), and large values silently clamped to i32.
     BuiltinMethod {
         name: "round",
         params: &[BParam::Double],
+        ret: BRet::Long,
+        descriptor: "(D)J",
+    },
+    BuiltinMethod {
+        name: "round",
+        params: &[BParam::Float],
         ret: BRet::Int,
-        descriptor: "(D)I",
+        descriptor: "(F)I",
     },
     BuiltinMethod {
         name: "max",

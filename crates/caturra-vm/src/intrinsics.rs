@@ -3439,6 +3439,51 @@ fn overflow() -> VmError {
     throw("java.lang.ArithmeticException: integer overflow")
 }
 
+/// `Math.round(double)` — half-up toward positive infinity, computed on the
+/// bit pattern exactly as JDK 11 does. The naive `(a + 0.5).floor()` rounds
+/// `0.49999999999999994` UP, because adding `0.5` to it in `double` overflows
+/// to `1.0`; this does not. The out-of-`[0,63]` branch is the `(long) a` cast,
+/// which Rust's saturating float→int matches (NaN→0, ±∞→`i64::MIN`/`i64::MAX`).
+fn java_round_double(a: f64) -> i64 {
+    const SIGNIFICAND_WIDTH: i64 = 53;
+    const EXP_BIAS: i64 = 1023;
+    const EXP_BIT_MASK: i64 = 0x7FF0_0000_0000_0000;
+    const SIGNIF_BIT_MASK: i64 = 0x000F_FFFF_FFFF_FFFF;
+    let bits = a.to_bits().cast_signed();
+    let biased_exp = (bits & EXP_BIT_MASK) >> (SIGNIFICAND_WIDTH - 1);
+    let shift = (SIGNIFICAND_WIDTH - 2 + EXP_BIAS) - biased_exp;
+    if (shift & -64) == 0 {
+        let mut r = (bits & SIGNIF_BIT_MASK) | (SIGNIF_BIT_MASK + 1);
+        if bits < 0 {
+            r = -r;
+        }
+        ((r >> shift) + 1) >> 1
+    } else {
+        a as i64
+    }
+}
+
+/// `Math.round(float)` — the 32-bit twin of [`java_round_double`], returning
+/// an `int`.
+fn java_round_float(a: f32) -> i32 {
+    const SIGNIFICAND_WIDTH: i32 = 24;
+    const EXP_BIAS: i32 = 127;
+    const EXP_BIT_MASK: i32 = 0x7F80_0000;
+    const SIGNIF_BIT_MASK: i32 = 0x007F_FFFF;
+    let bits = a.to_bits().cast_signed();
+    let biased_exp = (bits & EXP_BIT_MASK) >> (SIGNIFICAND_WIDTH - 1);
+    let shift = (SIGNIFICAND_WIDTH - 2 + EXP_BIAS) - biased_exp;
+    if (shift & -32) == 0 {
+        let mut r = (bits & SIGNIF_BIT_MASK) | (SIGNIF_BIT_MASK + 1);
+        if bits < 0 {
+            r = -r;
+        }
+        ((r >> shift) + 1) >> 1
+    } else {
+        a as i32
+    }
+}
+
 #[allow(clippy::too_many_lines)] // one arm per documented method
 #[allow(clippy::float_cmp, clippy::many_single_char_names)]
 fn math_static(
@@ -3496,11 +3541,8 @@ fn math_static(
         ("floor", [JValue::Double(v)]) => d(v.floor()),
         ("ceil", [JValue::Double(v)]) => d(v.ceil()),
         ("rint", [JValue::Double(v)]) => d(v.round_ties_even()),
-        ("round", [JValue::Double(v)]) => {
-            // Java rounds half-up toward positive infinity.
-            #[allow(clippy::cast_possible_truncation)]
-            i((v + 0.5).floor() as i32)
-        }
+        ("round", [JValue::Double(v)]) => Ok(Some(JValue::Long(java_round_double(*v)))),
+        ("round", [JValue::Float(v)]) => i(java_round_float(*v)),
         ("sin", [JValue::Double(v)]) => d(v.sin()),
         ("cos", [JValue::Double(v)]) => d(v.cos()),
         ("tan", [JValue::Double(v)]) => d(v.tan()),

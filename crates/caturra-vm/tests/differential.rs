@@ -3502,6 +3502,53 @@ public class DiffExact {
 "#
 );
 
+// `Math.round`: returns `long` for a double (`int` for a float), rounds
+// half-up toward +infinity on the BIT pattern so `0.49999999999999994`
+// rounds down (adding 0.5 in double would overflow it to 1.0), and saturates
+// huge magnitudes / NaN like a `(long)`/`(int)` cast — caturra used to return
+// int (clamping large values to i32) and double-rounded the tie via
+// `(v + 0.5).floor()`.
+differential_test!(
+    diff_math_round,
+    "DiffRound",
+    r#"
+public class DiffRound {
+    public static void main(String[] args) {
+        System.out.println(Math.round(2500000000.0));       // > i32, needs long
+        System.out.println(Math.round(0.49999999999999994)); // 0, not 1
+        System.out.println(Math.round(0.5));
+        System.out.println(Math.round(-0.5));
+        System.out.println(Math.round(2.5));
+        System.out.println(Math.round(-2.5));
+        System.out.println(Math.round(Double.NaN));
+        System.out.println(Math.round(1e20));               // saturates to Long.MAX
+        System.out.println(Math.round(-1e20));              // saturates to Long.MIN
+        System.out.println(Math.round(2.5f));               // float overload -> int
+        System.out.println(Math.round(0.5f));
+        System.out.println(Math.round(1.6f));
+        long r = Math.round(4.5);
+        System.out.println(r + " " + (int) Math.round(3.7));
+    }
+}
+"#
+);
+
+// The double form returns `long`, so assigning it to an `int` without a cast
+// is a compile error — exactly as javac refuses it. Surfacing round(double)
+// as int had been LOOSER than javac.
+differential_reject!(
+    reject_math_round_double_into_int,
+    "RejectRoundInt",
+    r"
+public class RejectRoundInt {
+    public static void main(String[] args) {
+        int r = Math.round(2.5);
+        System.out.println(r);
+    }
+}
+"
+);
+
 // `Field.getX`/`setX` widen the field's type but never narrow it, and refuse
 // anything else with IllegalArgumentException. caturra used to return the raw
 // value for every typed getter, so `getLong` on an int field produced an Int
