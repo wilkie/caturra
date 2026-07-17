@@ -3938,6 +3938,13 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/CharSequence;)Z",
     },
+    // `contentEquals(CharSequence)` also takes a StringBuilder.
+    BuiltinMethod {
+        name: "contentEquals",
+        params: &[BParam::Builder],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/CharSequence;)Z",
+    },
     BuiltinMethod {
         name: "hashCode",
         params: &[],
@@ -5448,7 +5455,9 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("IEEEremainder", &[D, D], BRet::Double, "(DD)D"),
     bm("getExponent", &[D], BRet::Int, "(D)I"),
     bm("floorDiv", &[I, I], BRet::Int, "(II)I"),
+    bm("floorDiv", &[L, L], BRet::Long, "(JJ)J"),
     bm("floorMod", &[I, I], BRet::Int, "(II)I"),
+    bm("floorMod", &[L, L], BRet::Long, "(JJ)J"),
     bm("addExact", &[I, I], BRet::Int, "(II)I"),
     bm("subtractExact", &[I, I], BRet::Int, "(II)I"),
     bm("multiplyExact", &[I, I], BRet::Int, "(II)I"),
@@ -5618,6 +5627,9 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     bm("compare", &[C, C], BRet::Int, "(CC)I"),
     bm("hashCode", &[C], BRet::Int, "(C)I"),
     bm("toString", &[C], BRet::Str, "(C)Ljava/lang/String;"),
+    // `Character.toString(int codePoint)` — the code point's string (one char
+    // in the BMP, a surrogate pair above it).
+    bm("toString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     bm("valueOf", &[C], BRet::Char, "(C)C"),
     bm("isHighSurrogate", &[C], BRet::Boolean, "(C)Z"),
     bm("isLowSurrogate", &[C], BRet::Boolean, "(C)Z"),

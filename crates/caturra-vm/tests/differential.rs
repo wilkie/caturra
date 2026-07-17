@@ -10512,3 +10512,24 @@ public class DiffIntern {
 }
 "#
 );
+
+// Valid Java 11 APIs the audit found caturra rejecting at compile time:
+// `Character.toString(int)` (a code point, incl. one above the BMP),
+// `String.contentEquals(StringBuilder)` (a CharSequence argument), and the
+// `long` overloads of `Math.floorDiv`/`floorMod`.
+differential_test!(
+    diff_missing_apis_char_content_floor,
+    "DiffMissingApis",
+    r#"
+public class DiffMissingApis {
+    public static void main(String[] args) {
+        System.out.println(Character.toString(65));
+        System.out.println(Character.toString(0x1F600));
+        System.out.println("abc".contentEquals(new StringBuilder("abc")));
+        System.out.println("abc".contentEquals(new StringBuilder("abd")));
+        System.out.println(Math.floorDiv(7L, 2L) + " " + Math.floorMod(-7L, 3L));
+        System.out.println(Math.floorDiv(-7L, 3L) + " " + Math.floorMod(7L, -3L));
+    }
+}
+"#
+);

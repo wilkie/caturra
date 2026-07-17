@@ -582,7 +582,10 @@ fn string_method(
     let arg_units = |value: &JValue| -> Result<Vec<u16>, VmError> {
         match value {
             JValue::Ref(Some(reference)) => match heap.get(*reference) {
-                Some(HeapObject::JavaString(other)) => Ok(other.clone()),
+                // A StringBuilder is a CharSequence too: `str.contentEquals(sb)`.
+                Some(HeapObject::JavaString(other) | HeapObject::StringBuilder(other)) => {
+                    Ok(other.clone())
+                }
                 _ => Err(throw("java.lang.ClassCastException: not a String")),
             },
             JValue::Ref(None) => Err(throw("java.lang.NullPointerException")),
@@ -3445,6 +3448,19 @@ fn java_floor_div(a: i32, b: i32) -> Result<i32, VmError> {
     }
 }
 
+/// The `long` form of [`java_floor_div`].
+fn java_floor_div_long(a: i64, b: i64) -> Result<i64, VmError> {
+    if b == 0 {
+        return Err(throw("java.lang.ArithmeticException: / by zero"));
+    }
+    let quotient = a.wrapping_div(b);
+    if (a ^ b) < 0 && quotient.wrapping_mul(b) != a {
+        Ok(quotient - 1)
+    } else {
+        Ok(quotient)
+    }
+}
+
 fn overflow() -> VmError {
     throw("java.lang.ArithmeticException: integer overflow")
 }
@@ -3627,6 +3643,15 @@ fn math_static(
         ("floorMod", [JValue::Int(a), JValue::Int(b)]) => {
             let quotient = java_floor_div(*a, *b)?;
             i(a.wrapping_sub(quotient.wrapping_mul(*b)))
+        }
+        ("floorDiv", [JValue::Long(a), JValue::Long(b)]) => {
+            java_floor_div_long(*a, *b).map(|q| Some(JValue::Long(q)))
+        }
+        ("floorMod", [JValue::Long(a), JValue::Long(b)]) => {
+            let quotient = java_floor_div_long(*a, *b)?;
+            Ok(Some(JValue::Long(
+                a.wrapping_sub(quotient.wrapping_mul(*b)),
+            )))
         }
         ("addExact", [JValue::Int(a), JValue::Int(b)]) => {
             a.checked_add(*b).map_or_else(|| Err(overflow()), i)
