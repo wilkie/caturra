@@ -3744,6 +3744,8 @@ enum BRet {
     BoxedElem,
     /// `java.lang.Class` (`getClass`, `getSuperclass`).
     Class,
+    /// `java.lang.Throwable` (`Throwable.getCause`).
+    Throwable,
     /// `Field[]` (`Class.getDeclaredFields`).
     FieldArray,
     /// `Class[]` (`Method.getParameterTypes`).
@@ -5370,6 +5372,13 @@ const EXCEPTION_METHODS: &[BuiltinMethod] = &[
         params: &[],
         ret: BRet::Str,
         descriptor: "()Ljava/lang/String;",
+    },
+    // `getCause()` — the chained cause, or null.
+    BuiltinMethod {
+        name: "getCause",
+        params: &[],
+        ret: BRet::Throwable,
+        descriptor: "()Ljava/lang/Throwable;",
     },
 ];
 
@@ -7268,6 +7277,8 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             _ => JType::Error,
         }),
         BRet::Class => Some(JType::Class),
+        // `Throwable` (`getCause`) — exception id 0.
+        BRet::Throwable => Some(JType::Exception(0)),
         BRet::FieldArray => Some(JType::Array {
             elem: ElemType::Field,
             dims: 1,
@@ -9032,6 +9043,7 @@ impl BodyGen<'_> {
 
     /// Emit `super(...)`/`this(...)`-style constructor invocation with
     /// `this` (slot 0) as the receiver.
+    #[allow(clippy::too_many_lines)] // one super-call dispatch (exception ctors)
     fn emit_constructor_call_on_this(&mut self, class_name: &str, args: &[Expr], span: SourceSpan) {
         self.code.push_op(op::ALOAD_0, 1);
         if class_name == "java/lang/Object" {
@@ -9054,11 +9066,24 @@ impl BodyGen<'_> {
             })
             && !self.table.has_class(class_name)
         {
+            let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
             match args {
                 [] => {
                     let init = intern_method_ref(self.pool, internal, "<init>", "()V");
                     self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
                     self.code.drop_stack(1);
+                }
+                // `super(cause)` — a single throwable argument.
+                [only] if self.is_throwable_arg(arg_types[0]) => {
+                    self.expr(only);
+                    let init = intern_method_ref(
+                        self.pool,
+                        internal,
+                        "<init>",
+                        "(Ljava/lang/Throwable;)V",
+                    );
+                    self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+                    self.code.drop_stack(2);
                 }
                 [message] => {
                     let message_ty = self.expr(message);
@@ -9076,11 +9101,30 @@ impl BodyGen<'_> {
                     self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
                     self.code.drop_stack(2);
                 }
-                _ => {
-                    self.error(
-                        span,
-                        "exception constructors take at most one String message",
+                // `super(message, cause)`.
+                [message, cause] if self.is_throwable_arg(arg_types[1]) => {
+                    let message_ty = self.expr(message);
+                    if message_ty != JType::Str && message_ty != JType::Error {
+                        self.error(
+                            message.span(),
+                            format!(
+                                "incompatible types: {} cannot be converted to String",
+                                message_ty.describe(self.table)
+                            ),
+                        );
+                    }
+                    self.expr(cause);
+                    let init = intern_method_ref(
+                        self.pool,
+                        internal,
+                        "<init>",
+                        "(Ljava/lang/String;Ljava/lang/Throwable;)V",
                     );
+                    self.code.push_op_u16(op::INVOKESPECIAL, init, 0);
+                    self.code.drop_stack(3);
+                }
+                _ => {
+                    self.error(span, "exception constructors take a message and/or a cause");
                 }
             }
             return;
@@ -9762,9 +9806,22 @@ impl BodyGen<'_> {
         JType::Object(class_id)
     }
 
-    /// `new SomeException()` / `new SomeException("message")`.
+    /// Whether an argument's type is assignable to `Throwable` (a library
+    /// throwable, or a user exception class) — for the chaining constructors.
+    fn is_throwable_arg(&self, ty: JType) -> bool {
+        match ty {
+            JType::Exception(_) | JType::Null => true,
+            JType::Object(id) => self.table.library_throwable_ancestor(id).is_some(),
+            _ => false,
+        }
+    }
+
+    /// `new SomeException()` / `("message")` / `("message", cause)` / `(cause)`.
     fn new_exception(&mut self, id: u8, args: &[Expr], span: SourceSpan) -> JType {
         let internal = exception_internal(id);
+        // Decide the constructor shape from the argument types before emitting
+        // (`type_of` peeks without side effects).
+        let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         let class_index = intern_class(self.pool, internal);
         self.code.push_op_u16(op::NEW, class_index, 1);
         self.code.push_op(op::DUP, 1);
@@ -9773,6 +9830,14 @@ impl BodyGen<'_> {
                 let init_ref = intern_method_ref(self.pool, internal, "<init>", "()V");
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(1);
+            }
+            // `new X(cause)` — a single throwable argument (not a String).
+            [only] if self.is_throwable_arg(arg_types[0]) => {
+                self.expr(only);
+                let init_ref =
+                    intern_method_ref(self.pool, internal, "<init>", "(Ljava/lang/Throwable;)V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
             }
             [message] => {
                 let message_ty = self.expr(message);
@@ -9790,11 +9855,30 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2);
             }
-            _ => {
-                self.error(
-                    span,
-                    "exception constructors take at most one String message",
+            // `new X(message, cause)`.
+            [message, cause] if self.is_throwable_arg(arg_types[1]) => {
+                let message_ty = self.expr(message);
+                if message_ty != JType::Str && message_ty != JType::Error {
+                    self.error(
+                        message.span(),
+                        format!(
+                            "incompatible types: {} cannot be converted to String",
+                            message_ty.describe(self.table)
+                        ),
+                    );
+                }
+                self.expr(cause);
+                let init_ref = intern_method_ref(
+                    self.pool,
+                    internal,
+                    "<init>",
+                    "(Ljava/lang/String;Ljava/lang/Throwable;)V",
                 );
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(3);
+            }
+            _ => {
+                self.error(span, "exception constructors take a message and/or a cause");
                 return JType::Error;
             }
         }

@@ -344,6 +344,9 @@ pub enum HeapObject {
     Exception {
         class_name: String,
         message: Option<String>,
+        /// The chained cause (`new X(msg, cause)` / `initCause`), for
+        /// `getCause()`. `None` when the exception has no cause.
+        cause: Option<HeapRef>,
     },
     /// A `java.lang.Class` handle from `obj.getClass()` — the (flat,
     /// simple) class name is enough for the structural reflection the

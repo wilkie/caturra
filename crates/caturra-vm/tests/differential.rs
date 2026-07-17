@@ -10699,6 +10699,35 @@ public class DiffMissingApis {
 "#
 );
 
+// Exception chaining: `new X(message, cause)` / `new X(cause)` store the
+// cause, which survives being thrown and caught (a re-materialized copy used
+// to drop it), and `getCause()` returns it — null when there is none. The
+// one-arg form derives its message from the cause's toString, as Java's
+// `Throwable(Throwable)` does.
+differential_test!(
+    diff_exception_cause_chaining,
+    "DiffExcCause",
+    r#"
+public class DiffExcCause {
+    public static void main(String[] args) {
+        try {
+            try { throw new IllegalStateException("inner"); }
+            catch (IllegalStateException e) { throw new RuntimeException("outer", e); }
+        } catch (RuntimeException e) {
+            System.out.println(e.getMessage());
+            Throwable c = e.getCause();
+            System.out.println(c.getClass().getSimpleName() + ": " + c.getMessage());
+            System.out.println(new RuntimeException("solo").getCause() == null);
+            IllegalStateException ise = new IllegalStateException("boom");
+            RuntimeException wrap = new RuntimeException(ise);
+            System.out.println(wrap.getMessage() + " / " + wrap.getCause().getMessage());
+            System.out.println(new RuntimeException(ise).getMessage());
+        }
+    }
+}
+"#
+);
+
 // Math corner cases: `Math.pow(x, ±inf)` with |x| == 1 is NaN (Java deviates
 // from IEEE, which gives 1.0); and the `nextUp`/`nextDown` FLOAT overloads
 // stay float, so `nextUp(Float.MAX_VALUE)` overflows to Infinity instead of

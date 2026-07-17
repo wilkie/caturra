@@ -520,6 +520,7 @@ impl<'run> Interpreter<'run> {
                 Some(crate::value::HeapObject::Exception {
                     class_name,
                     message,
+                    ..
                 }) => match message {
                     Some(message) => format!("{class_name}: {message}"),
                     None => class_name.clone(),
@@ -1672,6 +1673,7 @@ impl<'run> Interpreter<'run> {
                                 Some(crate::value::HeapObject::Exception {
                                     class_name,
                                     message,
+                                    ..
                                 }) => {
                                     return Err(VmError::UncaughtException(match message {
                                         Some(message) => format!("{class_name}: {message}"),
@@ -2187,13 +2189,24 @@ impl<'run> Interpreter<'run> {
             return Ok(false);
         }
 
-        // A user exception keeps its thrown object (identity, fields);
-        // library throws materialize one at the catch.
-        let thrown_object = if is_library {
-            None
-        } else {
-            self.last_thrown.take()
-        };
+        // A caught exception reuses the ORIGINAL thrown object when there is
+        // one — a user exception keeps its identity/fields, and a library
+        // exception thrown via `athrow` keeps its chained cause (which a
+        // re-materialized copy would drop). A VM-internal library throw (an
+        // AIOOBE, etc.) has no such object — `last_thrown` is `None` after the
+        // previous catch consumed it, or names a different class — so it
+        // re-materializes. The class filter guards against a stale reference.
+        let candidate = self.last_thrown.take();
+        let thrown_object = candidate.filter(|reference| match self.heap.get(*reference) {
+            Some(crate::value::HeapObject::Exception { class_name, .. }) => {
+                class_name.as_str() == dotted
+            }
+            Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                let class_name = class_name.clone();
+                self.instance_is_throwable(&class_name)
+            }
+            _ => false,
+        });
 
         // The active frame first, at the faulting instruction.
         let mut search_pc = addr;
@@ -2203,6 +2216,7 @@ impl<'run> Interpreter<'run> {
                     self.heap.alloc(crate::value::HeapObject::Exception {
                         class_name: dotted.to_owned(),
                         message: message.clone(),
+                        cause: None,
                     })
                 });
                 frame.stack.clear();
@@ -2829,11 +2843,14 @@ impl<'run> Interpreter<'run> {
 
         let mut layout = crate::value::ClassLayout::default();
         let mut defaults: Vec<JValue> = Vec::new();
-        // A user class extending a library throwable carries the message its
-        // `super(...)` passed up, in a slot no source field can name. Reserved
-        // first so it stays at the same slot in every subclass.
+        // A user class extending a library throwable carries the message and
+        // the chained cause its `super(...)` passed up, in slots no source
+        // field can name. Reserved first so they stay at the same slots in
+        // every subclass.
         if throwable {
             layout.push(Rc::from("__message"));
+            defaults.push(JValue::NULL);
+            layout.push(Rc::from("__cause"));
             defaults.push(JValue::NULL);
         }
         for class in chain.into_iter().rev() {
@@ -6644,6 +6661,19 @@ impl<'run> Interpreter<'run> {
                 };
                 let reference = self.heap.alloc_string(&text);
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
+            }
+            // A throwable-descended class also inherits `getCause()` (its
+            // `super(msg, cause)` stashed the cause in `__cause`).
+            if self.instance_is_throwable(instance_class)
+                && method_name == "getCause"
+                && descriptor == "()Ljava/lang/Throwable;"
+            {
+                let cause = self
+                    .heap
+                    .get(receiver)
+                    .and_then(|object| object.field("__cause"))
+                    .unwrap_or(JValue::NULL);
+                return Ok(UserDispatch::Value(Some(cause)));
             }
             // Object.toString() default: "ClassName@<hex>".
             if method_name == "toString" && descriptor == "()Ljava/lang/String;" {

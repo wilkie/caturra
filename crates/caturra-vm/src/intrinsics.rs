@@ -105,6 +105,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
                 return Some(HeapObject::Exception {
                     class_name: caturra_classfile::exceptions::dotted(class),
                     message: None,
+                    cause: None,
                 });
             }
             None
@@ -301,6 +302,26 @@ pub fn invoke_special(
                     "{class}.{method}{descriptor}"
                 ))),
             }
+        }
+        // Exception chaining. `new X(message, cause)` stores both; `new
+        // X(cause)` derives the message from the cause's toString, as Java's
+        // `Throwable(Throwable)` does. `super(...)` from a user exception class
+        // into its library parent lands here too (a user Instance receiver).
+        ("<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V")
+            if caturra_classfile::exceptions::is_exception_class(class) =>
+        {
+            let text = string_arg(heap, &args[0])?;
+            let cause = ref_arg(&args[1]);
+            set_exception_cause(heap, receiver, class, Some(text), cause);
+            Ok(())
+        }
+        ("<init>", "(Ljava/lang/Throwable;)V")
+            if caturra_classfile::exceptions::is_exception_class(class) =>
+        {
+            let cause = ref_arg(&args[0]);
+            let message = cause.map(|c| throwable_to_string(heap, c));
+            set_exception_cause(heap, receiver, class, message, cause);
+            Ok(())
         }
         ("<init>", "(Ljava/io/File;)V") => {
             let target = file_arg(heap, &args[0])?;
@@ -517,6 +538,7 @@ pub fn invoke_virtual(
             HeapObject::Exception {
                 class_name,
                 message,
+                ..
             },
             "printStackTrace",
         ) => {
@@ -534,6 +556,7 @@ pub fn invoke_virtual(
             HeapObject::Exception {
                 class_name,
                 message,
+                ..
             },
             "getMessage" | "toString" | "getLocalizedMessage",
         ) => {
@@ -551,6 +574,25 @@ pub fn invoke_virtual(
             let reference = heap.alloc_string(&rendered);
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // `getCause()` — the chained cause, or null.
+        (HeapObject::Exception { cause, .. }, "getCause") => Ok(Some(JValue::Ref(*cause))),
+        // `initCause(Throwable)` sets the cause and returns `this`.
+        (HeapObject::Exception { .. }, "initCause") => {
+            let cause = args.first().and_then(ref_arg);
+            if let Some(HeapObject::Exception { cause: slot, .. }) = heap.get_mut(receiver) {
+                *slot = cause;
+            }
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        // `getSuppressed()` — no suppressed exceptions are modelled, so an
+        // empty `Throwable[]`.
+        (HeapObject::Exception { .. }, "getSuppressed") => {
+            let reference = heap.alloc(HeapObject::RefArray(
+                String::from("[Ljava/lang/Throwable;"),
+                Vec::new(),
+            ));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         (HeapObject::Writer { .. }, _) => {
             writer_method(heap, vfs, receiver, method, descriptor, args)
         }
@@ -562,6 +604,92 @@ pub fn invoke_virtual(
 
 fn throw(message: impl Into<String>) -> VmError {
     VmError::UncaughtException(message.into())
+}
+
+/// The heap reference an argument holds (`None` for `null` or a non-reference).
+fn ref_arg(value: &JValue) -> Option<HeapRef> {
+    match value {
+        JValue::Ref(r) => *r,
+        _ => None,
+    }
+}
+
+/// A throwable's default `toString`: its binary class name, plus `": message"`
+/// when it has one. Used to derive `new X(cause)`'s message, as
+/// `Throwable(Throwable)` does. (A user override of `toString` is not consulted
+/// — this is only the constructor's message derivation.)
+fn throwable_to_string(heap: &Heap, reference: HeapRef) -> String {
+    match heap.get(reference) {
+        Some(HeapObject::Exception {
+            class_name,
+            message,
+            ..
+        }) => match message {
+            Some(message) => format!("{class_name}: {message}"),
+            None => class_name.clone(),
+        },
+        Some(HeapObject::Instance { class_name, .. }) => {
+            let message = heap
+                .get(reference)
+                .and_then(|o| o.field("__message"))
+                .and_then(|v| match v {
+                    JValue::Ref(Some(r)) => heap.string_text(r),
+                    _ => None,
+                });
+            let dotted = class_name.replace('/', ".");
+            match message {
+                Some(message) => format!("{dotted}: {message}"),
+                None => dotted,
+            }
+        }
+        _ => String::from("java.lang.Throwable"),
+    }
+}
+
+/// Store an exception's message and chained cause: a library `Exception`
+/// object sets its own fields; a user exception `Instance` (reached through
+/// `super(message, cause)`) stashes them in the `__message`/`__cause` slots its
+/// layout reserves.
+fn set_exception_cause(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    class: &str,
+    message: Option<String>,
+    cause: Option<HeapRef>,
+) {
+    match heap.get(receiver) {
+        Some(HeapObject::Exception { .. }) => {
+            if let Some(HeapObject::Exception {
+                message: slot,
+                cause: cause_slot,
+                ..
+            }) = heap.get_mut(receiver)
+            {
+                *slot = message;
+                *cause_slot = cause;
+            }
+        }
+        Some(HeapObject::Instance { .. })
+            if caturra_classfile::exceptions::is_exception_class(class) =>
+        {
+            if let Some(text) = message {
+                let reference = heap.alloc_string(&text);
+                if let Some(field) = heap
+                    .get_mut(receiver)
+                    .and_then(|object| object.field_mut("__message"))
+                {
+                    *field = JValue::Ref(Some(reference));
+                }
+            }
+            if let Some(field) = heap
+                .get_mut(receiver)
+                .and_then(|object| object.field_mut("__cause"))
+            {
+                *field = JValue::Ref(cause);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// `java.lang.String` instance methods over UTF-16 code units.
