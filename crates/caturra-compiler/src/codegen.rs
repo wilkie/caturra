@@ -11739,8 +11739,8 @@ impl BodyGen<'_> {
         let sig = match table.resolve(&class_name, method, &arg_types) {
             Resolution::Found(sig) => sig.clone(),
             Resolution::UnknownName => {
-                // Throwable-descended classes inherit getMessage /
-                // toString from their library parent.
+                // Throwable-descended classes inherit getMessage / toString /
+                // getCause from their library parent.
                 if self.table.is_throwable(class_id)
                     && (method == "getMessage" || method == "toString")
                     && args.is_empty()
@@ -11750,6 +11750,17 @@ impl BodyGen<'_> {
                     self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
                     self.code.drop_stack(1);
                     return Some(Some(JType::Str));
+                }
+                if self.table.is_throwable(class_id) && method == "getCause" && args.is_empty() {
+                    let method_ref = intern_method_ref(
+                        self.pool,
+                        &class_name,
+                        "getCause",
+                        "()Ljava/lang/Throwable;",
+                    );
+                    self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+                    self.code.drop_stack(1);
+                    return Some(Some(JType::Exception(0)));
                 }
                 self.error(
                     span,
@@ -16488,16 +16499,20 @@ impl BodyGen<'_> {
             // Two erasures that need no code when `widens` (which gated the
             // call) allows them: a LinkedList/TreeSet/TreeMap widening to a
             // wider face, a List/Set/Stack widening to `Collection`, of the
-            // same element; and a collection passed to a wildcard-typed
-            // parameter (`List<Integer>` -> `List<? extends Number>`), which
-            // erase identically.
+            // same element; a more specific throwable widening to a wider one
+            // or to `Object` (`Exception e = new IllegalStateException(...)`,
+            // and passing a specific exception to a `Throwable` parameter); and
+            // a collection passed to a wildcard-typed parameter
+            // (`List<Integer>` -> `List<? extends Number>`), which erase
+            // identically. The reference is unchanged in every case.
             (
                 JType::LinkedList { .. }
                 | JType::TreeSet(_)
                 | JType::TreeMap { .. }
                 | JType::List(_)
                 | JType::Set(_)
-                | JType::Stack(_),
+                | JType::Stack(_)
+                | JType::Exception(_),
                 _,
             )
             | (

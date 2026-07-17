@@ -10723,6 +10723,26 @@ public class DiffExcCause {
             System.out.println(wrap.getMessage() + " / " + wrap.getCause().getMessage());
             System.out.println(new RuntimeException(ise).getMessage());
         }
+
+        // A specific exception widens to a wider throwable variable/parameter,
+        // which the chaining needs: `Exception e = new IllegalStateException`,
+        // and passing a specific exception to a `Throwable` parameter.
+        Exception widened = new IllegalStateException("w");
+        System.out.println(widened.getMessage());
+
+        // A USER exception chains through `super(message, cause)`, and its
+        // inherited getCause reads the stashed cause.
+        try {
+            try { throw new NumberFormatException("bad"); }
+            catch (NumberFormatException e) { throw new AppException("wrapped", e); }
+        } catch (AppException e) {
+            Throwable c = e.getCause();
+            System.out.println(e.getMessage() + " <- " + c.getClass().getSimpleName() + ": " + c.getMessage());
+        }
+    }
+
+    static class AppException extends RuntimeException {
+        AppException(String m, Throwable c) { super(m, c); }
     }
 }
 "#
