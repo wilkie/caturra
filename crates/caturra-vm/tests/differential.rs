@@ -10547,6 +10547,46 @@ public class DiffIntern {
 "#
 );
 
+// A field initializer that reads a LATER field by simple name is an illegal
+// forward reference (JLS §8.3.3) — javac rejects it, caturra used to accept
+// it and read 0.
+differential_reject!(
+    reject_illegal_forward_reference,
+    "RejectForwardRef",
+    r"
+public class RejectForwardRef {
+    static int a = b;
+    static int b = 5;
+    public static void main(String[] args) {
+        System.out.println(a + b);
+    }
+}
+"
+);
+
+// The forward-reference check does not over-reach: a BACKWARD reference, a
+// method call, and a QUALIFIED forward reference (`Main.d`, which reads the
+// not-yet-initialized default) are all legal and must still compile.
+differential_test!(
+    diff_field_init_references,
+    "FwdOk",
+    r#"
+public class FwdOk {
+    static int a = 5;
+    static int b = a + 1;
+    static int c = FwdOk.d;
+    static int d = 10;
+    static int e = get();
+    static int get() { return 7; }
+    int x = 3;
+    int y = x * 2;
+    public static void main(String[] args) {
+        System.out.println(a + " " + b + " " + c + " " + d + " " + e + " " + new FwdOk().y);
+    }
+}
+"#
+);
+
 // Array covariance (JLS §10.5): storing a value that does not fit the array's
 // RUNTIME element type throws ArrayStoreException, naming the value's class.
 // `Object[] a = new String[1]; a[0] = 1;` compiles but is fatal at run time;

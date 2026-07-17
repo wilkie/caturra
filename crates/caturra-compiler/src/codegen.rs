@@ -226,6 +226,7 @@ fn emit_clinit(
         pending_label: None,
         finally_stack: Vec::new(),
         local_var_debug: Vec::new(),
+        forward_ref: None,
     };
     body.emit_ordered_initializers(decl, true);
     body.code.push_op(op::RETURN, 0);
@@ -3139,6 +3140,7 @@ fn emit_method(
         pending_label: None,
         finally_stack: Vec::new(),
         local_var_debug: Vec::new(),
+        forward_ref: None,
     };
 
     if !decl.is_static {
@@ -7336,6 +7338,11 @@ struct BodyGen<'a> {
     /// attributes. Slots are never reused, so live ranges safely
     /// extend to the end of the method.
     local_var_debug: Vec<(String, String, Option<String>, u16, u16)>,
+    /// While compiling a field initializer: that field's declaration order,
+    /// plus the declaration order of every field of the same static-ness in
+    /// this class — for the JLS §8.3.3 forward-reference check. A simple-name
+    /// READ of a field declared at or after the current one is illegal.
+    forward_ref: Option<(usize, std::rc::Rc<std::collections::HashMap<String, usize>>)>,
 }
 
 impl BodyGen<'_> {
@@ -9060,11 +9067,24 @@ impl BodyGen<'_> {
             }
         }
         actions.sort_by_key(|(order, _)| *order);
+        // Every field of this static-ness, by declaration order, for the
+        // forward-reference check (a simple-name read of a field declared at
+        // or after the one being initialized is illegal — JLS §8.3.3).
+        let orders: std::rc::Rc<std::collections::HashMap<String, usize>> = std::rc::Rc::new(
+            class_decl
+                .fields
+                .iter()
+                .filter(|f| f.is_static == is_static)
+                .map(|f| (f.name.clone(), f.order))
+                .collect(),
+        );
         for (_, action) in actions {
             match action {
                 Action::Field(field) => {
                     if let Some(init) = &field.init {
+                        self.forward_ref = Some((field.order, std::rc::Rc::clone(&orders)));
                         self.emit_field_initializer(field, init);
+                        self.forward_ref = None;
                     }
                 }
                 Action::Block(block) => {
@@ -14794,6 +14814,17 @@ impl BodyGen<'_> {
         }
         let name = &path[0];
         if self.lookup(name).is_none() {
+            // JLS §8.3.3: reading a field by SIMPLE NAME from a field
+            // initializer, when that field is declared at or after the one
+            // being initialized, is an illegal forward reference. (A qualified
+            // `Class.field` or `this.field` read is exempt and never reaches
+            // here; an assignment LHS goes through a different path.)
+            if let Some((init_order, orders)) = &self.forward_ref
+                && orders.get(name).is_some_and(|order| order >= init_order)
+            {
+                self.error(span, "illegal forward reference");
+                return JType::Error;
+            }
             // Implicit field of the current class.
             if let Some((owner, field)) = self.table.field(self.current_class, name) {
                 let field = field.clone();
