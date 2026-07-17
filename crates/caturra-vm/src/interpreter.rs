@@ -865,9 +865,15 @@ impl<'run> Interpreter<'run> {
                                     pc = *next as usize;
                                     continue;
                                 }
-                                Frameless::Suspended(callee) => {
+                                Frameless::Suspended(mut chain) => {
                                     frame.pc = *next as usize;
-                                    self.frames.push(std::mem::replace(&mut frame, callee));
+                                    let innermost =
+                                        chain.pop().expect("a suspension carries a frame");
+                                    self.frames.push(std::mem::replace(&mut frame, innermost));
+                                    // Mini ancestors (a nested constructor's
+                                    // callers) sit between the real caller and
+                                    // the innermost callee.
+                                    self.frames.extend(chain);
                                     continue 'frames;
                                 }
                                 Frameless::Declined => {}
@@ -907,9 +913,12 @@ impl<'run> Interpreter<'run> {
                                     pc = *next as usize;
                                     continue;
                                 }
-                                Frameless::Suspended(callee) => {
+                                Frameless::Suspended(mut chain) => {
                                     frame.pc = *next as usize;
-                                    self.frames.push(std::mem::replace(&mut frame, callee));
+                                    let innermost =
+                                        chain.pop().expect("a suspension carries a frame");
+                                    self.frames.push(std::mem::replace(&mut frame, innermost));
+                                    self.frames.extend(chain);
                                     continue 'frames;
                                 }
                                 Frameless::Declined => {}
@@ -7041,7 +7050,7 @@ impl<'run> Interpreter<'run> {
             next_slot += usize::from(*width);
         }
         frame.stack.truncate(base);
-        self.frameless_run(target, method_name, code, locals, frame)
+        self.frameless_run(target, method_name, &code, locals, frame)
     }
 
     /// The same, for a warm `invokespecial` — a constructor, most of all. A
@@ -7095,25 +7104,51 @@ impl<'run> Interpreter<'run> {
             next_slot += usize::from(*width);
         }
         frame.stack.truncate(base);
-        self.frameless_run(target, method_name, code, locals, frame)
+        self.frameless_run(target, method_name, &code, locals, frame)
+    }
+
+    /// Adapt a [`Self::mini_run`] outcome to the caller's real frame: a
+    /// completed value lands on its operand stack, a suspension passes the
+    /// frame chain through.
+    fn frameless_run(
+        &mut self,
+        target: &'run ClassFile,
+        method_name: &'run str,
+        code: &Rc<MethodCode>,
+        locals: [JValue; FRAMELESS_SLOTS],
+        frame: &mut Frame<'run>,
+    ) -> Frameless<'run> {
+        match self.mini_run(target, method_name, code, locals, 0) {
+            MiniRun::Done(value) => {
+                if let Some(value) = value {
+                    frame.stack.push(value);
+                }
+                Frameless::Done
+            }
+            MiniRun::Suspended(frames) => Frameless::Suspended(frames),
+        }
     }
 
     /// The mini-interpreter itself: the callee's pre-decoded instructions,
     /// against two stack-local buffers. Shared by both frameless call paths —
     /// once the locals are filled and the caller's stack consumed, a virtual
-    /// call and a special call are the same thing.
+    /// call and a special call are the same thing. An `invokespecial` to a
+    /// user constructor whose own body is frameless RECURSES here (`depth`
+    /// caps the nesting), so `return new Color(r, g, b)` runs without a frame
+    /// end to end; a non-frameless callee suspends at the call instruction and
+    /// the general path re-executes it.
     ///
     /// Like `run_loop`, one long match by design: each arm mirrors its fast-arm
     /// twin there, and splitting them apart would only hide the pairing.
     #[allow(clippy::too_many_lines)]
-    fn frameless_run(
+    fn mini_run(
         &mut self,
         target: &'run ClassFile,
         method_name: &'run str,
-        code: Rc<MethodCode>,
+        code: &Rc<MethodCode>,
         mut locals: [JValue; FRAMELESS_SLOTS],
-        frame: &mut Frame<'run>,
-    ) -> Frameless<'run> {
+        depth: usize,
+    ) -> MiniRun<'run> {
         let mut stack = [JValue::Int(0); FRAMELESS_SLOTS];
         let mut sp = 0usize;
         let mut pc = 0usize;
@@ -7358,9 +7393,12 @@ impl<'run> Interpreter<'run> {
                         continue 'mini;
                     }
                 }
-                // Eligibility only admits the `Object.<init>` flavour, which
-                // does nothing — so this is a pop, not a call, and a
-                // constructor stays frameless all the way through.
+                // Eligibility admits the `Object.<init>` flavour — which does
+                // nothing, so it is a pop, not a call — and a user
+                // constructor, which recurses into a nested mini-run when its
+                // own body is frameless. Anything else (an intrinsic super, a
+                // callee that needs a frame) suspends at this instruction and
+                // the general path re-executes the call.
                 Some(Inst::InvokeSpecial { index, next, site }) => {
                     if site.get() == UNRESOLVED {
                         let malformed = |reason: String| VmError::MalformedClass {
@@ -7373,17 +7411,76 @@ impl<'run> Interpreter<'run> {
                             site.set(id);
                         }
                     }
-                    if site.get() != UNRESOLVED
-                        && matches!(
-                            self.special_sites[site.get() as usize].target,
-                            SpecialTarget::ObjectInit
-                        )
-                        && sp > 0
-                        && matches!(stack[sp - 1], JValue::Ref(Some(_)))
-                    {
-                        sp -= 1;
-                        pc = *next as usize;
-                        continue 'mini;
+                    if site.get() != UNRESOLVED {
+                        let id = site.get() as usize;
+                        if matches!(self.special_sites[id].target, SpecialTarget::ObjectInit)
+                            && sp > 0
+                            && matches!(stack[sp - 1], JValue::Ref(Some(_)))
+                        {
+                            sp -= 1;
+                            pc = *next as usize;
+                            continue 'mini;
+                        }
+                        // A frameless user constructor: run it right here.
+                        // Copy the target out of the site (the recursion needs
+                        // `&mut self`) before the guards.
+                        if let SpecialTarget::User {
+                            class: callee_class,
+                            method_name: callee_name,
+                            ref code,
+                        } = self.special_sites[id].target
+                            && code.frameless
+                            && depth < MAX_MINI_DEPTH
+                        {
+                            let callee_code = Rc::clone(code);
+                            let argc = self.special_sites[id].argc;
+                            let widths = Rc::clone(&self.special_sites[id].widths);
+                            if let Some(base) = sp.checked_sub(argc + 1)
+                                && matches!(stack[base], JValue::Ref(Some(_)))
+                                // The receiver slot plus the argument widths
+                                // must fit the callee's own locals.
+                                && widths
+                                    .iter()
+                                    .map(|width| usize::from(*width))
+                                    .sum::<usize>()
+                                    < usize::from(callee_code.attr.max_locals)
+                            {
+                                let mut callee_locals = [JValue::Int(0); FRAMELESS_SLOTS];
+                                callee_locals[0] = stack[base];
+                                let mut next_slot = 1;
+                                for (value, width) in stack[base + 1..sp].iter().zip(widths.iter())
+                                {
+                                    callee_locals[next_slot] = *value;
+                                    next_slot += usize::from(*width);
+                                }
+                                // The call happens: the receiver and arguments
+                                // are consumed whichever way it ends.
+                                sp = base;
+                                match self.mini_run(
+                                    callee_class,
+                                    callee_name,
+                                    &callee_code,
+                                    callee_locals,
+                                    depth + 1,
+                                ) {
+                                    MiniRun::Done(value) => {
+                                        if let Some(value) = value {
+                                            stack[sp] = value;
+                                            sp += 1;
+                                        }
+                                        pc = *next as usize;
+                                        continue 'mini;
+                                    }
+                                    MiniRun::Suspended(frames) => {
+                                        break 'mini MiniExit::SuspendNested {
+                                            call_pc: pc,
+                                            next: *next as usize,
+                                            frames,
+                                        };
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Some(Inst::InvokeVirtual { .. } | Inst::Legacy) | None => {
@@ -7406,36 +7503,49 @@ impl<'run> Interpreter<'run> {
             };
         };
 
-        match exit {
-            MiniExit::Done(value) => {
-                if let Some(value) = value {
-                    frame.stack.push(value);
-                }
-                Frameless::Done
+        // Pack this level's exact mini-state into a real frame: at the faulted
+        // instruction for a plain suspension, or resuming after the call (with
+        // the call site's line, as `track_line` would have left it) when a
+        // NESTED constructor suspended below us.
+        let pack = |interp: &mut Self, resume_pc: usize, line_pc: usize, sp: usize| {
+            let mut locals_vec = interp.take_vec(usize::from(code.attr.max_locals));
+            locals_vec.extend_from_slice(&locals[..usize::from(code.attr.max_locals)]);
+            let mut stack_vec = interp.take_vec(usize::from(code.attr.max_stack));
+            stack_vec.extend_from_slice(&stack[..sp]);
+            let current_line = match code.lines.get(line_pc).copied().unwrap_or(0) {
+                0 => None,
+                line => Some(line),
+            };
+            Frame {
+                class: target,
+                method_name,
+                code: Rc::clone(code),
+                pc: resume_pc,
+                current_line,
+                locals: locals_vec,
+                stack: stack_vec,
+                box_return_as: None,
             }
+        };
+        match exit {
+            MiniExit::Done(value) => MiniRun::Done(value),
             MiniExit::Suspend { at, refund } => {
                 if refund {
                     // The general path re-charges the instruction it re-runs.
                     self.remaining_instructions += 1;
                 }
-                let mut locals_vec = self.take_vec(usize::from(code.attr.max_locals));
-                locals_vec.extend_from_slice(&locals[..usize::from(code.attr.max_locals)]);
-                let mut stack_vec = self.take_vec(usize::from(code.attr.max_stack));
-                stack_vec.extend_from_slice(&stack[..sp]);
-                let current_line = match code.lines.get(at).copied().unwrap_or(0) {
-                    0 => None,
-                    line => Some(line),
-                };
-                Frameless::Suspended(Frame {
-                    class: target,
-                    method_name,
-                    code,
-                    pc: at,
-                    current_line,
-                    locals: locals_vec,
-                    stack: stack_vec,
-                    box_return_as: None,
-                })
+                let frame = pack(self, at, at, sp);
+                MiniRun::Suspended(vec![frame])
+            }
+            MiniExit::SuspendNested {
+                call_pc,
+                next,
+                mut frames,
+            } => {
+                // This level goes OUTSIDE the chain the callee handed up.
+                let frame = pack(self, next, call_pc, sp);
+                frames.insert(0, frame);
+                MiniRun::Suspended(frames)
             }
         }
     }
@@ -9396,22 +9506,40 @@ enum Frameless<'run> {
     /// already on the caller's operand stack.
     Done,
     /// The callee started but met something only the general path handles;
-    /// its exact mid-method state is in this frame, and resuming it framed
-    /// raises whatever a framed run would have raised.
-    Suspended(Frame<'run>),
+    /// its exact mid-method state is in these frames (outermost first — a
+    /// mini-run that recursed into a frameless constructor suspends the whole
+    /// chain), and resuming them framed raises whatever a framed run would
+    /// have raised.
+    Suspended(Vec<Frame<'run>>),
     /// Not attempted: the caller's stack is untouched and the call has not
     /// begun.
     Declined,
 }
 
-/// How a frameless mini-run ended (the two non-`Declined` outcomes, before
-/// the suspended state is packed into a frame).
-enum MiniExit {
+/// How one level of a frameless mini-run ended (the non-`Declined` outcomes,
+/// before the suspended state is packed into a frame).
+enum MiniExit<'run> {
     /// Executed a return; the value goes to the caller's stack.
     Done(Option<JValue>),
     /// A guard failed at `at`; `refund` says this instruction was already
     /// charged and the general path will charge it again.
     Suspend { at: usize, refund: bool },
+    /// A nested frameless constructor suspended mid-body. This level's own
+    /// state resumes AFTER its `invokespecial` at `next` (the call's arguments
+    /// are already consumed; the callee's eventual framed return completes it),
+    /// while `call_pc` names the call site for this level's trace line.
+    SuspendNested {
+        call_pc: usize,
+        next: usize,
+        frames: Vec<Frame<'run>>,
+    },
+}
+
+/// What [`Interpreter::mini_run`] hands back: a finished return value, or the
+/// frame chain of a suspension (outermost first).
+enum MiniRun<'run> {
+    Done(Option<JValue>),
+    Suspended(Vec<Frame<'run>>),
 }
 
 /// A resolved `invokespecial` site. Unlike a virtual call there is nothing to
@@ -9592,6 +9720,12 @@ const UNRESOLVED: u32 = u32::MAX;
 /// for — needs three locals and five stack slots.
 const FRAMELESS_SLOTS: usize = 8;
 
+/// How deep [`Interpreter::mini_run`] recurses into nested frameless
+/// constructors (each level is a real Rust stack frame, so this stays small —
+/// a `super(...)` chain rarely passes two). Past the cap the call suspends
+/// into the general path, which enforces the real `max_call_depth`.
+const MAX_MINI_DEPTH: usize = 8;
+
 /// Whether a method can run without a frame (`frameless_virtual_call`):
 /// every instruction is one of the pre-decoded fast ops, every branch is
 /// forward (a frameless run has no debugger checkpoint or interrupt poll
@@ -9638,12 +9772,19 @@ fn frameless_eligible(class: &ClassFile, attr: &CodeAttribute, insts: &[Inst]) -
                 attr.code[pc],
                 op::IRETURN | op::LRETURN | op::FRETURN | op::DRETURN | op::ARETURN | op::RETURN
             ),
-            // The implicit `super()` of a base class, and nothing else that
-            // wears the `invokespecial` opcode.
-            Inst::InvokeSpecial { index, .. } => {
-                class.constant_pool.get_member_ref(*index)
-                    == Some(("java/lang/Object", "<init>", "()V"))
-            }
+            // The implicit `super()` of a base class (a pop, not a call), or a
+            // USER constructor — `new Color(r, g, b)` in an accessor body.
+            // Whether the user constructor's own body is frameless is only
+            // knowable at run time (its class may not even be loaded yet):
+            // `mini_run` recurses into it when it is, and suspends this level
+            // at the call instruction — the general path re-executes it — when
+            // it is not. Nothing else wearing the `invokespecial` opcode
+            // (private methods, `super.m(...)`, intrinsics) is admitted.
+            Inst::InvokeSpecial { index, .. } => match class.constant_pool.get_member_ref(*index) {
+                Some(("java/lang/Object", "<init>", "()V")) => true,
+                Some((owner, "<init>", _)) => !owner.contains('/'),
+                _ => false,
+            },
             // A user class, whose name is unqualified in caturra's single flat
             // namespace — never a library class, whose `new` is an intrinsic
             // the mini-interpreter has no way to run.

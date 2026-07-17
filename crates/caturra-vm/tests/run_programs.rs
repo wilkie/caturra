@@ -12570,6 +12570,74 @@ fn fault_inside_a_warm_constructor_keeps_its_frame_in_the_trace() {
     assert_eq!(console.stdout_text(), "482\n");
 }
 
+#[test]
+fn fault_inside_a_nested_frameless_constructor_keeps_both_frames() {
+    // The deepest frameless shape: a warm accessor whose body is
+    // `return new Ratio(...)` runs with no frame, and the mini-interpreter
+    // RECURSES into the (also frameless) constructor. A fault inside the
+    // nested constructor must materialize BOTH mini-levels as real frames —
+    // the constructor at its faulting line, the accessor at its call line —
+    // so the trace reads exactly as a framed run's would.
+    let (result, console) = compile_and_run(
+        r"
+        class Ratio {
+            int value;
+
+            Ratio(int num, int div) {
+                this.value = num / div;
+            }
+        }
+
+        public class NestedTrace {
+            private int num;
+            private int div;
+
+            NestedTrace(int num, int div) {
+                this.num = num;
+                this.div = div;
+            }
+
+            Ratio toRatio() {
+                return new Ratio(num, div);
+            }
+
+            public static void main(String[] args) {
+                NestedTrace fine = new NestedTrace(100, 4);
+                int sum = 0;
+                for (int i = 0; i < 100; i++) {
+                    sum += fine.toRatio().value;
+                }
+                System.out.println(sum);
+                NestedTrace broken = new NestedTrace(100, 0);
+                System.out.println(broken.toRatio().value);
+            }
+        }
+        ",
+        "NestedTrace",
+    );
+    assert!(
+        matches!(result, Err(VmError::UncaughtException(_))),
+        "{result:?}"
+    );
+    let stderr = console.stderr_text();
+    assert!(
+        stderr.contains("java.lang.ArithmeticException: / by zero"),
+        "{stderr}"
+    );
+    let ctor_at = stderr
+        .find("\tat Ratio.<init>(NestedTrace.java:6)")
+        .unwrap();
+    let accessor_at = stderr
+        .find("\tat NestedTrace.toRatio(NestedTrace.java:20)")
+        .unwrap();
+    let main_at = stderr
+        .find("\tat NestedTrace.main(NestedTrace.java:31)")
+        .unwrap();
+    assert!(ctor_at < accessor_at && accessor_at < main_at, "{stderr}");
+    // The 100 warm calls all completed frameless first.
+    assert_eq!(console.stdout_text(), "2500\n");
+}
+
 /// `JUnit`'s delta overloads: `assertEquals(expected, actual, delta)` passes
 /// when the two are within `delta` of each other. The money and measurement
 /// levels use them to avoid asserting on exact binary fractions
