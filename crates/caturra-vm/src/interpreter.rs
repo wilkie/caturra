@@ -7925,6 +7925,15 @@ impl<'run> Interpreter<'run> {
                     frame.stack.push(JValue::Ref(Some(reference)));
                     return Ok(None);
                 }
+                // `array.clone()` — a shallow copy of the same runtime type
+                // (the elements themselves are shared, as Java's is).
+                "clone" => {
+                    if let Some(copy) = self.heap.get(receiver).cloned() {
+                        let new_ref = self.heap.alloc(copy);
+                        frame.stack.push(JValue::Ref(Some(new_ref)));
+                        return Ok(None);
+                    }
+                }
                 _ => {}
             }
         }

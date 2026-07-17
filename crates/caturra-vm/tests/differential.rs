@@ -10699,6 +10699,42 @@ public class DiffMissingApis {
 "#
 );
 
+// Array APIs the audit found caturra rejecting: `instanceof` against an array
+// type (`o instanceof int[]`, `String[]`, `int[][]`), `array.clone()` (a
+// shallow copy of the same runtime type — a 2D clone shares its rows), and
+// `Arrays.sort(int[], from, to)` sorting a subrange.
+differential_test!(
+    diff_array_apis,
+    "DiffArrayApis",
+    r#"
+import java.util.Arrays;
+
+public class DiffArrayApis {
+    public static void main(String[] args) {
+        Object o = new int[2];
+        Object s = new String[1];
+        Object m = new int[2][3];
+        System.out.println((o instanceof int[]) + " " + (o instanceof String[]) + " " + (o instanceof Object));
+        System.out.println((s instanceof String[]) + " " + (s instanceof Object[]));
+        System.out.println((m instanceof int[][]) + " " + (m instanceof int[]));
+
+        int[] x = {1, 2, 3};
+        int[] y = x.clone();
+        y[0] = 99;
+        System.out.println(x[0] + " " + y[0] + " " + (x == y));
+        int[][] grid = {{1, 2}, {3, 4}};
+        int[][] gc = grid.clone();
+        gc[0][0] = 7;
+        System.out.println(grid[0][0] + " " + gc[0][0]);
+
+        int[] r = {5, 3, 1, 4, 2};
+        Arrays.sort(r, 1, 4);
+        System.out.println(Arrays.toString(r));
+    }
+}
+"#
+);
+
 // The Long/Integer unsigned and bit family the audit found missing:
 // Integer.toUnsignedLong, Long.divideUnsigned/remainderUnsigned/
 // toUnsignedString(/radix)/compareUnsigned, and Long.rotateLeft/rotateRight

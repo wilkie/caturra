@@ -71,10 +71,14 @@ class Arrays {
   }
   // In-place ascending sort (insertion sort — stable, small inputs).
   public static void sort(int[] a) {
-    for (int i = 1; i < a.length; i++) {
+    sort(a, 0, a.length);
+  }
+  // Sort a[fromIndex..toIndex).
+  public static void sort(int[] a, int fromIndex, int toIndex) {
+    for (int i = fromIndex + 1; i < toIndex; i++) {
       int key = a[i];
       int j = i - 1;
-      while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      while (j >= fromIndex && a[j] > key) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }

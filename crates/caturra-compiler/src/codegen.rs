@@ -10912,9 +10912,10 @@ impl BodyGen<'_> {
             | JType::Exception(_) => {
                 return self.builtin_instance_call(receiver_ty, method, args, span);
             }
-            // Arrays are Objects: `equals`/`hashCode`/`toString`/`getClass`.
+            // Arrays are Objects: `equals`/`hashCode`/`toString`/`getClass`,
+            // plus `clone()` (which returns the array's own type).
             JType::Array { .. } => {
-                return self.array_object_call(method, args, span);
+                return self.array_object_call(receiver_ty, method, args, span);
             }
             // A wrapper method on a primitive receiver (`someInt.intValue()`,
             // `x.compareTo(y)`) — autobox and dispatch on the wrapper.
@@ -10955,6 +10956,7 @@ impl BodyGen<'_> {
     #[allow(clippy::option_option)] // matches the call-dispatch return shape
     fn array_object_call(
         &mut self,
+        receiver_ty: JType,
         method: &str,
         args: &[Expr],
         span: SourceSpan,
@@ -10964,6 +10966,9 @@ impl BodyGen<'_> {
             ("hashCode", 0) => (JType::Int, "()I"),
             ("toString", 0) => (JType::Str, "()Ljava/lang/String;"),
             ("getClass", 0) => (JType::Class, "()Ljava/lang/Class;"),
+            // `clone()` returns the array's own type (`int[].clone()` is an
+            // `int[]`), via `Object.clone()`'s `Object` descriptor.
+            ("clone", 0) => (receiver_ty, "()Ljava/lang/Object;"),
             _ => {
                 self.error(span, format!("cannot call {method}(...) on an array"));
                 return None;
@@ -14232,6 +14237,10 @@ impl BodyGen<'_> {
             // `e instanceof RuntimeException` — a library throwable. The VM
             // climbs the shared exception hierarchy, so a subclass answers true.
             JType::Exception(id) => exception_internal(id).to_owned(),
+            // `o instanceof int[]` / `String[]` / `int[][]` — the constant-pool
+            // "class" of an array is its descriptor; the VM answers array-type
+            // checks by comparing those.
+            JType::Array { .. } => target.descriptor(self.table),
             other => {
                 self.error(
                     span,
