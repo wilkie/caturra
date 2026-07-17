@@ -10704,6 +10704,37 @@ public class DiffMissingApis {
 // to drop it), and `getCause()` returns it — null when there is none. The
 // one-arg form derives its message from the cause's toString, as Java's
 // `Throwable(Throwable)` does.
+// An exception escaping a static initializer (a field initializer OR a static
+// block) is wrapped in ExceptionInInitializerError, whose cause is the
+// original — and it is catchable around the field access that triggered the
+// class's initialization. (Also exercises the unwinder's handler search AT the
+// init-triggering instruction, not one before it.)
+differential_test!(
+    diff_exception_in_initializer,
+    "DiffEIIE",
+    r#"
+public class DiffEIIE {
+    static class BadField { static int x = 1 / 0; }
+    static class BadBlock { static int y; static { y = Integer.parseInt("nope"); } }
+    static class ViaCall { static int z = compute(); static int compute() { return 1 / 0; } }
+    public static void main(String[] args) {
+        try { int a = BadField.x; System.out.println("no throw"); }
+        catch (ExceptionInInitializerError e) {
+            System.out.println("field: " + e.getCause().getClass().getSimpleName() + ": " + e.getCause().getMessage());
+        }
+        try { int a = BadBlock.y; }
+        catch (ExceptionInInitializerError e) {
+            System.out.println("block: " + e.getCause().getClass().getSimpleName());
+        }
+        try { int a = ViaCall.z; }
+        catch (ExceptionInInitializerError e) {
+            System.out.println("call: " + e.getCause().getClass().getSimpleName());
+        }
+    }
+}
+"#
+);
+
 differential_test!(
     diff_exception_cause_chaining,
     "DiffExcCause",

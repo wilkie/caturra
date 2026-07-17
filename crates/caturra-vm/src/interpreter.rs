@@ -656,6 +656,7 @@ impl<'run> Interpreter<'run> {
             locals,
             stack,
             box_return_as: None,
+            pc_reexecutes: false,
         })
     }
 
@@ -2107,8 +2108,11 @@ impl<'run> Interpreter<'run> {
                         continue 'frames;
                     }
                     Ok(Flow::InitChain(mut chain)) => {
-                        // `frame.pc` was rewound by the arm; the chain
-                        // runs ancestor-first as pseudo-callers.
+                        // `frame.pc` was rewound by the arm to the triggering
+                        // `getstatic`/`new`, which re-runs once the chain
+                        // completes — so the unwinder must search for a handler
+                        // AT that pc, not one before it.
+                        frame.pc_reexecutes = true;
                         let first = chain.remove(0);
                         self.frames.push(std::mem::replace(&mut frame, first));
                         for pending in chain.into_iter().rev() {
@@ -2124,6 +2128,10 @@ impl<'run> Interpreter<'run> {
                             None => return Ok(value),
                             Some(caller) => {
                                 frame = caller;
+                                // The caller now runs normally (re-executing its
+                                // init-triggering instruction if it had one), so
+                                // its pc is once again a normal resume point.
+                                frame.pc_reexecutes = false;
                                 self.recycle_vec(spent_locals);
                                 self.recycle_vec(spent_stack);
                                 if let Some(mut value) = value {
@@ -2179,13 +2187,13 @@ impl<'run> Interpreter<'run> {
         let VmError::UncaughtException(text) = error else {
             return Ok(false);
         };
-        let (dotted, message) = match exception_header(text).split_once(": ") {
-            Some((class, message)) => (class, Some(message.to_owned())),
-            None => (exception_header(text), None),
+        let (mut dotted, mut message) = match exception_header(text).split_once(": ") {
+            Some((class, message)) => (class.to_owned(), Some(message.to_owned())),
+            None => (exception_header(text).to_owned(), None),
         };
         let internal = dotted.replace('.', "/");
         let is_library = caturra_classfile::exceptions::is_exception_class(&internal);
-        if !is_library && !self.instance_is_throwable(dotted) {
+        if !is_library && !self.instance_is_throwable(&dotted) {
             return Ok(false);
         }
 
@@ -2197,10 +2205,8 @@ impl<'run> Interpreter<'run> {
         // previous catch consumed it, or names a different class — so it
         // re-materializes. The class filter guards against a stale reference.
         let candidate = self.last_thrown.take();
-        let thrown_object = candidate.filter(|reference| match self.heap.get(*reference) {
-            Some(crate::value::HeapObject::Exception { class_name, .. }) => {
-                class_name.as_str() == dotted
-            }
+        let mut thrown_object = candidate.filter(|reference| match self.heap.get(*reference) {
+            Some(crate::value::HeapObject::Exception { class_name, .. }) => *class_name == dotted,
             Some(crate::value::HeapObject::Instance { class_name, .. }) => {
                 let class_name = class_name.clone();
                 self.instance_is_throwable(&class_name)
@@ -2211,10 +2217,10 @@ impl<'run> Interpreter<'run> {
         // The active frame first, at the faulting instruction.
         let mut search_pc = addr;
         loop {
-            if let Some(handler_pc) = self.handler_for(frame, search_pc, dotted) {
+            if let Some(handler_pc) = self.handler_for(frame, search_pc, &dotted) {
                 let exception = thrown_object.unwrap_or_else(|| {
                     self.heap.alloc(crate::value::HeapObject::Exception {
-                        class_name: dotted.to_owned(),
+                        class_name: dotted.clone(),
                         message: message.clone(),
                         cause: None,
                     })
@@ -2224,12 +2230,43 @@ impl<'run> Interpreter<'run> {
                 frame.pc = handler_pc;
                 return Ok(true);
             }
+            // A non-Error exception escaping a `<clinit>` is wrapped in
+            // ExceptionInInitializerError (JVMS §5.5), with the original as its
+            // cause. Once wrapped the class is EIIE, itself an Error, so a
+            // nested `<clinit>` boundary does not double-wrap.
+            if frame.method_name == "<clinit>"
+                && !caturra_classfile::exceptions::is_exception_subclass(
+                    &dotted.replace('.', "/"),
+                    "java/lang/Error",
+                )
+            {
+                let cause = thrown_object.take().unwrap_or_else(|| {
+                    self.heap.alloc(crate::value::HeapObject::Exception {
+                        class_name: dotted.clone(),
+                        message: message.clone(),
+                        cause: None,
+                    })
+                });
+                let wrapper = self.heap.alloc(crate::value::HeapObject::Exception {
+                    class_name: String::from("java.lang.ExceptionInInitializerError"),
+                    message: None,
+                    cause: Some(cause),
+                });
+                dotted = String::from("java.lang.ExceptionInInitializerError");
+                message = None;
+                thrown_object = Some(wrapper);
+            }
             match self.frames.pop() {
                 Some(caller) => {
-                    // The caller's saved pc points just past its invoke
-                    // instruction; step back inside it so try ranges
-                    // covering the call match.
-                    search_pc = caller.pc.saturating_sub(1);
+                    // A caller's saved pc normally points just past its invoke
+                    // instruction, so step back inside it for the try-range
+                    // check. An init-chain caller's pc already points AT the
+                    // instruction it will re-run, so it is used as-is.
+                    search_pc = if caller.pc_reexecutes {
+                        caller.pc
+                    } else {
+                        caller.pc.saturating_sub(1)
+                    };
                     *frame = caller;
                 }
                 None => return Ok(false),
@@ -7737,6 +7774,7 @@ impl<'run> Interpreter<'run> {
                 locals: locals_vec,
                 stack: stack_vec,
                 box_return_as: None,
+                pc_reexecutes: false,
             }
         };
         match exit {
@@ -9818,6 +9856,11 @@ struct Frame<'run> {
     /// before delivery (a reflective `Method.invoke` of a primitive-returning
     /// method must hand back an `Integer`/`Double`/… like real Java).
     box_return_as: Option<String>,
+    /// When set, `pc` points AT the instruction to (re-)execute rather than
+    /// PAST a completed call — true for a frame suspended by an `<clinit>`
+    /// init chain (it re-runs the `getstatic`/`new` that triggered it). The
+    /// unwinder must then search for a handler AT `pc`, not `pc - 1`.
+    pc_reexecutes: bool,
 }
 
 /// A parsed `Code` attribute plus its debug tables, cached per method.

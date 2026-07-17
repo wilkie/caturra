@@ -52,6 +52,12 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
     // Linkage errors are Errors, not Exceptions: `catch (Exception)` must not
     // take a VerifyError, but `catch (Throwable)` must.
     ("java/lang/LinkageError", "java/lang/Error"),
+    // An exception escaping a static initializer is wrapped in this (an Error,
+    // so `catch (Exception)` does not take it — its CAUSE is the original).
+    (
+        "java/lang/ExceptionInInitializerError",
+        "java/lang/LinkageError",
+    ),
     ("java/lang/VerifyError", "java/lang/LinkageError"),
     (
         "java/lang/IllegalArgumentException",
