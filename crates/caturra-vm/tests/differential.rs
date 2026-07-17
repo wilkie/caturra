@@ -10547,6 +10547,35 @@ public class DiffIntern {
 "#
 );
 
+// Interface fields are implicitly `public static final` (JLS §9.3): a
+// constant reachable as `Iface.CONST`, and inherited by an implementing class
+// so a bare `CONST` resolves too. A `static final` integral constant — from
+// this class or an inherited interface — is also a valid `case` label. Both
+// were compile errors before.
+differential_test!(
+    diff_interface_constants_and_case_labels,
+    "DiffIfaceConst",
+    r#"
+interface Limits { int TOP = 5; String TAG = "hi"; }
+
+public class DiffIfaceConst implements Limits {
+    static final int LOW = 1, HIGH = 3;
+    int viaInstance() { return TOP; }
+    public static void main(String[] args) {
+        System.out.println(Limits.TOP + " " + TOP + " " + TAG + " " + new DiffIfaceConst().viaInstance());
+        for (int x = 0; x <= 5; x++) {
+            switch (x) {
+                case LOW: System.out.println(x + " low"); break;
+                case HIGH: System.out.println(x + " high"); break;
+                case Limits.TOP: System.out.println(x + " top"); break;
+                default: System.out.println(x + " mid");
+            }
+        }
+    }
+}
+"#
+);
+
 // A field initializer that reads a LATER field by simple name is an illegal
 // forward reference (JLS §8.3.3) — javac rejects it, caturra used to accept
 // it and read 0.

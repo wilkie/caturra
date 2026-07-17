@@ -393,6 +393,10 @@ struct FieldSig {
     is_static: bool,
     is_private: bool,
     is_final: bool,
+    /// The compile-time constant value of a `static final` integral field with
+    /// a constant initializer (`static final int LIMIT = 3;`) — what lets it
+    /// stand in as a `case` label. `None` for a non-constant field.
+    const_int: Option<i64>,
 }
 
 /// Everything call/field resolution knows about one class.
@@ -674,12 +678,25 @@ impl MethodTable {
                 let mut fields = Vec::new();
 
                 for field in &class.fields {
+                    let field_ty = table.resolve_type(&field.ty).unwrap_or(JType::Unsupported);
+                    // A `static final` integral field with a constant int
+                    // initializer is a compile-time constant (usable as a case
+                    // label). char/byte/short/int all live as int here.
+                    let const_int = (field.is_static
+                        && field.is_final
+                        && matches!(
+                            field_ty,
+                            JType::Int | JType::Char | JType::Short | JType::Byte
+                        ))
+                    .then(|| field.init.as_ref().and_then(constant_int_value))
+                    .flatten();
                     let sig = FieldSig {
                         name: field.name.clone(),
-                        ty: table.resolve_type(&field.ty).unwrap_or(JType::Unsupported),
+                        ty: field_ty,
                         is_static: field.is_static,
                         is_private: field.is_private,
                         is_final: field.is_final,
+                        const_int,
                     };
                     if fields.iter().any(|f: &FieldSig| f.name == sig.name) {
                         diagnostics.push(Diagnostic::error(
@@ -1414,17 +1431,29 @@ impl MethodTable {
     /// Look up a field in a class or its ancestors, returning the
     /// owning class alongside.
     fn field(&self, class: &str, name: &str) -> Option<(ClassId, &FieldSig)> {
-        let mut current = self.classes.get(class);
+        // Superclass chain first, then implemented interfaces — an interface's
+        // `public static final` constants ARE inherited by an implementing
+        // class (unlike its static methods), so `MAX` resolves in a class that
+        // `implements Const`.
+        let start = self.classes.get(class).map(|i| i.id)?;
+        let mut stack = vec![start];
         let mut steps = 0usize;
-        while let Some(info) = current {
+        while let Some(id) = stack.pop() {
             steps += 1;
-            if steps > self.class_names.len() + 1 {
+            if steps > self.class_names.len() * 4 + 4 {
                 return None;
             }
-            if let Some(field) = info.fields.iter().find(|f| f.name == name) {
-                return Some((info.id, field));
+            if let Some(info) = self.info_by_id(id) {
+                if let Some(field) = info.fields.iter().find(|f| f.name == name) {
+                    return Some((info.id, field));
+                }
+                if let Some(parent) = info.superclass {
+                    stack.push(parent);
+                }
+                for iface in &info.interfaces {
+                    stack.push(*iface);
+                }
             }
-            current = info.superclass.and_then(|id| self.info_by_id(id));
         }
         None
     }
@@ -7694,6 +7723,28 @@ impl BodyGen<'_> {
         self.code.bind(end);
     }
 
+    /// A `case` label's constant int value: a literal, or a `static final`
+    /// integral constant named by simple name (current class or an inherited
+    /// interface) or qualified as `Class.FIELD`. `None` if it is not a
+    /// compile-time constant.
+    fn case_label_value(&self, value: &Expr) -> Option<i64> {
+        if let Some(v) = constant_int_value(value) {
+            return Some(v);
+        }
+        let field = match value {
+            Expr::Name { path, .. } if path.len() == 1 => {
+                self.table.field(self.current_class, &path[0])
+            }
+            Expr::Name { path, .. } if path.len() == 2 => self.table.field(&path[0], &path[1]),
+            Expr::Field { object, name, .. } => match object.as_ref() {
+                Expr::Name { path, .. } if path.len() == 1 => self.table.field(&path[0], name),
+                _ => None,
+            },
+            _ => None,
+        };
+        field.and_then(|(_, sig)| sig.const_int)
+    }
+
     #[allow(clippy::too_many_lines)] // one lowering plan
     fn switch_statement(&mut self, selector: &Expr, arms: &[SwitchArm], span: SourceSpan) {
         let selector_ty = self.expr(selector);
@@ -7805,7 +7856,7 @@ impl BodyGen<'_> {
                     self.code.drop_stack(2);
                     self.code.branch(op::IFNE, arm_labels[index], 1);
                 } else {
-                    let Some(constant) = constant_int_value(value) else {
+                    let Some(constant) = self.case_label_value(value) else {
                         self.error(value.span(), "case labels must be constants");
                         continue;
                     };

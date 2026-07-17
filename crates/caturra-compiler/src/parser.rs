@@ -744,6 +744,17 @@ impl Parser<'_> {
         }
         self.eat_symbol("}");
 
+        // Every field declared in an interface is implicitly `public static
+        // final` (JLS §9.3), so `Iface.CONST` reads a constant, not a
+        // non-static field.
+        if is_interface {
+            for field in &mut fields {
+                field.is_static = true;
+                field.is_final = true;
+                field.is_private = false;
+            }
+        }
+
         Ok(ClassDecl {
             name,
             is_public,
