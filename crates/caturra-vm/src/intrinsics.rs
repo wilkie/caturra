@@ -3638,6 +3638,53 @@ fn java_round_float(a: f32) -> i32 {
     }
 }
 
+/// Java's `Math.pow`. Rust's `f64::powf` (glibc) is correctly rounded except on
+/// exact ties, where it rounds half-away from zero while the JDK rounds half-to-
+/// even — e.g. `17^13`, an odd integer sitting exactly on a double midpoint. The
+/// JDK's `Math.pow` is correctly rounded for *every* integer exponent (verified
+/// against a real JVM), so an integer base raised to a non-negative integer
+/// power is computed exactly: the exact `u128` power cast to `f64` rounds half-
+/// to-even, matching the JDK. Everything else defers to glibc, which already
+/// matches the JDK bit-for-bit for non-integer / non-representable results.
+#[allow(clippy::float_cmp)]
+fn java_pow(a: f64, b: f64) -> f64 {
+    // Java's one deviation from IEEE 754: |x| == 1 with an infinite exponent.
+    if a.abs() == 1.0 && b.is_infinite() {
+        return f64::NAN;
+    }
+    exact_integer_pow(a, b).unwrap_or_else(|| a.powf(b))
+}
+
+/// The correctly-rounded value of integer `a` raised to a non-negative integer
+/// power `b`, when the exact power fits in `u128`; otherwise `None` (defer to
+/// glibc). Negative exponents and |base| < 2 already match the JDK bit-for-bit,
+/// so they are left to `powf`.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp
+)]
+fn exact_integer_pow(a: f64, b: f64) -> Option<f64> {
+    if a.fract() != 0.0 || b.fract() != 0.0 || !(1.0..=127.0).contains(&b) {
+        return None;
+    }
+    let mag = a.abs();
+    if mag < 2.0 {
+        return None;
+    }
+    let exp = b as u32;
+    let base = mag as u128;
+    let mut acc: u128 = 1;
+    for _ in 0..exp {
+        acc = acc.checked_mul(base)?;
+    }
+    // `u128 as f64` rounds to nearest, ties to even — the correctly-rounded
+    // result the JDK produces.
+    let val = acc as f64;
+    Some(if a < 0.0 && exp % 2 == 1 { -val } else { val })
+}
+
 #[allow(clippy::too_many_lines)] // one arm per documented method
 #[allow(clippy::float_cmp, clippy::many_single_char_names)]
 fn math_static(
@@ -3685,15 +3732,7 @@ fn math_static(
         ("abs", [JValue::Double(v)]) => d(v.abs()),
         ("sqrt", [JValue::Double(v)]) => d(v.sqrt()),
         ("cbrt", [JValue::Double(v)]) => d(v.cbrt()),
-        // Java deviates from IEEE `pow` in one case: |x| == 1 with an infinite
-        // exponent is NaN (IEEE, and Rust's `powf`, give 1.0).
-        ("pow", [JValue::Double(a), JValue::Double(b)]) => {
-            if a.abs() == 1.0 && b.is_infinite() {
-                d(f64::NAN)
-            } else {
-                d(a.powf(*b))
-            }
-        }
+        ("pow", [JValue::Double(a), JValue::Double(b)]) => d(java_pow(*a, *b)),
         ("hypot", [JValue::Double(a), JValue::Double(b)]) => d(a.hypot(*b)),
         ("max", [JValue::Int(a), JValue::Int(b)]) => i((*a).max(*b)),
         ("max", [JValue::Double(a), JValue::Double(b)]) => d(java_double_max(*a, *b)),

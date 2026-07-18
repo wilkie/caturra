@@ -1496,6 +1496,41 @@ public class DiffWrapFull {
 "#
 );
 
+// Math.pow is correctly rounded for integer exponents; glibc's powf rounds
+// half-away on exact ties (e.g. 17^13, an odd integer on a double midpoint)
+// while the JDK rounds half-to-even. The raw bits pin the last ulp.
+differential_test!(
+    diff_math_pow_integer_exponents,
+    "DiffPowInt",
+    r"
+public class DiffPowInt {
+    static void show(double b, double e) {
+        System.out.println(Long.toHexString(Double.doubleToRawLongBits(Math.pow(b, e))));
+    }
+    public static void main(String[] args) {
+        // Previously off-by-one-ulp exact ties.
+        show(17, 13);
+        show(9, 17);
+        show(58, 11);
+        show(41, 10);
+        show(36, 17);
+        show(34, 13);
+        show(18, 17);
+        show(10, 23);
+        // Negative base sign handling and ordinary integer powers.
+        show(-2, 13);
+        show(-3, 7);
+        show(2, 40);
+        show(7, 5);
+        show(123, 0);
+        // Non-integer exponents stay on the transcendental path (unchanged).
+        show(2, 0.5);
+        show(3.7, 2.5);
+    }
+}
+"
+);
+
 // Character methods use Java's Unicode tables, not Rust's char semantics:
 // toUpperCase/toLowerCase are the *simple* (single-char) case mappings, and
 // isDigit/digit/getNumericValue recognise every Unicode decimal-digit (Nd)
