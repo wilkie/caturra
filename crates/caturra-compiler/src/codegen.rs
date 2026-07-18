@@ -3462,28 +3462,48 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
 
 /// A compile-time constant int/char case label (literals, optionally
 /// negated).
-/// The compile-time constant String value of an expression (JLS §15.28): a
-/// String literal, or a `+` whose operands are both constant Strings. Folding
-/// such a concatenation to one interned literal is what makes `"ab" == "a" +
-/// "b"` true. Deliberately narrow — a constant `final String` variable or a
-/// primitive operand is NOT folded (that needs constant propagation, or risks
-/// a string-form mismatch), so those keep their correct runtime concatenation.
-fn constant_string_value(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::Literal {
-            value: Literal::Str(s),
-            ..
-        } => Some(s.clone()),
-        Expr::Binary {
-            op: BinaryOp::Add,
-            lhs,
-            rhs,
-            ..
-        } => Some(format!(
-            "{}{}",
-            constant_string_value(lhs)?,
-            constant_string_value(rhs)?
-        )),
+/// A constant's exact `String` form (as `String.valueOf`/`StringBuilder.append`
+/// would render it at runtime), for folding a constant string concatenation.
+/// `Double`/`Float`/`Null` return `None` — a floating form risks disagreeing
+/// with the runtime's, and `null` is not a constant expression — so those defer
+/// to the (correct, just un-interned) runtime concat path.
+fn literal_java_string(lit: &Literal) -> Option<String> {
+    Some(match lit {
+        Literal::Str(s) => s.clone(),
+        Literal::Int(v) | Literal::Long(v) => v.to_string(),
+        Literal::Char(c) => c.to_string(),
+        Literal::Bool(b) => b.to_string(),
+        Literal::Double(_) | Literal::Float(_) | Literal::Null => return None,
+    })
+}
+
+/// Coerce an evaluated constant to a variable's declared type, so a constant
+/// variable carries the value of its *own* type (a `final char c = 65` denotes
+/// `'A'`, not the int `65`). `Double`/`Float` are deliberately not tracked
+/// (see [`literal_java_string`]).
+fn coerce_const_to_type(lit: Literal, ty: JType) -> Option<Literal> {
+    match ty {
+        JType::Str => matches!(lit, Literal::Str(_)).then_some(lit),
+        JType::Boolean => matches!(lit, Literal::Bool(_)).then_some(lit),
+        JType::Char => match lit {
+            Literal::Char(_) => Some(lit),
+            Literal::Int(v) => u32::try_from(v)
+                .ok()
+                .and_then(char::from_u32)
+                .map(Literal::Char),
+            _ => None,
+        },
+        JType::Int | JType::Short | JType::Byte => match lit {
+            Literal::Int(_) => Some(lit),
+            Literal::Char(c) => Some(Literal::Int(i64::from(u32::from(c)))),
+            _ => None,
+        },
+        JType::Long => match lit {
+            Literal::Long(_) => Some(lit),
+            Literal::Int(v) => Some(Literal::Long(v)),
+            Literal::Char(c) => Some(Literal::Long(i64::from(u32::from(c)))),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -3643,6 +3663,12 @@ struct LocalVar {
     ty: JType,
     is_final: bool,
     assigned: bool,
+    /// The compile-time constant this variable denotes, when it is a *constant
+    /// variable* (JLS §4.12.4: `final`, of primitive or `String` type, with a
+    /// constant-expression initializer). Only consulted to fold a constant
+    /// string concatenation so `"ab" == p + "b"` interns like a JDK; the
+    /// variable is still emitted and read normally everywhere else.
+    const_val: Option<Literal>,
 }
 
 #[allow(clippy::too_many_lines)] // ctor chaining preamble is cohesive
@@ -3697,6 +3723,8 @@ fn emit_method(
                 // rejects, which is the direction never to be wrong in.
                 is_final: param.is_final,
                 assigned: true,
+                // A parameter's value is not a compile-time constant.
+                const_val: None,
             },
         ));
     }
@@ -8591,6 +8619,7 @@ impl BodyGen<'_> {
                     ty,
                     is_final: false,
                     assigned: true,
+                    const_val: None,
                 },
             ));
             for stmt in &clause.body {
@@ -9087,6 +9116,7 @@ impl BodyGen<'_> {
             // same): a paused debugger doesn't show the variable until
             // it actually holds its value.
             self.record_local_debug(&declarator.name, var_ty, slot);
+            let const_val = self.constant_variable_value(is_final, declarator.init.as_ref(), var_ty);
             self.scopes
                 .last_mut()
                 .expect("scope stack is never empty")
@@ -9097,6 +9127,7 @@ impl BodyGen<'_> {
                         ty: var_ty,
                         is_final,
                         assigned,
+                        const_val,
                     },
                 ));
         }
@@ -9132,6 +9163,7 @@ impl BodyGen<'_> {
         self.emit_store(slot, var_ty);
         self.record_local_debug(&declarator.name, var_ty, slot);
         let _ = span;
+        let const_val = self.constant_variable_value(is_final, declarator.init.as_ref(), var_ty);
         self.scopes
             .last_mut()
             .expect("scope stack is never empty")
@@ -9142,6 +9174,7 @@ impl BodyGen<'_> {
                     ty: var_ty,
                     is_final,
                     assigned: true,
+                    const_val,
                 },
             ));
     }
@@ -12742,6 +12775,7 @@ impl BodyGen<'_> {
                 ty: var_ty,
                 is_final: false,
                 assigned: true,
+                const_val: None,
             },
         ));
 
@@ -12840,6 +12874,7 @@ impl BodyGen<'_> {
                 ty: var_ty,
                 is_final: false,
                 assigned: true,
+                const_val: None,
             },
         ));
 
@@ -16700,13 +16735,74 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKEVIRTUAL, to_string, 0);
     }
 
+    /// The constant a `final` local variable denotes (JLS §4.12.4), if any: it
+    /// must be `final`, have an initializer, and that initializer must itself be
+    /// a constant expression of the variable's (String/integral/char/boolean)
+    /// type. Only used to fold constant string concatenations.
+    fn constant_variable_value(
+        &mut self,
+        is_final: bool,
+        init: Option<&Expr>,
+        var_ty: JType,
+    ) -> Option<Literal> {
+        if !is_final {
+            return None;
+        }
+        let lit = self.const_eval(init?)?;
+        coerce_const_to_type(lit, var_ty)
+    }
+
+    /// Evaluate a constant expression (JLS §15.29) to its literal value, or
+    /// `None` if it is not a compile-time constant. Handles literals, constant
+    /// variables (`final` locals, `static final` fields), and constant string
+    /// concatenation. Numeric operators are intentionally NOT folded — such a
+    /// sub-expression simply makes the whole thing non-constant here, so it
+    /// takes the (correct, un-interned) runtime path.
+    fn const_eval(&mut self, expr: &Expr) -> Option<Literal> {
+        match expr {
+            Expr::Literal { value, .. } if !matches!(value, Literal::Null) => Some(value.clone()),
+            Expr::Name { path, .. } if path.len() == 1 => {
+                if let Some(var) = self.lookup(&path[0]) {
+                    return var.const_val.clone();
+                }
+                self.table
+                    .field(self.current_class, &path[0])
+                    .and_then(|(_, f)| f.const_literal.clone())
+            }
+            Expr::Name { path, .. } if path.len() == 2 => self
+                .table
+                .field(&path[0], &path[1])
+                .and_then(|(_, f)| f.const_literal.clone()),
+            Expr::Binary {
+                op: BinaryOp::Add,
+                lhs,
+                rhs,
+                ..
+            } => {
+                let l = self.const_eval(lhs)?;
+                let r = self.const_eval(rhs)?;
+                // A `+` is string concatenation exactly when an operand is a
+                // String; two numeric constants are addition, which is left
+                // un-folded (see the method note).
+                if !matches!(l, Literal::Str(_)) && !matches!(r, Literal::Str(_)) {
+                    return None;
+                }
+                let folded = format!("{}{}", literal_java_string(&l)?, literal_java_string(&r)?);
+                Some(Literal::Str(folded))
+            }
+            _ => None,
+        }
+    }
+
     fn concat(&mut self, lhs: &Expr, rhs: &Expr) -> JType {
-        // A compile-time constant string concatenation (JLS §15.28) folds to a
-        // SINGLE interned constant, so `"ab" == "a" + "b"` compares equal, as
-        // on a JDK. Only string operands fold — `"a" + 5` keeps its runtime
-        // path (correct output; just not interned), avoiding any risk of a
-        // primitive's string form differing from the runtime's.
-        if let (Some(l), Some(r)) = (constant_string_value(lhs), constant_string_value(rhs)) {
+        // A compile-time constant string concatenation (JLS §15.28/§15.29) folds
+        // to a SINGLE interned constant, so `"ab" == "a" + "b"` and
+        // `"ab" == p + "b"` (a constant variable `p`) compare equal, as on a
+        // JDK. A non-constant operand keeps the runtime builder path.
+        if let (Some(l), Some(r)) = (
+            self.const_eval(lhs).as_ref().and_then(literal_java_string),
+            self.const_eval(rhs).as_ref().and_then(literal_java_string),
+        ) {
             let folded = format!("{l}{r}");
             let utf8 = self.pool.intern_utf8(&folded);
             let index = self.pool.intern(Constant::String { string_index: utf8 });

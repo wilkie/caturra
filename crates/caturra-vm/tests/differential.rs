@@ -1496,6 +1496,41 @@ public class DiffWrapFull {
 "#
 );
 
+// A constant variable (JLS §4.12.4: `final`, primitive/String, constant
+// initializer) is a constant expression, so a concatenation using it folds to
+// one interned String -- `"ab" == p + "b"` is true, exactly as on a JDK.
+// Non-constant operands keep the runtime builder path and compare unequal.
+differential_test!(
+    diff_constant_final_string_folding,
+    "DiffConstFold",
+    r#"
+public class DiffConstFold {
+    static final String FS = "k";
+    static final int FI = 7;
+    static String get() { return "a"; }
+    public static void main(String[] args) {
+        final String p = "a";
+        String q = "a";                 // not final
+        final String r = p + "b";       // constant, from a constant variable
+        final int n = 1;
+        final char c = 65;              // 'A'
+        final boolean b = true;
+        System.out.println("ab" == p + "b");        // true
+        System.out.println("ab" == q + "b");        // false (q not final)
+        System.out.println("ab" == r);              // true
+        System.out.println("a1" == "a" + n);        // true
+        System.out.println("k7" == FS + FI);        // true (static finals)
+        System.out.println("ab" == get() + "b");    // false (method call)
+        System.out.println("aab" == p + p + "b");   // true
+        System.out.println("xA" == "x" + c);        // true (char is 'A', not 65)
+        System.out.println("ptrue" == "p" + b);     // true
+        // The runtime concatenation still renders every value correctly.
+        System.out.println("[" + p + q + n + c + b + "]");
+    }
+}
+"#
+);
+
 // Math.pow is correctly rounded for integer exponents; glibc's powf rounds
 // half-away on exact ties (e.g. 17^13, an odd integer on a double midpoint)
 // while the JDK rounds half-to-even. The raw bits pin the last ulp.
