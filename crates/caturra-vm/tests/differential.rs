@@ -1496,6 +1496,55 @@ public class DiffWrapFull {
 "#
 );
 
+// Wrapper `==` is a REFERENCE comparison (JLS §15.21.3) with the autoboxing
+// cache (§5.1.7): equal values inside the cache share a reference (true),
+// values outside get distinct references (false), and a wrapper compared with
+// a primitive auto-unboxes to a value comparison. Boolean `==` (which used to
+// crash) is a reference comparison too.
+differential_test!(
+    diff_boxed_reference_equality,
+    "DiffBoxedEq",
+    r"
+public class DiffBoxedEq {
+    public static void main(String[] args) {
+        Integer i127a = 127, i127b = 127;
+        Integer i128a = 128, i128b = 128;
+        Integer i200a = 200, i200b = 200;
+        Integer ineg128a = -128, ineg128b = -128;
+        Integer ineg129a = -129, ineg129b = -129;
+        System.out.println(i127a == i127b);       // true  (cached)
+        System.out.println(i128a == i128b);       // false (out of cache)
+        System.out.println(i200a == i200b);       // false
+        System.out.println(ineg128a == ineg128b); // true
+        System.out.println(ineg129a == ineg129b); // false
+        Integer alias = i200a;
+        System.out.println(i200a == alias);        // true (same reference)
+        int prim = 200;
+        System.out.println(i200a == prim);         // true (unboxes)
+        Long l127a = 127L, l127b = 127L, l200a = 200L, l200b = 200L;
+        System.out.println(l127a == l127b);        // true
+        System.out.println(l200a == l200b);        // false
+        Character ca = 'a', cb = 'a', c200a = 200, c200b = 200;
+        System.out.println(ca == cb);              // true (0..127)
+        System.out.println(c200a == c200b);        // false
+        Boolean ba = true, bb = true;
+        System.out.println(ba == bb);              // true
+        System.out.println(ba == ba);              // true (no crash)
+        System.out.println(ba == Boolean.TRUE);    // true
+        boolean bprim = true;
+        System.out.println(ba == bprim);           // true (unboxes)
+        Short sa = 100, sb = 100, s200a = 200, s200b = 200;
+        System.out.println(sa == sb);              // true
+        System.out.println(s200a == s200b);        // false
+        Integer nul = null;
+        System.out.println(nul == null);           // true
+        Object asObj = i200a;
+        System.out.println(i200a == asObj);        // true (same reference, Object view)
+    }
+}
+"
+);
+
 // A constant variable (JLS §4.12.4: `final`, primitive/String, constant
 // initializer) is a constant expression, so a concatenation using it folds to
 // one interned String -- `"ab" == p + "b"` is true, exactly as on a JDK.

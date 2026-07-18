@@ -418,6 +418,30 @@ impl HeapObject {
 #[derive(Debug, Default)]
 pub struct Heap {
     objects: Vec<HeapObject>,
+    /// The autoboxing cache (JLS §5.1.7): `Wrapper.valueOf` returns a SHARED
+    /// reference for a value in the cached range, so `Integer a = 100, b = 100;
+    /// a == b` is true while `200 == 200` (out of range) is false. Keyed by
+    /// (wrapper tag, value) — see [`Heap::box_wrapper`].
+    wrapper_cache: std::collections::HashMap<(u8, i64), HeapRef>,
+}
+
+/// The autoboxing-cache key for a wrapper class and value, or `None` when the
+/// value is outside the cached range (so each boxing is a distinct object).
+/// The `u8` tag keeps different wrappers of the same numeric value apart.
+fn wrapper_cache_key(class: &str, value: JValue) -> Option<(u8, i64)> {
+    let (tag, v) = match (class, value) {
+        ("java/lang/Integer", JValue::Int(v)) => (0u8, i64::from(v)),
+        ("java/lang/Short", JValue::Int(v)) => (1, i64::from(v)),
+        ("java/lang/Byte", JValue::Int(v)) => (2, i64::from(v)),
+        ("java/lang/Long", JValue::Long(v)) => (3, v),
+        // Character caches 0..=127; Boolean caches both values.
+        ("java/lang/Character", JValue::Int(v)) => {
+            return (0..=127).contains(&v).then_some((4, i64::from(v)));
+        }
+        ("java/lang/Boolean", JValue::Int(v)) => return Some((5, i64::from(v))),
+        _ => return None,
+    };
+    (-128..=127).contains(&v).then_some((tag, v))
 }
 
 impl Heap {
@@ -436,6 +460,28 @@ impl Heap {
     /// Allocate a Java string from Rust UTF-8 text.
     pub fn alloc_string(&mut self, text: &str) -> HeapRef {
         self.alloc(HeapObject::JavaString(text.encode_utf16().collect()))
+    }
+
+    /// Box a primitive into its wrapper via the autoboxing cache (JLS §5.1.7):
+    /// a value in the cached range shares one reference so `==` on two such
+    /// boxings is true, while out-of-range values each get a fresh reference.
+    /// Integer/Short/Byte/Long cache -128..=127, Character 0..=127, Boolean
+    /// both values; Double/Float are never cached.
+    pub fn box_wrapper(&mut self, class: &str, value: JValue) -> HeapRef {
+        let cache_key = wrapper_cache_key(class, value);
+        if let Some(key) = cache_key
+            && let Some(&reference) = self.wrapper_cache.get(&key)
+        {
+            return reference;
+        }
+        let reference = self.alloc(HeapObject::Boxed {
+            class_name: std::rc::Rc::from(class),
+            value,
+        });
+        if let Some(key) = cache_key {
+            self.wrapper_cache.insert(key, reference);
+        }
+        reference
     }
 
     #[must_use]

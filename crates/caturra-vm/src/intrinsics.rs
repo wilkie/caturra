@@ -3246,10 +3246,7 @@ pub fn invoke_static(
         && descriptor.ends_with(&format!("L{class};"))
         && !matches!(args[0], JValue::Ref(_))
     {
-        let reference = heap.alloc(HeapObject::Boxed {
-            class_name: std::rc::Rc::from(class),
-            value: args[0],
-        });
+        let reference = heap.box_wrapper(class, args[0]);
         return Ok(Some(JValue::Ref(Some(reference))));
     }
     match class {

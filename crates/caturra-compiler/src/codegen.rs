@@ -9116,7 +9116,8 @@ impl BodyGen<'_> {
             // same): a paused debugger doesn't show the variable until
             // it actually holds its value.
             self.record_local_debug(&declarator.name, var_ty, slot);
-            let const_val = self.constant_variable_value(is_final, declarator.init.as_ref(), var_ty);
+            let const_val =
+                self.constant_variable_value(is_final, declarator.init.as_ref(), var_ty);
             self.scopes
                 .last_mut()
                 .expect("scope stack is never empty")
@@ -16465,14 +16466,37 @@ impl BodyGen<'_> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per operand-type family
+    /// Whether two reference types, at least one a wrapper, may be compared
+    /// with `==`/`!=` (JLS §15.21.3 / §5.5). Two wrappers must be the same
+    /// kind; a wrapper also compares with `null`, `Object`, and `Comparable`
+    /// (its supertypes). Anything else — `Integer == Long`, `Integer == String`
+    /// — is incomparable, exactly as javac rules.
+    fn wrapper_refs_comparable(&self, a: JType, b: JType) -> bool {
+        let comparable_id = self.table.class_id("Comparable");
+        let wrapper_ok = |other: JType| {
+            other == JType::Null
+                || matches!(other, JType::Object(id)
+                    if id == self.table.object_id || Some(id) == comparable_id)
+        };
+        match (a, b) {
+            (JType::Boxed(e1), JType::Boxed(e2)) => e1 == e2,
+            (JType::Boxed(_), other) | (other, JType::Boxed(_)) => wrapper_ok(other),
+            _ => true,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // one cohesive arm per operand-type shape
     fn comparison(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
         let (raw_l, raw_r) = (self.type_of(lhs), self.type_of(rhs));
-        // Comparing against `null` is a reference comparison (JLS §15.21.3),
-        // so a wrapper stays boxed: `map.get(k) == null` asks whether the
-        // mapping is absent, and must not try to unbox it first.
-        let against_null = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
-            && (raw_l == JType::Null || raw_r == JType::Null);
-        let (lt, rt) = if against_null {
+        // Equality between two reference operands is a REFERENCE comparison
+        // (JLS §15.21.3), so a wrapper stays boxed and compares by identity:
+        // `Integer a = 200, b = 200; a == b` is false, `map.get(k) == null`
+        // asks whether the mapping is absent. Only when an operand is a
+        // primitive does the other auto-unbox (§15.21.1 numeric equality).
+        let reference_equality = matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+            && raw_l.is_reference()
+            && raw_r.is_reference();
+        let (lt, rt) = if reference_equality {
             (raw_l, raw_r)
         } else {
             (numeric_view(raw_l), numeric_view(raw_r))
@@ -16496,6 +16520,27 @@ impl BodyGen<'_> {
                 format!(
                     "operator '{}' cannot be applied to {} and {}",
                     comparison_symbol(op),
+                    lt.describe(self.table),
+                    rt.describe(self.table)
+                ),
+            );
+            return JType::Error;
+        }
+
+        // A wrapper reference comparison is legal only against a cast-compatible
+        // type (JLS §15.21.3 / §5.5): `Integer == Long`, `Integer == String`,
+        // `Integer == Boolean` are compile errors, exactly as javac rejects
+        // them — never accept what javac refuses.
+        if reference_equality
+            && (matches!(lt, JType::Boxed(_)) || matches!(rt, JType::Boxed(_)))
+            && !self.wrapper_refs_comparable(lt, rt)
+        {
+            self.expr(lhs);
+            self.expr(rhs);
+            self.error(
+                span,
+                format!(
+                    "incomparable types: {} and {}",
                     lt.describe(self.table),
                     rt.describe(self.table)
                 ),
@@ -16576,13 +16621,20 @@ impl BodyGen<'_> {
             } else {
                 JType::Boolean
             };
+            // `numeric_conversion` unboxes a wrapper operand; the boolean path
+            // does not go through it, so unbox a boxed `Boolean` explicitly
+            // (`Boolean b = true; b == false` compares the unboxed values).
             let actual_l = self.expr(lhs);
             if both_numeric {
                 self.numeric_conversion(actual_l, target);
+            } else if let JType::Boxed(elem) = actual_l {
+                self.emit_unbox(elem);
             }
             let actual_r = self.expr(rhs);
             if both_numeric {
                 self.numeric_conversion(actual_r, target);
+            } else if let JType::Boxed(elem) = actual_r {
+                self.emit_unbox(elem);
             }
             let jump = match op {
                 BinaryOp::Eq => op::IF_ICMPEQ,
@@ -17161,6 +17213,16 @@ impl BodyGen<'_> {
                 // The wrapper both is the top `Object` and implements
                 // `Comparable`, so it satisfies a `Comparable`-bounded param.
                 self.emit_box(elem);
+                return;
+            }
+            // A boxed wrapper already IS an `Object`/`Comparable`, so widening
+            // to one is a no-op that KEEPS the same reference (JLS §5.1.5):
+            // `Object o = anInteger; o == anInteger` must stay true. Unboxing
+            // and re-boxing here would mint a fresh identity.
+            if let JType::Boxed(_) = from
+                && let JType::Object(id) = to
+                && (id == self.table.object_id || self.table.class_id("Comparable") == Some(id))
+            {
                 return;
             }
             // Unbox a wrapper to its primitive (then widen if needed).
