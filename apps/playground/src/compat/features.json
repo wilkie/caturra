@@ -308,7 +308,7 @@
     "source": "public class Rec {\n    record Point(int x, int y) {}\n\n    public static void main(String[] args) {\n        System.out.println(new Point(1, 2));\n    }\n}\n",
     "status": "beyond-11",
     "reason": "missing return statement",
-    "javac": "/tmp/compat-txh_lh40/Rec.java:2: error: cannot find symbol"
+    "javac": "/tmp/compat-85asd13y/Rec.java:2: error: cannot find symbol"
   },
   {
     "id": "text-blocks",
@@ -319,7 +319,7 @@
     "source": "public class Block {\n    public static void main(String[] args) {\n        String html = \"\"\"\n            <p>hi</p>\n            \"\"\";\n        System.out.println(html);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "unterminated string literal",
-    "javac": "/tmp/compat-k_pznp86/Block.java:3: error: unclosed string literal"
+    "javac": "/tmp/compat-9rvvdgcb/Block.java:3: error: unclosed string literal"
   },
   {
     "id": "switch-expressions",
@@ -330,7 +330,7 @@
     "source": "public class Switch {\n    public static void main(String[] args) {\n        int day = 3;\n        String name = switch (day) {\n            case 1 -> \"monday\";\n            case 3 -> \"wednesday\";\n            default -> \"other\";\n        };\n        System.out.println(name);\n    }\n}\n",
     "status": "beyond-11",
     "reason": "expected an expression",
-    "javac": "/tmp/compat-ppbg3g5f/Switch.java:4: error: illegal start of expression"
+    "javac": "/tmp/compat-zpev1p2k/Switch.java:4: error: illegal start of expression"
   },
   {
     "id": "g-primitives",
@@ -711,5 +711,55 @@
     "source": "public class G {\n    int x = 1;\n    G() { }\n    G(int x) { this.x = x; }\n    String show() { int x = 99; return x + \" \" + this.x; }\n    static class Parent { String describe() { return \"parent\"; } }\n    static class Child extends Parent {\n        @Override String describe() { return super.describe() + \"+child\"; }\n    }\n    public static void main(String[] args) throws Exception {\nSystem.out.println(new G(5).show());\n        System.out.println(new Child().describe());\n    }\n}\n",
     "status": "supported",
     "expected": "99 5\nparent+child\n"
+  },
+  {
+    "id": "g-regex",
+    "category": "Library",
+    "title": "Regular expressions (split, matches, replaceAll)",
+    "summary": "`String.split` takes a REGEX, not a literal \u2014 with groups, quantifiers and $1 in the replacement.",
+    "main": "G",
+    "source": "import java.util.Arrays;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nSystem.out.println(Arrays.toString(\"1.2.3\".split(\"\\\\.\")));\n        System.out.println(Arrays.toString(\"a1b22c\".split(\"[0-9]+\")));\n        System.out.println(\"2024-01-15\".matches(\"\\\\d{4}-\\\\d{2}-\\\\d{2}\"));\n        System.out.println(\"John Smith\".replaceAll(\"(\\\\w+) (\\\\w+)\", \"$2, $1\"));\n        System.out.println(\"a b  c\".replaceAll(\"\\\\s+\", \"_\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "[1, 2, 3]\n[a, b, c]\ntrue\nSmith, John\na_b_c\n"
+  },
+  {
+    "id": "g-fail-fast",
+    "category": "Collections",
+    "title": "Fail-fast iterators (ConcurrentModificationException)",
+    "summary": "Modifying a collection while iterating it throws, as on a real JVM \u2014 including the quirk where removing the second-to-last element does not.",
+    "main": "G",
+    "source": "import java.util.ArrayList;\nimport java.util.Arrays;\nimport java.util.ConcurrentModificationException;\nimport java.util.Iterator;\nimport java.util.List;\npublic class G {\n\n    public static void main(String[] args) throws Exception {\nList<String> l = new ArrayList<>(Arrays.asList(\"a\", \"b\", \"c\", \"d\", \"e\"));\n        try {\n            for (String s : l) { if (s.equals(\"b\")) l.remove(s); }\n        } catch (ConcurrentModificationException e) {\n            System.out.println(\"threw \" + e.getClass().getSimpleName());\n        }\n        Iterator<String> it = l.iterator();\n        while (it.hasNext()) { if (it.next().equals(\"c\")) it.remove(); }\n        System.out.println(l);\n    }\n}\n",
+    "status": "supported",
+    "expected": "threw ConcurrentModificationException\n[a, d, e]\n"
+  },
+  {
+    "id": "g-casts",
+    "category": "Expressions",
+    "title": "Casts: to Object, boxing and unboxing",
+    "summary": "Every reference widens to Object (which is how you pick an overload), and a primitive casts to its wrapper.",
+    "main": "G",
+    "source": "public class G {\n    static String which(Object x) { return \"Object\"; }\n    static String which(String x) { return \"String\"; }\n    public static void main(String[] args) throws Exception {\nObject o = (Object) \"hi\";\n        System.out.println(o);\n        System.out.println(which(\"x\"));\n        System.out.println(which((Object) \"x\"));\n        int n = 5;\n        System.out.println((Integer) n);\n        System.out.println((int) (Integer) n);\n        System.out.println((Double) 2.5);\n    }\n}\n",
+    "status": "supported",
+    "expected": "hi\nString\nObject\n5\n5\n2.5\n"
+  },
+  {
+    "id": "g-qualified-this",
+    "category": "Declarations",
+    "title": "Qualified this (Outer.this) and enclosing access",
+    "summary": "An inner class names either instance, and an anonymous class reads its enclosing object's members.",
+    "main": "G",
+    "source": "public class G {\n    int x = 1;\n    int twice() { return x * 2; }\n    class Inner {\n        int x = 2;\n        void show() { System.out.println(G.this.x + \" \" + this.x + \" \" + G.this.twice()); }\n    }\n    interface Src { int get(); }\n    void viaAnonymous() {\n        Src s = new Src() { public int get() { return x + twice(); } };\n        System.out.println(s.get());\n    }\n    public static void main(String[] args) throws Exception {\nG outer = new G();\n        outer.new Inner().show();\n        outer.viaAnonymous();\n    }\n}\n",
+    "status": "supported",
+    "expected": "1 2 2\n3\n"
+  },
+  {
+    "id": "g-generic-supertype",
+    "category": "Declarations",
+    "title": "Parameterized supertype (with bridge methods)",
+    "summary": "A subclass stands in for `Box<String>`, and a call through that reference reaches the OVERRIDE \u2014 which needs the bridge method erasure would otherwise lose.",
+    "main": "G",
+    "source": "public class G {\n    static class Box<T> { void set(T t) { System.out.println(\"Box.set \" + t); } }\n    static class SBox extends Box<String> {\n        @Override void set(String s) { System.out.println(\"SBox.set \" + s); }\n    }\n    interface F<T> { String apply(T t); }\n    static class SF implements F<String> {\n        public String apply(String s) { return \"SF:\" + s; }\n    }\n    public static void main(String[] args) throws Exception {\nBox<String> b = new SBox();\n        b.set(\"typed\");\n        F<String> f = new SF();\n        System.out.println(f.apply(\"y\"));\n    }\n}\n",
+    "status": "supported",
+    "expected": "SBox.set typed\nSF:y\n"
   }
 ]

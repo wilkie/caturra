@@ -47,6 +47,7 @@ const JAVA_UTIL: &[&str] = &[
     "InputMismatchException",
     "NoSuchElementException",
     "EmptyStackException",
+    "ConcurrentModificationException",
     "IllegalFormatException",
     "UnknownFormatConversionException",
     "MissingFormatArgumentException",

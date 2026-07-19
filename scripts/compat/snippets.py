@@ -1261,4 +1261,64 @@ GRAMMAR = [
                       '    static class Parent { String describe() { return "parent"; } }\n'
                       '    static class Child extends Parent {\n'
                       '        @Override String describe() { return super.describe() + "+child"; }\n    }')),
+    # ----- landed 2026-07-18/19: each of these was a gap the differential
+    # audit found, so the page should show them working rather than leave the
+    # grammar walk silent about them.
+    dict(id="g-regex", category="Library", title="Regular expressions (split, matches, replaceAll)",
+         summary="`String.split` takes a REGEX, not a literal — with groups, quantifiers and $1 in the replacement.",
+         main="G",
+         source=_prog('System.out.println(Arrays.toString("1.2.3".split("\\\\.")));\n'
+                      '        System.out.println(Arrays.toString("a1b22c".split("[0-9]+")));\n'
+                      '        System.out.println("2024-01-15".matches("\\\\d{4}-\\\\d{2}-\\\\d{2}"));\n'
+                      '        System.out.println("John Smith".replaceAll("(\\\\w+) (\\\\w+)", "$2, $1"));\n'
+                      '        System.out.println("a b  c".replaceAll("\\\\s+", "_"));',
+                      '', 'import java.util.Arrays;')),
+    dict(id="g-fail-fast", category="Collections", title="Fail-fast iterators (ConcurrentModificationException)",
+         summary="Modifying a collection while iterating it throws, as on a real JVM — including the quirk where removing the second-to-last element does not.",
+         main="G",
+         source=_prog('List<String> l = new ArrayList<>(Arrays.asList("a", "b", "c", "d", "e"));\n'
+                      '        try {\n'
+                      '            for (String s : l) { if (s.equals("b")) l.remove(s); }\n'
+                      '        } catch (ConcurrentModificationException e) {\n'
+                      '            System.out.println("threw " + e.getClass().getSimpleName());\n        }\n'
+                      '        Iterator<String> it = l.iterator();\n'
+                      '        while (it.hasNext()) { if (it.next().equals("c")) it.remove(); }\n'
+                      '        System.out.println(l);',
+                      '', 'import java.util.ArrayList;\nimport java.util.Arrays;\n'
+                      'import java.util.ConcurrentModificationException;\n'
+                      'import java.util.Iterator;\nimport java.util.List;')),
+    dict(id="g-casts", category="Expressions", title="Casts: to Object, boxing and unboxing",
+         summary="Every reference widens to Object (which is how you pick an overload), and a primitive casts to its wrapper.",
+         main="G",
+         source=_prog('Object o = (Object) "hi";\n        System.out.println(o);\n'
+                      '        System.out.println(which("x"));\n'
+                      '        System.out.println(which((Object) "x"));\n'
+                      '        int n = 5;\n'
+                      '        System.out.println((Integer) n);\n'
+                      '        System.out.println((int) (Integer) n);\n'
+                      '        System.out.println((Double) 2.5);',
+                      '    static String which(Object x) { return "Object"; }\n'
+                      '    static String which(String x) { return "String"; }')),
+    dict(id="g-qualified-this", category="Declarations", title="Qualified this (Outer.this) and enclosing access",
+         summary="An inner class names either instance, and an anonymous class reads its enclosing object's members.",
+         main="G",
+         source=_prog('G outer = new G();\n        outer.new Inner().show();\n        outer.viaAnonymous();',
+                      '    int x = 1;\n    int twice() { return x * 2; }\n'
+                      '    class Inner {\n        int x = 2;\n'
+                      '        void show() { System.out.println(G.this.x + " " + this.x + " " + G.this.twice()); }\n    }\n'
+                      '    interface Src { int get(); }\n'
+                      '    void viaAnonymous() {\n'
+                      '        Src s = new Src() { public int get() { return x + twice(); } };\n'
+                      '        System.out.println(s.get());\n    }')),
+    dict(id="g-generic-supertype", category="Declarations", title="Parameterized supertype (with bridge methods)",
+         summary="A subclass stands in for `Box<String>`, and a call through that reference reaches the OVERRIDE — which needs the bridge method erasure would otherwise lose.",
+         main="G",
+         source=_prog('Box<String> b = new SBox();\n        b.set("typed");\n'
+                      '        F<String> f = new SF();\n        System.out.println(f.apply("y"));',
+                      '    static class Box<T> { void set(T t) { System.out.println("Box.set " + t); } }\n'
+                      '    static class SBox extends Box<String> {\n'
+                      '        @Override void set(String s) { System.out.println("SBox.set " + s); }\n    }\n'
+                      '    interface F<T> { String apply(T t); }\n'
+                      '    static class SF implements F<String> {\n'
+                      '        public String apply(String s) { return "SF:" + s; }\n    }')),
 ]

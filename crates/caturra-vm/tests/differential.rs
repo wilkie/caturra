@@ -12301,3 +12301,32 @@ public class DiffLegalGenerics {
 }
 "#
 );
+
+// `ConcurrentModificationException` was CATCHABLE (it is in the VM"s exception
+// table) but could not be named in an import, so catching it by name only
+// worked behind a wildcard `import java.util.*`. Found by adding the
+// fail-fast entry to the compatibility page, which records every claim as a
+// runnable program — the page"s whole point.
+differential_test!(
+    diff_cme_named_import,
+    "DiffCmeImport",
+    r#"
+import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
+import java.util.List;
+
+public class DiffCmeImport {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>();
+        list.add("x");
+        list.add("y");
+        try {
+            for (String s : list) { list.add("z"); }
+        } catch (ConcurrentModificationException e) {
+            System.out.println("caught " + e.getClass().getSimpleName());
+        }
+        System.out.println(list.size());
+    }
+}
+"#
+);
