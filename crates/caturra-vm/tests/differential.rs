@@ -11183,3 +11183,130 @@ public class DiffLongBits {
 }
 "#
 );
+
+// `String.split` takes a REGULAR EXPRESSION, not a literal. caturra split on
+// the literal argument until 2026-07-18, which was a silent wrong answer
+// wherever the delimiter had any regex meaning — and silently CORRECT for the
+// regex-inert delimiters (`split(",")`) that dominate real code, which is how
+// it survived so long. Every line here diverged before the regex engine landed.
+differential_test!(
+    diff_split_is_a_regex,
+    "DiffSplitRegex",
+    r#"
+import java.util.Arrays;
+
+public class DiffSplitRegex {
+    public static void main(String[] args) {
+        // An escaped metacharacter is literal; a bare one is not.
+        System.out.println(Arrays.toString("1.2.3".split("\\.")));
+        System.out.println("a.b.c".split(".").length);
+        // Character classes and quantifiers.
+        System.out.println(Arrays.toString("a1b22c".split("[0-9]+")));
+        System.out.println(Arrays.toString("a b  c".split("\\s+")));
+        System.out.println(Arrays.toString("x,y;z".split("[,;]")));
+        System.out.println(Arrays.toString("a1b2c".split("\\d")));
+        // Alternation.
+        System.out.println(Arrays.toString("a-b_c".split("-|_")));
+        // A delimiter with no regex meaning still behaves the same.
+        System.out.println(Arrays.toString("a,b,c".split(",")));
+        // No match at all returns the whole input as one element, which is why
+        // the empty string splits to a ONE-element array, not an empty one.
+        System.out.println("".split(",").length);
+        System.out.println(Arrays.toString("nomatch".split(",")));
+        // Trailing empties: dropped at limit 0, kept when negative.
+        System.out.println(Arrays.toString("a,b,,c,,,".split(",")));
+        System.out.println(Arrays.toString("a,b,,c,,,".split(",", -1)));
+        // A positive limit caps the parts; the last keeps the rest.
+        System.out.println(Arrays.toString("a,b,c,d".split(",", 2)));
+        System.out.println(Arrays.toString("boo:and:foo".split("o", 2)));
+        System.out.println(Arrays.toString("boo:and:foo".split("o", -2)));
+        // A zero-width match contributes no leading empty string.
+        System.out.println(Arrays.toString("abc".split("")));
+        System.out.println(Arrays.toString("abc".split("x*")));
+        // Leading delimiter DOES produce a leading empty string.
+        System.out.println(Arrays.toString(",a,b".split(",")));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_matches_and_replace_regex,
+    "DiffRegexReplace",
+    r##"
+public class DiffRegexReplace {
+    public static void main(String[] args) {
+        // matches() is anchored at BOTH ends, and must backtrack to get there:
+        // a greedy `a*` first eats "aa" and has to give one back for `b?`.
+        System.out.println("hello123".matches("[a-z]+\\d+"));
+        System.out.println("aab".matches("a*b?"));
+        System.out.println("abc".matches("a"));
+        System.out.println("2024-01-15".matches("\\d{4}-\\d{2}-\\d{2}"));
+        System.out.println("".matches(""));
+        System.out.println("aaa".matches("a{2,3}"));
+        System.out.println("aaaa".matches("a{2,3}"));
+        // Possessive quantifiers never give back; greedy ones do.
+        System.out.println("aaa".matches("a*a"));
+        System.out.println("aaa".matches("a*+a"));
+        // Reluctant vs greedy.
+        System.out.println("<a><b>".replaceAll("<.+>", "X"));
+        System.out.println("<a><b>".replaceAll("<.+?>", "X"));
+        // Group references in the replacement.
+        System.out.println("John Smith".replaceAll("(\\w+) (\\w+)", "$2, $1"));
+        System.out.println("a1b2".replaceAll("\\d", "#"));
+        System.out.println("a1b2".replaceFirst("\\d", "#"));
+        // A backslash escapes the next character in a replacement, so this
+        // inserts a literal dollar sign rather than starting a group.
+        System.out.println("x".replaceAll("x", "\\$"));
+        // A zero-width match replaces at every position.
+        System.out.println("aaa".replaceAll("a*", "-"));
+        System.out.println("abc".replaceAll("", "."));
+        // Backreferences inside the pattern.
+        System.out.println("aabaa".matches("(a+)b\\1"));
+        System.out.println("aabaaa".matches("(a+)b\\1"));
+        // Anchors and word boundaries.
+        System.out.println("a cat here".replaceAll("\\bcat\\b", "dog"));
+        System.out.println("concatenate".replaceAll("\\bcat\\b", "dog"));
+        // Java's \s is the six ASCII spaces only, so a non-breaking space
+        // (U+00A0) is NOT whitespace to a regex.
+        System.out.println("a b".replaceAll("\\s", "_"));
+        System.out.println("a\tb".replaceAll("\\s", "_"));
+        // String.replace stays LITERAL even when it looks like a regex.
+        System.out.println("a.b".replace(".", "-"));
+    }
+}
+"##
+);
+
+// A malformed pattern is a PatternSyntaxException, not a silently-wrong split.
+// The message is multi-line (description, pattern, caret), and the class must
+// be catchable both by its own name and as an IllegalArgumentException.
+differential_test!(
+    diff_pattern_syntax_exception,
+    "DiffPatternSyntax",
+    r##"
+import java.util.regex.PatternSyntaxException;
+
+public class DiffPatternSyntax {
+    public static void main(String[] args) {
+        try {
+            "abc".split("[");
+        } catch (PatternSyntaxException e) {
+            System.out.println("caught: " + e.getMessage());
+        }
+        try {
+            "abc".matches("(a");
+        } catch (Exception e) {
+            System.out.println(e.getClass().getName());
+        }
+        try {
+            "abc".split("*");
+        } catch (IllegalArgumentException e) {
+            System.out.println("catchable as IllegalArgumentException");
+        }
+        // A valid pattern after a caught bad one still works.
+        System.out.println("a1b".replaceAll("\\d", "#"));
+    }
+}
+"##
+);

@@ -779,9 +779,9 @@ fn string_method(
             let other = arg_units(other)?;
             Ok(Some(JValue::Int(compare_utf16(&units, &other))))
         }
-        ("split", [delimiter]) => {
-            let delimiter = arg_units(delimiter)?;
-            let parts = split_units(&units, &delimiter);
+        ("split", [pattern]) => {
+            let pattern = arg_units(pattern)?;
+            let parts = split_regex(&units, &pattern, 0)?;
             let refs: Vec<JValue> = parts
                 .into_iter()
                 .map(|part| JValue::Ref(Some(heap.alloc(HeapObject::JavaString(part)))))
@@ -806,6 +806,26 @@ fn string_method(
             let from = arg_units(from)?;
             let to = arg_units(to)?;
             let replaced = replace_units(&units, &from, &to);
+            let reference = heap.alloc(HeapObject::JavaString(replaced));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("matches", [pattern]) => {
+            let pattern = arg_units(pattern)?;
+            Ok(Some(JValue::Int(i32::from(matches_regex(
+                &units, &pattern,
+            )?))))
+        }
+        ("replaceAll", [pattern, replacement]) => {
+            let pattern = arg_units(pattern)?;
+            let replacement = arg_units(replacement)?;
+            let replaced = replace_regex(&units, &pattern, &replacement, false)?;
+            let reference = heap.alloc(HeapObject::JavaString(replaced));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("replaceFirst", [pattern, replacement]) => {
+            let pattern = arg_units(pattern)?;
+            let replacement = arg_units(replacement)?;
+            let replaced = replace_regex(&units, &pattern, &replacement, true)?;
             let reference = heap.alloc(HeapObject::JavaString(replaced));
             Ok(Some(JValue::Ref(Some(reference))))
         }
@@ -915,9 +935,9 @@ fn string_method(
                 &units, &needle, *from,
             ))))
         }
-        ("split", [delimiter, JValue::Int(limit)]) => {
-            let delimiter = arg_units(delimiter)?;
-            let parts = split_units_limit(&units, &delimiter, *limit);
+        ("split", [pattern, JValue::Int(limit)]) => {
+            let pattern = arg_units(pattern)?;
+            let parts = split_regex(&units, &pattern, *limit)?;
             let refs: Vec<JValue> = parts
                 .into_iter()
                 .map(|part| JValue::Ref(Some(heap.alloc(HeapObject::JavaString(part)))))
@@ -1444,47 +1464,6 @@ fn last_index_of_from(haystack: &[u16], needle: &[u16], from: i32) -> i32 {
     -1
 }
 
-/// `String.split(delimiter, limit)` with Java's limit semantics over a
-/// literal delimiter: positive caps the part count (the last keeps the
-/// rest), zero drops trailing empties, negative keeps them.
-fn split_units_limit(haystack: &[u16], delimiter: &[u16], limit: i32) -> Vec<Vec<u16>> {
-    if limit == 0 {
-        return split_units(haystack, delimiter);
-    }
-    let mut parts: Vec<Vec<u16>> = Vec::new();
-    if delimiter.is_empty() {
-        for unit in haystack {
-            if limit > 0 && i32::try_from(parts.len()).unwrap_or(i32::MAX) == limit - 1 {
-                break;
-            }
-            parts.push(vec![*unit]);
-        }
-        let consumed: usize = parts.len();
-        if consumed < haystack.len() {
-            parts.push(haystack[consumed..].to_vec());
-        } else if limit < 0 || parts.is_empty() {
-            parts.push(Vec::new());
-        }
-        return parts;
-    }
-    let mut start = 0;
-    let mut at = 0;
-    while at + delimiter.len() <= haystack.len() {
-        if limit > 0 && i32::try_from(parts.len()).unwrap_or(i32::MAX) == limit - 1 {
-            break;
-        }
-        if &haystack[at..at + delimiter.len()] == delimiter {
-            parts.push(haystack[start..at].to_vec());
-            at += delimiter.len();
-            start = at;
-        } else {
-            at += 1;
-        }
-    }
-    parts.push(haystack[start..].to_vec());
-    parts
-}
-
 fn substring(
     heap: &mut Heap,
     units: &[u16],
@@ -1561,34 +1540,169 @@ fn compare_utf16(a: &[u16], b: &[u16]) -> i32 {
     i32::try_from(a.len()).unwrap_or(i32::MAX) - i32::try_from(b.len()).unwrap_or(i32::MAX)
 }
 
-/// `String.split` with a literal delimiter. Matches Java's default
-/// behavior of dropping trailing empty strings; an empty delimiter
-/// splits into single code units (as Java's empty regex does). The
-/// delimiter is NOT a regex — a documented deviation that only shows
-/// for metacharacter delimiters like `"."`.
-fn split_units(haystack: &[u16], delimiter: &[u16]) -> Vec<Vec<u16>> {
+/// Compile a pattern, reporting a bad one as Java's `PatternSyntaxException`.
+fn compile_regex(pattern: &[u16]) -> Result<crate::regex::Regex, VmError> {
+    crate::regex::Regex::new(pattern).map_err(|error| {
+        throw(format!(
+            "java.util.regex.PatternSyntaxException: {}",
+            error.message()
+        ))
+    })
+}
+
+/// Successive matches of `regex` in `input`, as Java's `Matcher.find` walks
+/// them: each search resumes at the previous match's end, and a zero-width
+/// match advances one unit so the loop cannot stall.
+fn find_matches(regex: &crate::regex::Regex, input: &[u16]) -> Vec<crate::regex::Match> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at <= input.len() {
+        let Some(one) = regex.find_at(input, at) else {
+            break;
+        };
+        at = if one.end == one.start {
+            one.end + 1
+        } else {
+            one.end
+        };
+        found.push(one);
+    }
+    found
+}
+
+/// `String.split(regex, limit)` — JDK 11's algorithm, step for step.
+///
+/// The delimiter is a REGULAR EXPRESSION, not a literal. Several rules here
+/// look arbitrary but are load-bearing, and each one is a case caturra used to
+/// get wrong:
+///
+/// * a zero-width match at position 0 contributes no leading `""`;
+/// * if nothing matched at all, the result is the whole input as ONE element,
+///   which is why `"".split(",")` is `[""]` and not `[]`;
+/// * `limit > 0` caps the parts, with the last one holding the entire rest;
+/// * `limit == 0` drops trailing empty strings, `limit < 0` keeps them.
+fn split_regex(input: &[u16], pattern: &[u16], limit: i32) -> Result<Vec<Vec<u16>>, VmError> {
+    let regex = compile_regex(pattern)?;
+    let match_limited = limit > 0;
+    let cap = usize::try_from(limit).unwrap_or(0);
     let mut parts: Vec<Vec<u16>> = Vec::new();
-    if delimiter.is_empty() {
-        parts.extend(haystack.iter().map(|unit| vec![*unit]));
-    } else {
-        let mut start = 0;
-        let mut at = 0;
-        while at + delimiter.len() <= haystack.len() {
-            if &haystack[at..at + delimiter.len()] == delimiter {
-                parts.push(haystack[start..at].to_vec());
-                at += delimiter.len();
-                start = at;
-            } else {
+    let mut index = 0;
+
+    for one in find_matches(&regex, input) {
+        if !match_limited || parts.len() < cap - 1 {
+            // No empty leading substring for a zero-width match at the very
+            // beginning of the input.
+            if index == 0 && one.start == 0 && one.end == 0 {
+                continue;
+            }
+            parts.push(input[index..one.start].to_vec());
+            index = one.end;
+        } else if parts.len() == cap - 1 {
+            // The last permitted part takes everything that is left.
+            parts.push(input[index..].to_vec());
+            index = one.end;
+        }
+    }
+
+    // No match anywhere: the input comes back whole and untouched.
+    if index == 0 {
+        return Ok(vec![input.to_vec()]);
+    }
+    if !match_limited || parts.len() < cap {
+        parts.push(input[index..].to_vec());
+    }
+    if limit == 0 {
+        while parts.last().is_some_and(Vec::is_empty) {
+            parts.pop();
+        }
+    }
+    Ok(parts)
+}
+
+/// `String.matches` — the pattern must match the entire string.
+fn matches_regex(input: &[u16], pattern: &[u16]) -> Result<bool, VmError> {
+    Ok(compile_regex(pattern)?.matches_whole(input))
+}
+
+/// `String.replaceAll` / `replaceFirst`.
+///
+/// The replacement is not literal: `$1` inserts a group and `\` escapes the
+/// next character, matching `Matcher.appendReplacement`. A `$` naming a group
+/// that does not exist is an error in Java, not a literal dollar.
+fn replace_regex(
+    input: &[u16],
+    pattern: &[u16],
+    replacement: &[u16],
+    first_only: bool,
+) -> Result<Vec<u16>, VmError> {
+    let regex = compile_regex(pattern)?;
+    let mut out: Vec<u16> = Vec::new();
+    let mut index = 0;
+    for one in find_matches(&regex, input) {
+        if one.start < index {
+            // A zero-width match immediately after a consumed one.
+            continue;
+        }
+        out.extend_from_slice(&input[index..one.start]);
+        out.extend(expand_replacement(input, &one, replacement, &regex)?);
+        index = one.end;
+        if first_only {
+            break;
+        }
+    }
+    out.extend_from_slice(&input[index..]);
+    Ok(out)
+}
+
+/// Expand `$n` group references and `\` escapes in a replacement string.
+fn expand_replacement(
+    input: &[u16],
+    one: &crate::regex::Match,
+    replacement: &[u16],
+    regex: &crate::regex::Regex,
+) -> Result<Vec<u16>, VmError> {
+    let mut out: Vec<u16> = Vec::new();
+    let mut at = 0;
+    while at < replacement.len() {
+        let unit = replacement[at];
+        if unit == u16::from(b'\\') {
+            at += 1;
+            if at < replacement.len() {
+                out.push(replacement[at]);
                 at += 1;
             }
+            continue;
         }
-        parts.push(haystack[start..].to_vec());
+        if unit != u16::from(b'$') {
+            out.push(unit);
+            at += 1;
+            continue;
+        }
+        at += 1;
+        // Java takes the longest run of digits that still names a group.
+        let mut group = None;
+        while at < replacement.len() {
+            let digit = replacement[at];
+            if !(0x30..=0x39).contains(&digit) {
+                break;
+            }
+            let extended = group.unwrap_or(0) * 10 + usize::from(digit - 0x30);
+            if extended > regex.group_count() {
+                break;
+            }
+            group = Some(extended);
+            at += 1;
+        }
+        let Some(group) = group else {
+            return Err(throw(String::from(
+                "java.lang.IllegalArgumentException: Illegal group reference",
+            )));
+        };
+        if let Some(Some((from, to))) = one.groups.get(group).copied() {
+            out.extend_from_slice(&input[from..to]);
+        }
     }
-    // Java (limit 0) removes trailing empty strings.
-    while parts.last().is_some_and(Vec::is_empty) {
-        parts.pop();
-    }
-    parts
+    Ok(out)
 }
 
 /// `String.replace(CharSequence, CharSequence)` — literal in Java too.

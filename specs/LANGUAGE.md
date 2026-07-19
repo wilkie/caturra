@@ -188,11 +188,10 @@ be referenced from a static context`, and `cannot find symbol` when the
 - **The class library** (stage 7, intrinsics per SCOPE.md):
   - The full Java 11 `String` API over UTF-16 (2026-07-03), because
     students look methods up in documentation and expect them to exist:
-    every instance method except the regex family
-    (`matches`/`replaceAll`/`replaceFirst`), the stream family
-    (`chars`/`codePoints`/`lines`), and `getBytes` — those report an
-    honest "String.matches exists in Java, but regular expressions are
-    not supported by caturra" rather than a misleading cannot-find-symbol.
+    every instance method except the stream family
+    (`chars`/`codePoints`/`lines`) and `getBytes` — those report an
+    honest "String.chars exists in Java, but streams are not supported
+    by caturra" rather than a misleading cannot-find-symbol.
     Statics: `valueOf` (all overloads incl. `char[]`), `copyValueOf`,
     and `String.format` (2026-07-03) — plus `System.out.printf` and
     `PrintWriter.printf` — via a compiler special-case that synthesizes
@@ -205,10 +204,18 @@ be referenced from a static context`, and `cannot find symbol` when the
     Float conversions round HALF_UP over the shortest-round-trip
     decimal digits, matching Java's `BigDecimal.valueOf` path exactly
     (`%.2f` of `2.675` is `2.68`). `join` still reports the varargs
-    limitation. `split` treats its
-    delimiter literally, not as a regex (a documented deviation visible
-    only for metacharacter delimiters like `"."`), with Java's full
-    limit semantics; `intern` preserves reference identity; `hashCode`
+    limitation. The regex family (`split`/`matches`/`replaceAll`/
+    `replaceFirst`) is backed by caturra's own backtracking engine over
+    UTF-16 units (`caturra-vm/src/regex.rs`, 2026-07-18): character
+    classes, the predefined classes with Java's ASCII definitions of
+    `\d`/`\w`/`\s`, greedy/reluctant/possessive quantifiers, groups,
+    backreferences, alternation and anchors, with `split`'s exact JDK
+    algorithm (limit semantics, the zero-width-at-zero rule, and the
+    no-match case that makes `"".split(",")` one element). A malformed
+    pattern is a real `PatternSyntaxException`. Before that `split` took
+    its argument LITERALLY, which was silently wrong for any delimiter
+    with regex meaning and silently right for the `","` case that
+    dominates real code. `intern` preserves reference identity; `hashCode`
     is Java's exact algorithm. With Java 11 exception wording
     (`StringIndexOutOfBoundsException: String index out of range: 5`).
     `equals` accepts only strings/null (a documented narrowing of
@@ -308,7 +315,9 @@ be referenced from a static context`, and `cannot find symbol` when the
     Every `hasNextX` classification, the mismatch
     behaviour and `close` are pinned against a real JDK by the differential
     suite (`diff_scanner_close_closes_standard_in`).
-    Pattern/regex members and streams report honest reasons.
+    `Pattern`/`Matcher` and the stream members report honest reasons
+    (the regex ENGINE exists, but caturra compiles patterns inside the
+    `String` methods rather than exposing the objects).
   - `ArrayList<E>` with the CSA generics surface: wrapper/String/class
     element types, the diamond, and the full Java 11 method set
     (2026-07-03): `size/add/get/set/remove` (by index and by value),

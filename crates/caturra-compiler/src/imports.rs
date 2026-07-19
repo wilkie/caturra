@@ -77,6 +77,11 @@ const JAVA_UTIL_FUNCTION: &[&str] = &[
     "Supplier",
 ];
 /// `java.util.stream` — the Stream pipeline and its collectors.
+/// `Pattern`/`Matcher` are not modelled — caturra compiles patterns inside
+/// `String.split`/`matches`/`replaceAll` rather than exposing the objects —
+/// but the exception those methods throw is part of the API students catch.
+const JAVA_UTIL_REGEX: &[&str] = &["PatternSyntaxException"];
+
 const JAVA_UTIL_STREAM: &[&str] = &[
     "Stream",
     "IntStream",
@@ -123,6 +128,7 @@ const JAVA_LANG: &[&str] = &[
 /// "cannot find symbol".
 const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     ("java.util", &["Vector", "Hashtable"]),
+    ("java.util.regex", &["Pattern", "Matcher", "MatchResult"]),
     (
         "java.io",
         &[
@@ -164,12 +170,12 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
     "java.text",
     "java.math",
     "java.sql",
-    "java.util.regex",
     "java.util.concurrent",
 ];
 
 /// Library type names whose use requires an import.
 const REQUIRES_IMPORT: &[&str] = &[
+    "PatternSyntaxException",
     "Scanner",
     "ArrayList",
     "List",
@@ -229,9 +235,8 @@ const REQUIRES_IMPORT: &[&str] = &[
 pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     let (package, class) = dotted.rsplit_once('.')?;
     let known = match package {
-        "java.util" | "java.io" | "java.lang" | "java.util.function" | "java.nio.file" => {
-            package_classes(package)?
-        }
+        "java.util" | "java.io" | "java.lang" | "java.util.function" | "java.util.regex"
+        | "java.nio.file" => package_classes(package)?,
         _ => return None,
     };
     known.iter().find(|name| **name == class).copied()
@@ -277,6 +282,7 @@ fn package_classes(package: &str) -> Option<&'static [&'static str]> {
     match package {
         "java.util" => Some(JAVA_UTIL),
         "java.util.stream" => Some(JAVA_UTIL_STREAM),
+        "java.util.regex" => Some(JAVA_UTIL_REGEX),
         "java.util.function" => Some(JAVA_UTIL_FUNCTION),
         "java.io" => Some(JAVA_IO),
         "java.nio.file" => Some(JAVA_NIO_FILE),

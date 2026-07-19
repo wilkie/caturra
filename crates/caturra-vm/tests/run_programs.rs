@@ -7902,14 +7902,6 @@ fn try_catch_compile_errors_match_javac() {
             "'try' needs at least one 'catch' clause or a 'finally' block",
         ),
         (
-            r#"class M { static void f() { boolean b = "ab".matches("a."); } }"#,
-            "String.matches exists in Java, but regular expressions are not supported by caturra",
-        ),
-        (
-            r#"class M { static void f() { String s = "a".replaceAll("a", "b"); } }"#,
-            "String.replaceAll exists in Java, but regular expressions are not supported",
-        ),
-        (
             r#"class M { static void f() { "abc".lines(); } }"#,
             "String.lines exists in Java, but streams are not supported by caturra",
         ),

@@ -4441,6 +4441,24 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         descriptor: "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;",
     },
     BuiltinMethod {
+        name: "matches",
+        params: &[BParam::Str],
+        ret: BRet::Boolean,
+        descriptor: "(Ljava/lang/String;)Z",
+    },
+    BuiltinMethod {
+        name: "replaceAll",
+        params: &[BParam::Str, BParam::Str],
+        ret: BRet::Str,
+        descriptor: "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "replaceFirst",
+        params: &[BParam::Str, BParam::Str],
+        ret: BRet::Str,
+        descriptor: "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+    },
+    BuiltinMethod {
         name: "toUpperCase",
         params: &[],
         ret: BRet::Str,
@@ -4686,9 +4704,6 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 /// symbol" would read as a bug.
 #[rustfmt::skip]
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
-    ("String", "matches", "regular expressions are not supported by caturra"),
-    ("String", "replaceAll", "regular expressions are not supported by caturra"),
-    ("String", "replaceFirst", "regular expressions are not supported by caturra"),
     ("String", "getBytes", "byte arrays are not supported by caturra"),
     ("String", "chars", "streams are not supported by caturra"),
     ("String", "codePoints", "streams are not supported by caturra"),

@@ -14,6 +14,7 @@ mod interpreter;
 pub mod intrinsics;
 pub mod io;
 pub mod map;
+pub(crate) mod regex;
 pub mod value;
 pub mod vfs;
 pub mod vm;
