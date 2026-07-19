@@ -12451,3 +12451,94 @@ public class DiffWrapperDispatch {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Set.equals across implementations, and TreeSet/TreeMap's first-insert check
+// ---------------------------------------------------------------------------
+
+// `AbstractSet.equals` is specified across implementations and is SYMMETRIC.
+// Requiring the other side to be a HashSet made it one-way: `tree.equals(hash)`
+// was true while `hash.equals(tree)` was false.
+differential_test!(
+    diff_set_equals_across_implementations,
+    "DiffSetEquals",
+    r#"
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+public class DiffSetEquals {
+    public static void main(String[] args) {
+        Set<Integer> hash = new HashSet<>(Arrays.asList(1, 2, 3));
+        Set<Integer> tree = new TreeSet<>(Arrays.asList(3, 2, 1));
+        System.out.println(hash.equals(tree));
+        System.out.println(tree.equals(hash));
+        System.out.println(hash.hashCode() == tree.hashCode());
+        // ... and the cases that must stay false.
+        System.out.println(hash.equals(new HashSet<>(Arrays.asList(1, 2))));
+        System.out.println(hash.equals(null));
+        System.out.println(hash.equals("not a set"));
+        // A keySet() is a Set too, in both directions.
+        Map<String, Integer> map = new HashMap<>();
+        map.put("a", 1);
+        map.put("b", 2);
+        System.out.println(map.keySet().equals(new HashSet<>(Arrays.asList("a", "b"))));
+        System.out.println(new HashSet<>(Arrays.asList("a", "b")).equals(map.keySet()));
+    }
+}
+"#
+);
+
+// The JDK compares an element WITH ITSELF when the collection is empty — the
+// "type (and possibly null) check" in TreeMap.put. Without it the FIRST insert
+// compared against nothing, so a null and a non-Comparable element slipped in
+// and only the second insert complained.
+differential_test!(
+    diff_tree_first_insert_checks,
+    "DiffTreeFirstInsert",
+    r#"
+import java.util.Arrays;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+public class DiffTreeFirstInsert {
+    static class NotComparable {
+        int x;
+        NotComparable(int x) { this.x = x; }
+    }
+
+    public static void main(String[] args) {
+        TreeSet<NotComparable> set = new TreeSet<>();
+        try {
+            set.add(new NotComparable(1));
+            System.out.println("accepted, size " + set.size());
+        } catch (ClassCastException e) {
+            System.out.println("ClassCastException on the first add");
+        }
+        TreeSet<String> nulls = new TreeSet<>();
+        try {
+            nulls.add(null);
+            System.out.println("null accepted");
+        } catch (NullPointerException e) {
+            System.out.println("NullPointerException on the first add");
+        }
+        TreeMap<String, String> map = new TreeMap<>();
+        try {
+            map.put(null, "v");
+            System.out.println("null key accepted");
+        } catch (NullPointerException e) {
+            System.out.println("NullPointerException on the first put");
+        }
+        // Ordinary sorted use is untouched.
+        System.out.println(new TreeSet<>(Arrays.asList("b", "a", "c")));
+        TreeMap<String, Integer> ordered = new TreeMap<>();
+        ordered.put("b", 2);
+        ordered.put("a", 1);
+        System.out.println(ordered);
+    }
+}
+"#
+);

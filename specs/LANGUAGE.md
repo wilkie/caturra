@@ -81,6 +81,16 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   structural change to the collections caturra models changes the size. The
   documented gap: a modification that nets out to the same size between two
   `next()` calls (an add AND a remove) is not caught, where a real JVM would.
+- **Set.equals and the tree collections' first insert** (2026-07-19):
+  `AbstractSet.equals` is specified across implementations and is symmetric, so
+  a `HashSet` equals a `TreeSet` holding the same elements — it used to demand
+  a `HashSet` on the other side, which made it one-way. A `keySet()` view
+  compares as a Set too (a `values()` view does NOT: `AbstractCollection` does
+  not override `equals`, so it stays identity, as on a JDK). Separately,
+  `TreeSet.add`/`TreeMap.put` now compare the first element WITH ITSELF, the
+  JDK's "type (and possibly null) check": before, the first insert compared
+  against nothing, so `null` and a non-`Comparable` element were accepted and
+  only the SECOND insert complained.
 - **Wrapper dispatch and identity** (2026-07-19): `list.remove(Integer.valueOf(2))`
   removes the VALUE, not the element at index 2. Both `remove(int)` and
   `remove(Object)` exist and caturra stores list elements UNBOXED, so both

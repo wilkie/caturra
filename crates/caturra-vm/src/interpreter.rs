@@ -4384,6 +4384,45 @@ impl<'run> Interpreter<'run> {
     }
 
     /// `list.contains(probe)`: Java asks the *probe*, not the element.
+    /// `AbstractSet.equals` between any two set-like collections: same size,
+    /// and every element of one present in the other.
+    fn set_like_equals(&mut self, receiver: HeapRef, other: HeapRef) -> Result<bool, VmError> {
+        if !self.is_set_like(other) || self.set_like_len(receiver) != self.set_like_len(other) {
+            return Ok(false);
+        }
+        let theirs = self.collection_elements(other);
+        for element in self.collection_elements(receiver) {
+            let mut found = false;
+            for candidate in &theirs {
+                if self.java_equals(element, *candidate)? {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether `reference` is a Set of any implementation — what
+    /// `AbstractSet.equals` will compare against.
+    fn is_set_like(&self, reference: HeapRef) -> bool {
+        use crate::value::HeapObject;
+        match self.heap.get(reference) {
+            Some(HeapObject::HashSet(_) | HeapObject::TreeSet { .. }) => true,
+            Some(HeapObject::UnmodifiableSet(inner)) => self.is_set_like(*inner),
+            Some(HeapObject::MapView { kind, .. }) => matches!(kind, MapViewKind::Keys),
+            _ => false,
+        }
+    }
+
+    /// The element count of any set-like collection.
+    fn set_like_len(&self, reference: HeapRef) -> usize {
+        iterated_len_of(&self.heap, reference)
+    }
+
     fn list_contains(&mut self, list: HeapRef, probe: JValue) -> Result<bool, VmError> {
         Ok(self.list_index_of(list, probe, false)? >= 0)
     }
@@ -4700,6 +4739,10 @@ impl<'run> Interpreter<'run> {
         use crate::value::HeapObject;
         let comparator = self.tree_map_comparator(map);
         let entries = self.map_entries(map);
+        // Same self-compare as TreeSet: the first key must be checked too.
+        if entries.is_empty() {
+            self.compare_with(key, key, comparator)?;
+        }
         let mut at = entries.len();
         for (index, (stored, _)) in entries.iter().enumerate() {
             let ordering = self.compare_with(key, *stored, comparator)?;
@@ -4800,7 +4843,7 @@ impl<'run> Interpreter<'run> {
             }
             Some(HeapObject::MapView { map, kind }) => {
                 let (map, kind) = (*map, *kind);
-                return self.map_view_intrinsic(map, kind, method_name, descriptor, args);
+                return self.map_view_intrinsic(receiver, map, kind, method_name, descriptor, args);
             }
             Some(HeapObject::MapEntry { map, key }) => {
                 let (map, key) = (*map, *key);
@@ -5067,24 +5110,16 @@ impl<'run> Interpreter<'run> {
                 };
                 element
             }
-            // `AbstractSet.equals`: another Set of the same size holding them all.
+            // `AbstractSet.equals`: ANY Set of the same size holding them all.
+            // It is specified across implementations and is symmetric, so a
+            // HashSet equals a TreeSet with the same elements. Requiring the
+            // other side to be a HashSet made it one-way: `tree.equals(hash)`
+            // was true while `hash.equals(tree)` was false.
             ("equals", [JValue::Ref(other)]) => {
                 let Some(other) = *other else {
                     return Ok(Answered::Value(JValue::Int(0)));
                 };
-                if !matches!(self.heap.get(other), Some(HeapObject::HashSet(_)))
-                    || self.map_len(receiver) != self.map_len(other)
-                {
-                    return Ok(Answered::Value(JValue::Int(0)));
-                }
-                let mut equal = true;
-                for element in self.collection_elements(receiver) {
-                    if self.map_find(other, element)?.is_none() {
-                        equal = false;
-                        break;
-                    }
-                }
-                JValue::Int(i32::from(equal))
+                JValue::Int(i32::from(self.set_like_equals(receiver, other)?))
             }
             // `AbstractSet.hashCode`: the sum of the elements' hash codes.
             ("hashCode", []) => {
@@ -5212,6 +5247,14 @@ impl<'run> Interpreter<'run> {
         use crate::value::HeapObject;
         let comparator = self.tree_set_comparator(set);
         let values = self.tree_set_values(set);
+        // The JDK compares the element WITH ITSELF when the collection is
+        // empty — "type (and possibly null) check" in TreeMap.put. Without it
+        // the first insert compares against nothing, so a null and a
+        // non-Comparable element were silently accepted and only the SECOND
+        // insert complained.
+        if values.is_empty() {
+            self.compare_with(element, element, comparator)?;
+        }
         let mut at = values.len();
         for (index, existing) in values.iter().enumerate() {
             let ordering = self.compare_with(element, *existing, comparator)?;
@@ -6450,6 +6493,7 @@ impl<'run> Interpreter<'run> {
     #[allow(clippy::too_many_lines)] // one method table
     fn map_view_intrinsic(
         &mut self,
+        view: HeapRef,
         map: HeapRef,
         kind: MapViewKind,
         method_name: &str,
@@ -6460,6 +6504,14 @@ impl<'run> Interpreter<'run> {
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(self.map_len(map)).unwrap_or(i32::MAX)),
             ("isEmpty", []) => JValue::Int(i32::from(self.map_len(map) == 0)),
+            // A `keySet()` IS a Set, so it compares like one against any other
+            // Set. (`values()` is a plain Collection, whose `equals` is
+            // identity — AbstractCollection does not override it — so it is
+            // deliberately not handled here.)
+            ("equals", [JValue::Ref(other)]) if matches!(kind, MapViewKind::Keys) => match *other {
+                Some(other) => JValue::Int(i32::from(self.set_like_equals(view, other)?)),
+                None => JValue::Int(0),
+            },
             ("contains", [probe]) => {
                 let found = match kind {
                     MapViewKind::Keys => self.map_find(map, *probe)?.is_some(),
