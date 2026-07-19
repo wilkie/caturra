@@ -9374,11 +9374,11 @@ public class RejectLocalScope {
 );
 
 // A local class in an INSTANCE method reading an enclosing instance member needs
-// an enclosing `this`, the same machinery an inner class would — which caturra
-// does not model. javac accepts it; caturra is stricter (it refuses rather than
-// silently miscompute). Capturing locals and reading enclosing statics, above,
-// is the supported subset.
-stricter_than_javac!(
+// an enclosing `this`, the same machinery an inner class has. caturra used to
+// refuse this (a documented strictness, recorded here as `stricter_than_javac!`);
+// since 2026-07-18 the capture pass threads the enclosing instance in, so both
+// engines now run it and the case is asserted for its OUTPUT.
+differential_test!(
     local_class_reads_enclosing_instance,
     "StricterLocalInstance",
     r#"
@@ -11840,4 +11840,201 @@ public class DiffGenericArray {
     }
 }
 "#
+);
+
+// ---------------------------------------------------------------------------
+// Nested classes: the enclosing instance
+//
+// An anonymous or local class in an INSTANCE method could not reach the
+// enclosing instance at all, `Outer.this` did not parse, and private members
+// were not shared across the nesting boundary. The capture pass already
+// threaded an enclosing `this` into LAMBDAS; the rest of the work was making
+// that safe for classes, which — unlike lambdas — have members of their own
+// that shadow the enclosing ones.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_enclosing_instance_capture,
+    "DiffEnclosing",
+    r#"
+interface Src { int get(); }
+
+class Base { int x = 100; int m() { return 200; } }
+
+public class DiffEnclosing {
+    int x = 5;
+    int m() { return 7; }
+    static int s = 3;
+
+    void anonReadsField() {
+        Src q = new Src() { public int get() { return x; } };
+        System.out.println(q.get());
+    }
+    void anonCallsMethod() {
+        Src q = new Src() { public int get() { return m(); } };
+        System.out.println(q.get());
+    }
+    void localReadsField() {
+        class L { int go() { return x; } }
+        System.out.println(new L().go());
+    }
+    void localCallsMethod() {
+        class L { int go() { return m(); } }
+        System.out.println(new L().go());
+    }
+
+    // Shadowing: a member the class provides ITSELF wins, and no enclosing
+    // instance is captured. Three ways to provide one:
+    void ownField() {
+        Src q = new Src() { int x = 99; public int get() { return x; } };
+        System.out.println(q.get());
+    }
+    void ownMethod() {
+        Src q = new Src() { int m() { return 42; } public int get() { return m(); } };
+        System.out.println(q.get());
+    }
+    void inheritedMembers() {
+        Base b = new Base() { public String toString() { return x + " " + m(); } };
+        System.out.println(b);
+    }
+
+    // A captured local and the enclosing instance together.
+    void both() {
+        int local = 50;
+        Src q = new Src() { public int get() { return local + x + m(); } };
+        System.out.println(q.get());
+    }
+    // A local class with its own constructor, plus enclosing access.
+    void localWithConstructor() {
+        class L { int n; L(int n) { this.n = n; } int go() { return n + x + m(); } }
+        System.out.println(new L(1).go());
+    }
+    // A static context has no enclosing instance; a static field still works.
+    static void inStatic() {
+        Src q = new Src() { public int get() { return s; } };
+        System.out.println(q.get());
+    }
+
+    public static void main(String[] args) {
+        inStatic();
+        DiffEnclosing e = new DiffEnclosing();
+        e.anonReadsField();
+        e.anonCallsMethod();
+        e.localReadsField();
+        e.localCallsMethod();
+        e.ownField();
+        e.ownMethod();
+        e.inheritedMembers();
+        e.both();
+        e.localWithConstructor();
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_qualified_this,
+    "DiffQualifiedThis",
+    r#"
+public class DiffQualifiedThis {
+    int x = 1;
+    int m() { return 10; }
+
+    class Mid {
+        int x = 2;
+        class Deep {
+            int x = 3;
+            void go() {
+                // Every level is nameable, and the unqualified name is the
+                // nearest one.
+                System.out.println(DiffQualifiedThis.this.x + " " + Mid.this.x + " " + this.x);
+                System.out.println(x);
+                System.out.println(DiffQualifiedThis.this.m());
+                System.out.println(DiffQualifiedThis.this);
+            }
+        }
+    }
+
+    public String toString() { return "outer"; }
+
+    public static void main(String[] args) {
+        DiffQualifiedThis outer = new DiffQualifiedThis();
+        DiffQualifiedThis.Mid mid = outer.new Mid();
+        mid.new Deep().go();
+    }
+}
+"#
+);
+
+// JLS 6.6.1: a private member is accessible throughout the body of the
+// top-level class enclosing it — in BOTH directions across the nesting.
+differential_test!(
+    diff_private_across_nesting,
+    "DiffPrivateNesting",
+    r"
+public class DiffPrivateNesting {
+    private int secret = 3;
+    private int hidden() { return 4; }
+
+    class Inner {
+        private int mine = 9;
+        int readOuter() { return secret + hidden(); }
+    }
+
+    public static void main(String[] args) {
+        DiffPrivateNesting outer = new DiffPrivateNesting();
+        DiffPrivateNesting.Inner inner = outer.new Inner();
+        System.out.println(inner.readOuter());
+        System.out.println(inner.mine);
+    }
+}
+"
+);
+
+// An inner class may not declare static members (JLS 8.1.3) — except constant
+// variables, which are folded and need no class to live in.
+differential_reject!(
+    reject_static_field_in_inner_class,
+    "RejInnerStatic",
+    r"
+public class RejInnerStatic {
+    class Inner { static int c = 5; }
+    public static void main(String[] args) {
+        System.out.println(Inner.c);
+    }
+}
+"
+);
+
+// Only an INNER class has an enclosing instance to bind.
+differential_reject!(
+    reject_qualified_new_of_static_nested,
+    "RejQualifiedNew",
+    r"
+public class RejQualifiedNew {
+    static class N { int v = 1; }
+    public static void main(String[] args) {
+        System.out.println(new RejQualifiedNew().new N().v);
+    }
+}
+"
+);
+
+// The legal neighbours of those two rejections, so the checks cannot be
+// widened into refusing valid code.
+differential_test!(
+    diff_legal_nested_statics,
+    "DiffLegalNested",
+    r"
+public class DiffLegalNested {
+    class Inner { static final int C = 5; int v = 1; }
+    static class Nested { static int s = 2; }
+    public static void main(String[] args) {
+        System.out.println(Inner.C);
+        System.out.println(Nested.s);
+        System.out.println(new DiffLegalNested().new Inner().v);
+        System.out.println(new Nested().s);
+    }
+}
+"
 );

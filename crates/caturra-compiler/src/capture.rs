@@ -196,17 +196,31 @@ fn inject_outer_captures(
             (c.name.clone(), (fields, methods))
         })
         .collect();
+    // Every user class's superclass, for walking what a body inherits.
+    let supers: HashMap<String, String> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .filter_map(|c| c.superclass.clone().map(|s| (c.name.clone(), s)))
+        .collect();
+
     for (name, body) in anon_bodies {
-        if !name.starts_with("Lambda$") {
-            continue;
-        }
         let Some(owner) = owners.get(name) else {
             continue;
         };
         let Some((fields, methods)) = instance_members.get(owner) else {
             continue;
         };
-        if lambda_needs_outer(body, fields, methods) {
+        let needs = if name.starts_with("Lambda$") {
+            lambda_needs_outer(body, fields, methods)
+        } else {
+            // An anonymous or local class HAS members of its own, and may
+            // inherit more, so a bare name means the enclosing instance only
+            // when nothing nearer provides it. `this` never counts either — it
+            // is the class's own instance, unlike a lambda's.
+            let (own_fields, own_methods) = provided_members(body, &instance_members, &supers);
+            class_needs_outer(body, fields, methods, &own_fields, &own_methods)
+        };
+        if needs {
             // The outer instance is captured first, so its constructor
             // parameter precedes the local captures.
             let caps = captures.entry(name.clone()).or_default();
@@ -1405,14 +1419,23 @@ fn lambda_needs_outer(
 }
 
 fn stmts_use_outer(stmts: &[Stmt], methods: &HashSet<String>) -> bool {
-    stmts.iter().any(|s| stmt_uses_outer(s, methods))
+    stmts.iter().any(|s| stmt_uses_outer(s, methods, true))
 }
 
-fn stmt_uses_outer(stmt: &Stmt, methods: &HashSet<String>) -> bool {
-    let e = |x: &Expr| expr_uses_outer(x, methods);
-    let sub = |x: &Stmt| stmt_uses_outer(x, methods);
+/// The same walk for an anonymous/local class, where a bare `this` is the
+/// class's OWN instance and so proves nothing about the enclosing one — only
+/// an unqualified call to a method it does not provide itself does.
+fn stmts_use_outer_methods(stmts: &[Stmt], methods: &HashSet<String>) -> bool {
+    stmts.iter().any(|s| stmt_uses_outer(s, methods, false))
+}
+
+fn stmt_uses_outer(stmt: &Stmt, methods: &HashSet<String>, this_counts: bool) -> bool {
+    let e = |x: &Expr| expr_uses_outer(x, methods, this_counts);
+    let sub = |x: &Stmt| stmt_uses_outer(x, methods, this_counts);
     match stmt {
-        Stmt::Block(body) => stmts_use_outer(body, methods),
+        Stmt::Block(body) => body
+            .iter()
+            .any(|s| stmt_uses_outer(s, methods, this_counts)),
         Stmt::Expr(x) | Stmt::Throw { value: x, .. } => e(x),
         Stmt::LocalDecl { declarators, .. } => {
             declarators.iter().filter_map(|d| d.init.as_ref()).any(e)
@@ -1464,8 +1487,8 @@ fn stmt_uses_outer(stmt: &Stmt, methods: &HashSet<String>) -> bool {
     }
 }
 
-fn expr_uses_outer(expr: &Expr, methods: &HashSet<String>) -> bool {
-    if matches!(expr, Expr::This { .. }) {
+fn expr_uses_outer(expr: &Expr, methods: &HashSet<String>, this_counts: bool) -> bool {
+    if this_counts && matches!(expr, Expr::This { .. }) {
         return true;
     }
     if let Expr::Call {
@@ -1479,7 +1502,70 @@ fn expr_uses_outer(expr: &Expr, methods: &HashSet<String>) -> bool {
     }
     let mut hit = false;
     walk_expr_children(&mut expr.clone(), &mut |e| {
-        hit = hit || expr_uses_outer(e, methods);
+        hit = hit || expr_uses_outer(e, methods, this_counts);
     });
     hit
+}
+
+/// The instance members an anonymous/local class body provides for itself:
+/// its own fields and methods, plus everything it inherits from a USER
+/// superclass. A name these cover is not a reference to the enclosing
+/// instance, whatever the enclosing class happens to declare.
+///
+/// A library supertype's members are invisible here, so an anonymous subclass
+/// of a library class that shadows an enclosing field by inheritance would
+/// still capture the outer instance. Nothing in the corpus does that, and the
+/// alternative — assuming a shadow whenever the supertype is unknown — would
+/// silently drop legitimate enclosing access, the worse failure.
+fn provided_members(
+    body: &ClassDecl,
+    all: &HashMap<String, (HashSet<String>, HashSet<String>)>,
+    supers: &HashMap<String, String>,
+) -> (HashSet<String>, HashSet<String>) {
+    let mut fields: HashSet<String> = body.fields.iter().map(|f| f.name.clone()).collect();
+    let mut methods: HashSet<String> = body.methods.iter().map(|m| m.name.clone()).collect();
+    // An anonymous class records its supertype in `superclass` whether that is
+    // a class or an interface; either way its members are nearer than the
+    // enclosing instance's.
+    let mut current = body.superclass.clone();
+    let mut seen = 0usize;
+    while let Some(name) = current {
+        seen += 1;
+        if seen > all.len() + 1 {
+            break; // a cycle would be a compiler bug; do not hang on it
+        }
+        if let Some((f, m)) = all.get(&name) {
+            fields.extend(f.iter().cloned());
+            methods.extend(m.iter().cloned());
+        }
+        current = supers.get(&name).cloned();
+    }
+    (fields, methods)
+}
+
+/// Whether an anonymous or local class body reads a field or calls a method of
+/// its ENCLOSING instance — the condition for capturing that instance.
+///
+/// Unlike the lambda rule this ignores `this` (the class has its own) and
+/// subtracts everything the class provides for itself, so an own or inherited
+/// member shadows the enclosing one rather than capturing it.
+fn class_needs_outer(
+    body: &ClassDecl,
+    owner_fields: &HashSet<String>,
+    owner_methods: &HashSet<String>,
+    own_fields: &HashSet<String>,
+    own_methods: &HashSet<String>,
+) -> bool {
+    // `free_names` already excludes the body's own fields and every local.
+    if free_names(body)
+        .iter()
+        .any(|n| owner_fields.contains(n) && !own_fields.contains(n))
+    {
+        return true;
+    }
+    // Only the enclosing methods this class does NOT provide itself.
+    let reachable: HashSet<String> = owner_methods.difference(own_methods).cloned().collect();
+    body.methods
+        .iter()
+        .any(|m| stmts_use_outer_methods(&m.body, &reachable))
 }

@@ -1036,8 +1036,30 @@ x)`) with type-parameter erasure — every type variable is rewritten
   hoisted alongside the program. The body may declare its own fields
   and methods, override abstract methods, and inherit concrete and
   interface-default methods; the instance is used through its
-  supertype. Not yet: constructor arguments (`new Base(args) {...}`)
-  and capture of `Outer.this` (the enclosing instance).
+  supertype.
+  **The enclosing instance is captured since 2026-07-18**: an anonymous
+  or local class in an instance method reads the enclosing object's
+  fields and calls its methods by simple name, through the same
+  `__caturraOuter` capture lambdas already used. A member the class
+  provides ITSELF — declared or inherited from a user superclass —
+  shadows the enclosing one and captures nothing, which is the
+  difference from a lambda (a lambda has no members, so a bare name
+  there is unambiguous). A library supertype's members are invisible to
+  that check, so an anonymous subclass of a library class whose
+  INHERITED member shadows an enclosing field would still capture the
+  outer instance; nothing in the corpus does that, and assuming a shadow
+  whenever the supertype is unknown would silently drop legitimate
+  enclosing access, the worse failure.
+  **`Outer.this`** (JLS §15.8.4) parses and resolves since the same
+  date, walking out one `__caturraOuter` hop at a time so a
+  doubly-nested class can name either enclosing instance.
+  **Private members cross the nesting boundary** (JLS §6.6.1): they are
+  accessible throughout the body of the enclosing TOP-LEVEL class, in
+  both directions, so an inner class may call the outer's private method
+  and the outer may read the inner's private field.
+  **Rejected** since 2026-07-18, as javac does: a static member declared
+  in an inner class (JLS §8.1.3 — constant variables excepted) and a
+  qualified `new` of a static nested class.
 
 - **Closure capture** (2026-07-03): an anonymous class body may
   reference effectively-final local variables of the enclosing method

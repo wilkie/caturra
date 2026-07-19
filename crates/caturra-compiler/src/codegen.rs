@@ -41,6 +41,7 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
         for class in &unit.classes {
             check_enum_static_references(class, path, &mut diagnostics);
             crate::flow::check(class, path, &mut diagnostics);
+            check_inner_static_members(class, path, &mut diagnostics);
             classes.push(CompiledClass {
                 binary_name: class.name.clone(),
                 class_file: emit_class(path, &mut diagnostics, &table, class),
@@ -1165,6 +1166,35 @@ impl MethodTable {
         self.class_names
             .get(usize::from(id.0))
             .map_or("<unknown>", String::as_str)
+    }
+
+    /// The top-level class enclosing `id` — itself when it is not nested.
+    ///
+    /// Nesting is flattened at parse time, so this walks the recorded
+    /// `enclosing` chain back up. The loop is bounded by the class count: a
+    /// cycle would be a compiler bug, not a program's doing, and hanging on
+    /// one would be worse than returning the wrong answer.
+    fn top_level_class(&self, id: ClassId) -> ClassId {
+        let mut current = id;
+        for _ in 0..=self.class_names.len() {
+            let Some(info) = self.info_by_id(current) else {
+                return current;
+            };
+            let Some(outer) = info.enclosing.as_ref().and_then(|name| self.class_id(name)) else {
+                return current;
+            };
+            current = outer;
+        }
+        current
+    }
+
+    /// JLS §6.6.1: a private member is accessible anywhere within the body of
+    /// the TOP-LEVEL class that encloses its declaration — so an inner class
+    /// may call its outer's private method, and the outer may read the inner's
+    /// private field. Comparing the two classes directly (the old rule) made
+    /// every such access an error.
+    fn shares_top_level(&self, one: ClassId, other: ClassId) -> bool {
+        one == other || self.top_level_class(one) == self.top_level_class(other)
     }
 
     /// Resolve a source-level type, mapping class names (including
@@ -3041,6 +3071,37 @@ fn conditional_numeric_type(
 /// A `static final` field whose initializer is a compile-time constant (a
 /// "constant variable", JLS §4.12.4) — the enum static-reference rule exempts
 /// these, since they are inlined and have no initialization ordering.
+/// JLS §8.1.3: an inner (non-static nested) class may not declare static
+/// members — except constant variables, which are folded at compile time and
+/// need no class to hold them. caturra accepted them and gave the field a
+/// home, so `Inner.c` compiled here and failed on a real JDK.
+fn check_inner_static_members(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
+    if !decl.is_inner {
+        return;
+    }
+    let qualified = match &decl.enclosing {
+        Some(outer) => format!("{outer}.{}", decl.name),
+        None => decl.name.clone(),
+    };
+    let mut report = |span| {
+        diagnostics.push(Diagnostic::error(
+            path,
+            format!("Illegal static declaration in inner class {qualified}"),
+            span,
+        ));
+    };
+    for field in &decl.fields {
+        if field.is_static && !is_constant_static_field(field) {
+            report(field.span);
+        }
+    }
+    for method in &decl.methods {
+        if method.is_static {
+            report(method.span);
+        }
+    }
+}
+
 fn is_constant_static_field(field: &FieldDecl) -> bool {
     if !field.is_static || !field.is_final {
         return false;
@@ -8036,6 +8097,55 @@ impl BodyGen<'_> {
         self.emit_getfield(self.current_class_id, outer);
     }
 
+    /// `Outer.this` (JLS §15.8.4): the enclosing instance of the named class.
+    ///
+    /// Walks out through the `__caturraOuter` chain one level at a time, so a
+    /// doubly-nested class can name either enclosing instance. `Self.this`
+    /// inside the class itself is just `this`.
+    fn qualified_this(&mut self, class_name: &str, span: SourceSpan) -> JType {
+        let Some(target) = self.table.class_id(class_name) else {
+            self.error(span, format!("cannot find symbol: class {class_name}"));
+            return JType::Error;
+        };
+        if target == self.current_class_id {
+            self.code.push_op(op::ALOAD_0, 1);
+            return JType::Object(target);
+        }
+        if self.in_static {
+            self.error(
+                span,
+                "non-static variable this cannot be referenced from a static context",
+            );
+            return JType::Error;
+        }
+        // Each hop reads the `__caturraOuter` of the class reached so far.
+        let mut current = self.current_class_id;
+        let mut pushed = false;
+        for _ in 0..=self.table.class_names.len() {
+            let owner = self.table.class_name(current).to_owned();
+            let Some((_, outer)) = self.table.field(&owner, crate::capture::OUTER_FIELD) else {
+                break;
+            };
+            let outer = outer.clone();
+            let JType::Object(enclosing) = outer.ty else {
+                break;
+            };
+            if pushed {
+                self.emit_getfield(current, &outer);
+            } else {
+                self.code.push_op(op::ALOAD_0, 1);
+                self.emit_getfield(current, &outer);
+                pushed = true;
+            }
+            if enclosing == target {
+                return JType::Object(target);
+            }
+            current = enclosing;
+        }
+        self.error(span, format!("not an enclosing class: {class_name}"));
+        JType::Error
+    }
+
     /// The class `super` denotes: this class's superclass, or the implicit
     /// `Object` when it declares none. A field then resolves from there
     /// upward, which is what `super.n` means — the field the superclass
@@ -9962,7 +10072,7 @@ impl BodyGen<'_> {
             return None;
         };
         let field = field.clone();
-        if field.is_private && owner != self.current_class_id {
+        if field.is_private && !self.table.shares_top_level(owner, self.current_class_id) {
             self.error(
                 span,
                 format!(
@@ -10202,6 +10312,13 @@ impl BodyGen<'_> {
             .and_then(|id| self.table.info_by_id(id))
             .is_some_and(|info| info.is_inner);
         if !is_inner {
+            // `new Outer().new Nested()` where Nested is STATIC (or a
+            // top-level class) — javac: "qualified new of static class". Only
+            // an inner class has an enclosing instance to bind.
+            if outer.is_some() {
+                self.error(span, "qualified new of static class");
+                return JType::Error;
+            }
             return self.new_object(class_name, type_args, args, span);
         }
         let enclosing = match self.table.field(simple, crate::capture::OUTER_FIELD) {
@@ -10377,7 +10494,7 @@ impl BodyGen<'_> {
                 return JType::Error;
             }
         };
-        if sig.is_private && class_id != self.current_class_id {
+        if sig.is_private && !self.table.shares_top_level(class_id, self.current_class_id) {
             self.error(
                 span,
                 format!("{class_name}() has private access in {class_name}"),
@@ -12397,7 +12514,7 @@ impl BodyGen<'_> {
                 return None;
             }
         };
-        if sig.is_private && class_id != self.current_class_id {
+        if sig.is_private && !self.table.shares_top_level(class_id, self.current_class_id) {
             self.error(
                 span,
                 format!("{method}() has private access in {class_name}"),
@@ -15510,6 +15627,11 @@ impl BodyGen<'_> {
 
     #[allow(clippy::too_many_lines)] // one resolution ladder, clearest linear
     fn name(&mut self, path: &[String], span: SourceSpan) -> JType {
+        // `Outer.this` (JLS §15.8.4) — the parser encodes qualified this as a
+        // path ending in `this`, which no field can be named.
+        if path.len() >= 2 && path[path.len() - 1] == "this" {
+            return self.qualified_this(&path[path.len() - 2], span);
+        }
         // Fully qualified statics: java.lang.Integer.MAX_VALUE, ...
         if let Some(short) = self.strip_package_prefix(path) {
             return self.name(&short, span);

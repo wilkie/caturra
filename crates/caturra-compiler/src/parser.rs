@@ -2821,6 +2821,19 @@ impl Parser<'_> {
                     };
                     continue;
                 }
+                // `Outer.this` — qualified this (JLS §15.8.4), naming the
+                // enclosing instance from inside an inner class. Encoded as a
+                // name path ending in `this`, which cannot collide with a
+                // field: `this` is a keyword, so no field can be called that.
+                if self.at_keyword(Keyword::This)
+                    && let Expr::Name { path, span } = &mut expr
+                {
+                    let end = self.here().end;
+                    self.pos += 1;
+                    path.push(String::from("this"));
+                    span.end = end;
+                    continue;
+                }
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
                     let args = self.arguments()?;
