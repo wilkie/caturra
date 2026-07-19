@@ -12542,3 +12542,63 @@ public class DiffTreeFirstInsert {
 }
 "#
 );
+
+// A compound assignment's implicit cast is a NARROWING PRIMITIVE conversion,
+// which only exists when the target is a primitive. For a WRAPPER target the
+// result must already fit, because assignment to it is a boxing conversion and
+// boxing does not narrow. caturra narrowed anyway and printed -14.
+differential_reject!(
+    reject_narrowing_compound_assignment_to_wrapper,
+    "RejByteCompound",
+    r"
+public class RejByteCompound {
+    public static void main(String[] args) {
+        Byte b = 10;
+        b += 1000;
+        System.out.println(b);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_double_compound_assignment_to_integer,
+    "RejIntegerCompound",
+    r"
+public class RejIntegerCompound {
+    public static void main(String[] args) {
+        Integer i = 1;
+        i += 2.7;
+        System.out.println(i);
+    }
+}
+"
+);
+
+// The legal neighbours: a PRIMITIVE target still narrows implicitly, and a
+// wrapper target whose result already fits is fine.
+differential_test!(
+    diff_compound_assignment_targets,
+    "DiffCompoundTargets",
+    r"
+public class DiffCompoundTargets {
+    public static void main(String[] args) {
+        byte narrowed = 10;
+        narrowed += 1000;
+        System.out.println(narrowed);
+        Integer counter = 1;
+        counter += 2;
+        System.out.println(counter);
+        Integer bumped = 5;
+        bumped++;
+        System.out.println(bumped);
+        Double total = 1.0;
+        total += 2;
+        System.out.println(total);
+        Long big = 1L;
+        big += 2;
+        System.out.println(big);
+    }
+}
+"
+);

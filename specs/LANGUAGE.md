@@ -81,6 +81,13 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   structural change to the collections caturra models changes the size. The
   documented gap: a modification that nets out to the same size between two
   `next()` calls (an add AND a remove) is not caught, where a real JVM would.
+- **Compound assignment to a wrapper** (2026-07-19): the implicit cast of
+  `E1 op= E2` (JLS §15.26.2) is a NARROWING PRIMITIVE conversion, so it exists
+  only when the target is a primitive. `byte b = 10; b += 1000;` still wraps to
+  -14, but `Byte b = 10; b += 1000;` and `Integer i = 1; i += 2.7;` are now
+  refused as javac refuses them — assignment to a wrapper is a boxing
+  conversion, and boxing does not narrow. A wrapper target whose result already
+  fits (`Integer i += 2`, `Double d += 2`, `i++`) is unaffected.
 - **Set.equals and the tree collections' first insert** (2026-07-19):
   `AbstractSet.equals` is specified across implementations and is symmetric, so
   a `HashSet` equals a `TreeSet` holding the same elements — it used to demand

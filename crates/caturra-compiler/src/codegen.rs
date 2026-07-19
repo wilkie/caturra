@@ -9561,7 +9561,31 @@ impl BodyGen<'_> {
 
                 // Compound assignment: promote, operate, then cast back
                 // to the variable's type implicitly (JLS §15.26.2).
+                //
+                // That implicit cast is a NARROWING PRIMITIVE conversion, and
+                // it only exists when the target is a primitive. For a WRAPPER
+                // target the result has to fit the wrapper's own type already,
+                // because assignment to it is a boxing conversion and boxing
+                // does not narrow — which is why javac rejects `Byte b = 10;
+                // b += 1000;` and `Integer i = 1; i += 2.7;` while accepting
+                // both with `byte`/`int` targets. caturra narrowed anyway and
+                // printed -14 and 3.
                 let promoted = promote(target, operand);
+                if let JType::Boxed(elem) = var_ty
+                    && promoted != elem.base_type()
+                {
+                    self.error(
+                        span,
+                        format!(
+                            "incompatible types: {} cannot be converted to {}",
+                            promoted.describe(self.table),
+                            var_ty.describe(self.table)
+                        ),
+                    );
+                    self.expr(value);
+                    self.code.discard();
+                    return;
+                }
                 self.emit_load(slot, var_ty);
                 self.numeric_conversion(var_ty, promoted);
                 let actual = self.expr(value);
