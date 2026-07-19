@@ -317,10 +317,23 @@ pub enum HeapObject {
     /// A live `java.util.Iterator` over a list or set: the collection it walks,
     /// the position it will return next, and the position it last returned (for
     /// `remove()`, `None` before the first `next()` or right after a `remove()`).
+    ///
+    /// `expected_len` makes the iterator FAIL-FAST: the collection's length when
+    /// this iterator last agreed with it. `next()` compares and throws
+    /// `ConcurrentModificationException` if someone else changed the collection
+    /// meanwhile; the iterator's own `remove()` re-syncs it.
+    ///
+    /// Length stands in for the JDK's `modCount` because every structural
+    /// modification of the collections caturra models changes the size —
+    /// `put` of an existing key and `list.set(i, v)` are not structural and do
+    /// not bump `modCount` either. The gap is a modification that nets out to
+    /// the same size between two `next()` calls (an add AND a remove), which
+    /// the JDK catches and this does not; see the note in `iterator_method`.
     Iterator {
         source: HeapRef,
         index: usize,
         last: Option<usize>,
+        expected_len: usize,
     },
     /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
     /// Java's are views too, so a later `put` shows through.

@@ -18,7 +18,7 @@ use crate::debug::{
     Breakpoint, DebugCommand, DebugFrameSnapshot, DebugHost, DebugSnapshot, PauseReason,
     WatchEvaluator,
 };
-use crate::intrinsics::{self, IntrinsicStatics};
+use crate::intrinsics::{self, IntrinsicStatics, check_comodification, iterated_len_of};
 use crate::io::ConsoleIo;
 use crate::value::{Heap, HeapRef, JValue, MapViewKind};
 use crate::vfs::VirtualFileSystem;
@@ -4748,10 +4748,12 @@ impl<'run> Interpreter<'run> {
                 )
             )
         {
+            let expected_len = iterated_len_of(&self.heap, receiver);
             let iterator = self.heap.alloc(HeapObject::Iterator {
                 source: receiver,
                 index: 0,
                 last: None,
+                expected_len,
             });
             return Ok(Answered::Value(JValue::Ref(Some(iterator))));
         }
@@ -7873,6 +7875,32 @@ impl<'run> Interpreter<'run> {
             receiver
         };
 
+        // The enhanced-for loop's fail-fast element fetch. A for-each compiles
+        // to an index loop rather than a real iterator, so the comodification
+        // check the JDK does inside `Iterator.next()` has to ride along with
+        // the element access — which is exactly where it belongs: checking in
+        // the loop CONDITION instead would throw on removing the second-to-last
+        // element, where a real JVM ends the loop silently.
+        //
+        // Rewriting to the plain accessor here keeps the check in ONE place for
+        // every backing (list, set, map view, deque, …) and costs no extra call
+        // per iteration: it replaces the accessor rather than adding to it.
+        let method_name = match method_name {
+            "__getChecked" | "__getBoxedChecked" => {
+                let expected = match args.pop() {
+                    Some(JValue::Int(expected)) => usize::try_from(expected).unwrap_or(usize::MAX),
+                    _ => usize::MAX,
+                };
+                check_comodification(&self.heap, receiver, expected)?;
+                if method_name == "__getChecked" {
+                    "get"
+                } else {
+                    "__get"
+                }
+            }
+            other => other,
+        };
+
         // User-defined objects dispatch on the instance's actual class;
         // everything else is an intrinsic (PrintStream, StringBuilder).
         let instance_class = match self.heap.get(receiver) {
@@ -8517,6 +8545,7 @@ impl<'run> Interpreter<'run> {
     /// rejects, in order, and report whether any were removed.
     fn list_remove_if(&mut self, receiver: HeapRef, predicate: HeapRef) -> Result<bool, VmError> {
         let items = self.list_items(receiver);
+        let expected_len = items.len();
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(predicate)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -8541,6 +8570,16 @@ impl<'run> Interpreter<'run> {
             if !drop {
                 kept.push(element);
             }
+        }
+        // JDK 11 scans the WHOLE range and checks for comodification once, at
+        // the end — so a predicate that mutates the list runs to completion
+        // (every side effect lands) and then the removals are abandoned. It is
+        // not an early exit, which is why `removeIf(x -> { l.add(9); ... })`
+        // leaves five 9s appended and nothing removed.
+        if self.list_items(receiver).len() != expected_len {
+            return Err(VmError::UncaughtException(String::from(
+                "java.util.ConcurrentModificationException",
+            )));
         }
         let removed = kept.len() != self.list_items(receiver).len();
         if let Some(list) = self.heap.list_values_mut(receiver) {

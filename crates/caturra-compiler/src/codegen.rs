@@ -12863,7 +12863,24 @@ impl BodyGen<'_> {
         ));
 
         let size_ref = intern_method_ref(self.pool, class, "size", "()I");
-        let get_ref = intern_method_ref(self.pool, class, accessor, "(I)Ljava/lang/Object;");
+        // The fail-fast accessor: it takes the size the loop started with and
+        // throws ConcurrentModificationException if the collection has changed.
+        // See the rewrite in `Interpreter::invoke_instance`.
+        let checked = if accessor == "get" {
+            "__getChecked"
+        } else {
+            "__getBoxedChecked"
+        };
+        let get_ref = intern_method_ref(self.pool, class, checked, "(II)Ljava/lang/Object;");
+
+        // The size when the loop began — what every element fetch is checked
+        // against, standing in for the JDK iterator's `expectedModCount`.
+        let expected_slot = self.next_slot;
+        self.next_slot += 1;
+        self.emit_load(list_slot, iterable_ty);
+        self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
+        self.code.drop_stack(1);
+        self.emit_store(expected_slot, JType::Int);
 
         let cond_label = self.code.new_label();
         let continue_label = self.code.new_label();
@@ -12874,13 +12891,19 @@ impl BodyGen<'_> {
         self.emit_load(list_slot, iterable_ty);
         self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
         self.code.drop_stack(1);
-        self.code.branch(op::IF_ICMPGE, end, 2);
+        // `index != size`, NOT `index < size`: the JDK's `hasNext` is
+        // `cursor != size`, and the difference is observable. After a `clear()`
+        // mid-loop the cursor sits PAST the (now zero) size, and `!=` keeps
+        // going so the element fetch can throw CME — where `<` would end the
+        // loop quietly and swallow the error.
+        self.code.branch(op::IF_ICMPEQ, end, 2);
 
         self.emit_load(list_slot, iterable_ty);
         self.emit_load(index_slot, JType::Int);
+        self.emit_load(expected_slot, JType::Int);
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, get_ref, element.width());
-        self.code.drop_stack(2);
+        self.code.drop_stack(3);
         self.convert_for_assignment(element, var_ty, span);
         self.emit_store(var_slot, var_ty);
 

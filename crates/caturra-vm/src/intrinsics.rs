@@ -2480,12 +2480,46 @@ fn view_map(heap: &Heap, source: HeapRef) -> Option<HeapRef> {
 }
 
 /// The element count of a collection an iterator walks (list, set, or map view).
+/// Throw `ConcurrentModificationException` if the collection changed size
+/// since the iterator (or for-each loop) last agreed with it.
+///
+/// This is the fail-fast check the JDK spells `checkForComodification`. It
+/// exists so a program that mutates a collection while walking it fails HERE,
+/// loudly, instead of silently skipping an element — before this, removing
+/// during a for-each quietly skipped the next one, and adding looped forever.
+pub(crate) fn check_comodification(
+    heap: &Heap,
+    source: HeapRef,
+    expected_len: usize,
+) -> Result<(), VmError> {
+    if iterated_len(heap, source) == expected_len {
+        return Ok(());
+    }
+    Err(throw("java.util.ConcurrentModificationException"))
+}
+
+/// `iterated_len` for callers outside this module.
+pub(crate) fn iterated_len_of(heap: &Heap, source: HeapRef) -> usize {
+    iterated_len(heap, source)
+}
+
 fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
     if let Some(values) = heap.list_values(source) {
         return values.len();
     }
     if let Some(map) = view_map(heap, source) {
         return iterated_len(heap, map);
+    }
+    // An unmodifiable wrapper iterates the collection it wraps. Missing these
+    // made the length read as 0, which the comodification check saw as a
+    // change and turned into a spurious CME on a perfectly ordinary for-each.
+    if let Some(
+        HeapObject::UnmodifiableList(inner)
+        | HeapObject::UnmodifiableSet(inner)
+        | HeapObject::UnmodifiableMap(inner),
+    ) = heap.get(source)
+    {
+        return iterated_len(heap, *inner);
     }
     match heap.get(source) {
         Some(HeapObject::HashSet(entries) | HeapObject::HashMap(entries)) => entries.len(),
@@ -2576,16 +2610,24 @@ fn iterator_method(
         source,
         index,
         last,
+        expected_len,
     }) = heap.get(receiver)
     else {
         unreachable!("receiver kind checked by caller");
     };
-    let (source, index, last) = (*source, *index, *last);
+    let (source, index, last, expected_len) = (*source, *index, *last, *expected_len);
     match method {
+        // `hasNext` does NOT check for comodification — the JDK's is a bare
+        // `cursor != size`. That is not an oversight to fix: it is what makes
+        // removing the SECOND-TO-LAST element end a for-each silently instead
+        // of throwing, because the shortened size makes `hasNext` false before
+        // `next` ever gets to complain. Checking here would "improve" caturra
+        // into disagreeing with every real JVM.
         "hasNext" => Ok(Some(JValue::Int(i32::from(
-            index < iterated_len(heap, source),
+            index != iterated_len(heap, source),
         )))),
         "next" => {
+            check_comodification(heap, source, expected_len)?;
             if index >= iterated_len(heap, source) {
                 return Err(throw("java.util.NoSuchElementException"));
             }
@@ -2637,12 +2679,24 @@ fn iterator_method(
             let Some(position) = last else {
                 return Err(throw("java.lang.IllegalStateException"));
             };
+            // A stale iterator cannot remove either (the JDK checks here too).
+            check_comodification(heap, source, expected_len)?;
             iterated_remove(heap, source, position);
             // The cursor steps back onto the hole so the next element is not
-            // skipped, and `remove()` cannot be called twice in a row.
-            if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
+            // skipped, and `remove()` cannot be called twice in a row. This is
+            // the ONE legal modification during iteration, so the iterator
+            // re-syncs its expectation rather than tripping over itself.
+            let len = iterated_len(heap, source);
+            if let Some(HeapObject::Iterator {
+                index,
+                last,
+                expected_len,
+                ..
+            }) = heap.get_mut(receiver)
+            {
                 *index = position;
                 *last = None;
+                *expected_len = len;
             }
             Ok(None)
         }
@@ -2696,10 +2750,12 @@ fn list_method(
     };
     match (method, descriptor, args) {
         ("iterator", _, []) => {
+            let expected_len = iterated_len(heap, receiver);
             let iterator = heap.alloc(HeapObject::Iterator {
                 source: receiver,
                 index: 0,
                 last: None,
+                expected_len,
             });
             Ok(Some(JValue::Ref(Some(iterator))))
         }

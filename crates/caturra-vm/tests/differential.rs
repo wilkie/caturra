@@ -11525,3 +11525,187 @@ public class DiffIfFalseDead {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Fail-fast iterators (java.util.ConcurrentModificationException)
+//
+// Nothing in caturra was fail-fast: modifying a collection inside a for-each
+// silently skipped the next element, and ADDING inside one looped FOREVER,
+// because a for-each compiles to an index loop that re-reads size() each time.
+// A hang is the worst possible outcome in a browser playground.
+// ---------------------------------------------------------------------------
+
+// The exact JDK behaviours, including the two that look like bugs and are not:
+// replacing a value is not a structural change, and removing the second-to-last
+// element ends the loop silently because `hasNext` never lets `next` complain.
+differential_test!(
+    diff_fail_fast_for_each,
+    "DiffFailFast",
+    r#"
+import java.util.*;
+
+public class DiffFailFast {
+    public static void main(String[] args) {
+        // Remove during a for-each: the JDK sees it on the NEXT element.
+        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c", "d", "e"));
+        try {
+            for (String s : list) { if (s.equals("b")) list.remove(s); System.out.println("saw " + s); }
+        } catch (ConcurrentModificationException e) {
+            System.out.println("removed: " + e.getClass().getName());
+        }
+        System.out.println(list);
+
+        // Add during a for-each. This used to hang caturra forever.
+        List<String> growing = new ArrayList<>(Arrays.asList("a"));
+        try {
+            for (String s : growing) { growing.add("z"); }
+        } catch (ConcurrentModificationException e) {
+            System.out.println("added: " + e.getClass().getName());
+        }
+        System.out.println(growing.size());
+
+        // clear() leaves the cursor PAST the end; `cursor != size` is what
+        // keeps the loop going long enough to throw.
+        List<String> cleared = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        try {
+            for (String s : cleared) { cleared.clear(); }
+        } catch (ConcurrentModificationException e) {
+            System.out.println("cleared: " + e.getClass().getName());
+        }
+
+        // THE QUIRK: removing the second-to-last element ends the loop with no
+        // exception at all, because the shortened size makes hasNext() false.
+        // A `hasNext` that checked for comodification would break this.
+        List<String> quirk = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        for (String s : quirk) { if (s.equals("b")) quirk.remove(s); System.out.println("q " + s); }
+        System.out.println("no exception: " + quirk);
+
+        // Replacing a value is NOT a structural modification.
+        Map<Integer, String> replaced = new HashMap<>();
+        for (int i = 0; i < 3; i++) { replaced.put(i, "v" + i); }
+        for (Integer k : replaced.keySet()) { replaced.put(k, "z"); }
+        System.out.println("replace ok: " + replaced.size());
+
+        // An untouched collection iterates normally.
+        int sum = 0;
+        for (int x : new ArrayList<>(Arrays.asList(1, 2, 3))) { sum += x; }
+        System.out.println(sum);
+    }
+}
+"#
+);
+
+// Every backing has to be fail-fast, not just ArrayList.
+differential_test!(
+    diff_fail_fast_every_collection,
+    "DiffFailFastAll",
+    r#"
+import java.util.*;
+
+public class DiffFailFastAll {
+    public static void main(String[] args) {
+        Map<Integer, String> map = new HashMap<>();
+        for (int i = 0; i < 5; i++) { map.put(i, "v" + i); }
+        try { for (Integer k : map.keySet()) { if (k == 1) map.remove(k); } }
+        catch (ConcurrentModificationException e) { System.out.println("keySet"); }
+        Map<Integer, String> values = new HashMap<>();
+        for (int i = 0; i < 5; i++) { values.put(i, "v" + i); }
+        try { for (String v : values.values()) { values.put(99, "x"); } }
+        catch (ConcurrentModificationException e) { System.out.println("values"); }
+        Map<Integer, String> entries = new HashMap<>();
+        for (int i = 0; i < 5; i++) { entries.put(i, "v" + i); }
+        try { for (Map.Entry<Integer, String> e : entries.entrySet()) { entries.remove(0); } }
+        catch (ConcurrentModificationException e) { System.out.println("entrySet"); }
+
+        Set<Integer> hashSet = new HashSet<>(Arrays.asList(1, 2, 3, 4, 5));
+        try { for (Integer x : hashSet) { if (x == 2) hashSet.remove(x); } }
+        catch (ConcurrentModificationException e) { System.out.println("hashSet"); }
+        List<Integer> linked = new LinkedList<>(Arrays.asList(1, 2, 3, 4, 5));
+        try { for (Integer x : linked) { if (x == 2) linked.remove(x); } }
+        catch (ConcurrentModificationException e) { System.out.println("linkedList"); }
+        TreeMap<Integer, Integer> treeMap = new TreeMap<>();
+        for (int i = 0; i < 5; i++) { treeMap.put(i, i); }
+        try { for (Integer k : treeMap.keySet()) { if (k == 1) treeMap.remove(k); } }
+        catch (ConcurrentModificationException e) { System.out.println("treeMap"); }
+        TreeSet<Integer> treeSet = new TreeSet<>(Arrays.asList(1, 2, 3, 4, 5));
+        try { for (Integer x : treeSet) { if (x == 2) treeSet.remove(x); } }
+        catch (ConcurrentModificationException e) { System.out.println("treeSet"); }
+        Stack<Integer> stack = new Stack<>();
+        stack.push(1); stack.push(2); stack.push(3);
+        try { for (Integer x : stack) { if (x == 1) stack.pop(); } }
+        catch (ConcurrentModificationException e) { System.out.println("stack"); }
+        Deque<Integer> deque = new ArrayDeque<>(Arrays.asList(1, 2, 3, 4));
+        try { for (Integer x : deque) { if (x == 1) deque.removeLast(); } }
+        catch (ConcurrentModificationException e) { System.out.println("arrayDeque"); }
+        PriorityQueue<Integer> queue = new PriorityQueue<>(Arrays.asList(1, 2, 3, 4, 5));
+        try { for (Integer x : queue) { if (x == 1) queue.remove(5); } }
+        catch (ConcurrentModificationException e) { System.out.println("priorityQueue"); }
+
+        // An unmodifiable view iterates its backing and must NOT report a
+        // spurious comodification (the wrapper"s own length is not the
+        // backing"s — reading it as 0 threw a bogus CME while this was built).
+        Set<Integer> backing = new TreeSet<>(Arrays.asList(3, 1, 2));
+        int total = 0;
+        for (int x : Collections.unmodifiableSet(backing)) { total += x; }
+        System.out.println("unmodifiable " + total);
+    }
+}
+"#
+);
+
+// An explicit Iterator is fail-fast too, and its OWN remove() stays legal.
+differential_test!(
+    diff_fail_fast_explicit_iterator,
+    "DiffFailFastIter",
+    r#"
+import java.util.*;
+
+public class DiffFailFastIter {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        Iterator<String> iterator = list.iterator();
+        System.out.println(iterator.next());
+        list.add("d");
+        // hasNext() does not check, so it still answers; next() throws.
+        System.out.println(iterator.hasNext());
+        try { iterator.next(); }
+        catch (ConcurrentModificationException e) { System.out.println("stale next"); }
+
+        // A stale iterator cannot remove either.
+        List<String> other = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        Iterator<String> stale = other.iterator();
+        stale.next();
+        other.remove("c");
+        try { stale.remove(); }
+        catch (ConcurrentModificationException e) { System.out.println("stale remove"); }
+
+        // Iterator.remove() is the ONE legal modification during iteration.
+        List<String> removing = new ArrayList<>(Arrays.asList("a", "b", "c", "d"));
+        Iterator<String> live = removing.iterator();
+        while (live.hasNext()) { if (live.next().startsWith("b")) { live.remove(); } }
+        System.out.println(removing);
+
+        // Two iterators over one list: one removing invalidates the other.
+        List<String> shared = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        Iterator<String> first = shared.iterator();
+        Iterator<String> second = shared.iterator();
+        first.next();
+        first.remove();
+        try { second.next(); }
+        catch (ConcurrentModificationException e) { System.out.println("other iterator"); }
+
+        // removeIf whose predicate mutates: JDK 11 runs the predicate over the
+        // WHOLE range, then throws and abandons the removals — so every side
+        // effect lands and nothing is removed.
+        List<Integer> mutating = new ArrayList<>(Arrays.asList(1, 2, 3, 4, 5));
+        try { mutating.removeIf(x -> { mutating.add(9); return x == 2; }); }
+        catch (ConcurrentModificationException e) { System.out.println("removeIf"); }
+        System.out.println(mutating);
+
+        List<Integer> plain = new ArrayList<>(Arrays.asList(1, 2, 3, 4, 5));
+        plain.removeIf(x -> x % 2 == 0);
+        System.out.println(plain);
+    }
+}
+"#
+);

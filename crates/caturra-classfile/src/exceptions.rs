@@ -128,6 +128,10 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/lang/RuntimeException",
     ),
     (
+        "java/util/ConcurrentModificationException",
+        "java/lang/RuntimeException",
+    ),
+    (
         "java/util/regex/PatternSyntaxException",
         "java/lang/IllegalArgumentException",
     ),

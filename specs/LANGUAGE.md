@@ -65,6 +65,22 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     saturation and i2c truncation;
   - string concatenation with `+`/`+=` (compiled to `StringBuilder` chains),
     formatting `int`/`double`/`char`/`boolean`/`null` exactly as Java does.
+- **Fail-fast iteration** (2026-07-18): every collection's iterator and every
+  for-each detect concurrent modification and throw
+  `ConcurrentModificationException`, across ArrayList, LinkedList, HashSet,
+  TreeSet, HashMap/TreeMap views, Stack, ArrayDeque and PriorityQueue. Before
+  this, modifying inside a for-each silently skipped an element and *adding*
+  looped forever — caturra hung rather than failing. The JDK's exact quirks are
+  reproduced: `hasNext()` does NOT check, so removing the second-to-last
+  element ends the loop with no exception; replacing a value (`put` of an
+  existing key, `list.set`) is not a structural modification and never throws;
+  `Iterator.remove()` is the one legal modification; and `removeIf` with a
+  mutating predicate runs the predicate over the whole range before throwing,
+  so its side effects land and the removals are abandoned (JDK 11 shape).
+  Detection uses the collection's LENGTH as the JDK's `modCount` — every
+  structural change to the collections caturra models changes the size. The
+  documented gap: a modification that nets out to the same size between two
+  `next()` calls (an add AND a remove) is not caught, where a real JVM would.
 - **Flow analysis** (`caturra-compiler/src/flow.rs`, 2026-07-18): statement
   reachability (JLS §14.21) and blank-final definite assignment (JLS §8.3.1.2,
   §16.9). Code after `return`/`throw`/`break`/`continue`, and the body of a
@@ -384,10 +400,10 @@ put/putIfAbsent/remove` (by key, and by key+value)/`replace` (both)/
     `keySet()` -> `Set<K>`, `values()` -> `Collection<V>`, `entrySet()`
     -> `Set<Map.Entry<K, V>>`. The views are live, as Java's are: a
     later `put` shows through, and `entry.setValue(...)` writes back.
-    for-each walks all three (an index loop over a synthetic accessor,
-    since caturra has no iterators — so mutating a map inside such a
-    loop silently sees the change where a real JDK throws
-    `ConcurrentModificationException`). **`keySet().forEach(k -> ...)`** and
+    for-each walks all three (an index loop over a synthetic accessor
+    rather than a real iterator) and is **fail-fast** since 2026-07-18:
+    mutating a map inside such a loop throws
+    `ConcurrentModificationException` exactly where a JDK does. **`keySet().forEach(k -> ...)`** and
     **`values().forEach(v -> ...)`** (2026-07-09), and the same on a
     `Set`/`Collection` variable holding a view, run a `Consumer` over the
     view's elements in the map's iteration order; the lambda's parameter is
