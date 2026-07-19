@@ -4362,6 +4362,11 @@ enum BRet {
     /// that is `null` on an empty collection (`poll`/`peek`), so the absence
     /// is representable exactly as Java's is.
     BoxedElem,
+    /// A named WRAPPER type (`Integer.valueOf(int)` returns an `Integer`).
+    /// The value still travels unboxed — caturra stores wrapper values that
+    /// way — but the STATIC type must be the reference, or overload
+    /// resolution cannot tell `remove(int)` from `remove(Object)`.
+    Wrapper(ElemType),
     /// `java.lang.Class` (`getClass`, `getSuperclass`).
     Class,
     /// `java.lang.Throwable` (`Throwable.getCause`).
@@ -6185,9 +6190,17 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     bm("toBinaryString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     bm("toOctalString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     bm("toHexString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
-    // valueOf returns the primitive value (no boxed identity/caching
-    // semantics in this VM — a documented deviation).
-    bm("valueOf", &[I], BRet::Int, "(I)I"),
+    // `valueOf` answers an Integer. The VM hands back the primitive (wrapper
+    // values are stored unboxed), but the static type has to be the WRAPPER:
+    // `list.remove(Integer.valueOf(2))` must reach `remove(Object)` and delete
+    // the VALUE, where typing it as `int` picked `remove(int index)` and
+    // deleted by POSITION — the classic Java trap, silently wrong.
+    bm(
+        "valueOf",
+        &[I],
+        BRet::Wrapper(ElemType::Int),
+        "(I)Ljava/lang/Integer;",
+    ),
     bm(
         "valueOf",
         &[S],
@@ -7848,7 +7861,51 @@ fn pick_builtin<'m>(
     }) {
         return Some(exact);
     }
+    // JLS §15.12.2 phase 1 beats phase 2: an overload applicable WITHOUT
+    // boxing or unboxing wins over one that needs it. The modelled parameter
+    // types cannot express this — caturra stores list elements unboxed, so
+    // `remove(int index)` and `remove(Object)` BOTH look like `int` for a
+    // `List<Integer>` — but the DESCRIPTORS still carry the real Java kinds.
+    //
+    // Without this, `list.remove(Integer.valueOf(2))` picked whichever
+    // overload came first in the table and removed by POSITION, the classic
+    // Java trap, silently.
+    if let Some(unboxed) = applicable.iter().find(|m| {
+        descriptor_param_kinds(m.descriptor)
+            .zip(args.iter())
+            .all(|(is_reference, arg)| is_reference == arg.is_reference())
+    }) {
+        return Some(unboxed);
+    }
     applicable.first().copied()
+}
+
+/// Whether each parameter of a method descriptor is a REFERENCE type, in
+/// order. `(ILjava/lang/Object;)V` yields `[false, true]`.
+fn descriptor_param_kinds(descriptor: &str) -> impl Iterator<Item = bool> + '_ {
+    let params = descriptor
+        .strip_prefix('(')
+        .and_then(|rest| rest.split_once(')'))
+        .map_or("", |(params, _)| params);
+    let mut chars = params.chars().peekable();
+    std::iter::from_fn(move || {
+        let mut is_reference = false;
+        loop {
+            let c = chars.next()?;
+            match c {
+                '[' => is_reference = true,
+                'L' => {
+                    for skip in chars.by_ref() {
+                        if skip == ';' {
+                            break;
+                        }
+                    }
+                    return Some(true);
+                }
+                _ => return Some(is_reference),
+            }
+        }
+    })
 }
 
 fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
@@ -7913,6 +7970,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Val => Some(boxed_or_nested(args.second, table)),
         // A map key and a queue/deque nullable element both box the first arg.
         BRet::Key | BRet::BoxedElem => Some(boxed_or_nested(args.first, table)),
+        BRet::Wrapper(elem) => Some(JType::Boxed(elem)),
         BRet::Keys => Some(args.first.map_or(JType::Error, JType::Set)),
         BRet::Values => Some(args.second.map_or(JType::Error, JType::Collection)),
         BRet::Entries => Some(match (args.first, args.second) {
@@ -10266,6 +10324,15 @@ impl BodyGen<'_> {
         {
             return JType::Exception(id);
         }
+        // `new Integer(5)` / `new Double("1.5")` — the deprecated wrapper
+        // constructors. The EMITTER models them (`new_wrapper`); type_of did
+        // not, so `new Integer("7") + 1` typed as nothing and the addition was
+        // refused. The type_of/emit divergence, again.
+        if !self.table.has_class(class)
+            && let Some(elem) = wrapper_elem(class)
+        {
+            return JType::Boxed(elem);
+        }
         match class {
             "Object" => JType::Object(self.table.object_id),
             "StringBuilder" => JType::StringBuilder,
@@ -10373,8 +10440,23 @@ impl BodyGen<'_> {
         } else {
             self.convert_for_assignment(actual, prim, arg.span());
         }
-        self.emit_box(elem);
+        // NOT `emit_box`: that routes through `Wrapper.valueOf`, which consults
+        // the autoboxing cache, and made `new Integer(5) == new Integer(5)`
+        // true. A constructor always creates a new object (JLS §15.9.4).
+        self.emit_new_wrapper(elem);
         JType::Boxed(elem)
+    }
+
+    /// Box without the autoboxing cache — one fresh object per call, for the
+    /// deprecated wrapper constructors.
+    fn emit_new_wrapper(&mut self, elem: ElemType) {
+        let internal = wrapper_internal(elem);
+        let prim = elem.base_type();
+        let descriptor = format!("({})L{internal};", prim.descriptor(self.table));
+        let method_ref = intern_method_ref(self.pool, internal, "__newWrapper", &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+        self.code.drop_stack(prim.width());
+        self.code.grow_stack(1);
     }
 
     /// `new ClassName(args)` (or an intrinsic: Scanner, `ArrayList`).
@@ -16920,8 +17002,23 @@ impl BodyGen<'_> {
             (numeric_view(raw_l), numeric_view(raw_r))
         };
         if lt == JType::Error || rt == JType::Error {
+            // Emit for nested diagnostics; if there were none, say so rather
+            // than let the comparison — and the statement around it —
+            // disappear without a trace. `println(new Boolean(true) == new
+            // Boolean(true))` printed NOTHING at all. Third path to carry this
+            // guard, after the arithmetic operators and call arguments.
+            let before = self.diagnostics.len();
             self.expr(lhs);
             self.expr(rhs);
+            if self.diagnostics.len() == before {
+                self.error(
+                    span,
+                    format!(
+                        "bad operand types for binary operator '{}'",
+                        comparison_symbol(op)
+                    ),
+                );
+            }
             return JType::Error;
         }
 

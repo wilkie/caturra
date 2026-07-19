@@ -12392,3 +12392,62 @@ public class DiffInlineArgs {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Wrapper dispatch and identity
+//
+// `list.remove(Integer.valueOf(2))` removed by POSITION — the classic Java
+// trap, silently wrong. Two overloads exist, `remove(int)` and
+// `remove(Object)`, and caturra stores list elements UNBOXED, so both looked
+// like `int` and the table order decided it. JLS 15.12.2 phase 1 (no boxing)
+// must beat phase 2, and the descriptors still carry the real Java kinds.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_wrapper_dispatch_and_identity,
+    "DiffWrapperDispatch",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class DiffWrapperDispatch {
+    public static void main(String[] args) {
+        // remove(Object) removes the VALUE ...
+        List<Integer> byValue = new ArrayList<>(Arrays.asList(10, 20, 30));
+        byValue.remove(Integer.valueOf(20));
+        System.out.println(byValue);
+        // ... and a wrapper-typed variable picks the same overload ...
+        List<Integer> boxed = new ArrayList<>(Arrays.asList(10, 20, 30));
+        Integer key = 30;
+        boxed.remove(key);
+        System.out.println(boxed);
+        // ... while a plain int still removes by POSITION.
+        List<Integer> byIndex = new ArrayList<>(Arrays.asList(10, 20, 30));
+        byIndex.remove(1);
+        System.out.println(byIndex);
+        List<String> strings = new ArrayList<>(Arrays.asList("a", "b"));
+        strings.remove("a");
+        System.out.println(strings);
+
+        // A constructor always creates a new object; valueOf consults the cache.
+        System.out.println(new Integer(5) == new Integer(5));
+        System.out.println(new Integer(5).equals(new Integer(5)));
+        System.out.println(new Integer(5) == Integer.valueOf(5));
+        System.out.println(Integer.valueOf(100) == Integer.valueOf(100));
+        System.out.println(Integer.valueOf(200) == Integer.valueOf(200));
+        System.out.println(new Boolean(true) == new Boolean(true));
+        Double first = new Double(1.5);
+        Double second = new Double(1.5);
+        System.out.println((first == second) + " " + first.equals(second));
+
+        // The wrapper constructors still behave as values.
+        System.out.println(new Integer(5) + new Integer(5));
+        System.out.println(new Integer("7") + 1);
+        System.out.println(Integer.valueOf(3) + Integer.valueOf(4));
+        int unboxed = Integer.valueOf(5);
+        System.out.println(unboxed + 1);
+    }
+}
+"#
+);

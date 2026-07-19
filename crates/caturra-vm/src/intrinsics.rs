@@ -3419,6 +3419,19 @@ pub fn invoke_static(
         let reference = heap.box_wrapper(class, args[0]);
         return Ok(Some(JValue::Ref(Some(reference))));
     }
+    // `new Integer(5)` must mint a DISTINCT object every time (JLS §15.9.4:
+    // a class instance creation expression always creates a new object), so
+    // `new Integer(5) == new Integer(5)` is FALSE while
+    // `Integer.valueOf(5) == Integer.valueOf(5)` is true. The compiler emits
+    // this caturra-internal name for the deprecated constructors precisely so
+    // the autoboxing cache above is bypassed.
+    if method == "__newWrapper" && args.len() == 1 && is_wrapper_class(class) {
+        let reference = heap.alloc(HeapObject::Boxed {
+            class_name: std::rc::Rc::from(class),
+            value: args[0],
+        });
+        return Ok(Some(JValue::Ref(Some(reference))));
+    }
     match class {
         "java/lang/Math" => math_static(rng, method, args),
         "java/lang/Integer" => integer_static(heap, method, args),
@@ -4126,7 +4139,15 @@ fn integer_static(
         ("max", [JValue::Int(a), JValue::Int(b)]) => i((*a).max(*b)),
         ("min", [JValue::Int(a), JValue::Int(b)]) => i((*a).min(*b)),
         ("sum", [JValue::Int(a), JValue::Int(b)]) => i(a.wrapping_add(*b)),
-        ("valueOf" | "hashCode", [JValue::Int(v)]) => i(*v),
+        // `Integer.valueOf(int)` answers a REFERENCE, through the autoboxing
+        // cache, so `valueOf(100) == valueOf(100)` is true and `valueOf(200)`
+        // is not. `hashCode` stays a plain int — they were one arm, which is
+        // why valueOf handed back a bare primitive.
+        ("valueOf", [JValue::Int(v)]) => {
+            let reference = heap.box_wrapper("java/lang/Integer", JValue::Int(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
+        ("hashCode", [JValue::Int(v)]) => i(*v),
         ("signum", [JValue::Int(v)]) => i(v.signum()),
         ("bitCount", [JValue::Int(v)]) => i(i32::try_from(v.count_ones()).unwrap_or(0)),
         ("highestOneBit", [JValue::Int(v)]) => i(if *v == 0 {

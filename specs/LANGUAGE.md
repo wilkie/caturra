@@ -81,6 +81,19 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   structural change to the collections caturra models changes the size. The
   documented gap: a modification that nets out to the same size between two
   `next()` calls (an add AND a remove) is not caught, where a real JVM would.
+- **Wrapper dispatch and identity** (2026-07-19): `list.remove(Integer.valueOf(2))`
+  removes the VALUE, not the element at index 2. Both `remove(int)` and
+  `remove(Object)` exist and caturra stores list elements UNBOXED, so both
+  modelled as `int` and the table order decided it — silently, and it is the
+  classic Java trap. `pick_builtin` now applies JLS §15.12.2's rule that an
+  overload applicable WITHOUT boxing beats one that needs it, reading the real
+  parameter kinds off the descriptors. `Integer.valueOf(int)` accordingly
+  answers a REFERENCE (through the autoboxing cache, so `valueOf(100) ==
+  valueOf(100)` is true and `valueOf(200)` is not), while the deprecated
+  `new Integer(5)` mints a fresh object every time (JLS §15.9.4) and is never
+  `==` to another. Two more silent-vanish paths closed alongside: a comparison
+  whose operand does not type, and `new Integer("7")`, which the emitter
+  modelled and `type_of` did not.
 - **A call can no longer vanish** (2026-07-19): when an argument's type could
   not be determined, `builtin_instance_call` emitted the arguments "for nested
   diagnostics" and bailed — and when there were none, the call disappeared
