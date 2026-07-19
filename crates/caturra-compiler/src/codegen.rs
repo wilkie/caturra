@@ -1398,6 +1398,11 @@ impl MethodTable {
                     // A wrapper array (`Integer[]`) stores its primitives
                     // directly, like the corresponding primitive array.
                     JType::Boxed(elem) => elem,
+                    // `T[]` erases to `Object[]` — the array of a type
+                    // variable. Without this the dimension peel bailed out and
+                    // the unchecked cast `(T[]) new Object[n]`, the standard
+                    // way to build a generic array, was refused outright.
+                    JType::TypeVar => ElemType::Object(self.object_id),
                     _ => return None,
                 };
                 Some(JType::Array { elem, dims })
@@ -15848,10 +15853,15 @@ impl BodyGen<'_> {
                     );
                     return JType::Error;
                 }
-                // An array widens to `Object` — it is a reference, and every
-                // array is-a Object. A safe upcast, no runtime check, the
-                // value unchanged (the JVM leaves the reference on the stack).
-                JType::Array { .. } if target_id == self.table.object_id => {
+                // Everything that is a reference widens to `Object`: arrays,
+                // strings, collections, boxed values. A safe upcast (JLS §5.5
+                // widening reference conversion), no runtime check, the value
+                // left on the stack unchanged.
+                //
+                // Only the array case used to be here, so `(Object) "hi"` —
+                // the ordinary way to pick `println(Object)` over
+                // `println(String)` — was rejected as an incompatible type.
+                source if source.is_reference() && target_id == self.table.object_id => {
                     return target;
                 }
                 _ => {
@@ -16019,6 +16029,37 @@ impl BodyGen<'_> {
                 let descriptor = target.descriptor(self.table);
                 let class_index = intern_class(self.pool, &descriptor);
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+                target
+            }
+            // A boxing cast (JLS §5.5): `(Integer) 5`, `(Double) d`. The
+            // primitive is boxed after any widening/narrowing the wrapper
+            // needs, so `(Long) 5L` works and `(Integer) 5L` does not — javac
+            // refuses that one too, since a cast performs at most ONE boxing
+            // conversion and no numeric conversion alongside it.
+            (
+                source @ (JType::Int
+                | JType::Long
+                | JType::Double
+                | JType::Float
+                | JType::Short
+                | JType::Byte
+                | JType::Char
+                | JType::Boolean),
+                JType::Boxed(elem),
+            ) => {
+                let wanted = elem.base_type();
+                if source != wanted {
+                    self.error(
+                        span,
+                        format!(
+                            "incompatible types: {} cannot be converted to {}",
+                            source.describe(self.table),
+                            target.describe(self.table)
+                        ),
+                    );
+                    return JType::Error;
+                }
+                self.emit_box(elem);
                 target
             }
             (source, target) => {

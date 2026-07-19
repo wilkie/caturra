@@ -11709,3 +11709,135 @@ public class DiffFailFastIter {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Casts (JLS 5.5)
+//
+// Three separate defects met here: `(Integer) 5` did not PARSE (a literal was
+// not accepted after a cast type), `(Object) "hi"` was rejected as an
+// incompatible type (only arrays were allowed to widen to Object), and a
+// boxing cast had no conversion at all. Casting to Object is the ordinary way
+// to pick an overload, so this blocked more than it looked like.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_casts_boxing_and_object,
+    "DiffCasts",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+public class DiffCasts {
+    static String which(Object o) { return "Object"; }
+    static String which(String s) { return "String"; }
+
+    public static void main(String[] args) {
+        // Widening reference conversion: every reference widens to Object.
+        Object fromString = (Object) "hi";
+        System.out.println(fromString);
+        System.out.println((Object) "s");
+        List<String> list = new ArrayList<>();
+        System.out.println((Object) list);
+        Object fromArray = (Object) new int[] { 1, 2 };
+        System.out.println(fromArray != null);
+
+        // The reason it matters: a cast to Object selects the overload.
+        System.out.println(which("x"));
+        System.out.println(which((Object) "x"));
+
+        // Boxing casts, on a literal (which had to start parsing first) and
+        // on a variable.
+        System.out.println((Integer) 5);
+        int x = 5;
+        System.out.println((Integer) x);
+        System.out.println((Double) 2.5);
+        System.out.println((Character) 'c');
+        System.out.println((Boolean) true);
+        System.out.println((Long) 7L);
+        System.out.println((Short) (short) 3);
+        System.out.println((Byte) (byte) 2);
+        System.out.println((Float) 1.5f);
+
+        // And back the other way, unboxing.
+        System.out.println((int) (Integer) x);
+        System.out.println((double) (Double) 2.5);
+
+        // A boxed value is still a reference, so it widens to Object too.
+        System.out.println((Object) (Integer) 5);
+    }
+}
+"#
+);
+
+// A cast performs at most ONE boxing conversion and no numeric conversion
+// alongside it, so every one of these is an error in javac as well. Pinned so
+// the boxing arm cannot quietly grow into a widening-then-boxing conversion.
+differential_reject!(
+    reject_boxing_cast_with_numeric_conversion,
+    "RejBoxWiden",
+    r"public class RejBoxWiden {
+    public static void main(String[] args) {
+        System.out.println((Long) 5);
+    }
+}"
+);
+
+differential_reject!(
+    reject_boxing_cast_narrowing,
+    "RejBoxNarrow",
+    r"public class RejBoxNarrow {
+    public static void main(String[] args) {
+        System.out.println((Integer) 5.0);
+    }
+}"
+);
+
+differential_reject!(
+    reject_boxing_cast_char_from_int,
+    "RejBoxChar",
+    r"public class RejBoxChar {
+    public static void main(String[] args) {
+        System.out.println((Character) 65);
+    }
+}"
+);
+
+differential_reject!(
+    reject_cast_string_to_wrapper,
+    "RejCastStrWrap",
+    r#"
+public class RejCastStrWrap {
+    public static void main(String[] args) {
+        System.out.println((Integer) "s");
+    }
+}
+"#
+);
+
+// `T[]` erases to `Object[]`, so the unchecked cast that every generic
+// container uses to allocate its backing array has to compile.
+differential_test!(
+    diff_generic_array_cast,
+    "DiffGenericArray",
+    r#"
+public class DiffGenericArray {
+    static class Box<T> {
+        private T[] items;
+        Box(int n) { items = (T[]) new Object[n]; }
+        void set(int i, T v) { items[i] = v; }
+        T get(int i) { return items[i]; }
+        int size() { return items.length; }
+    }
+
+    public static void main(String[] args) {
+        Box<String> box = new Box<>(3);
+        box.set(0, "x");
+        box.set(1, "y");
+        System.out.println(box.get(0));
+        System.out.println(box.get(1));
+        System.out.println(box.size());
+        System.out.println(box.get(2));
+    }
+}
+"#
+);

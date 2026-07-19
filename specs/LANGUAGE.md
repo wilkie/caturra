@@ -178,6 +178,18 @@ length 3`, `NegativeArraySizeException`, `NullPointerException`.
   cannot be cast to class B") — including a cast of a `null` literal,
   `(String) null`, which names an overload without turning `(x) - 1`
   into one — and superclass-first static initialization.
+  **Casts completed 2026-07-18** (JLS §5.5): every reference widens to
+  `Object` (`(Object) "hi"`, the ordinary way to pick an `Object` overload
+  — previously rejected as an incompatible type); boxing casts
+  (`(Integer) 5`, `(Double) d`) and the unboxing direction
+  (`(int) (Integer) x`); a cast operand may now be a literal or itself
+  parenthesized (`(Integer) 5` used to be a PARSE error, `(Short) (short) 3`
+  too). A cast performs at most ONE boxing conversion and no numeric
+  conversion beside it, so `(Long) 5`, `(Integer) 5.0` and `(Character) 65`
+  stay errors, as javac has them. `T[]` erases to `Object[]`, so the
+  unchecked `(T[]) new Object[n]` every generic container needs compiles.
+  Still ambiguous by design: `(Integer) -5`, since `(x) - 1` cannot be told
+  from a cast without type information.
   **Field hiding** (JLS §8.3, 2026-07-09): a subclass may declare a field
   with the same name as one in a superclass, of any type. The two are
   distinct slots, and which one an access means is fixed by the **static

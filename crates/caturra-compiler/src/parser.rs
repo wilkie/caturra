@@ -2694,6 +2694,11 @@ impl Parser<'_> {
         // (`(a) - b` stays arithmetic). `super` starts an operand too, as in
         // `(JLabel) super.getListCellRendererComponent(...)`, and so does
         // `null`, as in `(String) null` to pick a varargs overload.
+        //
+        // A LITERAL is just as unambiguous: `(a) 5` cannot be a parenthesized
+        // expression followed by anything, so it is a cast — which is what
+        // makes the boxing cast `(Integer) 5` parse. Only the tokens that
+        // could also be a binary operator (`-`, `+`, `(`) stay excluded.
         if self.at_symbol("(")
             && let Some(after) = self.scan_cast_type()
             && matches!(
@@ -2703,6 +2708,19 @@ impl Parser<'_> {
                         | TokenKind::Keyword(Keyword::New | Keyword::This | Keyword::Super)
                         | TokenKind::StringLiteral(_)
                         | TokenKind::NullLiteral
+                        | TokenKind::IntLiteral(_)
+                        | TokenKind::LongLiteral(_)
+                        | TokenKind::FloatLiteral(_)
+                        | TokenKind::DoubleLiteral(_)
+                        | TokenKind::CharLiteral(_)
+                        | TokenKind::BooleanLiteral(_)
+                        // `(Short) (short) 3` — the operand is itself
+                        // parenthesized or another cast. Safe because
+                        // `scan_cast_type` has already established that what
+                        // precedes is a well-formed TYPE followed by `)`, and
+                        // `(variable) (expr)` is not valid Java under any
+                        // reading, so nothing legal is stolen.
+                        | TokenKind::Symbol("(")
                 )
             )
         {
