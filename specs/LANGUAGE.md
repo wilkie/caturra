@@ -81,6 +81,21 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   structural change to the collections caturra models changes the size. The
   documented gap: a modification that nets out to the same size between two
   `next()` calls (an add AND a remove) is not caught, where a real JVM would.
+- **Generics, the dangerous direction** (2026-07-19): four programs javac
+  refuses no longer compile — a type argument in `instanceof`
+  (JLS §15.20.2; a wildcard `List<?>` is still fine), a STATIC member using the
+  class's type parameters (JLS §8.4.1; a method-level `<U>` is fine), two
+  methods of one class sharing an ERASURE (JLS §8.4.2), and writing to a
+  `? extends` collection (JLS §4.5.1 — reads such as `get`/`size`/`contains`
+  stay legal, and a `? super` collection is still writable). Enforcing the
+  `instanceof` rule found TWO places in caturra's own tree relying on it being
+  accepted: the bundled JUnit and a test program, both since corrected.
+  Also fixed: a value whose declared type is a TYPE VARIABLE
+  (`box.get()`, `box.v` on a `Box<String>`) typed as nothing in the pure
+  `type_of` path though the emitter substituted the tracked argument — so
+  `box.get() + box.get()` was not seen as a concatenation and the whole
+  `println` produced NO OUTPUT AT ALL, with no diagnostic. A binary operator
+  whose operands type as errors now says so rather than vanishing.
 - **Parameterized supertypes and bridge methods** (2026-07-18): a subclass
   stands in for its parameterized supertype — `Box<String> b = new SBox()`,
   `F<String> f = new SF()` — and the call REACHES THE OVERRIDE. Erasure gives

@@ -4075,7 +4075,7 @@ fn sort_arrays_and_collections_and_list_equals() {
                 System.out.println(a.equals(b) + " " + __eq(a, b));
             }
             static boolean __eq(Object x, Object y) {
-                if (x instanceof ArrayList<Object> && y instanceof ArrayList<Object>) {
+                if (x instanceof ArrayList && y instanceof ArrayList) {
                     ArrayList<Object> p = (ArrayList<Object>) x;
                     ArrayList<Object> q = (ArrayList<Object>) y;
                     if (p.size() != q.size()) return false;

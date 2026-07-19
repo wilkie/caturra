@@ -12131,3 +12131,173 @@ public class StricterCovariant {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Generics: the dangerous direction
+//
+// Four programs javac refuses and caturra compiled, plus a silent wrong answer
+// the audit never surfaced: a type variable read as a value typed as nothing,
+// so `+` was not seen as a concatenation and the whole println produced NO
+// OUTPUT AT ALL — no value, no newline, no diagnostic.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_type_variable_values,
+    "DiffTypeVarValues",
+    r#"
+public class DiffTypeVarValues {
+    static class Box<T> {
+        T v;
+        Box(T v) { this.v = v; }
+        T get() { return v; }
+    }
+
+    public static void main(String[] args) {
+        Box<String> box = new Box<>("x");
+        // Each of these reads a value whose declared type is the variable T.
+        System.out.println(box.get() + box.get());
+        System.out.println(box.v + box.v);
+        System.out.println("[" + box.get() + "]");
+        System.out.println(box.get());
+        System.out.println(box.get().length());
+        String pulled = box.get();
+        System.out.println(pulled + pulled);
+    }
+}
+"#
+);
+
+// A type argument in `instanceof` is illegal (JLS 15.20.2): erasure leaves
+// nothing to test. Found TWO places in caturra's own tree relying on this
+// being accepted — the bundled JUnit and a test program.
+differential_reject!(
+    reject_instanceof_with_type_argument,
+    "RejInstanceofGeneric",
+    r#"
+import java.util.List;
+import java.util.ArrayList;
+
+public class RejInstanceofGeneric {
+    public static void main(String[] args) {
+        Object o = new ArrayList<String>();
+        if (o instanceof List<String>) {
+            System.out.println("yes");
+        }
+    }
+}
+"#
+);
+
+// A static member cannot use the class's type parameters (JLS 8.4.1) — there
+// is no instance to have supplied them.
+differential_reject!(
+    reject_static_type_variable,
+    "RejStaticTypeVar",
+    r#"
+public class RejStaticTypeVar {
+    static class C<T> {
+        static T bad() { return null; }
+    }
+    public static void main(String[] args) {
+        System.out.println("ok");
+    }
+}
+"#
+);
+
+// Two methods of one class may not share an erasure (JLS 8.4.2).
+differential_reject!(
+    reject_erasure_clash,
+    "RejErasureClash",
+    r#"
+import java.util.List;
+
+public class RejErasureClash {
+    static class C {
+        void m(List<String> l) { System.out.println("str"); }
+        void m(List<Integer> l) { System.out.println("int"); }
+    }
+    public static void main(String[] args) {
+        System.out.println("x");
+    }
+}
+"#
+);
+
+// A `? extends` collection is read-only: its element type is an unknown
+// subtype, so nothing is known to be assignable into it.
+differential_reject!(
+    reject_add_to_extends_wildcard,
+    "RejWildcardAdd",
+    r"
+import java.util.ArrayList;
+import java.util.List;
+
+public class RejWildcardAdd {
+    public static void main(String[] args) {
+        List<? extends Number> l = new ArrayList<Integer>();
+        l.add(1);
+        System.out.println(l);
+    }
+}
+"
+);
+
+// The legal neighbours of all four, so the checks cannot be widened into
+// refusing valid code. `instanceof List<?>` is allowed (a wildcard tests
+// nothing), a method-level type parameter on a static method is fine,
+// overloads that differ after erasure are fine, and every READ of a
+// `? extends` collection is fine — `contains` and `indexOf` take `Object`.
+differential_test!(
+    diff_legal_generics_neighbours,
+    "DiffLegalGenerics",
+    r#"
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+public class DiffLegalGenerics {
+    static class Animal { public String toString() { return "A"; } }
+    static class Dog extends Animal { public String toString() { return "D"; } }
+
+    static class C<T> {
+        T v;
+        T get() { return v; }
+        static <U> U fine(U u) { return u; }
+        static int plain() { return 1; }
+        void m(List<String> l) { System.out.println("list"); }
+        void m(Set<String> s) { System.out.println("set"); }
+        void m(String s) { System.out.println("str"); }
+    }
+
+    static int count(List<? extends Animal> xs) { return xs.size(); }
+
+    public static void main(String[] args) {
+        Object o = new ArrayList<String>();
+        System.out.println(o instanceof List);
+        System.out.println(o instanceof List<?>);
+        System.out.println(C.fine("x"));
+        System.out.println(C.plain());
+
+        C<String> c = new C<>();
+        c.m(new ArrayList<String>());
+        c.m(new HashSet<String>());
+        c.m("s");
+
+        List<Dog> dogs = new ArrayList<>();
+        dogs.add(new Dog());
+        System.out.println(count(dogs));
+        List<? extends Animal> read = dogs;
+        System.out.println(read.get(0));
+        System.out.println(read.size());
+        System.out.println(read.isEmpty());
+        System.out.println(read.contains(null));
+        // A `? super` collection CAN be written to.
+        List<? super Dog> sink = new ArrayList<Animal>();
+        sink.add(new Dog());
+        System.out.println(sink);
+    }
+}
+"#
+);

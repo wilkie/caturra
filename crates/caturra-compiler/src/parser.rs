@@ -472,6 +472,18 @@ impl Parser<'_> {
                         let first = classes.len();
                         flatten_nested(class, &mut classes);
                         for class in &mut classes[first..] {
+                            for (message, span) in check_erasure_clashes(class) {
+                                self.error_at(span, message);
+                            }
+                            for (name, span) in check_static_type_variable_use(class) {
+                                self.error_at(
+                                    span,
+                                    format!(
+                                        "non-static type variable {name} cannot be \
+                                         referenced from a static context"
+                                    ),
+                                );
+                            }
                             erase_type_vars(class);
                         }
                     } else {
@@ -3818,6 +3830,137 @@ fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
 /// unbounded. Runtime semantics are unchanged (erasure); this keeps the rest
 /// of the compiler generics-unaware while letting a bounded `T`'s methods
 /// resolve.
+/// JLS §8.4.1 / §6.5.5.1: a STATIC member may not use the class's type
+/// parameters — there is no instance to have supplied them. javac: "non-static
+/// type variable T cannot be referenced from a static context".
+///
+/// Must run BEFORE `erase_type_vars`, which replaces those names and leaves
+/// nothing to detect. Method-level parameters (`static <T> T id(T)`) are fine
+/// and are excluded.
+fn check_static_type_variable_use(class: &ClassDecl) -> Vec<(String, SourceSpan)> {
+    let mut found = Vec::new();
+    if class.type_params.is_empty() {
+        return found;
+    }
+    for method in class.methods.iter().filter(|m| m.is_static) {
+        let shadowed: std::collections::HashSet<&str> =
+            method.type_params.iter().map(|p| p.name.as_str()).collect();
+        let mut check = |ty: &TypeRef| {
+            if let Some(name) = names_class_type_param(ty, class, &shadowed) {
+                found.push((name, method.span));
+            }
+        };
+        check(&method.return_type);
+        for param in &method.params {
+            check(&param.ty);
+        }
+    }
+    for field in class.fields.iter().filter(|f| f.is_static) {
+        if let Some(name) =
+            names_class_type_param(&field.ty, class, &std::collections::HashSet::new())
+        {
+            found.push((name, field.span));
+        }
+    }
+    found
+}
+
+/// The class type parameter this type names, if any (looking through arrays
+/// and type arguments).
+fn names_class_type_param(
+    ty: &TypeRef,
+    class: &ClassDecl,
+    shadowed: &std::collections::HashSet<&str>,
+) -> Option<String> {
+    match ty {
+        TypeRef::Named(name) => (class.type_params.iter().any(|p| p.name == *name)
+            && !shadowed.contains(name.as_str()))
+        .then(|| name.clone()),
+        TypeRef::Array(inner) => names_class_type_param(inner, class, shadowed),
+        TypeRef::Generic { args, .. } => args
+            .iter()
+            .find_map(|a| names_class_type_param(a, class, shadowed)),
+        _ => None,
+    }
+}
+
+/// JLS §8.4.2: two methods of one class may not have the same ERASURE.
+/// `m(List<String>)` and `m(List<Integer>)` are distinct in source and
+/// identical on the JVM, so javac refuses the pair — "name clash". caturra
+/// accepted both and silently kept whichever it resolved to.
+///
+/// Must run BEFORE erasure, which makes the two literally identical and so
+/// indistinguishable from a plain duplicate method.
+fn check_erasure_clashes(class: &ClassDecl) -> Vec<(String, SourceSpan)> {
+    let mut clashes = Vec::new();
+    let methods: Vec<&MethodDecl> = class.methods.iter().filter(|m| !m.is_abstract).collect();
+    for (i, one) in methods.iter().enumerate() {
+        for other in methods.iter().skip(i + 1) {
+            if one.name != other.name || one.params.len() != other.params.len() {
+                continue;
+            }
+            let (a, b) = (source_params(one), source_params(other));
+            // Identical in source too: that is a duplicate method, a different
+            // error reported elsewhere, not an erasure clash.
+            if a == b {
+                continue;
+            }
+            if erased_param_keys(one) == erased_param_keys(other) {
+                clashes.push((
+                    format!(
+                        "name clash: {}({}) and {}({}) have the same erasure",
+                        other.name,
+                        b.join(", "),
+                        one.name,
+                        a.join(", ")
+                    ),
+                    other.span,
+                ));
+            }
+        }
+    }
+    clashes
+}
+
+/// A parameter list as written, for the diagnostic.
+fn source_params(method: &MethodDecl) -> Vec<String> {
+    method
+        .params
+        .iter()
+        .map(|p| type_source_text(&p.ty))
+        .collect()
+}
+
+fn type_source_text(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Named(name) => name.clone(),
+        TypeRef::Array(inner) => format!("{}[]", type_source_text(inner)),
+        TypeRef::Generic { base, args } => {
+            let args: Vec<String> = args.iter().map(type_source_text).collect();
+            format!("{base}<{}>", args.join(", "))
+        }
+        other => format!("{other:?}").to_lowercase(),
+    }
+}
+
+/// A parameter list after erasure — type arguments dropped.
+fn erased_param_keys(method: &MethodDecl) -> Vec<String> {
+    method
+        .params
+        .iter()
+        .map(|p| erased_type_key(&p.ty))
+        .collect()
+}
+
+fn erased_type_key(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Named(name) => name.clone(),
+        TypeRef::Generic { base, .. } => base.clone(),
+        TypeRef::Array(inner) => format!("{}[]", erased_type_key(inner)),
+        other => format!("{other:?}"),
+    }
+}
+
 fn erase_type_vars(class: &mut ClassDecl) {
     use std::collections::HashMap;
     // A class with exactly one UNBOUNDED type parameter tracks it: that

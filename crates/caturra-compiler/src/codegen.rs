@@ -3166,6 +3166,37 @@ fn check_inner_static_members(decl: &ClassDecl, path: &str, diagnostics: &mut Ve
     }
 }
 
+/// The collection methods whose real Java signature takes the ELEMENT type
+/// (`add(E)`, `set(int, E)`, `addAll(Collection<? extends E>)`, ...), and so
+/// cannot be called on a `? extends` collection.
+///
+/// Named explicitly rather than derived from "takes `BParam::Elem`", because
+/// several READ methods take one too — `contains`, `indexOf` and `remove` are
+/// declared `(Object)` in the real API and stay perfectly legal on a
+/// `? extends` collection. Refusing those broke ordinary read-only code.
+const WRITES_AN_ELEMENT: &[&str] = &[
+    "add",
+    "addAll",
+    "set",
+    "addFirst",
+    "addLast",
+    "offer",
+    "offerFirst",
+    "offerLast",
+    "push",
+    "replaceAll",
+    "fill",
+];
+
+/// Whether a type argument is the unbounded wildcard `?`, the one form
+/// `instanceof` accepts (it constrains nothing, so erasure loses nothing).
+fn is_unbounded_wildcard(arg: &TypeRef) -> bool {
+    matches!(arg, TypeRef::Named(name)
+    if crate::ast::wildcard_parts(name).is_some_and(|(variance, bound)| {
+        variance == '?' && bound.is_empty()
+    }))
+}
+
 fn is_constant_static_field(field: &FieldDecl) -> bool {
     if !field.is_static || !field.is_final {
         return false;
@@ -11981,6 +12012,34 @@ impl BodyGen<'_> {
             return None;
         }
 
+        // A `? extends` collection is READ-ONLY (JLS §4.5.1, §5.1.10): its
+        // capture is some unknown subtype, so nothing — not even the bound —
+        // is known to be assignable INTO it. javac reports the capture:
+        // "int cannot be converted to CAP#1". Only `null` may be added, which
+        // caturra does not model separately, so every element-taking mutator
+        // is refused. Accepting `l.add(1)` on a `List<? extends Number>` let a
+        // program compile here and fail on a JDK.
+        if let Some(ElemType::Wildcard { bound, .. }) = elem.first
+            && matches!(
+                bound,
+                WildcardBound::Unbounded | WildcardBound::NumberUpper | WildcardBound::Upper(_)
+            )
+            && WRITES_AN_ELEMENT.contains(&method)
+        {
+            let (class, _) = builtin_instance_table(receiver_ty).expect("collection has a table");
+            self.error(
+                span,
+                format!(
+                    "no suitable method found for {method}(...) in {class}: a \
+                     '? extends' collection cannot be written to (its element \
+                     type is an unknown subtype)"
+                ),
+            );
+            for arg in args {
+                self.expr(arg);
+            }
+            return Some(None);
+        }
         let Some(chosen) = pick_builtin(methods, method, &arg_types, elem, self.table) else {
             if methods.iter().any(|m| m.name == method) {
                 self.error(
@@ -14479,6 +14538,21 @@ impl BodyGen<'_> {
                         .field(&owner, name)
                         .map_or(JType::Error, |(_, f)| f.ty)
                 }
+                // A field of a PARAMETERIZED receiver (`box.v` on a
+                // `Box<String>`) — the tracked argument replaces the type
+                // variable, as it does for a method return.
+                JType::Generic { class, arg } => {
+                    let owner = self.table.class_name(class).to_owned();
+                    self.table
+                        .field(&owner, name)
+                        .map_or(JType::Error, |(_, f)| {
+                            if f.ty == JType::TypeVar {
+                                arg.base_type()
+                            } else {
+                                f.ty
+                            }
+                        })
+                }
                 _ => JType::Error,
             },
             Expr::NewArray { elem, dims, .. } => {
@@ -14563,6 +14637,28 @@ impl BodyGen<'_> {
                     }
                     Some(other) => match self.type_of(other) {
                         JType::Object(id) => self.table.class_name(id).to_owned(),
+                        // A method on a PARAMETERIZED receiver (`box.get()` on a
+                        // `Box<String>`): resolve against the class, then put the
+                        // tracked type argument back in place of the type
+                        // variable, exactly as `instance_call` does when it
+                        // emits. Falling through to `Error` here was the
+                        // `type_of`/emit divergence again — and a nasty one:
+                        // `box.get() + box.get()` typed as Error, so `+` was not
+                        // seen as a string concatenation, and the whole
+                        // `println` silently produced NOTHING.
+                        JType::Generic { class, arg } => {
+                            let class_name = self.table.class_name(class).to_owned();
+                            let arg_types: Vec<JType> =
+                                args.iter().map(|a| self.type_of(a)).collect();
+                            return match self.table.resolve(&class_name, method, &arg_types) {
+                                Resolution::Found(sig) => match sig.ret {
+                                    Some(JType::TypeVar) => arg.base_type(),
+                                    Some(ret) => ret,
+                                    None => JType::Error,
+                                },
+                                _ => JType::Error,
+                            };
+                        }
                         // A wrapper method on a primitive/boxed receiver
                         // (`someInt.intValue()`) — autoboxed at emission.
                         JType::Int
@@ -15107,6 +15203,19 @@ impl BodyGen<'_> {
 
     /// `value instanceof Type` (reference types only).
     fn instance_of(&mut self, value: &Expr, ty: &TypeRef, span: SourceSpan) -> JType {
+        // `o instanceof List<String>` is illegal (JLS §15.20.2): erasure leaves
+        // nothing to test at runtime, so javac refuses the type argument rather
+        // than silently ignoring it. caturra ignored it and answered `true`,
+        // which is the answer a reader would least expect to be unreliable.
+        // A wildcard IS allowed (`instanceof List<?>`), since it tests nothing.
+        if let TypeRef::Generic { args, .. } = ty
+            && !args.iter().all(is_unbounded_wildcard)
+        {
+            self.error(span, "illegal generic type for instanceof");
+            self.expr(value);
+            self.code.discard();
+            return JType::Boolean;
+        }
         let value_ty = self.expr(value);
         // `o instanceof List` / `Map` / `Set` — a RAW library type, which is how
         // instanceof is always written (`instanceof List<String>` is illegal Java).
@@ -16524,6 +16633,7 @@ impl BodyGen<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per operator group
     fn binary(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
         match op {
             BinaryOp::And | BinaryOp::Or => self.logical(op, lhs, rhs, span),
@@ -16594,9 +16704,29 @@ impl BodyGen<'_> {
                     numeric_view(self.type_of(rhs)),
                 );
                 if lt == JType::Error || rt == JType::Error {
-                    // Emit for nested diagnostics, then bail.
+                    // Emit for nested diagnostics, then bail. If emitting the
+                    // operands reported NOTHING, the error would be invisible:
+                    // the program compiled and the statement silently produced
+                    // no output at all (how `box.get() + box.get()` printed
+                    // nothing). Say something rather than vanish.
+                    let before = self.diagnostics.len();
                     self.expr(lhs);
                     self.expr(rhs);
+                    if self.diagnostics.len() == before {
+                        self.error(
+                            span,
+                            format!(
+                                "bad operand types for binary operator '{}'",
+                                match op {
+                                    BinaryOp::Add => "+",
+                                    BinaryOp::Sub => "-",
+                                    BinaryOp::Mul => "*",
+                                    BinaryOp::Div => "/",
+                                    _ => "%",
+                                }
+                            ),
+                        );
+                    }
                     return JType::Error;
                 }
                 if !lt.is_numeric() || !rt.is_numeric() {

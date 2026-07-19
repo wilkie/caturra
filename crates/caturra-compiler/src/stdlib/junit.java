@@ -65,7 +65,9 @@ class Assertions {
   // semantics), which for user objects dispatches their equals override.
   static boolean __objEquals(Object expected, Object actual) {
     if (expected == null) return actual == null;
-    if (expected instanceof java.util.ArrayList<Object> && actual instanceof java.util.ArrayList<Object>) {
+    // Raw, not `ArrayList<Object>`: a type argument in `instanceof` is
+    // illegal Java (JLS 15.20.2), which caturra now enforces.
+    if (expected instanceof java.util.ArrayList && actual instanceof java.util.ArrayList) {
       java.util.ArrayList<Object> a = (java.util.ArrayList<Object>) expected;
       java.util.ArrayList<Object> b = (java.util.ArrayList<Object>) actual;
       if (a.size() != b.size()) return false;
