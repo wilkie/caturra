@@ -4159,9 +4159,14 @@ const ND_STARTS: [u32; 37] = [
 /// Devanagari '५' etc. all need this table.
 fn nd_digit_value(c: char) -> Option<u32> {
     let cp = u32::from(c);
+    // `then`, not `then_some`: the latter evaluates its argument eagerly, so
+    // `cp - s` underflowed for every start above `cp` — a debug-build panic on
+    // something as ordinary as `Character.isDigit('A')`. Release builds wrapped
+    // instead and the range test still rejected the value, which is how a
+    // panic on a common call went unnoticed.
     ND_STARTS
         .iter()
-        .find_map(|&s| (cp >= s && cp <= s + 9).then_some(cp - s))
+        .find_map(|&s| (cp >= s && cp <= s + 9).then(|| cp - s))
 }
 
 /// Java's `Character.toUpperCase(char)`: the *simple* (single-char) uppercase
