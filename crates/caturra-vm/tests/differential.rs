@@ -12708,3 +12708,132 @@ public class DiffLegalOverrides {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// try-with-resources: the JLS 14.20.3 translation
+//
+// The old desugaring was a documented approximation — a bare
+// `finally { r.close(); }` with the declarations OUTSIDE the guarded try. That
+// lost the body's exception whenever close() also threw, let a resource
+// initializer's exception escape the statement's own catch, and dereferenced a
+// null resource.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_try_with_resources_translation,
+    "DiffTwr",
+    r#"
+public class DiffTwr {
+    static class R implements AutoCloseable {
+        String name;
+        R(String name) { this.name = name; System.out.println("open " + name); }
+        @Override public void close() { System.out.println("close " + name); }
+    }
+    static class ThrowsOnClose implements AutoCloseable {
+        @Override public void close() { throw new IllegalStateException("fromClose"); }
+    }
+    static class ThrowsOnInit implements AutoCloseable {
+        ThrowsOnInit() { throw new RuntimeException("initFail"); }
+        @Override public void close() { System.out.println("never closed"); }
+    }
+    static R nothing() { return null; }
+
+    public static void main(String[] args) {
+        // Closed in REVERSE order of declaration.
+        try (R first = new R("a"); R second = new R("b")) {
+            System.out.println("body");
+        }
+
+        // The body's exception wins; close()'s is SUPPRESSED.
+        try (ThrowsOnClose bad = new ThrowsOnClose()) {
+            throw new RuntimeException("fromBody");
+        } catch (Exception e) {
+            System.out.println("caught " + e.getMessage()
+                + " suppressed=" + e.getSuppressed().length);
+        }
+
+        // An initializer failure is caught by the statement's OWN catch, and
+        // the resource opened before it still closes.
+        try (R open = new R("c"); ThrowsOnInit boom = new ThrowsOnInit()) {
+            System.out.println("never reached");
+        } catch (Exception e) {
+            System.out.println("caught " + e.getMessage());
+        }
+
+        // A null resource is skipped, not dereferenced.
+        try (R absent = nothing()) {
+            System.out.println("null body");
+        }
+
+        // The Java 9 form: an existing effectively-final variable.
+        R existing = new R("d");
+        try (existing) {
+            System.out.println("existing body");
+        }
+        System.out.println("end");
+    }
+}
+"#
+);
+
+// JLS 14.20: the alternatives of one multi-catch may not be related by
+// subclassing, and a multi-catch parameter is implicitly final.
+differential_reject!(
+    reject_multi_catch_subclassing,
+    "RejMultiCatchSubclass",
+    r#"
+public class RejMultiCatchSubclass {
+    public static void main(String[] args) {
+        try {
+            throw new IllegalStateException("x");
+        } catch (RuntimeException | IllegalStateException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_multi_catch_assignment,
+    "RejMultiCatchAssign",
+    r#"
+public class RejMultiCatchAssign {
+    public static void main(String[] args) {
+        try {
+            throw new IllegalStateException("x");
+        } catch (RuntimeException | Error e) {
+            e = new RuntimeException("reassigned");
+            System.out.println(e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// The legal neighbours: unrelated alternatives, and assignment to a SINGLE
+// catch parameter (only effectively final, so it may be assigned).
+differential_test!(
+    diff_legal_catch_forms,
+    "DiffLegalCatch",
+    r#"
+public class DiffLegalCatch {
+    public static void main(String[] args) {
+        try {
+            throw new IllegalStateException("x");
+        } catch (IllegalStateException | Error e) {
+            System.out.println(e.getMessage());
+        }
+        try {
+            throw new IllegalStateException("y");
+        } catch (RuntimeException e) {
+            e = new RuntimeException("reassigned");
+            System.out.println(e.getMessage());
+        }
+        RuntimeException held = new RuntimeException("held");
+        held.addSuppressed(new IllegalStateException("extra"));
+        System.out.println(held.getSuppressed().length);
+    }
+}
+"#
+);

@@ -360,6 +360,10 @@ pub enum HeapObject {
         /// The chained cause (`new X(msg, cause)` / `initCause`), for
         /// `getCause()`. `None` when the exception has no cause.
         cause: Option<HeapRef>,
+        /// Exceptions suppressed in favour of this one — what a
+        /// try-with-resources attaches when `close()` throws while the body
+        /// is already unwinding (JLS §14.20.3.1).
+        suppressed: Vec<HeapRef>,
     },
     /// A `java.lang.Class` handle from `obj.getClass()` — the (flat,
     /// simple) class name is enough for the structural reflection the

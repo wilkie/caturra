@@ -42,31 +42,50 @@ struct Resource {
     ty: TypeRef,
     name: String,
     init: Expr,
+    /// The Java 9 form `try (existing)`, naming an already-declared
+    /// effectively-final variable. It is closed like any other resource but
+    /// must NOT be re-declared.
+    existing: bool,
     span: SourceSpan,
 }
 
-/// Desugar `try (resources) body catches finally` into the plain try/finally the
-/// JLS §14.20.3 specifies, so codegen never sees a resource at all:
+/// Desugar `try (resources) body catches finally` into the plain try/catch the
+/// JLS §14.20.3 specifies, so codegen never sees a resource at all.
+///
+/// Per resource, innermost last, the translation is §14.20.3.1's:
 ///
 /// ```text
 /// {
-///   RType r1 = init1;                    // implicitly final
-///   RType r2 = init2;
-///   try {                                // the ORIGINAL catches + finally
-///     try {                              // r1's auto-close
-///       try { body } finally { r2.close(); }   // r2 closes first (reverse order)
-///     } finally { r1.close(); }
-///   } catch (...) { ... } finally { ... }
+///   RType r = init;                  // implicitly final
+///   Throwable primary = null;
+///   try { body }
+///   catch (Throwable t) { primary = t; throw t; }
+///   finally {
+///     if (r != null) {
+///       if (primary != null) {
+///         try { r.close(); } catch (Throwable s) { primary.addSuppressed(s); }
+///       } else {
+///         r.close();
+///       }
+///     }
+///   }
 /// }
 /// ```
 ///
-/// This is the common path exactly; what it does NOT reproduce is Java's
-/// suppressed-exception handling (if the body throws AND `close()` also throws,
-/// Java keeps the body's exception and attaches close's as suppressed — here
-/// close's would win). caturra's resources are `PrintWriter`/`Scanner`, whose
-/// `close()` does not throw, so the distinction never arises; a `throws`-ing
-/// close would be the only difference, and the honest note is better than the
-/// machinery.
+/// Three things this buys that a bare `finally { r.close(); }` did not, each
+/// of which was a confirmed divergence:
+///
+/// * **the body's exception wins.** If the body throws and `close()` throws
+///   too, Java keeps the body's and attaches close's as SUPPRESSED. The old
+///   shape let close's replace it, so the program caught the wrong exception
+///   entirely.
+/// * **an initializer failure is catchable.** The declarations now sit INSIDE
+///   the outer try, as §14.20.3.2 requires, so `try (R r = new R()) {...}
+///   catch (Exception e)` catches a throwing constructor — and any earlier
+///   resource still closes. They used to sit outside, so the exception escaped
+///   the statement's own catch and killed the program.
+/// * **a null resource is skipped**, not dereferenced.
+#[allow(clippy::too_many_lines)] // the JLS 14.20.3 translation, spelled out
 fn desugar_try_with_resources(
     resources: Vec<Resource>,
     body: Vec<Stmt>,
@@ -74,59 +93,138 @@ fn desugar_try_with_resources(
     finally_body: Option<Vec<Stmt>>,
     span: SourceSpan,
 ) -> Stmt {
+    let name_expr = |name: &str| Expr::Name {
+        path: vec![name.to_owned()],
+        span,
+    };
+    let null_literal = || Expr::Literal {
+        value: Literal::Null,
+        span,
+    };
+    let is_null = |name: &str, negated: bool| Expr::Binary {
+        op: if negated { BinaryOp::Ne } else { BinaryOp::Eq },
+        lhs: Box::new(name_expr(name)),
+        rhs: Box::new(null_literal()),
+        span,
+    };
     let close_call = |name: &str| {
         Stmt::Expr(Expr::Call {
-            receiver: Some(Box::new(Expr::Name {
-                path: vec![name.to_owned()],
-                span,
-            })),
+            receiver: Some(Box::new(name_expr(name))),
             method: String::from("close"),
             args: Vec::new(),
             span,
         })
     };
 
-    // Wrap the body in one auto-closing try per resource, innermost first — so the
-    // LAST resource declared is the FIRST closed (JLS reverse order).
+    // Innermost first, so the LAST resource declared is the FIRST closed.
     let mut inner = body;
-    for resource in resources.iter().rev() {
-        inner = vec![Stmt::Try {
-            body: inner,
-            catches: Vec::new(),
-            finally_body: Some(vec![close_call(&resource.name)]),
-            span,
-        }];
-    }
+    for (depth, resource) in resources.into_iter().enumerate().rev() {
+        // Synthetic names cannot collide with a source identifier: `$` is not
+        // in caturra's identifier set, and the depth keeps nested statements
+        // apart.
+        let primary = format!("__caturraPrimary${depth}");
+        let thrown = format!("__caturraThrown${depth}");
+        let closing = format!("__caturraClosing${depth}");
 
-    // The original catches/finally apply to the whole resource block.
-    let guarded = if catches.is_empty() && finally_body.is_none() {
-        inner
-    } else {
-        vec![Stmt::Try {
-            body: inner,
-            catches,
-            finally_body,
+        // `try { r.close(); } catch (Throwable s) { primary.addSuppressed(s); }`
+        let close_suppressing = Stmt::Try {
+            body: vec![close_call(&resource.name)],
+            catches: vec![CatchClause {
+                types: vec![TypeRef::Named(String::from("Throwable"))],
+                name: closing.clone(),
+                body: vec![Stmt::Expr(Expr::Call {
+                    receiver: Some(Box::new(name_expr(&primary))),
+                    method: String::from("addSuppressed"),
+                    args: vec![name_expr(&closing)],
+                    span,
+                })],
+                span,
+            }],
+            finally_body: None,
             span,
-        }]
-    };
+        };
 
-    // The resource declarations scope the whole thing.
-    let mut block = Vec::with_capacity(resources.len() + guarded.len());
-    for resource in resources {
+        // `if (primary != null) { close-suppressing } else { r.close(); }`
+        let close_either_way = Stmt::If {
+            cond: is_null(&primary, true),
+            then: Box::new(Stmt::Block(vec![close_suppressing])),
+            els: Some(Box::new(Stmt::Block(vec![close_call(&resource.name)]))),
+            span,
+        };
+
+        // A null resource is not closed at all (JLS §14.20.3.1).
+        let guarded_close = Stmt::If {
+            cond: is_null(&resource.name, true),
+            then: Box::new(Stmt::Block(vec![close_either_way])),
+            els: None,
+            span,
+        };
+
+        let attempt = Stmt::Try {
+            body: inner,
+            catches: vec![CatchClause {
+                types: vec![TypeRef::Named(String::from("Throwable"))],
+                name: thrown.clone(),
+                body: vec![
+                    Stmt::Assign {
+                        target: AssignTarget::Var(primary.clone()),
+                        op: None,
+                        value: name_expr(&thrown),
+                        span,
+                    },
+                    Stmt::Throw {
+                        value: name_expr(&thrown),
+                        span,
+                    },
+                ],
+                span,
+            }],
+            finally_body: Some(vec![guarded_close]),
+            span,
+        };
+
+        let mut block = Vec::with_capacity(3);
+        if !resource.existing {
+            block.push(Stmt::LocalDecl {
+                ty: resource.ty,
+                is_final: true,
+                declarators: vec![LocalDeclarator {
+                    name: resource.name,
+                    init: Some(resource.init),
+                    span: resource.span,
+                    extra_dims: 0,
+                }],
+                span,
+            });
+        }
         block.push(Stmt::LocalDecl {
-            ty: resource.ty,
-            is_final: true,
+            ty: TypeRef::Named(String::from("Throwable")),
+            is_final: false,
             declarators: vec![LocalDeclarator {
-                name: resource.name,
-                init: Some(resource.init),
-                span: resource.span,
+                name: primary,
+                init: Some(null_literal()),
+                span,
                 extra_dims: 0,
             }],
             span,
         });
+        block.push(attempt);
+        inner = block;
     }
-    block.extend(guarded);
-    Stmt::Block(block)
+
+    // The statement's OWN catches and finally wrap the whole thing, including
+    // the resource declarations — that is what makes an initializer failure
+    // catchable here (JLS §14.20.3.2).
+    if catches.is_empty() && finally_body.is_none() {
+        Stmt::Block(inner)
+    } else {
+        Stmt::Try {
+            body: inner,
+            catches,
+            finally_body,
+            span,
+        }
+    }
 }
 
 fn primitive_type_name(keyword: Keyword) -> Option<&'static str> {
@@ -1814,18 +1912,64 @@ impl Parser<'_> {
         let mut resources = Vec::new();
         loop {
             let _ = self.eat_keyword(Keyword::Final); // resources are final anyway
+            // `try (r)` names an existing variable: one identifier, then `)`
+            // or `;`. Anything else starts a declaration.
+            let bare_existing = matches!(self.peek(), Some(TokenKind::Identifier(_)))
+                && matches!(self.peek_at(1), Some(TokenKind::Symbol(")" | ";")));
+            if bare_existing {
+                let (name, name_span) = self.expect_ident("for the resource")?;
+                resources.push(Resource {
+                    ty: TypeRef::Var,
+                    name: name.clone(),
+                    init: Expr::Name {
+                        path: vec![name],
+                        span: name_span,
+                    },
+                    existing: true,
+                    span: name_span,
+                });
+                if self.eat_symbol(";") {
+                    if self.at_symbol(")") {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
             let ty = if self.eat_keyword(Keyword::Var) {
                 TypeRef::Var
             } else {
                 self.type_ref()?
             };
             let (name, name_span) = self.expect_ident("for the resource")?;
+            // `try (r)` (Java 9): an existing effectively-final variable,
+            // recognised by there being no `=` to follow.
+            if !self.at_symbol("=") {
+                resources.push(Resource {
+                    ty,
+                    name: name.clone(),
+                    init: Expr::Name {
+                        path: vec![name],
+                        span: name_span,
+                    },
+                    existing: true,
+                    span: name_span,
+                });
+                if self.eat_symbol(";") {
+                    if self.at_symbol(")") {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
             self.expect_symbol("=", "after the resource name")?;
             let init = self.expression()?;
             resources.push(Resource {
                 ty,
                 name,
                 init,
+                existing: false,
                 span: name_span,
             });
             // A trailing `;` before `)` is allowed and separates resources.

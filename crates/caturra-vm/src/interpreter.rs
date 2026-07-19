@@ -2223,6 +2223,7 @@ impl<'run> Interpreter<'run> {
                         class_name: dotted.clone(),
                         message: message.clone(),
                         cause: None,
+                        suppressed: Vec::new(),
                     })
                 });
                 frame.stack.clear();
@@ -2245,12 +2246,14 @@ impl<'run> Interpreter<'run> {
                         class_name: dotted.clone(),
                         message: message.clone(),
                         cause: None,
+                        suppressed: Vec::new(),
                     })
                 });
                 let wrapper = self.heap.alloc(crate::value::HeapObject::Exception {
                     class_name: String::from("java.lang.ExceptionInInitializerError"),
                     message: None,
                     cause: Some(cause),
+                    suppressed: Vec::new(),
                 });
                 dotted = String::from("java.lang.ExceptionInInitializerError");
                 message = None;

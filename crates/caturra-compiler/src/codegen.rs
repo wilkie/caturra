@@ -4312,6 +4312,8 @@ fn is_true_literal(expr: &Expr) -> bool {
 /// A parameter of an intrinsic method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BParam {
+    /// `java.lang.Throwable` (`addSuppressed`) — any exception.
+    Throwable,
     Int,
     Double,
     Long,
@@ -6080,13 +6082,22 @@ const EXCEPTION_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Throwable,
         descriptor: "()Ljava/lang/Throwable;",
     },
-    // `getSuppressed()` — an empty `Throwable[]` (none modelled), typed as
-    // `Object[]` (enough for `.length`).
+    // `getSuppressed()` — the real suppressed exceptions, typed as `Object[]`
+    // because `ElemType` has no exception variant, so `.length` and iteration
+    // work while an element needs a cast to reach `getMessage()`.
     BuiltinMethod {
         name: "getSuppressed",
         params: &[],
         ret: BRet::ObjectArray,
         descriptor: "()[Ljava/lang/Throwable;",
+    },
+    // `addSuppressed(t)` — used by the try-with-resources desugaring, and
+    // available to programs that manage suppression themselves.
+    BuiltinMethod {
+        name: "addSuppressed",
+        params: &[BParam::Throwable],
+        ret: BRet::Void,
+        descriptor: "(Ljava/lang/Throwable;)V",
     },
 ];
 
@@ -7800,6 +7811,8 @@ fn boxed_or_nested(elem: Option<ElemType>, table: &MethodTable) -> JType {
 
 fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
     match param {
+        // `Throwable` itself, whose id is 0 (see `exception_id`).
+        BParam::Throwable => JType::Exception(0),
         BParam::Int => JType::Int,
         BParam::Double => JType::Double,
         BParam::Long => JType::Long,
@@ -7845,6 +7858,10 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
 /// Whether an argument type satisfies a builtin parameter (widening).
 fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable) -> bool {
     match param {
+        BParam::Throwable => {
+            matches!(arg, JType::Exception(_))
+                || matches!(arg, JType::Object(id) if table.is_throwable(id))
+        }
         BParam::RefArray => matches!(arg, JType::Array { .. }),
         // Any reference (or boxable value) satisfies an `Object` parameter.
         BParam::Object => widens(arg, JType::Object(table.object_id), table),
@@ -8788,6 +8805,22 @@ impl BodyGen<'_> {
         let mut resolved: Vec<Vec<CatchKind>> = Vec::with_capacity(catches.len());
         for (index, clause) in catches.iter().enumerate() {
             let kinds = self.resolve_catch_types(clause);
+            // JLS §14.20: the alternatives of ONE multi-catch may not be
+            // related by subclassing — `catch (RuntimeException |
+            // IllegalStateException e)` is an error, because the narrower one
+            // could never be reached.
+            for (at, kind) in kinds.iter().enumerate() {
+                for other in kinds.iter().skip(at + 1) {
+                    if kind.is_masked_by(*other, self.table)
+                        || other.is_masked_by(*kind, self.table)
+                    {
+                        self.error(
+                            clause.span,
+                            "Alternatives in a multi-catch statement cannot be related by subclassing",
+                        );
+                    }
+                }
+            }
             for kind in &kinds {
                 for earlier in resolved.iter().take(index).flatten() {
                     if kind.is_masked_by(*earlier, self.table) {
@@ -8884,7 +8917,11 @@ impl BodyGen<'_> {
                 LocalVar {
                     slot,
                     ty,
-                    is_final: false,
+                    // A MULTI-catch parameter is implicitly final (JLS §14.20),
+                    // so assigning to it is an error — javac: "multi-catch
+                    // parameter e may not be assigned". A single-type catch
+                    // parameter is only effectively final and may be assigned.
+                    is_final: clause.types.len() > 1,
                     assigned: true,
                     const_val: None,
                 },

@@ -106,6 +106,7 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
                     class_name: caturra_classfile::exceptions::dotted(class),
                     message: None,
                     cause: None,
+                    suppressed: Vec::new(),
                 });
             }
             None
@@ -584,14 +585,28 @@ pub fn invoke_virtual(
             }
             Ok(Some(JValue::Ref(Some(receiver))))
         }
-        // `getSuppressed()` — no suppressed exceptions are modelled, so an
-        // empty `Throwable[]`.
-        (HeapObject::Exception { .. }, "getSuppressed") => {
+        // `getSuppressed()` — the exceptions a try-with-resources attached
+        // because `close()` threw while this one was already propagating.
+        (HeapObject::Exception { suppressed, .. }, "getSuppressed") => {
+            let elements: Vec<JValue> = suppressed
+                .iter()
+                .map(|reference| JValue::Ref(Some(*reference)))
+                .collect();
             let reference = heap.alloc(HeapObject::RefArray(
                 String::from("[Ljava/lang/Throwable;"),
-                Vec::new(),
+                elements,
             ));
             Ok(Some(JValue::Ref(Some(reference))))
+        }
+        // `addSuppressed(t)` — what the try-with-resources desugaring calls
+        // when a resource's `close()` throws and the body's exception wins.
+        (HeapObject::Exception { .. }, "addSuppressed") => {
+            if let Some(JValue::Ref(Some(extra))) = args.first().copied()
+                && let Some(HeapObject::Exception { suppressed, .. }) = heap.get_mut(receiver)
+            {
+                suppressed.push(extra);
+            }
+            Ok(None)
         }
         (HeapObject::Writer { .. }, _) => {
             writer_method(heap, vfs, receiver, method, descriptor, args)

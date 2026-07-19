@@ -88,6 +88,20 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   refused as javac refuses them — assignment to a wrapper is a boxing
   conversion, and boxing does not narrow. A wrapper target whose result already
   fits (`Integer i += 2`, `Double d += 2`, `i++`) is unaffected.
+- **try-with-resources** (2026-07-19) follows JLS §14.20.3's translation
+  rather than the bare `finally { r.close(); }` it used to desugar to. The
+  body's exception WINS and `close()`'s is attached as suppressed (reachable
+  via `getSuppressed()`, and `addSuppressed` is available directly); the
+  resource declarations sit INSIDE the guarded try, so an exception from a
+  resource initializer is caught by the statement's own catch and any earlier
+  resource still closes; a null resource is skipped rather than dereferenced;
+  and the Java 9 form `try (existingVariable)` parses. Multi-catch now
+  enforces JLS §14.20: alternatives may not be related by subclassing, and the
+  parameter is implicitly final. **Not checked:** that a resource's type
+  implements `AutoCloseable`. The desugaring happens in the parser, before any
+  type is known, and the obvious cast-based check would reject `PrintWriter`
+  and `Scanner` — which caturra models as intrinsic types rather than as
+  classes implementing the interface.
 - **Dispatch** (2026-07-19): overload resolution runs JLS §15.12.2's PHASES —
   everything applicable without boxing is considered first, and only if nothing
   matches does boxing enter — so `m(Integer)` beats `m(int)` for an `Integer`
