@@ -12038,3 +12038,96 @@ public class DiffLegalNested {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Generics: parameterized supertypes and bridge methods
+//
+// `Box<String> b = new SBox()` did not compile, and once it did the call
+// dispatched to the SUPERCLASS — erasure gives `Box` a `set(Object)` and
+// `SBox` a `set(String)`, two different descriptors, so nothing overrode
+// anything. A synthesized bridge fixes the dispatch; without it, making the
+// assignment compile would only have traded a compile error for a silent
+// wrong answer.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_parameterized_supertype_and_bridges,
+    "DiffBridges",
+    r#"
+public class DiffBridges {
+    static class Box<T> {
+        void set(T t) { System.out.println("Box.set " + t); }
+    }
+    static class SBox extends Box<String> {
+        @Override void set(String s) { System.out.println("SBox.set " + s); }
+    }
+    interface F<T> { String apply(T t); }
+    static class SF implements F<String> {
+        public String apply(String s) { return "SF:" + s; }
+    }
+    // Two type parameters: erased, but it must still construct.
+    static class Pair<A, B> {
+        A a;
+        B b;
+        Pair(A a, B b) { this.a = a; this.b = b; }
+        A first() { return a; }
+    }
+
+    public static void main(String[] args) {
+        // A subclass stands in for its parameterized supertype ...
+        Box<String> typed = new SBox();
+        typed.set("typed");
+        // ... and through a raw reference ...
+        Box raw = new SBox();
+        raw.set("raw");
+        // ... and directly.
+        new SBox().set("direct");
+
+        F<String> f = new SF();
+        System.out.println(f.apply("y"));
+
+        Pair<String, Integer> pair = new Pair<String, Integer>("s", 1);
+        System.out.println(pair.a);
+        System.out.println(pair.first());
+    }
+}
+"#
+);
+
+// The type argument a subclass writes is CHECKED, so a mismatched supertype
+// argument is still refused — the widening is not blind.
+differential_reject!(
+    reject_mismatched_supertype_argument,
+    "RejBoxMismatch",
+    r"
+public class RejBoxMismatch {
+    static class Box<T> { void set(T t) { } }
+    static class IntBox extends Box<Integer> { }
+    public static void main(String[] args) {
+        Box<String> b = new IntBox();
+        System.out.println(b);
+    }
+}
+"
+);
+
+// A COVARIANT return (JLS 8.4.5) is legal Java that caturra refuses. Dispatch
+// here is by descriptor, so `String f()` overriding `Object f()` needs a
+// bridge — and a bridge differing only in RETURN type cannot be written in
+// source, since its body would resolve back to itself. Accepting it without
+// one made `((A) new B()).f()` answer A's method: a silent wrong answer, far
+// worse than this refusal. Recorded so the strictness is deliberate and
+// cannot be lost by accident.
+stricter_than_javac!(
+    covariant_return_is_refused,
+    "StricterCovariant",
+    r#"
+public class StricterCovariant {
+    static class A { Object f() { return "A"; } }
+    static class B extends A { @Override String f() { return "B"; } }
+    public static void main(String[] args) {
+        System.out.println(((A) new B()).f());
+    }
+}
+"#
+);

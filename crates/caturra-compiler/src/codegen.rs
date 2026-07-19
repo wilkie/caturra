@@ -427,6 +427,10 @@ struct ClassInfo {
     /// Number of generic type parameters (`class Box<T>` → 1). Only
     /// single-parameter classes get type-argument tracking.
     type_param_count: usize,
+    /// The type arguments written on this class's supertypes
+    /// (`extends Box<String>`), so a subclass standing in for a
+    /// parameterized supertype can be CHECKED rather than assumed.
+    supertype_args: Vec<(String, Vec<TypeRef>)>,
     methods: Vec<MethodSig>,
     fields: Vec<FieldSig>,
 }
@@ -530,6 +534,7 @@ impl MethodTable {
                 is_enum: false,
                 is_inner: false,
                 type_param_count: 0,
+                supertype_args: Vec::new(),
                 methods: vec![
                     MethodSig {
                         name: String::from("toString"),
@@ -593,6 +598,7 @@ impl MethodTable {
                 is_enum: false,
                 is_inner: false,
                 type_param_count: 1,
+                supertype_args: Vec::new(),
                 methods: vec![MethodSig {
                     name: String::from("compareTo"),
                     params: vec![JType::TypeVar],
@@ -628,6 +634,7 @@ impl MethodTable {
                     is_enum: false,
                     is_inner: false,
                     type_param_count: 0,
+                    supertype_args: Vec::new(),
                     methods: vec![MethodSig {
                         name: String::from("close"),
                         params: Vec::new(),
@@ -667,6 +674,7 @@ impl MethodTable {
                         is_enum: false,
                         is_inner: false,
                         type_param_count: 0,
+                        supertype_args: Vec::new(),
                         methods: Vec::new(),
                         fields: Vec::new(),
                     },
@@ -858,6 +866,7 @@ impl MethodTable {
                 info.is_enum = class.is_enum;
                 info.is_inner = class.is_inner;
                 info.type_param_count = class.type_params.len();
+                info.supertype_args.clone_from(&class.supertype_args);
             }
         }
         table.check_hierarchy(units, diagnostics);
@@ -958,6 +967,17 @@ impl MethodTable {
                             .iter()
                             .find(|m| m.name == method.name && m.params == params && !m.is_private)
                         {
+                            // A COVARIANT return (JLS §8.4.5) is legal Java
+                            // that caturra REFUSES, deliberately: dispatch here
+                            // is by descriptor, so `String f()` overriding
+                            // `Object f()` needs a bridge — and a bridge that
+                            // differs only in return type cannot be written in
+                            // source, since its body would resolve back to
+                            // itself. Accepting it without one made
+                            // `((A) new B()).f()` answer A's method: a silent
+                            // wrong answer, far worse than this refusal.
+                            // The `Object`-to-`Object` case below is the
+                            // subset that already dispatches correctly.
                             let compatible_return = sup_sig.ret == ret
                                 || matches!(
                                     (ret, sup_sig.ret),
@@ -1166,6 +1186,36 @@ impl MethodTable {
         self.class_names
             .get(usize::from(id.0))
             .map_or("<unknown>", String::as_str)
+    }
+
+    /// The type argument `sub` writes for the parameterized supertype `sup`
+    /// — `class SBox extends Box<String>` answers `Str` for `Box`.
+    ///
+    /// `None` when the supertype is raw (`extends Box`), which javac treats as
+    /// an unchecked conversion rather than an error, or when the chain does not
+    /// record it. Walks the extends/implements chain, so an indirect subclass
+    /// answers too.
+    fn generic_supertype_arg(&self, sub: ClassId, sup: ClassId) -> Option<ElemType> {
+        let sup_name = self.class_name(sup).to_owned();
+        let mut queue = vec![sub];
+        let mut steps = 0usize;
+        while let Some(current) = queue.pop() {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                return None; // a cycle would be a compiler bug; do not hang
+            }
+            let Some(info) = self.info_by_id(current) else {
+                continue;
+            };
+            for (name, args) in &info.supertype_args {
+                if *name == sup_name && args.len() == 1 {
+                    return elem_from_type_arg(&args[0], self);
+                }
+            }
+            queue.extend(info.superclass);
+            queue.extend(info.interfaces.iter().copied());
+        }
+        None
     }
 
     /// The top-level class enclosing `id` — itself when it is not nested.
@@ -2224,6 +2274,20 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (JType::Object(sub), JType::Object(sup)) if table.is_subtype(sub, sup)
+        )
+        // A subclass stands in for its PARAMETERIZED supertype:
+        // `Box<String> b = new SBox()` where `SBox extends Box<String>`, and
+        // the same for `F<String> g = new SF()`. The type argument is checked
+        // against what the subclass actually wrote, so the mismatched
+        // `Box<String> b = new IntBox()` is still refused; a RAW `extends Box`
+        // records nothing and passes as unchecked, which is javac's rule too.
+        || matches!(
+            (from, to),
+            (JType::Object(sub), JType::Generic { class: sup, arg })
+                if table.is_subtype(sub, sup)
+                    && table
+                        .generic_supertype_arg(sub, sup)
+                        .is_none_or(|written| written == arg)
         )
         || matches!(
             (from, to),
@@ -10431,9 +10495,27 @@ impl BodyGen<'_> {
             self.error(span, reason);
             return JType::Error;
         }
+        // Type arguments on a class that declares type parameters are fine:
+        // erasure drops them. Only a class with NO parameters may not be
+        // parameterized. Refusing them wholesale rejected every
+        // `new Pair<String, Integer>(...)`, since only single-parameter
+        // classes get their argument tracked.
         if !type_args.is_empty() {
-            self.error(span, format!("{class_name} is not a generic type"));
-            return JType::Error;
+            let declares_params = self
+                .table
+                .class_id(class_name)
+                .or_else(|| {
+                    class_name
+                        .rsplit('.')
+                        .next()
+                        .and_then(|n| self.table.class_id(n))
+                })
+                .and_then(|id| self.table.info_by_id(id))
+                .is_some_and(|info| info.type_param_count > 0);
+            if !declares_params {
+                self.error(span, format!("{class_name} is not a generic type"));
+                return JType::Error;
+            }
         }
         let Some(class_id) = self.table.class_id(class_name) else {
             let classlib = ["String", "Object", "Integer", "Double", "StringBuilder"];
@@ -17410,6 +17492,12 @@ impl BodyGen<'_> {
             | (JType::Byte, JType::Short) => {}
             (JType::Null, to) if to.is_reference() => {}
             (JType::Object(sub), JType::Object(sup)) if self.table.is_subtype(sub, sup) => {}
+            // A subclass assigned to its PARAMETERIZED supertype
+            // (`Box<String> b = new SBox()`). The reference is unchanged; the
+            // type argument is verified inside `widens`. This matrix gates
+            // separately from `widens`, so both need the arm — the same trap
+            // that once left List -> Collection widening half-implemented.
+            (JType::Object(_), JType::Generic { .. }) if widens(from, to, self.table) => {}
             // Any reference type widens to the Object top type.
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
             // A String already satisfies a `Comparable`-bounded param — it is a

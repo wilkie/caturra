@@ -81,6 +81,26 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   structural change to the collections caturra models changes the size. The
   documented gap: a modification that nets out to the same size between two
   `next()` calls (an add AND a remove) is not caught, where a real JVM would.
+- **Parameterized supertypes and bridge methods** (2026-07-18): a subclass
+  stands in for its parameterized supertype — `Box<String> b = new SBox()`,
+  `F<String> f = new SF()` — and the call REACHES THE OVERRIDE. Erasure gives
+  `Box` a `set(Object)` and `SBox` a `set(String)`: two descriptors, so
+  nothing overrode anything and the call reached the superclass. A pass
+  (`bridges.rs`) synthesizes the bridge javac emits — a `set(Object)` that
+  casts and delegates. The two halves are inseparable: allowing the assignment
+  without the bridge would have traded a compile error for a silent wrong
+  answer. The type argument a subclass writes on its supertype is now RECORDED
+  (the parser used to skip it), so `Box<String> b = new IntBox()` is still
+  refused; a raw `extends Box` records nothing and passes as unchecked, as
+  javac has it. `new Pair<String, Integer>(...)` constructs too — only
+  single-parameter classes track their argument, but any class that declares
+  type parameters may be parameterized.
+  **Still refused, deliberately:** a COVARIANT return (`String f()` overriding
+  `Object f()`). Dispatch is by descriptor, so it needs a bridge, and a bridge
+  differing only in return type cannot be written in source — its body would
+  resolve back to itself. Accepting it without one made `((A) new B()).f()`
+  answer A's method, a silent wrong answer; the refusal is the safe direction
+  and is pinned by `stricter_than_javac!`.
 - **Flow analysis** (`caturra-compiler/src/flow.rs`, 2026-07-18): statement
   reachability (JLS §14.21) and blank-final definite assignment (JLS §8.3.1.2,
   §16.9). Code after `return`/`throw`/`break`/`continue`, and the body of a

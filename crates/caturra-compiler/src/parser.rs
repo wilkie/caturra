@@ -294,6 +294,9 @@ struct Parser<'a> {
     pending_annotations: Vec<Annotation>,
 }
 
+/// `(superclass, interfaces, type arguments written on each supertype)`.
+type Supertypes = (Option<String>, Vec<String>, Vec<(String, Vec<TypeRef>)>);
+
 impl Parser<'_> {
     // ----- token helpers -----
 
@@ -645,22 +648,31 @@ impl Parser<'_> {
     /// The `extends` / `implements` clauses: `(superclass, interfaces)`.
     /// An interface's `extends` is a list of interfaces, and an interface
     /// may not `implement`.
-    fn supertypes(&mut self, is_interface: bool) -> Parsed<(Option<String>, Vec<String>)> {
+    fn supertypes(&mut self, is_interface: bool) -> Parsed<Supertypes> {
         let mut superclass = None;
         let mut interfaces = Vec::new();
+        // The type arguments written on each supertype are RECORDED rather
+        // than skipped: `extends Box<String>` is what makes it checkable that
+        // a subclass may stand in for `Box<String>` and not for `Box<Integer>`.
+        let mut supertype_args: Vec<(String, Vec<TypeRef>)> = Vec::new();
+        let record = |name: &str, args: Vec<TypeRef>, out: &mut Vec<(String, Vec<TypeRef>)>| {
+            if !args.is_empty() {
+                out.push((name.to_owned(), args));
+            }
+        };
         if self.eat_keyword(Keyword::Extends) {
             if is_interface {
                 loop {
-                    let (parent, _) = self.expect_ident("after 'extends'")?;
-                    self.skip_type_args();
+                    let (parent, args) = self.supertype_ref()?;
+                    record(&parent, args, &mut supertype_args);
                     interfaces.push(parent);
                     if !self.eat_symbol(",") {
                         break;
                     }
                 }
             } else {
-                let (parent, _) = self.expect_ident("after 'extends'")?;
-                self.skip_type_args();
+                let (parent, args) = self.supertype_ref()?;
+                record(&parent, args, &mut supertype_args);
                 superclass = Some(parent);
             }
         }
@@ -670,15 +682,39 @@ impl Parser<'_> {
                 return Err(Abort);
             }
             loop {
-                let (parent, _) = self.expect_ident("after 'implements'")?;
-                self.skip_type_args();
+                let (parent, args) = self.supertype_ref()?;
+                record(&parent, args, &mut supertype_args);
                 interfaces.push(parent);
                 if !self.eat_symbol(",") {
                     break;
                 }
             }
         }
-        Ok((superclass, interfaces))
+        Ok((superclass, interfaces, supertype_args))
+    }
+
+    /// A supertype in an `extends`/`implements` clause: its name and the type
+    /// arguments written on it (empty when raw).
+    fn supertype_ref(&mut self) -> Parsed<(String, Vec<TypeRef>)> {
+        let start = self.pos;
+        let (name, _) = self.expect_ident("after 'extends'")?;
+        if !self.at_symbol("<") {
+            return Ok((name, Vec::new()));
+        }
+        // Re-read the whole thing with the type parser, which already knows
+        // the argument grammar (including wildcards).
+        self.pos = start;
+        if let Ok(TypeRef::Generic { base, args }) = self.type_ref() {
+            Ok((base, args))
+        } else {
+            // A form the type parser does not model: skip the arguments, which
+            // is what happened before they were recorded at all, and leave the
+            // supertype raw (treated as unchecked, like javac).
+            self.pos = start;
+            let (name, _) = self.expect_ident("after 'extends'")?;
+            self.skip_type_args();
+            Ok((name, Vec::new()))
+        }
     }
 
     /// Parse a class/interface/enum whose modifiers were already
@@ -702,7 +738,7 @@ impl Parser<'_> {
         let (name, name_span) = self.expect_ident("for the class")?;
         let type_params = self.parse_type_params()?;
 
-        let (superclass, interfaces) = self.supertypes(is_interface)?;
+        let (superclass, interfaces, supertype_args) = self.supertypes(is_interface)?;
 
         self.expect_symbol("{", "to open the class body")?;
         let mut methods = Vec::new();
@@ -762,6 +798,7 @@ impl Parser<'_> {
             enclosing: None,
             superclass,
             interfaces,
+            supertype_args,
             is_abstract: is_abstract_modifier || is_interface,
             is_interface,
             is_enum: false,
@@ -2987,6 +3024,7 @@ impl Parser<'_> {
             // compiler (it knows which names are interfaces).
             superclass: Some(String::from(supertype)),
             interfaces: Vec::new(),
+            supertype_args: Vec::new(),
             is_abstract: false,
             is_interface: false,
             is_enum: false,
@@ -3729,6 +3767,7 @@ fn desugar_enum(
         name,
         superclass: None,
         interfaces,
+        supertype_args: Vec::new(),
         is_abstract,
         is_interface: false,
         is_enum: true,

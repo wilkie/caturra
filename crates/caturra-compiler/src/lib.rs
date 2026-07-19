@@ -7,6 +7,7 @@
 //! current stage produce friendly "not yet supported" diagnostics.
 
 pub mod ast;
+mod bridges;
 mod capture;
 pub mod codegen;
 pub mod diagnostics;
@@ -580,6 +581,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
+    bridges::add_bridge_methods(&mut units);
     inner::bind_inner_classes(&mut units);
     lambda::desugar_lambdas(&mut units);
     compilation

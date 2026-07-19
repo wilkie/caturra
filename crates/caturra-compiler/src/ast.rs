@@ -45,6 +45,13 @@ pub struct ClassDecl {
     pub superclass: Option<String>,
     /// `implements` clause (or `extends` list for interfaces).
     pub interfaces: Vec<String>,
+    /// The TYPE ARGUMENTS written on each supertype: `extends Box<String>`
+    /// records `("Box", [String])`. Erasure drops them everywhere else, but
+    /// assigning a subclass to a parameterized supertype (`Box<String> b = new
+    /// SBox()`) can only be CHECKED against what was written — without these
+    /// the widening would have to be allowed blindly, accepting the mismatched
+    /// `Box<String> b = new IntBox()` that javac refuses.
+    pub supertype_args: Vec<(String, Vec<TypeRef>)>,
     pub is_abstract: bool,
     pub is_interface: bool,
     /// Set for `enum` declarations (after desugaring to a class): the
