@@ -1,0 +1,906 @@
+//! Statement reachability (JLS §14.21) and blank-final definite assignment
+//! (JLS §8.3.1.2, §16.9).
+//!
+//! Both are *rejection* analyses: they exist to refuse programs a real javac
+//! refuses. caturra had neither, so code after a `return` compiled, and a
+//! blank `final` field could go unassigned (reading 0), be assigned twice, or
+//! be read before it was assigned — `final` was not enforced for fields at
+//! all. Every one of those compiles in the playground and fails on a JDK,
+//! which is the direction that hurts.
+//!
+//! **Conservative by construction.** A missed error is a nuisance; a spurious
+//! one rejects a valid program, so every rule here errs toward saying nothing.
+//! In particular `constant_bool` only recognises literals, not the full
+//! constant expressions of JLS §15.28 — `while (DEBUG)` with a `static final
+//! boolean DEBUG = false` is accepted where javac reports the body
+//! unreachable. That is the safe direction, and the narrowing is deliberate.
+
+use crate::ast::{ClassDecl, Expr, FieldDecl, Literal, MethodDecl, Stmt};
+use crate::diagnostics::{Diagnostic, SourceSpan};
+
+/// Report unreachable statements and blank-final violations in `decl`.
+pub(crate) fn check(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
+    for method in &decl.methods {
+        if method.is_abstract {
+            continue;
+        }
+        let mut reporter = Reporter { path, diagnostics };
+        // The body of a method is reachable (JLS §14.21).
+        reachability(&method.body, &mut reporter);
+    }
+    blank_finals(decl, path, diagnostics);
+}
+
+struct Reporter<'a> {
+    path: &'a str,
+    diagnostics: &'a mut Vec<Diagnostic>,
+}
+
+impl Reporter<'_> {
+    fn error(&mut self, span: SourceSpan, message: impl Into<String>) {
+        self.diagnostics
+            .push(Diagnostic::error(self.path, message, span));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reachability (JLS §14.21)
+// ---------------------------------------------------------------------------
+
+/// Walk a block, reporting the FIRST statement that cannot be reached.
+///
+/// Only the first: javac reports one unreachable statement per block, and
+/// every statement after it is unreachable for the same reason, so repeating
+/// the message would bury the cause.
+fn reachability(statements: &[Stmt], reporter: &mut Reporter) {
+    let mut reachable = true;
+    for statement in statements {
+        if !reachable && let Some(span) = stmt_span(statement) {
+            reporter.error(span, "unreachable statement");
+        }
+        descend(statement, reporter);
+        // Reachability RESTARTS after a reported statement: everything below
+        // it is unreachable for the same already-reported reason, and javac
+        // reports only the first.
+        reachable = completes_normally(statement);
+    }
+}
+
+/// Recurse into a statement's own sub-blocks.
+fn descend(statement: &Stmt, reporter: &mut Reporter) {
+    match statement {
+        Stmt::Block(body) => reachability(body, reporter),
+        // JLS §14.21 deliberately exempts `if` from the constant-condition
+        // rule so that `if (DEBUG) { ... }` compiles either way — the
+        // "conditional compilation" carve-out. BOTH branches are treated as
+        // reachable no matter what the condition is, which is why
+        // `if (false) S;` is legal while `while (false) S;` is not.
+        Stmt::If { then, els, .. } => {
+            descend_stmt(then, reporter);
+            if let Some(els) = els {
+                descend_stmt(els, reporter);
+            }
+        }
+        Stmt::While { cond, body, .. } => {
+            if constant_bool(cond) == Some(false)
+                && let Some(span) = stmt_span(body)
+            {
+                reporter.error(span, "unreachable statement");
+            }
+            descend_stmt(body, reporter);
+        }
+        Stmt::For { cond, body, .. } => {
+            if cond
+                .as_ref()
+                .is_some_and(|c| constant_bool(c) == Some(false))
+                && let Some(span) = stmt_span(body)
+            {
+                reporter.error(span, "unreachable statement");
+            }
+            descend_stmt(body, reporter);
+        }
+        // A `do` body always runs at least once, so it is reachable
+        // whatever the condition says.
+        Stmt::DoWhile { body, .. } | Stmt::ForEach { body, .. } | Stmt::Labeled { body, .. } => {
+            descend_stmt(body, reporter);
+        }
+        Stmt::Switch { arms, .. } => {
+            // Each group is entered by its own label, so reachability
+            // restarts at every arm rather than flowing in from the last.
+            for arm in arms {
+                reachability(&arm.body, reporter);
+            }
+        }
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            reachability(body, reporter);
+            for clause in catches {
+                reachability(&clause.body, reporter);
+            }
+            if let Some(finally_body) = finally_body {
+                reachability(finally_body, reporter);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn descend_stmt(statement: &Stmt, reporter: &mut Reporter) {
+    descend(statement, reporter);
+}
+
+/// Whether `statement` can complete normally (JLS §14.21) — i.e. whether the
+/// statement after it is reachable.
+pub(crate) fn completes_normally(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Return { .. } | Stmt::Throw { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {
+            false
+        }
+        Stmt::Block(body) => block_completes_normally(body),
+        Stmt::If {
+            then,
+            els: Some(els),
+            ..
+        } => completes_normally(then) || completes_normally(els),
+        // An `if` with no `else` always completes normally: the condition may
+        // be false (true even for `if (true)`, per the carve-out), and a
+        // for-each iterates a collection that may be empty. Both are covered
+        // by the catch-all below; spelling them out would only repeat it.
+        // A constant-true loop completes only by breaking out of it.
+        Stmt::While { cond, body, .. } => {
+            if constant_bool(cond) == Some(true) {
+                return has_escaping_break(body, None);
+            }
+            true
+        }
+        Stmt::DoWhile { body, cond, .. } => {
+            if constant_bool(cond) == Some(true) {
+                return has_escaping_break(body, None);
+            }
+            // The body runs first, so an abrupt body still ends the loop.
+            block_or_stmt_completes(body) || has_escaping_break(body, None)
+        }
+        Stmt::For { cond, body, .. } => match cond {
+            Some(cond) if constant_bool(cond) != Some(true) => true,
+            // `for (;;)` and `for (; true;)`.
+            _ => has_escaping_break(body, None),
+        },
+        Stmt::Labeled { label, body, .. } => {
+            // A labeled statement also completes normally if some
+            // `break label;` inside it targets this label.
+            completes_normally(body) || has_escaping_break(body, Some(label))
+        }
+        Stmt::Switch { arms, .. } => switch_completes_normally(arms),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            // A `finally` that cannot complete normally swallows everything.
+            if let Some(finally_body) = finally_body
+                && !block_completes_normally(finally_body)
+            {
+                return false;
+            }
+            block_completes_normally(body)
+                || catches
+                    .iter()
+                    .any(|clause| block_completes_normally(&clause.body))
+        }
+        _ => true,
+    }
+}
+
+pub(crate) fn block_completes_normally(statements: &[Stmt]) -> bool {
+    statements.iter().all(completes_normally)
+}
+
+fn block_or_stmt_completes(statement: &Stmt) -> bool {
+    completes_normally(statement)
+}
+
+fn switch_completes_normally(arms: &[crate::ast::SwitchArm]) -> bool {
+    let has_default = arms
+        .iter()
+        .any(|arm| arm.labels.iter().any(Option::is_none));
+    // Without a `default`, the selector may match nothing.
+    if !has_default {
+        return true;
+    }
+    // Any `break` leaves the switch, and so does falling out of the last arm.
+    arms.iter()
+        .any(|arm| arm.body.iter().any(|s| has_escaping_break(s, None)))
+        || arms
+            .last()
+            .is_some_and(|arm| block_completes_normally(&arm.body))
+}
+
+/// Whether `statement` contains a `break` that would leave the construct being
+/// asked about — used to decide whether a `while (true)` or a labeled
+/// statement can complete normally.
+///
+/// `label` selects what counts: `None` asks about an unlabeled `break`, which
+/// binds to the nearest enclosing loop or switch, so the search does NOT
+/// descend into a nested loop or switch (that one would capture it).
+/// `Some(name)` asks about `break name;`, which escapes any nesting, so the
+/// search descends everywhere.
+fn has_escaping_break(statement: &Stmt, label: Option<&str>) -> bool {
+    match statement {
+        Stmt::Break {
+            label: break_label, ..
+        } => match label {
+            Some(wanted) => break_label.as_deref() == Some(wanted),
+            None => break_label.is_none(),
+        },
+        Stmt::Block(body) => body.iter().any(|s| has_escaping_break(s, label)),
+        Stmt::If { then, els, .. } => {
+            has_escaping_break(then, label)
+                || els.as_deref().is_some_and(|e| has_escaping_break(e, label))
+        }
+        Stmt::Labeled { body, .. } => has_escaping_break(body, label),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            body.iter().any(|s| has_escaping_break(s, label))
+                || catches
+                    .iter()
+                    .any(|c| c.body.iter().any(|s| has_escaping_break(s, label)))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|f| f.iter().any(|s| has_escaping_break(s, label)))
+        }
+        // A nested loop or switch captures an unlabeled break, but a labeled
+        // one passes straight through it.
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForEach { body, .. } => label.is_some() && has_escaping_break(body, label),
+        Stmt::Switch { arms, .. } => {
+            label.is_some()
+                && arms
+                    .iter()
+                    .any(|arm| arm.body.iter().any(|s| has_escaping_break(s, label)))
+        }
+        _ => false,
+    }
+}
+
+/// The value of a constant boolean condition, or `None` when it is not one.
+///
+/// Literals only — see the module note. Recognising more would be *correct*
+/// per JLS §15.28 but risks rejecting a valid program if the folding is ever
+/// wrong, and a missed unreachable-statement error costs nothing but strictness.
+fn constant_bool(expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::Literal {
+            value: Literal::Bool(value),
+            ..
+        } => Some(*value),
+        _ => None,
+    }
+}
+
+/// A statement's span, for the error caret.
+fn stmt_span(statement: &Stmt) -> Option<SourceSpan> {
+    match statement {
+        Stmt::Expr(expr) => Some(expr.span()),
+        Stmt::LocalDecl { span, .. }
+        | Stmt::Assign { span, .. }
+        | Stmt::ForEach { span, .. }
+        | Stmt::If { span, .. }
+        | Stmt::While { span, .. }
+        | Stmt::DoWhile { span, .. }
+        | Stmt::For { span, .. }
+        | Stmt::Break { span, .. }
+        | Stmt::Continue { span, .. }
+        | Stmt::Labeled { span, .. }
+        | Stmt::Return { span, .. }
+        | Stmt::SuperCall { span, .. }
+        | Stmt::ThisCall { span, .. }
+        | Stmt::Try { span, .. }
+        | Stmt::Throw { span, .. }
+        | Stmt::Switch { span, .. } => Some(*span),
+        // A bare block borrows its first statement's position.
+        Stmt::Block(body) => body.first().and_then(stmt_span),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blank finals (JLS §8.3.1.2, §16.9)
+// ---------------------------------------------------------------------------
+
+/// A `final` field with no initializer must be definitely assigned by the end
+/// of every constructor, and definitely `UNassigned` before each assignment.
+///
+/// Without this a blank final silently read its type's default, and `final`
+/// meant nothing for a field: it could be written twice in one constructor.
+fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
+    let blanks: Vec<&FieldDecl> = decl
+        .fields
+        .iter()
+        .filter(|field| field.is_final && !field.is_static && field.init.is_none())
+        .collect();
+    if blanks.is_empty() {
+        return;
+    }
+    // An instance initializer block assigns before every constructor body, so
+    // a field it assigns is already definitely assigned everywhere.
+    let assigned_by_initializer: Vec<&str> = blanks
+        .iter()
+        .filter(|field| {
+            decl.init_blocks
+                .iter()
+                .filter(|block| !block.is_static)
+                .any(|block| assigns_definitely_block(&block.body, &field.name))
+        })
+        .map(|field| field.name.as_str())
+        .collect();
+
+    let constructors: Vec<&MethodDecl> = decl.methods.iter().filter(|m| m.is_constructor).collect();
+
+    for field in &blanks {
+        if assigned_by_initializer.contains(&field.name.as_str()) {
+            continue;
+        }
+        // With no constructor at all, the default one assigns nothing.
+        if constructors.is_empty() {
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("variable {} might not have been initialized", field.name),
+                field.span,
+            ));
+            continue;
+        }
+        for constructor in &constructors {
+            // A constructor delegating with `this(...)` relies on the one it
+            // calls, which is checked on its own.
+            if constructor
+                .body
+                .first()
+                .is_some_and(|s| matches!(s, Stmt::ThisCall { .. }))
+            {
+                continue;
+            }
+            if !assigns_definitely_block(&constructor.body, &field.name) {
+                diagnostics.push(Diagnostic::error(
+                    path,
+                    format!("variable {} might not have been initialized", field.name),
+                    constructor.span,
+                ));
+            }
+            // A local or parameter of the same name shadows the field, so the
+            // "read" would be of that instead. Over-approximated across the
+            // whole constructor, which only ever MISSES an error.
+            let shadowed = constructor.params.iter().any(|p| p.name == field.name)
+                || declares_local_named(&constructor.body, &field.name);
+            if !shadowed && let Some(span) = read_before_assignment(&constructor.body, &field.name)
+            {
+                diagnostics.push(Diagnostic::error(
+                    path,
+                    format!("variable {} might not have been initialized", field.name),
+                    span,
+                ));
+            }
+            if let Some(span) = assigns_twice(&constructor.body, &field.name) {
+                diagnostics.push(Diagnostic::error(
+                    path,
+                    format!("variable {} might already have been assigned", field.name),
+                    span,
+                ));
+            }
+        }
+    }
+}
+
+/// Whether `statement` definitely assigns the field named `name`.
+fn assigns_definitely(statement: &Stmt, name: &str) -> bool {
+    match statement {
+        Stmt::Assign { target, .. } => is_field_target(target, name),
+        Stmt::Block(body) => assigns_definitely_block(body, name),
+        // Both branches must assign; a branch that cannot complete normally
+        // imposes no requirement (JLS §16.2.7).
+        Stmt::If {
+            then,
+            els: Some(els),
+            ..
+        } => {
+            let then_ok = assigns_definitely(then, name) || !completes_normally(then);
+            let else_ok = assigns_definitely(els, name) || !completes_normally(els);
+            then_ok && else_ok && (assigns_definitely(then, name) || assigns_definitely(els, name))
+        }
+        Stmt::Labeled { body, .. } => assigns_definitely(body, name),
+        // A loop body may not run, and a `try` body may fault partway; both
+        // are treated as not assigning. `do`/`while (true)` could be refined,
+        // but staying conservative here only ever accepts more.
+        _ => false,
+    }
+}
+
+fn assigns_definitely_block(statements: &[Stmt], name: &str) -> bool {
+    statements.iter().any(|s| assigns_definitely(s, name))
+}
+
+/// The span of a second unconditional assignment to `name`, if there is one.
+///
+/// Only straight-line assignments count: two writes on opposite branches of an
+/// `if` are legal, and this must never invent an error.
+fn assigns_twice(statements: &[Stmt], name: &str) -> Option<SourceSpan> {
+    let mut seen = false;
+    for statement in statements {
+        match statement {
+            Stmt::Assign { target, span, .. } if is_field_target(target, name) => {
+                if seen {
+                    return Some(*span);
+                }
+                seen = true;
+            }
+            Stmt::Block(body) => {
+                if let Some(span) = assigns_twice(body, name) {
+                    return Some(span);
+                }
+                if assigns_definitely_block(body, name) {
+                    if seen {
+                        return body.iter().find_map(|s| match s {
+                            Stmt::Assign { target, span, .. } if is_field_target(target, name) => {
+                                Some(*span)
+                            }
+                            _ => None,
+                        });
+                    }
+                    seen = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether an assignment target is the bare field `name` or `this.name`.
+fn is_field_target(target: &crate::ast::AssignTarget, name: &str) -> bool {
+    match target {
+        crate::ast::AssignTarget::Var(var) => var == name,
+        // `this.x = ...`; any other qualifier writes some other object.
+        crate::ast::AssignTarget::Field {
+            object,
+            name: field,
+        } => field == name && matches!(**object, Expr::This { .. }),
+        crate::ast::AssignTarget::Index { .. } => false,
+    }
+}
+
+/// The span of a read of blank final `name` that happens before the field is
+/// definitely assigned (JLS §8.3.3, §16.9) — `final int f; C() { print(f); f = 1; }`
+/// silently read 0.
+///
+/// Walks in execution order so an assignment *inside* a branch still covers the
+/// reads after it in that same branch; a read is only reported while the field
+/// is not yet assigned on the path reaching it.
+fn read_before_assignment(body: &[Stmt], name: &str) -> Option<SourceSpan> {
+    let mut scan = Scan {
+        name,
+        assigned: false,
+        found: None,
+    };
+    scan.block(body);
+    scan.found
+}
+
+struct Scan<'a> {
+    name: &'a str,
+    assigned: bool,
+    found: Option<SourceSpan>,
+}
+
+impl Scan<'_> {
+    fn block(&mut self, statements: &[Stmt]) {
+        for statement in statements {
+            self.stmt(statement);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per statement kind
+    fn stmt(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Assign {
+                target,
+                op,
+                value,
+                span,
+            } => {
+                // The right-hand side is evaluated first, so `f = f + 1` reads
+                // an unassigned field. A compound `f += 1` reads it too.
+                self.expr(value);
+                if is_field_target(target, self.name) {
+                    if op.is_some() && !self.assigned {
+                        self.report(*span);
+                    }
+                    self.assigned = true;
+                }
+            }
+            Stmt::Block(body) => self.block(body),
+            Stmt::If {
+                cond, then, els, ..
+            } => {
+                self.expr(cond);
+                let before = self.assigned;
+                self.stmt(then);
+                let after_then = self.assigned;
+                self.assigned = before;
+                if let Some(els) = els {
+                    self.stmt(els);
+                }
+                // Assigned afterwards only if both paths assigned.
+                self.assigned = after_then && self.assigned;
+            }
+            // A loop body may run zero times, so nothing it assigns counts
+            // afterwards — but a read inside it still happens after whatever
+            // came before.
+            Stmt::While { cond, body, .. } => {
+                self.expr(cond);
+                let before = self.assigned;
+                self.stmt(body);
+                self.assigned = before;
+            }
+            Stmt::DoWhile { body, cond, .. } => {
+                let before = self.assigned;
+                self.stmt(body);
+                let after_body = self.assigned;
+                self.expr(cond);
+                // The body always runs once, so its assignment does count.
+                self.assigned = after_body || before;
+            }
+            Stmt::For {
+                init,
+                cond,
+                update,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    self.stmt(init);
+                }
+                let before = self.assigned;
+                if let Some(cond) = cond {
+                    self.expr(cond);
+                }
+                self.stmt(body);
+                self.block(update);
+                self.assigned = before;
+            }
+            Stmt::ForEach { iterable, body, .. } => {
+                self.expr(iterable);
+                let before = self.assigned;
+                self.stmt(body);
+                self.assigned = before;
+            }
+            Stmt::Labeled { body, .. } => self.stmt(body),
+            Stmt::Expr(expr) | Stmt::Throw { value: expr, .. } => self.expr(expr),
+            Stmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    self.expr(value);
+                }
+            }
+            Stmt::LocalDecl { declarators, .. } => {
+                for declarator in declarators {
+                    if let Some(init) = &declarator.init {
+                        self.expr(init);
+                    }
+                }
+            }
+            Stmt::SuperCall { args, .. } | Stmt::ThisCall { args, .. } => {
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            Stmt::Switch { selector, arms, .. } => {
+                self.expr(selector);
+                let before = self.assigned;
+                for arm in arms {
+                    self.assigned = before;
+                    self.block(&arm.body);
+                }
+                self.assigned = before;
+            }
+            Stmt::Try {
+                body,
+                catches,
+                finally_body,
+                ..
+            } => {
+                let before = self.assigned;
+                self.block(body);
+                // A catch runs from a partially-executed try, so treat the
+                // try's assignments as not having happened.
+                for clause in catches {
+                    self.assigned = before;
+                    self.block(&clause.body);
+                }
+                self.assigned = before;
+                if let Some(finally_body) = finally_body {
+                    self.block(finally_body);
+                }
+            }
+            Stmt::Break { .. } | Stmt::Continue { .. } => {}
+        }
+    }
+
+    fn report(&mut self, span: SourceSpan) {
+        if self.found.is_none() {
+            self.found = Some(span);
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr) {
+        // A read of the field before it is assigned is the error being hunted.
+        if !self.assigned && reads_name(expr, self.name) {
+            self.report(expr.span());
+            return;
+        }
+        match expr {
+            Expr::Binary { lhs, rhs, .. } => {
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            Expr::Unary { operand, .. }
+            | Expr::Cast { operand, .. }
+            | Expr::InstanceOf { value: operand, .. }
+            | Expr::IncDec {
+                target: operand, ..
+            } => self.expr(operand),
+            Expr::Index { array, index, .. } => {
+                self.expr(array);
+                self.expr(index);
+            }
+            Expr::Field { object, .. }
+            | Expr::MethodRef {
+                qualifier: object, ..
+            } => {
+                self.expr(object);
+            }
+            Expr::Call { receiver, args, .. } => {
+                if let Some(receiver) = receiver {
+                    self.expr(receiver);
+                }
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            Expr::NewObject { args, outer, .. } => {
+                if let Some(outer) = outer {
+                    self.expr(outer);
+                }
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            Expr::SuperMethodCall { args, .. } | Expr::ArrayLiteral { elements: args, .. } => {
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            Expr::NewArray { dims, init, .. } => {
+                for dim in dims.iter().flatten() {
+                    self.expr(dim);
+                }
+                for element in init.iter().flatten() {
+                    self.expr(element);
+                }
+            }
+            Expr::Ternary {
+                cond, then, els, ..
+            } => {
+                self.expr(cond);
+                self.expr(then);
+                self.expr(els);
+            }
+            Expr::Assign { value, .. } => self.expr(value),
+            // A lambda body runs later, not here.
+            Expr::Literal { .. }
+            | Expr::Name { .. }
+            | Expr::This { .. }
+            | Expr::Super { .. }
+            | Expr::Lambda { .. } => {}
+        }
+    }
+}
+
+/// Whether this expression IS a read of the field `name` (a bare simple name,
+/// or `this.name`).
+fn reads_name(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Name { path, .. } => path.len() == 1 && path[0] == name,
+        Expr::Field {
+            object,
+            name: field,
+            ..
+        } => field == name && matches!(**object, Expr::This { .. }),
+        _ => false,
+    }
+}
+
+/// Whether any local declaration, for-each variable or catch parameter
+/// anywhere in `statements` uses `name`.
+fn declares_local_named(statements: &[Stmt], name: &str) -> bool {
+    statements.iter().any(|statement| match statement {
+        Stmt::LocalDecl { declarators, .. } => declarators.iter().any(|d| d.name == name),
+        Stmt::ForEach {
+            name: each, body, ..
+        } => each == name || declares_local_named(std::slice::from_ref(body), name),
+        Stmt::Block(body) => declares_local_named(body, name),
+        Stmt::If { then, els, .. } => {
+            declares_local_named(std::slice::from_ref(then), name)
+                || els
+                    .as_deref()
+                    .is_some_and(|e| declares_local_named(std::slice::from_ref(e), name))
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::Labeled { body, .. } => {
+            declares_local_named(std::slice::from_ref(body), name)
+        }
+        Stmt::For {
+            init, update, body, ..
+        } => {
+            init.as_deref()
+                .is_some_and(|i| declares_local_named(std::slice::from_ref(i), name))
+                || declares_local_named(update, name)
+                || declares_local_named(std::slice::from_ref(body), name)
+        }
+        Stmt::Switch { arms, .. } => arms.iter().any(|a| declares_local_named(&a.body, name)),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => {
+            declares_local_named(body, name)
+                || catches
+                    .iter()
+                    .any(|c| c.name == name || declares_local_named(&c.body, name))
+                || finally_body
+                    .as_ref()
+                    .is_some_and(|f| declares_local_named(f, name))
+        }
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{SourceFile, compile};
+
+    fn errors(source: &str) -> Vec<String> {
+        compile(&[SourceFile {
+            path: String::from("M.java"),
+            text: source.to_owned(),
+        }])
+        .diagnostics
+        .into_iter()
+        .map(|d| d.message)
+        .collect()
+    }
+
+    fn rejects_with(source: &str, message: &str) {
+        let found = errors(source);
+        assert!(
+            found.iter().any(|m| m.contains(message)),
+            "expected {message:?}, got {found:?}"
+        );
+    }
+
+    fn accepts(source: &str) {
+        let found = errors(source);
+        assert!(found.is_empty(), "expected no errors, got {found:?}");
+    }
+
+    #[test]
+    fn unreachable_after_abrupt_completion() {
+        rejects_with(
+            "class M { static void f() { return; int x = 1; } }",
+            "unreachable statement",
+        );
+        rejects_with(
+            "class M { static int f() { throw new RuntimeException(); int y = 1; } }",
+            "unreachable statement",
+        );
+        // But a CALL to a method that always throws completes normally as far
+        // as JLS §14.21 is concerned — reachability is syntactic, and only a
+        // `throw` statement itself ends the flow.
+        accepts(
+            "class M { static int f() { throw new RuntimeException(); } static void g() { f(); int x = 1; } }",
+        );
+        rejects_with(
+            "class M { static void f() { for (;;) { break; int x = 1; } } }",
+            "unreachable statement",
+        );
+        rejects_with(
+            "class M { static void f() { for (int i = 0; i < 1; i++) { continue; int x = 1; } } }",
+            "unreachable statement",
+        );
+        // The body of a constant-false loop can never run.
+        rejects_with(
+            "class M { static void f() { while (false) { int x = 1; } } }",
+            "unreachable statement",
+        );
+        rejects_with(
+            "class M { static void f() { for (; false;) { int x = 1; } } }",
+            "unreachable statement",
+        );
+    }
+
+    #[test]
+    fn if_false_is_legal_conditional_compilation() {
+        // JLS §14.21 exempts `if` on purpose, so this is NOT an error even
+        // though the body cannot run — unlike the `while (false)` above.
+        accepts("class M { static void f() { if (false) { int x = 1; } } }");
+        accepts("class M { static void f() { if (true) { } else { int x = 1; } } }");
+    }
+
+    #[test]
+    fn reachable_code_after_loops_and_branches_is_accepted() {
+        // A `while (true)` with a break DOES complete normally.
+        accepts("class M { static void f() { while (true) { break; } int x = 1; } }");
+        // Only one branch is abrupt, so the `if` completes normally.
+        accepts("class M { static void f(int n) { if (n > 0) return; int x = 1; } }");
+        // A do-while body always runs, whatever the condition.
+        accepts("class M { static void f() { do { int x = 1; } while (false); } }");
+        // A labeled break makes the labeled statement complete normally.
+        accepts("class M { static void f() { outer: { break outer; } int x = 1; } }");
+        // A nested loop's unlabeled break does not end the outer one.
+        accepts(
+            "class M { static void f() { while (true) { while (true) { break; } break; } int x = 1; } }",
+        );
+    }
+
+    #[test]
+    fn blank_final_fields_must_be_definitely_assigned() {
+        rejects_with(
+            "class M { final int f; M() { } }",
+            "variable f might not have been initialized",
+        );
+        // No constructor at all: the default one assigns nothing.
+        rejects_with(
+            "class M { final int f; }",
+            "variable f might not have been initialized",
+        );
+        // Assigned on only one branch.
+        rejects_with(
+            "class M { final int f; M(int n) { if (n > 0) f = n; } }",
+            "variable f might not have been initialized",
+        );
+        // Read before it is assigned.
+        rejects_with(
+            "class M { final int f; M() { int y = f; f = 1; } }",
+            "variable f might not have been initialized",
+        );
+        // Assigned twice — `final` must mean final.
+        rejects_with(
+            "class M { final int f; M() { f = 1; f = 2; } }",
+            "variable f might already have been assigned",
+        );
+    }
+
+    #[test]
+    fn blank_final_fields_assigned_every_way_are_accepted() {
+        accepts("class M { final int f; M() { f = 1; } }");
+        accepts("class M { final int f; M(int n) { if (n > 0) { f = 1; } else { f = 2; } } }");
+        accepts("class M { final int f; M() { this(1); } M(int n) { f = n; } }");
+        // An instance initializer block assigns before every constructor.
+        accepts("class M { final int f; { f = 1; } M() { } }");
+        // A field with an initializer is not blank at all.
+        accepts("class M { final int f = 1; M() { } }");
+        // Reading AFTER the assignment is fine, including inside a branch.
+        accepts("class M { final int f; M(int n) { f = n; int y = f; } }");
+        // A static final is initialized elsewhere and is not this rule's business.
+        accepts("class M { static final int F = 1; }");
+        // A local named like the field shadows it, so no read is involved.
+        accepts("class M { final int f; M() { int f = 2; this.f = f; } }");
+    }
+}

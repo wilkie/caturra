@@ -40,6 +40,7 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
     for (path, unit) in units {
         for class in &unit.classes {
             check_enum_static_references(class, path, &mut diagnostics);
+            crate::flow::check(class, path, &mut diagnostics);
             classes.push(CompiledClass {
                 binary_name: class.name.clone(),
                 class_file: emit_class(path, &mut diagnostics, &table, class),
@@ -3796,7 +3797,7 @@ fn emit_method(
     // javac-style missing-return check: a non-void method whose body
     // can complete normally is an error (JLS §8.4.7).
     if !matches!(body.return_type, None | Some(JType::Error))
-        && block_completes_normally(&decl.body)
+        && crate::flow::block_completes_normally(&decl.body)
     {
         body.error(decl.span, "missing return statement");
     }
@@ -4077,70 +4078,6 @@ fn method_descriptor(
     descriptor
 }
 
-/// Reachability-lite (JLS §14.21): whether a statement can complete
-/// normally, used for the missing-return check. Conservative on
-/// non-constant loop conditions, exact on the patterns students write
-/// (`while (true)` without `break` does not complete).
-fn stmt_completes_normally(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Throw { .. } => {
-            false
-        }
-        // JLS: a try statement completes normally iff (the try block or
-        // at least one catch block can complete normally) and the
-        // finally block, if any, can complete normally.
-        // A switch completes normally unless a default exists and every
-        // path ends abruptly; approximate: no default, any break, or
-        // the final arm falling out all mean normal completion.
-        Stmt::Switch { arms, .. } => {
-            let has_default = arms
-                .iter()
-                .any(|arm| arm.labels.iter().any(Option::is_none));
-            !has_default
-                || arms
-                    .last()
-                    .is_some_and(|arm| block_completes_normally(&arm.body))
-                || arms.iter().any(|arm| arm.body.iter().any(has_direct_break))
-        }
-        Stmt::Try {
-            body,
-            catches,
-            finally_body,
-            ..
-        } => {
-            (block_completes_normally(body)
-                || catches
-                    .iter()
-                    .any(|clause| block_completes_normally(&clause.body)))
-                && finally_body
-                    .as_ref()
-                    .is_none_or(|stmts| block_completes_normally(stmts))
-        }
-        Stmt::Block(statements) => block_completes_normally(statements),
-        Stmt::If {
-            then,
-            els: Some(els),
-            ..
-        } => stmt_completes_normally(then) || stmt_completes_normally(els),
-        // (An `if` without `else` falls through to `true` below: the
-        // condition may be false.)
-        // A constant-true loop only completes via `break`.
-        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
-            !is_true_literal(cond) || has_direct_break(body)
-        }
-        Stmt::For { cond, body, .. } => match cond {
-            Some(cond) if !is_true_literal(cond) => true,
-            // `for (;;)` or `for (; true;)`.
-            _ => has_direct_break(body),
-        },
-        _ => true,
-    }
-}
-
-fn block_completes_normally(statements: &[Stmt]) -> bool {
-    statements.iter().all(stmt_completes_normally)
-}
-
 fn is_true_literal(expr: &Expr) -> bool {
     matches!(
         expr,
@@ -4149,19 +4086,6 @@ fn is_true_literal(expr: &Expr) -> bool {
             ..
         }
     )
-}
-
-/// Whether a loop body contains a `break` binding to THAT loop (nested
-/// loops keep their own breaks).
-fn has_direct_break(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Break { .. } => true,
-        Stmt::Block(statements) => statements.iter().any(has_direct_break),
-        Stmt::If { then, els, .. } => {
-            has_direct_break(then) || els.as_deref().is_some_and(has_direct_break)
-        }
-        _ => false,
-    }
 }
 
 /// A parameter of an intrinsic method.
@@ -8489,7 +8413,7 @@ impl BodyGen<'_> {
             self.scopes.pop();
             // Running off the end of the LAST group is a way out of the switch;
             // running off the end of any other group just falls into the next.
-            if index == last && block_completes_normally(&arm.body) {
+            if index == last && crate::flow::block_completes_normally(&arm.body) {
                 falls_out = Some(self.assigned_flags());
             }
         }
@@ -8898,16 +8822,33 @@ impl BodyGen<'_> {
             self.code.branch(op::GOTO, end, 0);
             self.code.bind(else_label);
             self.statement(els);
-            // Definitely assigned only if both branches assign
-            // (JLS §16 intersection rule).
-            self.intersect_assigned(&after_then);
+            // JLS §16.2.7: a branch that cannot complete normally imposes no
+            // requirement — after `if (c) x = 1; else return;` the only way to
+            // reach the next statement is through the branch that assigned.
+            // Intersecting blindly (the old rule) rejected that valid program.
+            match (
+                crate::flow::completes_normally(then),
+                crate::flow::completes_normally(els),
+            ) {
+                (true, true) => self.intersect_assigned(&after_then),
+                // The else is abrupt, so only the then-branch reaches here.
+                (true, false) => self.restore_assigned(&after_then),
+                // The then is abrupt: keep what the else branch assigned,
+                // which is the state already in place.
+                (false, true | false) => {}
+            }
             self.code.bind(end);
         } else {
             let end = self.code.new_label();
             self.code.branch(op::IFEQ, end, 1);
             self.statement(then);
-            // A lone if may not run: its assignments don't count.
-            self.restore_assigned(&before);
+            // `if (true) x = 1;` always runs, so the assignment counts
+            // (JLS §16.2.7 — "definitely assigned after e when false" is
+            // vacuous for a constant-true condition). Any other lone `if`
+            // may not run, and its assignments do not.
+            if !is_true_literal(cond) {
+                self.restore_assigned(&before);
+            }
             self.code.bind(end);
         }
     }
@@ -8927,8 +8868,14 @@ impl BodyGen<'_> {
             break_flags: Vec::new(),
         });
         self.statement(body);
-        self.loop_stack.pop();
+        let exits = self.loop_stack.pop().map(|entry| entry.break_flags);
         self.restore_assigned(&before);
+        // JLS §16.2.10: after `while (true) S`, V is definitely assigned iff it
+        // is definitely assigned before every `break` that leaves the loop —
+        // the condition never ends it, so a break is the ONLY way out.
+        if is_true_literal(cond) {
+            self.adopt_break_flags(exits.unwrap_or_default());
+        }
         self.code.branch(op::GOTO, start, 0);
         self.code.bind(end);
     }
@@ -8983,12 +8930,17 @@ impl BodyGen<'_> {
             break_flags: Vec::new(),
         });
         self.statement(body);
-        self.loop_stack.pop();
+        let exits = self.loop_stack.pop().map(|entry| entry.break_flags);
         self.code.bind(update_label);
         for stmt in update {
             self.statement(stmt);
         }
         self.restore_assigned(&before);
+        // `for (;;)` and `for (; true;)` end only at a `break`, so the same
+        // rule as `while (true)` applies.
+        if cond.is_none_or(is_true_literal) {
+            self.adopt_break_flags(exits.unwrap_or_default());
+        }
         self.code.branch(op::GOTO, cond_label, 0);
         self.code.bind(end);
         self.scopes.pop();
@@ -9017,6 +8969,22 @@ impl BodyGen<'_> {
             for ((_, var), flag) in scope.iter_mut().zip(flags) {
                 var.assigned = *flag;
             }
+        }
+    }
+
+    /// Adopt the definite-assignment state common to every `break` that left a
+    /// loop the condition could never end (`while (true)`, `for (;;)`).
+    ///
+    /// With no breaks at all the loop never completes normally, so nothing
+    /// follows it and the state does not matter — the flags are left alone.
+    fn adopt_break_flags(&mut self, exits: Vec<Vec<Vec<bool>>>) {
+        let mut exits = exits.into_iter();
+        let Some(first) = exits.next() else {
+            return;
+        };
+        self.restore_assigned(&first);
+        for flags in exits {
+            self.intersect_assigned(&flags);
         }
     }
 

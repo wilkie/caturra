@@ -10,6 +10,7 @@ pub mod ast;
 mod capture;
 pub mod codegen;
 pub mod diagnostics;
+mod flow;
 mod imports;
 mod inner;
 mod lambda;

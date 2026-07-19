@@ -65,9 +65,26 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     saturation and i2c truncation;
   - string concatenation with `+`/`+=` (compiled to `StringBuilder` chains),
     formatting `int`/`double`/`char`/`boolean`/`null` exactly as Java does.
+- **Flow analysis** (`caturra-compiler/src/flow.rs`, 2026-07-18): statement
+  reachability (JLS §14.21) and blank-final definite assignment (JLS §8.3.1.2,
+  §16.9). Code after `return`/`throw`/`break`/`continue`, and the body of a
+  constant-false loop, are rejected as `unreachable statement` — while
+  `if (false) { ... }` stays legal, the conditional-compilation carve-out that
+  applies to `if` and nothing else. A blank `final` field must be definitely
+  assigned by the end of every constructor, may not be assigned twice, and may
+  not be read before it is assigned; before this a blank final silently read 0
+  and `final` meant nothing for a field. Definite assignment for LOCALS lives
+  in the codegen tracker and honours constant conditions (`if (true) x = 1;`),
+  abruptly-completing branches (`if (c) x = 1; else return;`) and JLS §16.2.10
+  (`while (true) { x = 5; break; }` — assigned before every exiting break).
+  Deliberately conservative: only boolean *literals* count as constant
+  conditions, not the wider constant expressions of JLS §15.28, since a missed
+  error costs only strictness while a spurious one rejects a valid program.
+  **Not implemented:** checked-exception analysis, so an unreported checked
+  exception and a `catch` for one the body cannot throw are both still accepted.
 - User-defined **static methods**: parameters, `return` (with javac-style
-  missing-return and unexpected-return checks via a reachability-lite
-  analysis, so `while (true) { ... return ...; }` needs no trailing return),
+  missing-return and unexpected-return checks via the same analysis,
+  so `while (true) { ... return ...; }` needs no trailing return),
   recursion and mutual recursion (guarded by `StackOverflowError`, see
   RUNTIME.md), bare same-class calls and `ClassName.method(...)` across
   classes/files, results usable in any expression or discarded as a

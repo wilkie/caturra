@@ -11310,3 +11310,218 @@ public class DiffPatternSyntax {
 }
 "##
 );
+
+// ---------------------------------------------------------------------------
+// Reachability (JLS §14.21) and definite assignment (JLS §16)
+//
+// caturra had no reachability analysis at all and no definite-assignment rule
+// for blank final FIELDS, so all of these compiled: dead code after `return`,
+// a `final` field that was never assigned (reading 0), one assigned twice, and
+// one read before assignment. Each is `differential_reject!` — the point is
+// that BOTH engines refuse, since accepting them is the direction that lets a
+// program work in the playground and fail on a real JDK.
+// ---------------------------------------------------------------------------
+
+differential_reject!(
+    reject_unreachable_after_return,
+    "RejUnreachReturn",
+    r#"
+public class RejUnreachReturn {
+    public static void main(String[] args) {
+        System.out.println("hi");
+        return;
+        System.out.println("dead");
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unreachable_after_break,
+    "RejUnreachBreak",
+    r"public class RejUnreachBreak {
+    public static void main(String[] args) {
+        for (int i = 0; i < 3; i++) {
+            break;
+            System.out.println(i);
+        }
+    }
+}"
+);
+
+differential_reject!(
+    reject_unreachable_after_throw,
+    "RejUnreachThrow",
+    r#"
+public class RejUnreachThrow {
+    static int g() {
+        throw new RuntimeException("x");
+        int y = 1;
+    }
+    public static void main(String[] args) {
+        System.out.println(g());
+    }
+}
+"#
+);
+
+// The constant-condition rule applies to loops but NOT to `if` — see
+// `accept_if_false_conditional_compilation` below for the other half.
+differential_reject!(
+    reject_while_false_body,
+    "RejWhileFalse",
+    r#"
+public class RejWhileFalse {
+    public static void main(String[] args) {
+        while (false) { System.out.println("dead"); }
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unreachable_in_switch_case,
+    "RejUnreachCase",
+    r#"
+public class RejUnreachCase {
+    static int g(int n) {
+        switch (n) {
+            case 1:
+                return 1;
+                System.out.println("dead");
+            default: return 0;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(g(1));
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_blank_final_field_never_assigned,
+    "RejBlankFinal",
+    r"public class RejBlankFinal {
+    final int f;
+    RejBlankFinal() { }
+    public static void main(String[] args) {
+        System.out.println(new RejBlankFinal().f);
+    }
+}"
+);
+
+differential_reject!(
+    reject_blank_final_field_one_branch,
+    "RejBlankFinalBranch",
+    r"public class RejBlankFinalBranch {
+    final int f;
+    RejBlankFinalBranch(int n) { if (n > 0) f = n; }
+    public static void main(String[] args) {
+        System.out.println(new RejBlankFinalBranch(3).f);
+    }
+}"
+);
+
+differential_reject!(
+    reject_blank_final_field_assigned_twice,
+    "RejBlankFinalTwice",
+    r"public class RejBlankFinalTwice {
+    final int f;
+    RejBlankFinalTwice() { f = 1; f = 2; }
+    public static void main(String[] args) {
+        System.out.println(new RejBlankFinalTwice().f);
+    }
+}"
+);
+
+differential_reject!(
+    reject_blank_final_field_read_before_assignment,
+    "RejBlankFinalRead",
+    r"public class RejBlankFinalRead {
+    final int f;
+    RejBlankFinalRead() { System.out.println(f); f = 1; }
+    public static void main(String[] args) {
+        new RejBlankFinalRead();
+    }
+}"
+);
+
+// The other direction: programs javac ACCEPTS that caturra used to reject,
+// because its definite-assignment tracker ignored constant conditions and
+// abrupt branches. Every line here was a compile error before.
+differential_test!(
+    diff_definite_assignment_constant_and_abrupt,
+    "DiffDefiniteAssign",
+    r"public class DiffDefiniteAssign {
+    static int viaIfTrue() {
+        int x;
+        // A constant-true condition always runs the branch (JLS §16.2.7).
+        if (true) x = 1;
+        return x;
+    }
+    static int viaReturningElse(int n) {
+        int x;
+        // The else cannot complete normally, so reaching the return means the
+        // then-branch ran and assigned.
+        if (n > 0) x = 1; else return -1;
+        return x;
+    }
+    static int viaThrowingElse(int n) {
+        int x;
+        if (n > 0) x = 1; else throw new RuntimeException();
+        return x;
+    }
+    static int viaBreakOutOfInfiniteLoop() {
+        int x;
+        // JLS §16.2.10: assigned before every break that leaves the loop.
+        while (true) { x = 5; break; }
+        return x;
+    }
+    static int viaForEver() {
+        int x;
+        for (;;) { x = 6; break; }
+        return x;
+    }
+    static int viaEveryBreak(int n) {
+        int x;
+        while (true) {
+            if (n > 0) { x = 1; break; }
+            x = 2;
+            break;
+        }
+        return x;
+    }
+    public static void main(String[] args) {
+        System.out.println(viaIfTrue());
+        System.out.println(viaReturningElse(1));
+        System.out.println(viaThrowingElse(1));
+        System.out.println(viaBreakOutOfInfiniteLoop());
+        System.out.println(viaForEver());
+        System.out.println(viaEveryBreak(1));
+        System.out.println(viaEveryBreak(0));
+    }
+}"
+);
+
+// `if (false)` is deliberately exempt from the unreachability rule so that a
+// disabled-by-constant block still compiles (JLS §14.21's "conditional
+// compilation" carve-out) — while `while (false)` above is an error.
+differential_test!(
+    accept_if_false_conditional_compilation,
+    "DiffIfFalseDead",
+    r#"
+public class DiffIfFalseDead {
+    static final boolean DEBUG = false;
+    public static void main(String[] args) {
+        if (false) { System.out.println("never"); }
+        if (DEBUG) { System.out.println("never either"); }
+        // A `while (true)` that breaks still completes normally.
+        while (true) { break; }
+        // A do-while body always runs, whatever the condition says.
+        do { System.out.println("once"); } while (false);
+        System.out.println("done");
+    }
+}
+"#
+);
