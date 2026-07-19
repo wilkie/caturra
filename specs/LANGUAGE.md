@@ -88,6 +88,18 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   refused as javac refuses them — assignment to a wrapper is a boxing
   conversion, and boxing does not narrow. A wrapper target whose result already
   fits (`Integer i += 2`, `Double d += 2`, `i++`) is unaffected.
+- **Dispatch** (2026-07-19): overload resolution runs JLS §15.12.2's PHASES —
+  everything applicable without boxing is considered first, and only if nothing
+  matches does boxing enter — so `m(Integer)` beats `m(int)` for an `Integer`
+  argument and `f(long)` beats `f(Integer)` for an `int` (which used to be
+  reported ambiguous). A call through a superclass-typed reference reaches the
+  SUPERCLASS overload: the bridge pass had been synthesizing a bridge for any
+  superclass `Object` parameter, which hijacked ordinary overloads, and now
+  only a real erased type variable qualifies. A PRIVATE method binds
+  statically (`invokespecial`), so a superclass's call to its own private
+  method no longer lands in a subclass's unrelated private method of the same
+  name. Overriding a `final` method (JLS §8.4.3.3) and weakening an override's
+  access (§8.4.8.3) are rejected, as javac rejects them.
 - **Set.equals and the tree collections' first insert** (2026-07-19):
   `AbstractSet.equals` is specified across implementations and is symmetric, so
   a `HashSet` equals a `TreeSet` holding the same elements — it used to demand

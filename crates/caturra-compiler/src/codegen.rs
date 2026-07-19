@@ -167,6 +167,7 @@ fn emit_class(
     // Default constructor when none is declared (JLS §8.8.9).
     if !decl.is_interface && !decl.methods.iter().any(|m| m.is_constructor) {
         let default_ctor = MethodDecl {
+            is_final: false,
             name: decl.name.clone(),
             is_static: false,
             is_public: true,
@@ -356,6 +357,8 @@ struct MethodSig {
     ret: Option<JType>,
     is_static: bool,
     is_private: bool,
+    /// Declared `final`: overriding it is a compile-time error (JLS §8.4.3.3).
+    is_final: bool,
     is_abstract: bool,
     /// The last parameter is `Type... name` — extra trailing arguments
     /// pack into the array.
@@ -542,6 +545,7 @@ impl MethodTable {
                         ret: string_ret,
                         is_static: false,
                         is_private: false,
+                        is_final: false,
                         is_abstract: false,
                         is_varargs: false,
                         ret_infer: None,
@@ -552,6 +556,7 @@ impl MethodTable {
                         ret: Some(JType::Class),
                         is_static: false,
                         is_private: false,
+                        is_final: false,
                         is_abstract: false,
                         is_varargs: false,
                         ret_infer: None,
@@ -562,6 +567,7 @@ impl MethodTable {
                         ret: Some(JType::Int),
                         is_static: false,
                         is_private: false,
+                        is_final: false,
                         is_abstract: false,
                         is_varargs: false,
                         ret_infer: None,
@@ -572,6 +578,7 @@ impl MethodTable {
                         ret: Some(JType::Boolean),
                         is_static: false,
                         is_private: false,
+                        is_final: false,
                         is_abstract: false,
                         is_varargs: false,
                         ret_infer: None,
@@ -605,6 +612,7 @@ impl MethodTable {
                     ret: Some(JType::Int),
                     is_static: false,
                     is_private: false,
+                    is_final: false,
                     is_abstract: true,
                     is_varargs: false,
                     ret_infer: None,
@@ -641,6 +649,7 @@ impl MethodTable {
                         ret: None,
                         is_static: false,
                         is_private: false,
+                        is_final: false,
                         is_abstract: true,
                         is_varargs: false,
                         ret_infer: None,
@@ -741,6 +750,7 @@ impl MethodTable {
                         },
                         is_static: method.is_static,
                         is_private: method.is_private,
+                        is_final: method.is_final,
                         is_abstract: method.is_abstract,
                         is_varargs: method.params.last().is_some_and(|p| p.is_varargs),
                         ret_infer: method.infer_return.clone(),
@@ -773,6 +783,7 @@ impl MethodTable {
                         ret: None,
                         is_static: false,
                         is_private: false,
+                        is_final: false,
                         is_abstract: false,
                         is_varargs: false,
                         ret_infer: None,
@@ -984,7 +995,18 @@ impl MethodTable {
                                     (Some(JType::Object(sub)), Some(JType::Object(sup)))
                                         if self.is_subtype(sub, sup)
                                 );
-                            if !compatible_return || sup_sig.is_static != method.is_static {
+                            // JLS §8.4.3.3: a `final` method cannot be
+                            // overridden. JLS §8.4.8.3: an override may not
+                            // REDUCE visibility, so a private method cannot
+                            // override a package-private or public one. Both
+                            // compiled here and then dispatched to the
+                            // subclass, which is what a JDK refuses outright.
+                            let weakens_access = method.is_private && !sup_sig.is_private;
+                            if !compatible_return
+                                || sup_sig.is_static != method.is_static
+                                || sup_sig.is_final
+                                || weakens_access
+                            {
                                 diagnostics.push(Diagnostic::error(
                                     path,
                                     format!(
@@ -1547,6 +1569,7 @@ impl MethodTable {
 
     /// Resolve `class.name(args)`: applicable-by-widening, exact match
     /// first, then the unique most-specific method.
+    #[allow(clippy::too_many_lines)] // the JLS 15.12.2 phase ladder, in order
     fn resolve(&self, class: &str, name: &str, args: &[JType]) -> Resolution<'_> {
         if !self.classes.contains_key(class) {
             return Resolution::UnknownName;
@@ -1591,14 +1614,34 @@ impl MethodTable {
         if named.is_empty() {
             return Resolution::UnknownName;
         }
-        let applicable: Vec<&MethodSig> = named
+        // JLS §15.12.2 runs in PHASES: everything applicable without boxing
+        // (phase 1) is considered first, and only if nothing matches does
+        // boxing enter the running (phase 2). Conflating the two made
+        // `m(int)` beat `m(Integer)` for an `Integer` argument, and made
+        // `f(long)` vs `f(Integer)` for an `int` look ambiguous.
+        let strict: Vec<&MethodSig> = named
             .iter()
             .copied()
             .filter(|m| {
                 m.params.len() == args.len()
-                    && m.params.iter().zip(args).all(|(p, a)| widens(*a, *p, self))
+                    && m.params
+                        .iter()
+                        .zip(args)
+                        .all(|(p, a)| widens_strictly(*a, *p, self))
             })
             .collect();
+        let applicable: Vec<&MethodSig> = if strict.is_empty() {
+            named
+                .iter()
+                .copied()
+                .filter(|m| {
+                    m.params.len() == args.len()
+                        && m.params.iter().zip(args).all(|(p, a)| widens(*a, *p, self))
+                })
+                .collect()
+        } else {
+            strict
+        };
         // JLS §15.12.2: fixed-arity applicability is tried first; only
         // if nothing matches do varargs methods enter the running.
         if applicable.is_empty() {
@@ -2250,6 +2293,23 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
 }
 
 #[allow(clippy::too_many_lines)] // one widening-conversion matrix (JLS §5.1.5/§5.2)
+/// JLS §15.12.2 phase 1: applicable by STRICT invocation — subtyping and
+/// widening only, with NO boxing or unboxing. An overload applicable this way
+/// beats one that needs a boxing conversion, which is why `m(Integer)` wins
+/// for an `Integer` argument even though `m(int)` would also accept it, and
+/// why `f(long)` wins over `f(Integer)` for an `int`.
+fn widens_strictly(from: JType, to: JType, table: &MethodTable) -> bool {
+    // These are exactly the boxing/unboxing arms of `widens`; identical types
+    // still pass, since that is not a conversion at all.
+    if matches!((from, to), (JType::Boxed(e), t) if e.base_type() == t)
+        || matches!((from, to), (f, JType::Boxed(e)) if e.base_type() == f)
+    {
+        return from == to;
+    }
+    widens(from, to, table)
+}
+
+#[allow(clippy::too_many_lines)] // one arm per conversion the JLS allows
 fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
     from == to
         || matches!(
@@ -12805,8 +12865,17 @@ impl BodyGen<'_> {
         let descriptor = sig.descriptor(self.table);
         let method_ref = intern_method_ref(self.pool, &class_name, method, &descriptor);
         let ret_width = sig.ret.map_or(0, JType::width);
-        self.code
-            .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
+        // A PRIVATE method is not inherited and cannot be overridden
+        // (JLS §8.4.8), so it binds statically — `invokespecial`, as javac
+        // emits. Dispatching it virtually let a superclass's call to its own
+        // private method land in a subclass's unrelated private method of the
+        // same name: `A.call()` answered "B.private".
+        let opcode = if sig.is_private {
+            op::INVOKESPECIAL
+        } else {
+            op::INVOKEVIRTUAL
+        };
+        self.code.push_op_u16(opcode, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
         Some(inferred_return(&sig, &arg_types))
     }

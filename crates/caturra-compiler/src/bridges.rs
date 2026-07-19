@@ -150,12 +150,24 @@ fn is_override_of(inherited: &MethodDecl, method: &MethodDecl) -> bool {
         })
 }
 
-/// Whether an erased parameter type came from a TYPE VARIABLE. A class with a
-/// single unbounded parameter erases `T` to the tracking sentinel rather than
-/// to `Object`, so both spellings have to be recognised — checking only for
-/// `Object` silently matched nothing, and no bridge was ever built.
+/// Whether an erased parameter type came from a TYPE VARIABLE.
+///
+/// ONLY the sentinel counts. Accepting plain `Object` as well — which an
+/// earlier version did, to catch multi-parameter generic classes whose `T`
+/// erases to `Object` — hijacked ordinary OVERLOADS: given
+/// `class A { m(Object) }` and `class B extends A { m(String) }`, which are
+/// two distinct methods, it synthesized a `m(Object)` bridge in B, and a call
+/// through an `A` reference then reached `B.m(String)` where a JDK reaches
+/// `A.m(Object)`. Erasure loses the difference between a `T` that became
+/// `Object` and an `Object` written by hand, so the only safe reading is the
+/// unambiguous one.
+///
+/// The cost is that a generic class with SEVERAL type parameters gets no
+/// bridge (its `T` erases to `Object`, not the sentinel), leaving the
+/// pre-existing missing-bridge gap. Missing a bridge loses a dispatch; adding
+/// a wrong one steals a call that was never generic. The second is worse.
 fn is_erased_variable(key: &str) -> bool {
-    key == "Object" || key == crate::parser::TYPEVAR_SENTINEL
+    key == crate::parser::TYPEVAR_SENTINEL
 }
 
 /// `void set(Object t) { set((String) t); }` — cast each narrowed parameter
@@ -208,6 +220,7 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         is_static: false,
         is_public: method.is_public,
         is_private: false,
+        is_final: false,
         is_constructor: false,
         is_abstract: false,
         type_params: Vec::new(),

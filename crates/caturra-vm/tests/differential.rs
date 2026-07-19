@@ -12602,3 +12602,109 @@ public class DiffCompoundTargets {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Dispatch: static receiver type, JLS 15.12.2 phases, and private/final
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_overload_phases_and_static_receiver,
+    "DiffDispatch",
+    r#"
+public class DiffDispatch {
+    static class A {
+        String m(Object o) { return "A.m(Object)"; }
+        private String secret() { return "A.private"; }
+        String callSecret() { return secret(); }
+    }
+    // NOT an override: two distinct methods, so a call through an `A`
+    // reference must reach A's.
+    static class B extends A {
+        String m(String s) { return "B.m(String)"; }
+        private String secret() { return "B.private"; }
+    }
+
+    static String pick(int i) { return "pick(int)"; }
+    static String pick(Integer i) { return "pick(Integer)"; }
+    static String widen(long l) { return "widen(long)"; }
+    static String widen(Integer i) { return "widen(Integer)"; }
+
+    public static void main(String[] args) {
+        // The STATIC type of the receiver chooses the overload.
+        A viaSuper = new B();
+        System.out.println(viaSuper.m("hi"));
+        B viaSub = new B();
+        System.out.println(viaSub.m("hi"));
+        System.out.println(viaSub.m((Object) "hi"));
+
+        // Phase 1 (no boxing) beats phase 2.
+        System.out.println(pick(Integer.valueOf(1)));
+        System.out.println(pick(1));
+        int primitive = 1;
+        System.out.println(widen(primitive));
+
+        // A private method is not inherited, so A's call reaches A's.
+        System.out.println(new B().callSecret());
+    }
+}
+"#
+);
+
+// JLS 8.4.3.3: a final method cannot be overridden.
+differential_reject!(
+    reject_override_of_final_method,
+    "RejFinalOverride",
+    r#"
+public class RejFinalOverride {
+    static class A { final String m() { return "A"; } }
+    static class B extends A { String m() { return "B"; } }
+    public static void main(String[] args) {
+        System.out.println(new B().m());
+    }
+}
+"#
+);
+
+// JLS 8.4.8.3: an override may not reduce visibility.
+differential_reject!(
+    reject_override_weakening_access,
+    "RejWeakenAccess",
+    r#"
+public class RejWeakenAccess {
+    static class A { String m() { return "A"; } String call() { return m(); } }
+    static class B extends A { private String m() { return "B"; } }
+    public static void main(String[] args) {
+        System.out.println(new B().call());
+    }
+}
+"#
+);
+
+// The legal neighbours, so neither check can be widened.
+differential_test!(
+    diff_legal_final_and_private_members,
+    "DiffLegalOverrides",
+    r#"
+public class DiffLegalOverrides {
+    static class A {
+        final String sealed() { return "A.sealed"; }
+        String open() { return "A.open"; }
+        private String own() { return "A.own"; }
+        String callOwn() { return own(); }
+    }
+    static class B extends A {
+        @Override String open() { return "B.open"; }
+        private String own() { return "B.own"; }
+    }
+
+    public static void main(String[] args) {
+        B b = new B();
+        System.out.println(b.sealed());
+        System.out.println(b.open());
+        System.out.println(b.callOwn());
+        A a = b;
+        System.out.println(a.open());
+    }
+}
+"#
+);

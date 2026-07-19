@@ -81,6 +81,7 @@ fn add_outer_binding(class: &mut ClassDecl, outer: &str) {
             is_static: false,
             is_public: false,
             is_private: false,
+            is_final: false,
             is_constructor: true,
             is_abstract: false,
             type_params: Vec::new(),
