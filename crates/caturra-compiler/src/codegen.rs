@@ -12006,8 +12006,24 @@ impl BodyGen<'_> {
         let elem = TypeArgs::of(receiver_ty);
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
+            // Emit the arguments so any nested error is reported. If NOTHING
+            // was reported, the call would otherwise disappear without a
+            // trace: no code, no value, no diagnostic — the statement simply
+            // does not happen. That is how `l.addAll(Arrays.asList("d"))`
+            // silently left the list unchanged, and how a `println` of such a
+            // call printed nothing at all. Never bail in silence.
+            let before = self.diagnostics.len();
             for arg in args {
                 self.expr(arg);
+            }
+            if self.diagnostics.len() == before {
+                self.error(
+                    span,
+                    format!(
+                        "cannot determine the type of an argument to {method}(...) — \
+                         this is a caturra limitation, not an error in your program"
+                    ),
+                );
             }
             return None;
         }
@@ -14802,6 +14818,27 @@ impl BodyGen<'_> {
                         "binarySearch" => return JType::Int,
                         // `fill` is void, which `type_of` spells `Error`.
                         "fill" => return JType::Error,
+                        // `asList` mirrors `emit_arrays_as_list`: a list of the
+                        // arguments' element type (the lone-array form is the
+                        // varargs array itself). Missing here, an INLINE
+                        // `Arrays.asList(...)` typed as Error, and the call
+                        // that took it silently did nothing at all —
+                        // `l.addAll(Arrays.asList("d"))` left the list
+                        // unchanged, with no output and no diagnostic.
+                        "asList" => {
+                            let object_elem = ElemType::Object(self.table.object_id);
+                            let elem = match args.as_slice() {
+                                [single] => match self.type_of(single) {
+                                    JType::Array { elem, dims: 1 } => elem,
+                                    other => elem_type_of(other).unwrap_or(object_elem),
+                                },
+                                _ => args
+                                    .first()
+                                    .and_then(|a| elem_type_of(self.type_of(a)))
+                                    .unwrap_or(object_elem),
+                            };
+                            return JType::List(elem);
+                        }
                         _ => {}
                     }
                 }

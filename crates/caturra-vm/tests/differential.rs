@@ -12330,3 +12330,65 @@ public class DiffCmeImport {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// A call whose argument could not be typed used to VANISH
+//
+// An inline `Arrays.asList(...)` typed as Error, because `type_of` did not know
+// the method although the emitter did — the type_of/emit divergence again. The
+// enclosing call then bailed out silently: no code, no value, NO DIAGNOSTIC.
+// `l.addAll(Arrays.asList("d"))` left the list untouched and
+// `println(l.containsAll(...))` printed nothing at all.
+//
+// The round-3 audit reported some of these as "removeAll ignores a user-defined
+// equals". It never reached equals — the whole call evaporated.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_inline_collection_arguments,
+    "DiffInlineArgs",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+
+public class DiffInlineArgs {
+    static class P {
+        int v;
+        P(int v) { this.v = v; }
+        @Override public boolean equals(Object o) { return o instanceof P && ((P) o).v == v; }
+        @Override public int hashCode() { return v; }
+        @Override public String toString() { return "P" + v; }
+    }
+
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        // Each of these takes an INLINE collection argument.
+        System.out.println(l.containsAll(Arrays.asList("a", "b")));
+        System.out.println(l.equals(Arrays.asList("a", "b", "c")));
+        System.out.println(l.containsAll(Arrays.asList("a")) ? 1 : 2);
+        boolean all = l.containsAll(Arrays.asList("a"));
+        System.out.println(all);
+        System.out.println(new HashSet<>(Arrays.asList("a", "b")).size());
+
+        List<String> add = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        add.addAll(Arrays.asList("d", "e"));
+        System.out.println(add);
+
+        List<String> remove = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        remove.removeAll(Arrays.asList("a"));
+        System.out.println(remove);
+
+        List<String> retain = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        retain.retainAll(Arrays.asList("a"));
+        System.out.println(retain);
+
+        // A user equals really is consulted, once the call happens at all.
+        List<P> ps = new ArrayList<>(Arrays.asList(new P(1), new P(2), new P(3)));
+        ps.removeAll(Arrays.asList(new P(2)));
+        System.out.println(ps);
+    }
+}
+"#
+);

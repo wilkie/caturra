@@ -81,6 +81,16 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   structural change to the collections caturra models changes the size. The
   documented gap: a modification that nets out to the same size between two
   `next()` calls (an add AND a remove) is not caught, where a real JVM would.
+- **A call can no longer vanish** (2026-07-19): when an argument's type could
+  not be determined, `builtin_instance_call` emitted the arguments "for nested
+  diagnostics" and bailed — and when there were none, the call disappeared
+  entirely: no code, no value, no diagnostic. `l.addAll(Arrays.asList("d"))`
+  left the list untouched and `println(l.containsAll(...))` printed nothing at
+  all. The trigger was an inline `Arrays.asList(...)`, which the EMITTER knew
+  and `type_of` did not (the same divergence as the type-variable values
+  above). `type_of` now mirrors it, and the bail reports a caturra-limitation
+  diagnostic when nothing else did, so the failure mode cannot recur silently
+  through any other unmodelled argument.
 - **Generics, the dangerous direction** (2026-07-19): four programs javac
   refuses no longer compile — a type argument in `instanceof`
   (JLS §15.20.2; a wildcard `List<?>` is still fine), a STATIC member using the
