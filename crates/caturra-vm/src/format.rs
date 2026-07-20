@@ -583,6 +583,26 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 pad_sign_aware(spec, value.is_sign_negative() && !value.is_nan(), &text)
             })
         }
+        // `%a`/`%A` — hexadecimal floating-point, the text `Double.toHexString`
+        // produces (which already carries any sign). `%A` uppercases it.
+        'a' => {
+            let value = match arg {
+                FormatArg::Double(v) => v,
+                FormatArg::Float(v) => f64::from(v),
+                other => return Err(conversion_mismatch(conversion, other)),
+            };
+            let body = crate::intrinsics::java_double_to_hex(value);
+            let body = if conversion == 'A' {
+                body.to_uppercase()
+            } else {
+                body
+            };
+            Ok(pad_sign_aware(
+                spec,
+                value.is_sign_negative() && !value.is_nan(),
+                &body,
+            ))
+        }
         _ => Err(unknown_conversion(conversion)),
     }
 }

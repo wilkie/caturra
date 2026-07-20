@@ -147,6 +147,13 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Float parsing and hex-float formatting** (2026-07-20): `Double.parseDouble`
+  and `Float.parseFloat` accept the Java grammar Rust's parser rejects — a
+  trailing type suffix (`"1.0f"`, `"3.14d"`) and the hexadecimal form
+  (`"0x1.8p1"` = 3.0) — instead of throwing NumberFormatException and aborting;
+  invalid strings still throw. The `%a`/`%A` formatter conversion (hexadecimal
+  floating-point) renders the text `Double.toHexString` produces (`0x1.0p0`),
+  where it used to throw UnknownFormatConversionException.
 - **Inherited static field write** (2026-07-20): `Sub.f = v` on a field
   declared in a superclass resolves to the DECLARING class — it used to abort
   ("malformed class: unknown static field Sub.f") because the write emitted the

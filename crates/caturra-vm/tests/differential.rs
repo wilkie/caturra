@@ -2956,6 +2956,45 @@ public class DiffBox {
 "#
 );
 
+// `Double.parseDouble`/`Float.parseFloat` accept the Java grammar Rust's parser
+// rejects — a trailing type suffix (`1.0f`, `3.14d`) and the hexadecimal form
+// (`0x1.8p1`) — instead of throwing; and `%a`/`%A` render the hex-float text
+// `Double.toHexString` produces. Each used to abort the program.
+differential_test!(
+    diff_float_parse_and_hex_format,
+    "DiffFloatParse",
+    r#"
+public class DiffFloatParse {
+    public static void main(String[] args) {
+        // Trailing type suffix.
+        System.out.println(Double.parseDouble("1f"));
+        System.out.println(Double.parseDouble("1.0d"));
+        System.out.println(Double.parseDouble("3.14f"));
+        System.out.println(Float.parseFloat("1.5f"));
+
+        // Hexadecimal floating-point.
+        System.out.println(Double.parseDouble("0x1.8p1"));
+        System.out.println(Double.parseDouble("0x1p4"));
+        System.out.println(Double.parseDouble("-0x1.0p-1"));
+        System.out.println(Float.parseFloat("0x1p4"));
+
+        // Plain forms still parse; invalid ones still throw.
+        System.out.println(Double.parseDouble("  2.5  "));
+        System.out.println(Double.parseDouble("NaN") + " " + Double.parseDouble("Infinity"));
+        try { Double.parseDouble("0xd"); } catch (NumberFormatException e) { System.out.println("NFE"); }
+        try { Double.parseDouble("abc"); } catch (NumberFormatException e) { System.out.println("NFE"); }
+
+        // %a / %A hexadecimal-float conversion.
+        System.out.println(String.format("%a", 1.0));
+        System.out.println(String.format("%a", 0.5));
+        System.out.println(String.format("%a", 3.0));
+        System.out.println(String.format("%A", 1.0));
+        System.out.println(String.format("%a", -2.5));
+    }
+}
+"#
+);
+
 // Writing an inherited static field through the subclass name (`Sub.f = v`)
 // resolves to the DECLARING class: it finds the slot (it used to abort with
 // "malformed class: unknown static field") and initializes only the superclass

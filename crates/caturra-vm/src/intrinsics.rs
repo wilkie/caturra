@@ -4347,7 +4347,7 @@ fn java_double_hash(v: f64) -> i32 {
 }
 
 /// Java's `Double.toHexString`.
-fn java_double_to_hex(v: f64) -> String {
+pub(crate) fn java_double_to_hex(v: f64) -> String {
     if v.is_nan() {
         return String::from("NaN");
     }
@@ -4377,6 +4377,68 @@ fn java_double_to_hex(v: f64) -> String {
     format!("{sign}0x1.{hex}p{unbiased}")
 }
 
+/// Strip an optional trailing Java float/double type suffix (`f`/`F`/`d`/`D`),
+/// legal on any numeric floating string — `"1.0f"`, `"3.14d"`, `"0x1p4d"`.
+fn strip_float_suffix(s: &str) -> &str {
+    match s.chars().last() {
+        Some('f' | 'F' | 'd' | 'D') if s.len() > 1 => &s[..s.len() - 1],
+        _ => s,
+    }
+}
+
+/// Parse a hexadecimal floating-point string (`0x1.8p1` = 3.0), the form Rust's
+/// float parser rejects but Java's `parseDouble`/`parseFloat` grammar accepts.
+/// The `p`/`P` binary exponent is mandatory (as in Java).
+fn parse_hex_float(s: &str) -> Option<f64> {
+    let (neg, rest) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let rest = rest
+        .strip_prefix("0x")
+        .or_else(|| rest.strip_prefix("0X"))?;
+    let (mantissa, exponent) = rest.split_once(['p', 'P'])?;
+    let exponent: i32 = exponent.parse().ok()?;
+    let (int_part, frac_part) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if int_part.is_empty() && frac_part.is_empty() {
+        return None;
+    }
+    let mut value = 0f64;
+    for c in int_part.chars() {
+        value = value * 16.0 + f64::from(c.to_digit(16)?);
+    }
+    let mut scale = 1.0 / 16.0;
+    for c in frac_part.chars() {
+        value += f64::from(c.to_digit(16)?) * scale;
+        scale /= 16.0;
+    }
+    value *= 2f64.powi(exponent);
+    Some(if neg { -value } else { value })
+}
+
+/// Parse per Java's `Double.parseDouble` grammar — a trailing type suffix and
+/// the hexadecimal form, both of which Rust's `str::parse` rejects.
+fn parse_java_double(trimmed: &str) -> Option<f64> {
+    let core = strip_float_suffix(trimmed);
+    let unsigned = core.trim_start_matches(['+', '-']);
+    if unsigned.starts_with("0x") || unsigned.starts_with("0X") {
+        return parse_hex_float(core);
+    }
+    core.parse().ok()
+}
+
+/// `Float.parseFloat`'s grammar — the same suffix and hex forms, rounded to a
+/// float.
+#[allow(clippy::cast_possible_truncation)]
+fn parse_java_float(trimmed: &str) -> Option<f32> {
+    let core = strip_float_suffix(trimmed);
+    let unsigned = core.trim_start_matches(['+', '-']);
+    if unsigned.starts_with("0x") || unsigned.starts_with("0X") {
+        return parse_hex_float(core).map(|value| value as f32);
+    }
+    core.parse().ok()
+}
+
 #[allow(clippy::float_cmp)]
 fn double_static(
     heap: &mut Heap,
@@ -4397,9 +4459,7 @@ fn double_static(
             if trimmed.is_empty() {
                 return Err(throw("java.lang.NumberFormatException: empty String"));
             }
-            trimmed
-                .parse()
-                .map_or_else(|_| Err(number_format(&text)), d)
+            parse_java_double(trimmed).map_or_else(|| Err(number_format(&text)), d)
         }
         ("toString", [JValue::Double(v)]) => {
             let reference = heap.alloc_string(&java_double_to_string(*v));
@@ -4818,9 +4878,7 @@ fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option
             if trimmed.is_empty() {
                 return Err(throw("java.lang.NumberFormatException: empty String"));
             }
-            trimmed
-                .parse()
-                .map_or_else(|_| Err(number_format(&text)), f)
+            parse_java_float(trimmed).map_or_else(|| Err(number_format(&text)), f)
         }
         ("valueOf", [JValue::Float(v)]) => f(*v),
         ("toString", [JValue::Float(v)]) => {
