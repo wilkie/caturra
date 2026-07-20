@@ -195,8 +195,16 @@ pub fn invoke_special(
             Ok(())
         }
         // `new StringBuilder(capacity)`: a sizing hint with no observable
-        // effect — caturra models contents, not the backing array.
+        // effect — caturra models contents, not the backing array — EXCEPT
+        // that a negative capacity throws, as it allocates a `char[capacity]`.
         ("<init>", "(I)V") if matches!(heap.get(receiver), Some(HeapObject::StringBuilder(_))) => {
+            if let JValue::Int(capacity) = args[0]
+                && capacity < 0
+            {
+                return Err(throw(format!(
+                    "java.lang.NegativeArraySizeException: {capacity}"
+                )));
+            }
             Ok(())
         }
         // `new HashMap<>(initialCapacity)`: unlike a builder's, a map's
@@ -242,7 +250,19 @@ pub fn invoke_special(
             Ok(())
         }
         ("<init>", "(Ljava/lang/String;)V") => {
-            let text = string_arg(heap, &args[0])?;
+            // `new StringBuilder(otherBuilder)` reaches here too (a
+            // StringBuilder IS a CharSequence), so read the argument's chars
+            // whether it is a String or a builder.
+            let text = match &args[0] {
+                JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                    Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
+                        String::from_utf16_lossy(units)
+                    }
+                    _ => return Err(throw("java.lang.ClassCastException: not a String")),
+                },
+                JValue::Ref(None) => return Err(throw("java.lang.NullPointerException")),
+                _ => return Err(throw("java.lang.VerifyError: expected a String argument")),
+            };
             match heap.get_mut(receiver) {
                 // `new String(String)` / `new StringBuilder(String)`: seed
                 // with a fresh copy of the chars (both store UTF-16 units).
@@ -1184,6 +1204,31 @@ fn builder_method(
             let text = heap.alloc(HeapObject::JavaString(units));
             Ok(Some(JValue::Ref(Some(text))))
         }
+        // `equals` is Object identity: StringBuilder does not override it, so
+        // two builders are equal only when they are the SAME object.
+        ("equals", [other]) => {
+            let same = matches!(other, JValue::Ref(Some(r)) if *r == receiver);
+            Ok(Some(JValue::Int(i32::from(same))))
+        }
+        // `append(char[], offset, len)` — a sub-range of the array.
+        ("append", [array, JValue::Int(offset), JValue::Int(length)]) => {
+            let chars = char_array_units(heap, array)?;
+            let offset = usize::try_from(*offset).unwrap_or(usize::MAX);
+            let length = usize::try_from(*length).unwrap_or(usize::MAX);
+            let end = offset.checked_add(length);
+            let slice = end
+                .filter(|e| *e <= chars.len())
+                .map(|e| chars[offset..e].to_vec())
+                .ok_or_else(|| {
+                    throw(format!(
+                        "java.lang.ArrayIndexOutOfBoundsException: {offset}"
+                    ))
+                })?;
+            let mut appended = units;
+            appended.extend(slice);
+            builder_store(heap, receiver, appended);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
         ("append", [value]) => {
             let mut appended = units;
             appended.extend(builder_value_text(heap, params, value)?);
@@ -1242,7 +1287,7 @@ fn builder_method(
         ("setLength", [JValue::Int(new_length)]) => {
             let new_length = usize::try_from(*new_length).map_err(|_| {
                 throw(format!(
-                    "java.lang.StringIndexOutOfBoundsException: newLength {new_length}"
+                    "java.lang.StringIndexOutOfBoundsException: String index out of range: {new_length}"
                 ))
             })?;
             let mut resized = units;
@@ -1271,9 +1316,11 @@ fn builder_method(
             *from,
         )))),
         ("substring", [JValue::Int(begin)]) => substring(heap, &units, *begin, len),
-        // subSequence is substring by another name (CharSequence view).
+        // subSequence is substring by another name (CharSequence view). Unlike
+        // String's substring, StringBuilder's out-of-range message says
+        // "start"/"end" (not "begin"), and does NOT clamp end.
         ("substring" | "subSequence", [JValue::Int(begin), JValue::Int(end)]) => {
-            substring_range(heap, &units, *begin, *end)
+            builder_substring(heap, &units, *begin, *end)
         }
         ("compareTo", [other]) => {
             let other = match other {
@@ -1325,7 +1372,7 @@ fn check_index(index: i32, count: usize) -> Result<usize, VmError> {
         .filter(|at| *at < count)
         .ok_or_else(|| {
             throw(format!(
-                "java.lang.StringIndexOutOfBoundsException: index {index}, length {count}"
+                "java.lang.StringIndexOutOfBoundsException: index {index},length {count}"
             ))
         })
 }
@@ -1337,7 +1384,7 @@ fn check_offset(offset: i32, count: usize) -> Result<usize, VmError> {
         .filter(|at| *at <= count)
         .ok_or_else(|| {
             throw(format!(
-                "java.lang.StringIndexOutOfBoundsException: offset {offset}, length {count}"
+                "java.lang.StringIndexOutOfBoundsException: offset {offset},length {count}"
             ))
         })
 }
@@ -1346,34 +1393,46 @@ fn check_offset(offset: i32, count: usize) -> Result<usize, VmError> {
 /// than `end`, and `end` is clamped to the length (Java tolerates a large
 /// `end` here, unlike `substring`).
 fn check_range(start: i32, end: i32, count: usize) -> Result<(usize, usize), VmError> {
+    // JDK 11 clamps `end` to the length FIRST, so the message reports the
+    // clamped value: `replace(9, 10, ...)` on a length-3 builder is
+    // "start 9, end 3, length 3", not "end 10".
+    let clamped_end = end.min(i32::try_from(count).unwrap_or(i32::MAX));
     let bad = || {
         throw(format!(
-            "java.lang.StringIndexOutOfBoundsException: start {start}, end {end}, length {count}"
+            "java.lang.StringIndexOutOfBoundsException: start {start}, \
+             end {clamped_end}, length {count}"
         ))
     };
-    if start > end {
+    if start > clamped_end {
         return Err(bad());
     }
     let start = usize::try_from(start).ok().filter(|s| *s <= count);
     let start = start.ok_or_else(bad)?;
-    let end = usize::try_from(end).unwrap_or(usize::MAX).min(count);
+    let end = usize::try_from(clamped_end).unwrap_or(0);
     Ok((start, end))
 }
 
 /// The UTF-16 units of a code point, for `appendCodePoint`.
 fn code_point_units(code_point: i32) -> Result<Vec<u16>, VmError> {
+    // The message shows the value as UPPERCASE hex of its unsigned bits —
+    // `-1` is `0xFFFFFFFF`, `0x110000` is itself (JDK 11's
+    // `Character.toString(int)` / `appendCodePoint`).
+    let invalid = || {
+        throw(format!(
+            "java.lang.IllegalArgumentException: Not a valid Unicode code point: 0x{:X}",
+            code_point.cast_unsigned()
+        ))
+    };
     let valid = u32::try_from(code_point)
         .ok()
         .filter(|cp| *cp <= 0x0010_FFFF)
-        .ok_or_else(|| throw(format!("java.lang.IllegalArgumentException: {code_point}")))?;
+        .ok_or_else(invalid)?;
     // Surrogate code points have no scalar value but are still one `char`.
     if (0xD800..0xE000).contains(&valid) {
         return Ok(vec![u16::try_from(valid).unwrap_or(u16::MAX)]);
     }
     let Some(ch) = char::from_u32(valid) else {
-        return Err(throw(format!(
-            "java.lang.IllegalArgumentException: {code_point}"
-        )));
+        return Err(invalid());
     };
     let mut buffer = [0u16; 2];
     Ok(ch.encode_utf16(&mut buffer).to_vec())
@@ -1508,6 +1567,32 @@ fn substring(
     }
     let begin_usize = usize::try_from(begin).unwrap_or(0).min(units.len());
     let reference = heap.alloc(HeapObject::JavaString(units[begin_usize..].to_vec()));
+    Ok(Some(JValue::Ref(Some(reference))))
+}
+
+/// `StringBuilder.substring(start, end)` — like `String.substring` but with
+/// the builder's `start`/`end` message wording (String says `begin`), and it
+/// does NOT clamp `end` (an over-long `end` is an error, unlike `delete`).
+fn builder_substring(
+    heap: &mut Heap,
+    units: &[u16],
+    start: i32,
+    end: i32,
+) -> Result<Option<JValue>, VmError> {
+    let length = units.len();
+    let bad = || {
+        throw(format!(
+            "java.lang.StringIndexOutOfBoundsException: start {start}, end {end}, length {length}"
+        ))
+    };
+    let valid = usize::try_from(start)
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .filter(|(s, e)| s <= e && *e <= length);
+    let Some((start, end)) = valid else {
+        return Err(bad());
+    };
+    let reference = heap.alloc(HeapObject::JavaString(units[start..end].to_vec()));
     Ok(Some(JValue::Ref(Some(reference))))
 }
 

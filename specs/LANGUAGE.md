@@ -410,7 +410,23 @@ be referenced from a static context`, and `cannot find symbol` when the
     capacity hint and ignores it: caturra models a builder's contents,
     not its backing array, so `ensureCapacity`/`trimToSize` are the
     no-ops they observably are, and `capacity()` — having no honest
-    answer — reports a reason rather than a cannot-find-symbol.
+    answer — reports a reason rather than a cannot-find-symbol
+    (but `new StringBuilder(-1)` throws `NegativeArraySizeException`, as it
+    allocates a `char[]`). **Rounded out 2026-07-19:**
+    `new StringBuilder(otherBuilder)`, `equals` (Object IDENTITY — the classic
+    trap), `append(char[], offset, len)`, `%s` of a builder, `(StringBuilder)
+    null`, and a null builder printing as `null` all work; `append(null)` is
+    rejected as ambiguous and `sb == aString` as incomparable types, both as
+    javac rejects them; and the out-of-range exception messages match JDK 11
+    exactly — `start`/`end` (not `begin`) for a builder, no space in
+    `index N,length M`, a clamped `end` in `replace`, the JDK 11 `setLength`
+    wording, and `Not a valid Unicode code point: 0x…` for `appendCodePoint`.
+    **Still gaps** (all safe-direction, near-zero corpus demand):
+    `CharSequence` as a declarable type; `String.valueOf(aBuilder)`;
+    `StringBuffer` (report an honest reason); and an UNPAIRED-surrogate char or
+    string LITERAL (`'\uD83D'`), which the lexer's `char`/`String` token types
+    cannot hold, so it becomes U+FFFD — a core token-representation limit, not a
+    StringBuilder one.
     `StringBuilder` is a full type wherever a type is written — a field, a
     parameter, a return type, or a captured lambda local (2026-07-09; the
     JVM descriptor builder handled `String`/`Scanner` but not

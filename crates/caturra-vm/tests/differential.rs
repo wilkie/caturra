@@ -13039,3 +13039,110 @@ public class DiffLazyStreams {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// StringBuilder: behavior, dispatch, and JDK 11 messages
+// ---------------------------------------------------------------------------
+
+// Behaviour + constructor/dispatch features.
+differential_test!(
+    diff_string_builder_features,
+    "DiffSbFeatures",
+    r#"
+public class DiffSbFeatures {
+    public static void main(String[] args) {
+        // new StringBuilder(otherBuilder) copies the contents (independent).
+        StringBuilder src = new StringBuilder("dup");
+        StringBuilder copy = new StringBuilder(src);
+        copy.append("!");
+        System.out.println(copy + " " + src);
+
+        // %s of a StringBuilder, and a cast of null to StringBuilder.
+        StringBuilder ab = new StringBuilder("ab");
+        System.out.println(String.format("[%s]", ab));
+        StringBuilder nul = (StringBuilder) null;
+        System.out.println(nul);
+        System.out.println("x" + ab);
+
+        // equals is Object IDENTITY — the classic trap.
+        StringBuilder one = new StringBuilder("z");
+        StringBuilder two = new StringBuilder("z");
+        System.out.println(one.equals(two));
+        System.out.println(one.equals(one));
+
+        // append(char[], offset, len).
+        char[] cs = { 'p', 'q', 'r', 's' };
+        System.out.println(new StringBuilder().append(cs, 1, 2));
+
+        // A negative capacity throws.
+        try { new StringBuilder(-1); System.out.println("no throw"); }
+        catch (NegativeArraySizeException e) { System.out.println("NASE " + e.getMessage()); }
+    }
+}
+"#
+);
+
+// Exception messages match JDK 11 (several caturra had were JDK 17 wording, or
+// had an extra space, or the wrong word).
+differential_test!(
+    diff_string_builder_messages,
+    "DiffSbMessages",
+    r#"
+public class DiffSbMessages {
+    static void show(int which) {
+        try {
+            StringBuilder b = new StringBuilder("abc");
+            switch (which) {
+                case 0: b.charAt(3); break;
+                case 1: b.setCharAt(3, 'z'); break;
+                case 2: b.deleteCharAt(3); break;
+                case 3: new StringBuilder("hello").insert(9, "Z"); break;
+                case 4: new StringBuilder("abcdef").substring(2, 99); break;
+                case 5: new StringBuilder("xyz").replace(9, 10, "q"); break;
+                case 6: new StringBuilder("xyz").delete(9, 3); break;
+                case 7: b.setLength(-1); break;
+                case 8: b.appendCodePoint(-1); break;
+                case 9: b.appendCodePoint(0x110000); break;
+                case 10: "abcdef".substring(2, 99); break;
+                default: break;
+            }
+        } catch (Exception e) {
+            System.out.println(e.getMessage());
+        }
+    }
+    public static void main(String[] args) {
+        for (int i = 0; i <= 10; i++) {
+            show(i);
+        }
+    }
+}
+"#
+);
+
+// The dangerous direction: two calls javac rejects that caturra accepted.
+differential_reject!(
+    reject_string_builder_append_null,
+    "RejSbAppendNull",
+    r#"
+public class RejSbAppendNull {
+    public static void main(String[] args) {
+        StringBuilder b = new StringBuilder("ab");
+        b.append(null);
+        System.out.println(b);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_string_builder_equals_string,
+    "RejSbEqString",
+    r#"
+public class RejSbEqString {
+    public static void main(String[] args) {
+        StringBuilder b = new StringBuilder("x");
+        System.out.println(b == "x");
+    }
+}
+"#
+);

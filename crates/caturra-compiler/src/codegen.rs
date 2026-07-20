@@ -6859,6 +6859,21 @@ const METHOD_METHODS: &[BuiltinMethod] = &[
 /// `java.lang.StringBuilder` methods (`append` returns the builder for
 /// chaining; the VM stores UTF-16 units).
 const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
+    // `equals` is Object identity (StringBuilder does NOT override it) — the
+    // classic trap where two builders with equal contents are not equal.
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    // `append(char[], offset, len)` — a sub-range of a char array.
+    bm(
+        "append",
+        &[BParam::CharArray, I, I],
+        BRet::Builder,
+        "([CII)Ljava/lang/StringBuilder;",
+    ),
     bm(
         "append",
         &[S],
@@ -10976,10 +10991,16 @@ impl BodyGen<'_> {
         let descriptor = match args {
             [] => "()V",
             [arg] => match self.expr(arg) {
-                JType::Str | JType::Error => "(Ljava/lang/String;)V",
+                // `new StringBuilder(otherBuilder)` — a StringBuilder is a
+                // CharSequence, seeded from its contents; emitted with the
+                // String descriptor, which the VM's seed arm accepts for both.
+                JType::Str | JType::StringBuilder | JType::Error => "(Ljava/lang/String;)V",
                 ty if widens(ty, JType::Int, self.table) => "(I)V",
                 _ => {
-                    self.error(span, "new StringBuilder(...) takes a String or an int");
+                    self.error(
+                        span,
+                        "new StringBuilder(...) takes a String, a StringBuilder, or an int",
+                    );
                     "(Ljava/lang/String;)V"
                 }
             },
@@ -12112,6 +12133,67 @@ impl BodyGen<'_> {
     /// Resolve and emit an intrinsic instance call (String / Scanner /
     /// `ArrayList`); the receiver value is already on the stack.
     #[allow(clippy::option_option, clippy::too_many_lines)]
+    /// Whether a bare `null` argument makes an intrinsic overload set
+    /// ambiguous. `null` matches every reference parameter, so if two
+    /// applicable overloads take DIFFERENT reference types at the null
+    /// position (neither a subtype of the other), the call cannot be resolved —
+    /// `sb.append(null)` between `append(String)` and `append(char[])`.
+    /// Returns a short "both … match" description when ambiguous.
+    fn null_argument_ambiguity(
+        &self,
+        methods: &[BuiltinMethod],
+        method: &str,
+        args: &[Expr],
+        arg_types: &[JType],
+        elem: TypeArgs,
+    ) -> Option<String> {
+        // Find a null-literal argument.
+        let null_pos = args.iter().position(|a| {
+            matches!(
+                a,
+                Expr::Literal {
+                    value: Literal::Null,
+                    ..
+                }
+            )
+        })?;
+        // Applicable overloads of the right name and arity.
+        let applicable: Vec<&BuiltinMethod> = methods
+            .iter()
+            .filter(|m| {
+                m.name == method
+                    && m.params.len() == arg_types.len()
+                    && m.params
+                        .iter()
+                        .zip(arg_types)
+                        .all(|(p, a)| bparam_matches(*p, *a, elem, self.table))
+            })
+            .collect();
+        // The parameter kinds at the null position that are REFERENCE types.
+        let ref_kinds: Vec<JType> = applicable
+            .iter()
+            .map(|m| bparam_type(m.params[null_pos], elem, self.table))
+            .filter(|t| t.is_reference())
+            .collect();
+        // Two distinct reference kinds with no subtype relation → ambiguous.
+        for (i, a) in ref_kinds.iter().enumerate() {
+            for b in ref_kinds.iter().skip(i + 1) {
+                if a != b && !widens(*a, *b, self.table) && !widens(*b, *a, self.table) {
+                    return Some(format!(
+                        "both method {}({}) and method {}({}) match",
+                        method,
+                        a.describe(self.table),
+                        method,
+                        b.describe(self.table)
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    #[allow(clippy::too_many_lines)] // one dispatch arm per intrinsic receiver
+    #[allow(clippy::option_option)] // outer None = not handled, inner = void
     fn builtin_instance_call(
         &mut self,
         receiver_ty: JType,
@@ -12272,6 +12354,17 @@ impl BodyGen<'_> {
                 self.expr(arg);
             }
             return Some(None);
+        }
+        // A bare `null` argument is ambiguous when two applicable overloads
+        // take DIFFERENT, unrelated reference parameters at that position
+        // (`sb.append(null)` between `append(String)` and `append(char[])`).
+        // caturra picked the first and passed null silently; javac rejects it.
+        if let Some(bad) = self.null_argument_ambiguity(methods, method, args, &arg_types, elem) {
+            self.error(span, format!("reference to {method} is ambiguous: {bad}"));
+            for arg in args {
+                self.expr(arg);
+            }
+            return None;
         }
         let Some(chosen) = pick_builtin(methods, method, &arg_types, elem, self.table) else {
             if methods.iter().any(|m| m.name == method) {
@@ -12480,6 +12573,7 @@ impl BodyGen<'_> {
                 | JType::EntrySet { .. }
                 | JType::MapEntry { .. }
                 | JType::File
+                | JType::StringBuilder
                 | JType::Exception(_) => self.coerce_to_string_for_output(ty),
                 other => other,
             };
@@ -12981,6 +13075,12 @@ impl BodyGen<'_> {
             return JType::Str;
         }
         if ty == JType::StringBuilder {
+            // A StringBuilder prints via `println(Object)` -> `String.valueOf`,
+            // which is null-safe: a null builder is "null", not an NPE.
+            let null_case = self.code.new_label();
+            let done = self.code.new_label();
+            self.code.push_op(op::DUP, 1);
+            self.code.branch(op::IFNULL, null_case, 1);
             let method_ref = intern_method_ref(
                 self.pool,
                 "java/lang/StringBuilder",
@@ -12989,6 +13089,14 @@ impl BodyGen<'_> {
             );
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
             self.code.drop_stack(1);
+            self.code.branch(op::GOTO, done, 0);
+            self.code.bind(null_case);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+            let utf8 = self.pool.intern_utf8("null");
+            let index = self.pool.intern(Constant::String { string_index: utf8 });
+            self.code.push_ldc(index);
+            self.code.bind(done);
             return JType::Str;
         }
         if let Some(class) = match ty {
@@ -16384,6 +16492,16 @@ impl BodyGen<'_> {
             }
             return JType::Str;
         }
+        // Cast to StringBuilder — commonly `(StringBuilder) null` (to pick a
+        // CharSequence overload) or an erased Object back down. A runtime
+        // checkcast, no-op on null.
+        if target == JType::StringBuilder && source.is_reference() {
+            if source != JType::StringBuilder && source != JType::Null {
+                let class_index = intern_class(self.pool, "java/lang/StringBuilder");
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return JType::StringBuilder;
+        }
         // Casting a reference (commonly an erased Object) to a List: a runtime
         // checkcast to java/util/ArrayList.
         if let JType::List(_) = target
@@ -17129,6 +17247,30 @@ impl BodyGen<'_> {
         }
     }
 
+    /// Whether two operand types are distinct SCALAR library types with no
+    /// relationship, which `==` cannot compare (JLS §15.21.3). Only the scalar
+    /// intrinsics are listed — each is a `final`-ish concrete type unrelated to the
+    /// others, so a comparison between two different ones is always a compile
+    /// error, exactly as javac reports "incomparable types".
+    fn incomparable_scalars(a: JType, b: JType) -> bool {
+        fn scalar_family(t: JType) -> Option<u8> {
+            match t {
+                JType::Str => Some(0),
+                JType::StringBuilder => Some(1),
+                JType::Scanner => Some(2),
+                JType::File => Some(3),
+                JType::Writer => Some(4),
+                JType::Reader => Some(5),
+                JType::Path => Some(6),
+                _ => None,
+            }
+        }
+        match (scalar_family(a), scalar_family(b)) {
+            (Some(x), Some(y)) => x != y,
+            _ => false,
+        }
+    }
+
     #[allow(clippy::too_many_lines)] // one cohesive arm per operand-type shape
     fn comparison(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
         let (raw_l, raw_r) = (self.type_of(lhs), self.type_of(rhs));
@@ -17190,6 +17332,25 @@ impl BodyGen<'_> {
         // type (JLS §15.21.3 / §5.5): `Integer == Long`, `Integer == String`,
         // `Integer == Boolean` are compile errors, exactly as javac rejects
         // them — never accept what javac refuses.
+        // Two UNRELATED concrete library types can never be `==` (JLS §15.21.3
+        // needs a casting conversion, and none exists between e.g. a
+        // StringBuilder and a String). caturra accepted these and compared by
+        // identity (always false). Restricted to the scalar library types,
+        // which have no subtype relationships among them — collections are left
+        // to the existing paths, where List/Collection etc. do relate.
+        if reference_equality && Self::incomparable_scalars(lt, rt) {
+            self.expr(lhs);
+            self.expr(rhs);
+            self.error(
+                span,
+                format!(
+                    "incomparable types: {} and {}",
+                    lt.describe(self.table),
+                    rt.describe(self.table)
+                ),
+            );
+            return JType::Error;
+        }
         if reference_equality
             && (matches!(lt, JType::Boxed(_)) || matches!(rt, JType::Boxed(_)))
             && !self.wrapper_refs_comparable(lt, rt)
