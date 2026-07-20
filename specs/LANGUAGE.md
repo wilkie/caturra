@@ -99,6 +99,18 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   than the one-element `List<int[]>` Java produces — a deliberate Java gotcha
   javac itself warns about, near-zero in practice, and it needs the nested
   array-element machinery to model.
+- **`java.util.Objects`** (2026-07-20): the null-safe static helpers —
+  `equals(a, b)`, `hashCode(o)`, `hash(o...)`, `toString(o)` /
+  `toString(o, default)`, `isNull` / `nonNull`, and `requireNonNull(o)` /
+  `requireNonNull(o, message)`. `equals`/`hashCode` dispatch a user
+  `equals`/`hashCode` override (a VM intrinsic, reusing the same
+  `java_equals`/`java_hash_code` that back collection membership), `hash` folds
+  its arguments exactly like `Arrays.hashCode(Object[])`, `toString` renders
+  like `String.valueOf` (so `null` is `"null"`), and `requireNonNull` throws
+  the JDK's `NullPointerException` — with the given message or `getMessage() ==
+  null`. `requireNonNull` returns its argument's inferred type `T` (a checkcast
+  narrows the erased `Object` back), so `String s = Objects.requireNonNull(x)`
+  needs no cast. A primitive argument autoboxes into the `Object` parameters.
 - **try-with-resources** (2026-07-19) follows JLS §14.20.3's translation
   rather than the bare `finally { r.close(); }` it used to desugar to. The
   body's exception WINS and `close()`'s is attached as suppressed (reachable

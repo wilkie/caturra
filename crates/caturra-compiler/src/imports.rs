@@ -42,6 +42,7 @@ const JAVA_UTIL: &[&str] = &[
     "OptionalInt",
     "OptionalDouble",
     "Arrays",
+    "Objects",
     "Random",
     "Collections",
     "InputMismatchException",

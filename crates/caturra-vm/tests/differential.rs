@@ -2956,6 +2956,81 @@ public class DiffBox {
 "#
 );
 
+// `java.util.Objects`: the null-safe static helpers. `equals`/`hashCode`
+// dispatch a user override; `hash` folds like `Arrays.hashCode`; `toString`
+// renders like `String.valueOf`; `requireNonNull` returns its argument's
+// inferred type and throws the JDK's NPE (with the given message or none).
+differential_test!(
+    diff_objects_null_safe_helpers,
+    "DiffObjects",
+    r#"
+import java.util.Objects;
+
+public class DiffObjects {
+    static class Point {
+        int x, y;
+        Point(int x, int y) { this.x = x; this.y = y; }
+        public boolean equals(Object o) {
+            if (!(o instanceof Point)) return false;
+            Point p = (Point) o;
+            return x == p.x && y == p.y;
+        }
+        public int hashCode() { return Objects.hash(x, y); }
+        public String toString() { return "(" + x + ", " + y + ")"; }
+    }
+
+    public static void main(String[] args) {
+        // equals: null-safe, symmetric, dispatches the user override.
+        System.out.println(Objects.equals("x", "x") + " " + Objects.equals("x", "y"));
+        System.out.println(Objects.equals(null, null) + " " + Objects.equals("x", null)
+            + " " + Objects.equals(null, "y"));
+        Integer i = 5, j = 5;
+        System.out.println(Objects.equals(i, j) + " " + Objects.equals(5, 6));
+        Point p1 = new Point(1, 2), p2 = new Point(1, 2), p3 = new Point(3, 4);
+        System.out.println(Objects.equals(p1, p2) + " " + Objects.equals(p1, p3)
+            + " " + Objects.equals(p1, null));
+
+        // hashCode: null is 0, a user object uses its override.
+        System.out.println(Objects.hashCode("x") + " " + Objects.hashCode(null));
+        System.out.println(Objects.hashCode(p1) + " " + (p1.hashCode() == p2.hashCode()));
+
+        // hash: folds every argument, boxing primitives.
+        System.out.println(Objects.hash(1, 2, 3));
+        System.out.println(Objects.hash("a", 1, true));
+        System.out.println(Objects.hash());
+
+        // toString: null-safe, with and without a default.
+        System.out.println(Objects.toString(null) + " " + Objects.toString(p1));
+        System.out.println(Objects.toString(null, "default") + " " + Objects.toString("v", "d"));
+
+        // isNull / nonNull.
+        System.out.println(Objects.isNull(null) + " " + Objects.isNull("x"));
+        System.out.println(Objects.nonNull(null) + " " + Objects.nonNull("x"));
+
+        // requireNonNull: returns the argument's inferred type.
+        Point r = Objects.requireNonNull(p1);
+        System.out.println(r.x + " " + r);
+        String s = Objects.requireNonNull("hi");
+        System.out.println(s.length());
+        Integer boxed = Objects.requireNonNull(7);
+        System.out.println(boxed + 1);
+
+        // requireNonNull throws the JDK's NPE — no message, then a message.
+        try {
+            Objects.requireNonNull(null);
+        } catch (NullPointerException e) {
+            System.out.println("NPE msg=" + e.getMessage());
+        }
+        try {
+            Objects.requireNonNull(null, "was null");
+        } catch (NullPointerException e) {
+            System.out.println("NPE msg=" + e.getMessage());
+        }
+    }
+}
+"#
+);
+
 // A wrapper auto-unboxes (JLS §5.1.8) in every context that demands a
 // primitive: an `if`/`while`/`for`/ternary CONDITION, a unary `-`/`~`/`!`, an
 // array INDEX, and `++`/`--` on a wrapper local or field (which reboxes via

@@ -3644,6 +3644,81 @@ impl<'run> Interpreter<'run> {
         Ok(true)
     }
 
+    /// `java.util.Objects`: the null-safe static helpers. `equals`/`hashCode`
+    /// dispatch a user override (via [`Self::java_equals`]/[`Self::java_hash_code`]),
+    /// `toString` renders like `String.valueOf`, and `requireNonNull` throws
+    /// the JDK's `NullPointerException` — with the given message or none.
+    fn objects_static_intrinsic(
+        &mut self,
+        frame: &mut Frame<'run>,
+        class_name: &str,
+        method_name: &str,
+        args: &[JValue],
+    ) -> Result<bool, VmError> {
+        if class_name != "Objects" && class_name != "java/util/Objects" {
+            return Ok(false);
+        }
+        let result = match (method_name, args) {
+            ("equals", [a, b]) => JValue::Int(i32::from(self.java_equals(*a, *b)?)),
+            ("hashCode", [o]) => JValue::Int(self.java_hash_code(*o)?),
+            ("hash", [array]) => {
+                let elements = match array {
+                    JValue::Ref(Some(reference)) => {
+                        self.array_elements(*reference).unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                };
+                // `Arrays.hashCode(Object[])`: 1, then `31*h + hash(element)`
+                // per element — and `hash(null)` is 0.
+                let mut hash = 1i32;
+                for element in elements {
+                    let element_hash = self.java_hash_code(element)?;
+                    hash = hash.wrapping_mul(31).wrapping_add(element_hash);
+                }
+                JValue::Int(hash)
+            }
+            ("toString", [o]) => {
+                let text = self.string_value_of(*o, 0)?;
+                JValue::Ref(Some(self.heap.alloc_string(&text)))
+            }
+            ("toString", [o, default]) => {
+                if *o == JValue::NULL {
+                    *default
+                } else {
+                    let text = self.string_value_of(*o, 0)?;
+                    JValue::Ref(Some(self.heap.alloc_string(&text)))
+                }
+            }
+            ("isNull", [o]) => JValue::Int(i32::from(*o == JValue::NULL)),
+            ("nonNull", [o]) => JValue::Int(i32::from(*o != JValue::NULL)),
+            ("requireNonNull", [o]) => {
+                if *o == JValue::NULL {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
+                *o
+            }
+            ("requireNonNull", [o, message]) => {
+                if *o == JValue::NULL {
+                    let text = match message {
+                        JValue::Ref(Some(reference)) => {
+                            self.heap.string_text(*reference).unwrap_or_default()
+                        }
+                        _ => String::from("null"),
+                    };
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.NullPointerException: {text}"
+                    )));
+                }
+                *o
+            }
+            _ => return Ok(false),
+        };
+        frame.stack.push(result);
+        Ok(true)
+    }
+
     fn arrays_static_intrinsic(
         &mut self,
         frame: &mut Frame<'run>,
@@ -7175,6 +7250,9 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         }
         if self.arrays_static_intrinsic(frame, class_name, method_name, args)? {
+            return Ok(None);
+        }
+        if self.objects_static_intrinsic(frame, class_name, method_name, args)? {
             return Ok(None);
         }
         if self.collectors_static_intrinsic(frame, class_name, method_name, args)? {

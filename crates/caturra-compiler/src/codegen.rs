@@ -13687,7 +13687,7 @@ impl BodyGen<'_> {
                         // `ofNullable`), and `Path`/`Paths`/`Files` hold the
                         // `java.nio.file` ones — none a bundled class nor in a
                         // fixed static table (their returns are handled inline).
-                        || matches!(single, "Optional" | "Path" | "Paths" | "Files")
+                        || matches!(single, "Optional" | "Path" | "Paths" | "Files" | "Objects")
                     {
                         Some(CallTarget::Static(single.to_owned()))
                     } else if self.table.field(self.current_class, single).is_some()
@@ -13840,6 +13840,13 @@ impl BodyGen<'_> {
         // reads/writes it through the virtual filesystem.
         if matches!(class, "Path" | "Paths" | "Files") && !self.table.has_class(class) {
             return self.emit_nio_call(class, method, args, span);
+        }
+        // `java.util.Objects` — the null-safe static helpers. Each takes
+        // `Object` parameters that must BOX a primitive argument (the generic
+        // static path does only numeric conversion), and `requireNonNull`
+        // returns its argument's inferred type, so it needs its own emitter.
+        if class == "Objects" && !self.table.has_class(class) {
+            return self.emit_objects_call(method, args, span);
         }
         // `Arrays.asList` is variadic (`<T> List<T> asList(T...)`): a lone
         // array argument is the varargs array; anything else packs into one.
@@ -14401,6 +14408,165 @@ impl BodyGen<'_> {
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
         self.code.drop_stack(width);
         Some(ret)
+    }
+
+    /// Push an argument for an `Object` parameter, boxing a primitive (the
+    /// generic static path does only numeric conversion, which would leave a
+    /// bare primitive where a reference is required).
+    fn emit_object_arg(&mut self, arg: &Expr) {
+        let object_ty = JType::Object(self.table.object_id);
+        let actual = self.expr(arg);
+        self.convert_for_assignment(actual, object_ty, arg.span());
+    }
+
+    /// Invoke a `java.util.Objects` static with the arguments already stacked.
+    fn invoke_objects(&mut self, name: &str, descriptor: &str, args_width: u16, ret_width: u16) {
+        let method_ref = intern_method_ref(self.pool, "java/util/Objects", name, descriptor);
+        self.code
+            .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);
+        self.code.drop_stack(args_width);
+    }
+
+    /// `Objects.requireNonNull` returns its argument's inferred type `T`
+    /// (JLS §8.4.4), but the descriptor erases to `Object`. Narrow the stacked
+    /// reference back to `T` with a checkcast — a user class, `String`, or the
+    /// wrapper a primitive argument boxed to. Other shapes (a container, a
+    /// `null` literal) stay `Object`, which is stricter than javac only in that
+    /// a cast is then needed to use them as their concrete type.
+    fn narrow_object_return(&mut self, arg_ty: JType) -> JType {
+        let (internal, ty) = match arg_ty {
+            JType::Str => (Some(String::from("java/lang/String")), JType::Str),
+            JType::Object(id) => (Some(self.table.class_name(id).to_owned()), arg_ty),
+            JType::Boxed(elem) => (Some(wrapper_internal(elem).to_owned()), arg_ty),
+            other => match boxable_primitive(other) {
+                Some(elem) => (Some(wrapper_internal(elem).to_owned()), JType::Boxed(elem)),
+                None => (None, JType::Object(self.table.object_id)),
+            },
+        };
+        if let Some(internal) = internal {
+            let class_index = intern_class(self.pool, &internal);
+            self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+        }
+        ty
+    }
+
+    /// `java.util.Objects`: the null-safe static helpers, each backed by a VM
+    /// intrinsic that dispatches a user `equals`/`hashCode`/`toString` where
+    /// the JDK does.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_objects_call(
+        &mut self,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        match (method, args) {
+            ("equals", [a, b]) => {
+                self.emit_object_arg(a);
+                self.emit_object_arg(b);
+                self.invoke_objects("equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", 2, 1);
+                Some(Some(JType::Boolean))
+            }
+            ("hashCode", [a]) => {
+                self.emit_object_arg(a);
+                self.invoke_objects("hashCode", "(Ljava/lang/Object;)I", 1, 1);
+                Some(Some(JType::Int))
+            }
+            ("hash", _) => {
+                let array_ty = JType::Array {
+                    elem: ElemType::Object(self.table.object_id),
+                    dims: 1,
+                };
+                // A lone `Object[]` is the varargs array; anything else packs.
+                if let [single] = args
+                    && matches!(self.type_of(single), JType::Array { dims: 1, .. })
+                {
+                    let actual = self.expr(single);
+                    self.numeric_conversion(actual, array_ty);
+                } else {
+                    self.emit_array_literal(args, array_ty, span);
+                }
+                self.invoke_objects("hash", "([Ljava/lang/Object;)I", 1, 1);
+                Some(Some(JType::Int))
+            }
+            ("toString", [a]) => {
+                self.emit_object_arg(a);
+                self.invoke_objects("toString", "(Ljava/lang/Object;)Ljava/lang/String;", 1, 1);
+                Some(Some(JType::Str))
+            }
+            ("toString", [a, default]) => {
+                self.emit_object_arg(a);
+                self.emit_string_arg(default);
+                self.invoke_objects(
+                    "toString",
+                    "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;",
+                    2,
+                    1,
+                );
+                Some(Some(JType::Str))
+            }
+            ("isNull", [a]) => {
+                self.emit_object_arg(a);
+                self.invoke_objects("isNull", "(Ljava/lang/Object;)Z", 1, 1);
+                Some(Some(JType::Boolean))
+            }
+            ("nonNull", [a]) => {
+                self.emit_object_arg(a);
+                self.invoke_objects("nonNull", "(Ljava/lang/Object;)Z", 1, 1);
+                Some(Some(JType::Boolean))
+            }
+            ("requireNonNull", [a]) => {
+                let arg_ty = self.type_of(a);
+                self.emit_object_arg(a);
+                self.invoke_objects(
+                    "requireNonNull",
+                    "(Ljava/lang/Object;)Ljava/lang/Object;",
+                    1,
+                    1,
+                );
+                Some(Some(self.narrow_object_return(arg_ty)))
+            }
+            ("requireNonNull", [a, message]) => {
+                let arg_ty = self.type_of(a);
+                self.emit_object_arg(a);
+                self.emit_string_arg(message);
+                self.invoke_objects(
+                    "requireNonNull",
+                    "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;",
+                    2,
+                    1,
+                );
+                Some(Some(self.narrow_object_return(arg_ty)))
+            }
+            _ => {
+                let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                for arg in args {
+                    self.expr(arg);
+                }
+                self.error(
+                    span,
+                    format!(
+                        "cannot find symbol: method {method}({}) in class Objects",
+                        describe_types(&arg_types, self.table)
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// Push a `String` argument, reporting a type mismatch the way javac does.
+    fn emit_string_arg(&mut self, arg: &Expr) {
+        let ty = self.expr(arg);
+        if ty != JType::Str && ty != JType::Error {
+            self.error(
+                arg.span(),
+                format!(
+                    "incompatible types: {} cannot be converted to String",
+                    ty.describe(self.table)
+                ),
+            );
+        }
     }
 
     /// `Arrays.asList(T...)`: pack the arguments into an `Object[]`, call the
