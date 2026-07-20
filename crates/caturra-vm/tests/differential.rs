@@ -3010,6 +3010,28 @@ public class DiffNpeMsg {
 "#
 );
 
+// String.intern() returns the CANONICAL pooled reference — the one every
+// literal shares — so `new String("x").intern() == "x"` is true. And
+// `new String(...)` types as String (type_of mirrored the emitter), so the
+// comparison compiles.
+differential_test!(
+    diff_string_intern_identity,
+    "DiffIntern",
+    r#"
+public class DiffIntern {
+    public static void main(String[] args) {
+        String s = new String("hi").intern();
+        System.out.println(s == "hi");
+        System.out.println(new String("hi").intern() == "hi");
+        System.out.println("HELLO".toLowerCase().intern() == "hello");
+        String t = "hi";
+        System.out.println(new String("hi") == t);
+        System.out.println(new String("hi").equals(t));
+    }
+}
+"#
+);
+
 // Math special cases: IEEEremainder with an infinite divisor returns the finite
 // dividend (not NaN); pow with a NaN exponent is NaN (not C99's 1.0); and the
 // float overloads of ulp/nextAfter answer in FLOAT precision, not double.

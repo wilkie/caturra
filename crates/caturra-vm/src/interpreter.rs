@@ -8612,6 +8612,23 @@ impl<'run> Interpreter<'run> {
             None => (std::borrow::Cow::Borrowed(descriptor), args),
         };
 
+        // `String.intern()` must return the CANONICAL pooled reference — the
+        // one every string literal shares (`string_pool`, which `ldc`
+        // populates) — not just any heap string with equal content. The
+        // intrinsic layer sees only the heap and would return the receiver's
+        // own copy (it is allocated before its `ldc`'d argument, so it has the
+        // lower index `find_string` picks), making `new String("x").intern() ==
+        // "x"` wrongly false.
+        if method_name == "intern"
+            && args.is_empty()
+            && let Some(crate::value::HeapObject::JavaString(units)) = self.heap.get(receiver)
+        {
+            let text = String::from_utf16_lossy(units);
+            let canonical = self.intern_string(&text);
+            frame.stack.push(JValue::Ref(Some(canonical)));
+            return Ok(None);
+        }
+
         // User instances already returned above; only intrinsics reach here.
         let result = if is_reflect {
             // Class/Field methods need the class table (superclass,

@@ -10906,6 +10906,11 @@ impl BodyGen<'_> {
         }
         match class {
             "Object" => JType::Object(self.table.object_id),
+            // `new String(...)` — the emitter's `new_string` returns `Str`;
+            // type_of did not, so `new String("x") == "x"` and
+            // `new String(cs).intern()` typed as nothing (the type_of/emit
+            // divergence). All the `new String` forms produce a String.
+            "String" => JType::Str,
             "StringBuilder" => JType::StringBuilder,
             "Scanner" => JType::Scanner,
             "File" => JType::File,

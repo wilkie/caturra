@@ -195,6 +195,14 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   owner. Now consistent: the write finds the slot and initializes only the
   declaring class, not the subclass named (JLS §12.4.1). (The analogous inherited
   static METHOD call still over-initializes the subclass — a separate open item.)
+- **String.intern() identity** (2026-07-20): `intern()` returns the CANONICAL
+  pooled reference (the `string_pool` every literal shares, which `ldc`
+  populates), so `new String("x").intern() == "x"` is true. It used to return the
+  first heap string of equal content, which — because a `new String` object is
+  allocated before its `ldc`'d argument — was the receiver's own copy. Handled at
+  the interpreter level, where the pool is reachable. Separately, `new String(...)`
+  now types as `String` in `type_of` (it already did in the emitter), so
+  `new String("x") == "x"` compiles instead of "bad operand types".
 - **JDK 11 NullPointerException messages** (2026-07-20): a VM-raised NPE in JDK
   11 has a NULL detail message — the "helpful" JEP-358 text ("cannot invoke
   \"String.length()\" because ... is null") is JDK 14+, enabled by default only
