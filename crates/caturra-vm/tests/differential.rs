@@ -12899,3 +12899,63 @@ public class DiffAsList {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Formatter: flag/width validation and rendering corners
+// ---------------------------------------------------------------------------
+
+// Validation the JDK does BEFORE looking at the argument. caturra rendered
+// these silently — the accepts-invalid direction. Each is caught by class name
+// so the output is deterministic and the class is confirmed catchable.
+differential_test!(
+    diff_format_validation,
+    "DiffFormatValidation",
+    r#"
+public class DiffFormatValidation {
+    public static void main(String[] args) {
+        try { String.format("%--5s", "a"); } catch (Exception e) { System.out.println(e.getClass().getSimpleName() + ": " + e.getMessage()); }
+        try { String.format("%<s", "a"); } catch (Exception e) { System.out.println(e.getClass().getSimpleName() + ": " + e.getMessage()); }
+        try { String.format("%-d", 1); } catch (Exception e) { System.out.println(e.getClass().getSimpleName()); }
+        try { String.format("%0d", 1); } catch (Exception e) { System.out.println(e.getClass().getSimpleName()); }
+        try { String.format("%5n"); } catch (Exception e) { System.out.println(e.getClass().getSimpleName()); }
+        try { String.format("%.2%"); } catch (Exception e) { System.out.println(e.getClass().getSimpleName()); }
+        try { String.format("%#g", 1.0); } catch (Exception e) { System.out.println(e.getClass().getSimpleName()); }
+        // The forms that stay LEGAL, so the checks are not too broad.
+        System.out.println(String.format("[%-5s]", "a"));
+        System.out.println(String.format("[%05d]", 42));
+        System.out.println(String.format("%s=%<S", "x"));
+    }
+}
+"#
+);
+
+differential_test!(
+    diff_format_rendering_corners,
+    "DiffFormatRendering",
+    r#"
+public class DiffFormatRendering {
+    public static void main(String[] args) {
+        // The # radix prefix comes before the zero padding.
+        System.out.println(String.format("%#010x", 255));
+        System.out.println(String.format("%#08X", 255));
+        System.out.println(String.format("%#o", 8));
+        // The ( flag parenthesizes a negative infinity.
+        System.out.println(String.format("%(f", Double.NEGATIVE_INFINITY));
+        System.out.println(String.format("%(f", Double.POSITIVE_INFINITY));
+        System.out.println(String.format("%(f", -2.5));
+        // Precision truncates %b like %s.
+        System.out.println(String.format("%.2b", true));
+        System.out.println(String.format("%.1s", "hello"));
+        // The # flag keeps a trailing decimal point at precision 0.
+        System.out.println(String.format("%#.0f", 3.0));
+        System.out.println(String.format("%.0f", 3.0));
+        // %g of zero is fixed with precision-1 fraction digits.
+        System.out.println(String.format("%.1g", 0.0));
+        System.out.println(String.format("%.4g", 0.0));
+        System.out.println(String.format("%g", 0.0));
+        // %c widens a byte or short to a char.
+        System.out.println(String.format("%c%c%c", (byte) 72, (short) 105, 33));
+    }
+}
+"#
+);

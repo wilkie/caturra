@@ -358,9 +358,24 @@ be referenced from a static context`, and `cannot find symbol` when the
     `- + 0 , ( #` and space, argument indexes (`%2$s`), width, and
     precision, with Java's exception types and messages
     (`IllegalFormatConversionException: d != java.lang.String`, ...).
+    **Validation tightened 2026-07-19**: a duplicate flag
+    (`DuplicateFormatFlagsException`), `-`/`0` with no width
+    (`MissingFormatWidthException`), a width on `%n` or precision on `%%`
+    (`IllegalFormatWidth`/`PrecisionException`), `#` on `%g`
+    (`FormatFlagsConversionMismatchException`), and a leading `%<` with no
+    preceding argument (`MissingFormatArgumentException`) are all thrown as a
+    JDK throws them — previously rendered silently. Rendering corners fixed the
+    same day: the `#` radix prefix (`0x`) precedes the zero-pad (`%#010x` of 255
+    is `0x000000ff`), `%(f` parenthesizes a negative infinity, precision
+    truncates `%b`, `%#.0f` keeps the trailing dot, `%g` of zero uses
+    `precision-1` fraction digits, and `%c` widens a byte or short.
     Float conversions round HALF_UP over the shortest-round-trip
     decimal digits, matching Java's `BigDecimal.valueOf` path exactly
-    (`%.2f` of `2.675` is `2.68`). `join` still reports the varargs
+    (`%.2f` of `2.675` is `2.68`). **Known limit:** `%b`/`%h` of a NULL
+    Object-typed argument (and `%b`/`%d`/`%f` of a non-null one) — the argument
+    is coerced to a string at the CALL site because the formatter cannot invoke
+    `toString` at render time, so a null becomes `"null"` where `%b` should be
+    `false` and `%h` should be `null`. `join` still reports the varargs
     limitation. The regex family (`split`/`matches`/`replaceAll`/
     `replaceFirst`) is backed by caturra's own backtracking engine over
     UTF-16 units (`caturra-vm/src/regex.rs`, 2026-07-18): character

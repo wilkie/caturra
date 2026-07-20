@@ -163,6 +163,18 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/util/IllegalFormatFlagsException",
         "java/util/IllegalFormatException",
     ),
+    (
+        "java/util/DuplicateFormatFlagsException",
+        "java/util/IllegalFormatFlagsException",
+    ),
+    (
+        "java/util/MissingFormatWidthException",
+        "java/util/IllegalFormatException",
+    ),
+    (
+        "java/util/IllegalFormatWidthException",
+        "java/util/IllegalFormatException",
+    ),
     ("java/io/IOException", "java/lang/Exception"),
     ("java/io/FileNotFoundException", "java/io/IOException"),
 ];

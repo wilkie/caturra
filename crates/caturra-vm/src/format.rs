@@ -86,6 +86,9 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
     let mut next_arg = 0usize;
     // The index the previous conversion consumed, for the `<` relative index.
     let mut last_index = 0usize;
+    // Whether any conversion has consumed an argument yet — a leading `%<`
+    // has nothing to reuse.
+    let mut consumed_an_argument = false;
 
     while at < chars.len() {
         if chars[at] != '%' {
@@ -99,6 +102,15 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
             '%' => out.push_str(&pad(&spec, "%")),
             'n' => out.push('\n'),
             _ => {
+                // `%<s` with nothing before it: there is no previous argument
+                // to reuse. The JDK reports the specifier as a missing
+                // argument, so a leading relative index is an error.
+                if spec.relative && !consumed_an_argument {
+                    return Err(throw(
+                        "java.util.MissingFormatArgumentException",
+                        &format!("Format specifier '{}'", spec.text),
+                    ));
+                }
                 let index = if spec.relative {
                     last_index
                 } else if let Some(explicit) = spec.arg_index {
@@ -109,6 +121,7 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
                     index
                 };
                 last_index = index;
+                consumed_an_argument = true;
                 let arg = *args.get(index).ok_or_else(|| {
                     throw(
                         "java.util.MissingFormatArgumentException",
@@ -158,19 +171,38 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
         *at = digits_start;
     }
 
-    // Flags.
-    loop {
-        match chars.get(*at) {
-            Some('-') => spec.left_justify = true,
-            Some('+') => spec.plus = true,
-            Some(' ') => spec.space = true,
-            Some('0') => spec.zero_pad = true,
-            Some(',') => spec.grouping = true,
-            Some('(') => spec.parentheses = true,
-            Some('#') => spec.alternate = true,
-            // `%<d` reuses the previous specifier's argument.
-            Some('<') => spec.relative = true,
-            _ => break,
+    // Flags. A repeated flag is a `DuplicateFormatFlagsException` — each is a
+    // single bit here, so the second occurrence would otherwise vanish
+    // silently. `<` is a positional flag and may not repeat either.
+    while let Some(c @ ('-' | '+' | ' ' | '0' | ',' | '(' | '#' | '<')) = chars.get(*at).copied() {
+        let flag = c;
+        let already = match flag {
+            '-' => spec.left_justify,
+            '+' => spec.plus,
+            ' ' => spec.space,
+            '0' => spec.zero_pad,
+            ',' => spec.grouping,
+            '(' => spec.parentheses,
+            '#' => spec.alternate,
+            '<' => spec.relative,
+            _ => false,
+        };
+        if already {
+            return Err(throw(
+                "java.util.DuplicateFormatFlagsException",
+                &format!("Flags = '{flag}'"),
+            ));
+        }
+        match flag {
+            '-' => spec.left_justify = true,
+            '+' => spec.plus = true,
+            ' ' => spec.space = true,
+            '0' => spec.zero_pad = true,
+            ',' => spec.grouping = true,
+            '(' => spec.parentheses = true,
+            '#' => spec.alternate = true,
+            '<' => spec.relative = true,
+            _ => {}
         }
         *at += 1;
     }
@@ -218,10 +250,33 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
 /// before, never a spurious throw.
 fn validate_spec(spec: &Spec) -> Result<(), VmError> {
     let c = spec.conversion;
-    if c == 'n' || c == '%' {
+    // `%n` and `%%` take no width or precision.
+    if c == 'n' {
+        if let Some(width) = spec.width {
+            return Err(throw(
+                "java.util.IllegalFormatWidthException",
+                &width.to_string(),
+            ));
+        }
+        return Ok(());
+    }
+    if c == '%' {
+        if let Some(precision) = spec.precision {
+            return Err(throw(
+                "java.util.IllegalFormatPrecisionException",
+                &precision.to_string(),
+            ));
+        }
         return Ok(());
     }
     let lower = c.to_ascii_lowercase();
+
+    // A flag that needs a width but has none — `%-d`, `%0x` — is a
+    // `MissingFormatWidthException` naming the whole specifier. `,`/`+`/` `/`(`
+    // do not require one.
+    if spec.width.is_none() && (spec.left_justify || spec.zero_pad) {
+        return Err(throw("java.util.MissingFormatWidthException", &spec.text));
+    }
 
     // Mutually exclusive flag pairs (checked on the flags alone).
     if spec.left_justify && spec.zero_pad {
@@ -268,8 +323,9 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
             }
         }
     }
-    // Decimal 'd' takes every numeric flag except '#'.
-    if lower == 'd' && spec.alternate {
+    // Decimal 'd' takes every numeric flag except '#'; general float 'g'
+    // rejects '#' too (only e/f and the integer radixes o/x accept it).
+    if (lower == 'd' || lower == 'g') && spec.alternate {
         return Err(mismatch('#'));
     }
 
@@ -373,6 +429,9 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 _ => true,
             };
             let mut text = value.to_string();
+            if let Some(precision) = spec.precision {
+                text = text.chars().take(precision).collect();
+            }
             if conversion == 'B' {
                 text = text.to_uppercase();
             }
@@ -424,6 +483,13 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
         'c' => {
             let unit = match arg {
                 FormatArg::Char(u) => u32::from(u),
+                FormatArg::Byte(v) => u32::from(v.cast_unsigned()),
+                FormatArg::Short(v) => u32::try_from(v).map_err(|_| {
+                    throw(
+                        "java.util.IllegalFormatException",
+                        &format!("Code point = {v}"),
+                    )
+                })?,
                 FormatArg::Int(v) => u32::try_from(v).map_err(|_| {
                     throw(
                         "java.util.IllegalFormatException",
@@ -485,16 +551,21 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
                 'o' => format!("{value:o}"),
                 _ => format!("{value:x}"),
             };
-            if spec.alternate {
-                text = match conversion.to_ascii_lowercase() {
-                    'o' => format!("0{text}"),
-                    _ => format!("0x{text}"),
-                };
-            }
             if conversion == 'X' {
                 text = text.to_uppercase();
             }
-            Ok(pad_numeric(spec, "", &text))
+            // The `#` radix prefix (`0x`/`0X`/`0`) sits before any zero-pad,
+            // like a sign — `%#010x` of 255 is `0x000000ff`, not `0000000xff`.
+            let prefix = if spec.alternate {
+                match conversion {
+                    'o' | 'O' => "0",
+                    'X' => "0X",
+                    _ => "0x",
+                }
+            } else {
+                ""
+            };
+            Ok(pad_numeric(spec, prefix, &text))
         }
         'f' | 'e' | 'g' => {
             let value = match arg {
@@ -548,7 +619,21 @@ fn format_float(spec: &Spec, value: f64) -> String {
         return String::from("NaN");
     }
     if value.is_infinite() {
-        return String::from(if value > 0.0 { "Infinity" } else { "-Infinity" });
+        // The `(` flag parenthesizes a NEGATIVE infinity — `%(f` of
+        // -Infinity is `(Infinity)`, not `-Infinity`.
+        if value < 0.0 && spec.parentheses {
+            return String::from("(Infinity)");
+        }
+        let sign = if value < 0.0 {
+            "-"
+        } else if spec.plus {
+            "+"
+        } else if spec.space {
+            " "
+        } else {
+            ""
+        };
+        return format!("{sign}Infinity");
     }
 
     let sign = if value.is_sign_negative() {
@@ -568,6 +653,11 @@ fn format_float(spec: &Spec, value: f64) -> String {
         'f' => {
             let precision = spec.precision.unwrap_or(6);
             let mut text = fixed_digits(value.abs(), precision);
+            // The `#` flag forces a decimal point even at precision 0:
+            // `%#.0f` of 3.0 is `3.`, where `%.0f` is `3`.
+            if spec.alternate && precision == 0 {
+                text.push('.');
+            }
             if spec.grouping {
                 let (int_part, frac_part) = text
                     .split_once('.')
@@ -753,9 +843,14 @@ fn scientific_digits(value: f64, precision: usize) -> String {
 fn general_digits(value: f64, precision: usize) -> String {
     let (mut digits, point) = shortest_decimal(value);
     if digits.is_empty() {
-        let mut out = String::from("0.");
-        out.push_str(&"0".repeat(precision.saturating_sub(1).max(1)));
-        return out;
+        // Zero in %g is fixed notation with `precision - 1` fraction digits:
+        // `%.1g` of 0.0 is `0`, `%.6g` is `0.00000`. It was emitting `0.0`
+        // regardless of precision.
+        let fraction = precision.saturating_sub(1);
+        if fraction == 0 {
+            return String::from("0");
+        }
+        return format!("0.{}", "0".repeat(fraction));
     }
     let mut exponent = point - 1;
     if round_half_up(&mut digits, precision) {
