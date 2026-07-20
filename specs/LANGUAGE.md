@@ -505,11 +505,17 @@ be referenced from a static context`, and `cannot find symbol` when the
     Long/float/byte-dependent members report honest "the long type is
     not supported" style errors, with
     `NumberFormatException: For input string: "x"`.
-  - `Scanner` over `System.in` — `next`/`nextLine`, the full numeric set
+  - `Scanner` over `System.in`, a `File`, **or a `String`** (`new
+    Scanner("10 20 hi")`, 2026-07-20 — the JDK constructor that tokenizes a
+    literal source, fully present so `hasNextLine` is exact) — `next`/`nextLine`,
+    the full numeric set
     (`nextInt`/`nextLong`/`nextShort`/`nextByte`/`nextFloat`/`nextDouble`/
     `nextBoolean`), every matching `hasNextX`, and `close` — tokenizing
     like Java, fed by the host console; in the browser this is the
-    SharedArrayBuffer blocking-stdin path. A failed `nextX` throws
+    SharedArrayBuffer blocking-stdin path. `nextLine` excludes the line
+    terminator and matches `\r\n` (or a lone `\r`) as one, so a CRLF source
+    yields `a`, not `a\r` (2026-07-20 — the buffer path returned the carriage
+    return; fixed for the file and string sources alike). A failed `nextX` throws
     `InputMismatchException` and **does not consume the token**, as the
     JDK documents, so `catch (InputMismatchException e) { in.next(); }`
     skips the offending word rather than the one after it. The float

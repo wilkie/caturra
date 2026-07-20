@@ -2956,6 +2956,51 @@ public class DiffBox {
 "#
 );
 
+// `new Scanner(String)` tokenizes a literal source, and `nextLine` strips a
+// `\r\n` (or lone `\r`) terminator the way the JDK does — a CRLF source yields
+// `a`, not `a\r`.
+differential_test!(
+    diff_scanner_string_source,
+    "DiffScanner",
+    r#"
+import java.util.Scanner;
+
+public class DiffScanner {
+    public static void main(String[] args) {
+        // Mixed tokens over a String source.
+        Scanner sc = new Scanner("10 20 hello\nworld 3.5");
+        System.out.println(sc.nextInt());
+        System.out.println(sc.nextInt());
+        System.out.println(sc.next());
+        System.out.println(sc.next());
+        System.out.println(sc.nextDouble());
+        System.out.println(sc.hasNext());
+
+        // A token then the rest of its line.
+        Scanner mixed = new Scanner("42 rest of line\nsecond line\n");
+        int n = mixed.nextInt();
+        System.out.println(n + "|" + mixed.nextLine() + "|");
+        System.out.println("[" + mixed.nextLine() + "]");
+        System.out.println(mixed.hasNextLine());
+
+        // CRLF and a lone trailing CR: the terminator is excluded.
+        Scanner lines = new Scanner("a\r\nb\r\nc");
+        while (lines.hasNextLine()) System.out.println("[" + lines.nextLine() + "]");
+        Scanner cr = new Scanner("only\r");
+        System.out.println("[" + cr.nextLine() + "]");
+
+        // An empty source has neither a token nor a line.
+        Scanner empty = new Scanner("");
+        System.out.println(empty.hasNext() + " " + empty.hasNextLine());
+
+        // Leading/trailing whitespace is skipped between tokens.
+        Scanner spaced = new Scanner("  spaced   words  ");
+        System.out.println("[" + spaced.next() + "][" + spaced.next() + "]");
+    }
+}
+"#
+);
+
 // `Short` and `Byte`: `valueOf(short)`/`valueOf(byte)` box (they used to crash
 // with a "not a String" ClassCastException — the compiler re-boxed the VM's
 // already-boxed result), `compare` returns `x - y` (NOT the -1/0/1 sign

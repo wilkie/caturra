@@ -274,6 +274,24 @@ pub fn invoke_special(
                     *path = text;
                     Ok(())
                 }
+                Some(HeapObject::Scanner { .. }) => {
+                    // `new Scanner(String)`: the whole literal is the source,
+                    // fully present (eof), and closing it must not touch stdin.
+                    if let Some(HeapObject::Scanner {
+                        buffer,
+                        pos,
+                        eof,
+                        stdin,
+                        ..
+                    }) = heap.get_mut(receiver)
+                    {
+                        *buffer = text;
+                        *pos = 0;
+                        *eof = true;
+                        *stdin = false;
+                    }
+                    Ok(())
+                }
                 Some(HeapObject::Exception { message, .. }) => {
                     *message = Some(text);
                     Ok(())
@@ -2109,6 +2127,12 @@ fn scanner_set_pos(heap: &mut Heap, receiver: HeapRef, new_pos: usize) {
 }
 
 /// Read up to the next newline (consuming it); `None` at EOF.
+/// Drop a single trailing carriage return, so a `\r\n`-terminated line reads
+/// the way the JDK's `nextLine` returns it (terminator excluded).
+fn strip_cr(line: &str) -> &str {
+    line.strip_suffix('\r').unwrap_or(line)
+}
+
 fn scanner_next_line(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
@@ -2117,14 +2141,16 @@ fn scanner_next_line(
     loop {
         let (buffer, pos, eof) = scanner_state(heap, receiver);
         if let Some(offset) = buffer[pos..].find('\n') {
-            let line = buffer[pos..pos + offset].to_owned();
+            // The JDK's line separator matches `\r\n` as one terminator, so a
+            // CRLF source yields `a`, not `a\r` — strip the carriage return.
+            let line = strip_cr(&buffer[pos..pos + offset]).to_owned();
             scanner_set_pos(heap, receiver, pos + offset + 1);
             return Ok(Some(line));
         }
         if eof {
             // Trailing text without a newline still counts as a line.
             if pos < buffer.len() {
-                let line = buffer[pos..].to_owned();
+                let line = strip_cr(&buffer[pos..]).to_owned();
                 scanner_set_pos(heap, receiver, buffer.len());
                 return Ok(Some(line));
             }

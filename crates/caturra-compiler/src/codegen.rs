@@ -11102,19 +11102,21 @@ impl BodyGen<'_> {
             return JType::Scanner;
         }
 
-        // Scanner over a File.
-        if let [file] = args {
-            let file_ty = self.expr(file);
-            if file_ty == JType::Error {
+        // Scanner over a File or a String (`new Scanner("10 20 hi")` — the
+        // JDK constructor that tokenizes a literal source).
+        if let [source] = args {
+            let source_ty = self.expr(source);
+            if source_ty == JType::Error {
                 return JType::Error;
             }
-            if file_ty == JType::File {
-                let init_ref = intern_method_ref(
-                    self.pool,
-                    "java/util/Scanner",
-                    "<init>",
-                    "(Ljava/io/File;)V",
-                );
+            let descriptor = match source_ty {
+                JType::File => Some("(Ljava/io/File;)V"),
+                JType::Str => Some("(Ljava/lang/String;)V"),
+                _ => None,
+            };
+            if let Some(descriptor) = descriptor {
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/Scanner", "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2);
                 return JType::Scanner;
@@ -11122,8 +11124,8 @@ impl BodyGen<'_> {
         }
         self.error(
             span,
-            "Scanner reads System.in or a File: new Scanner(System.in) / \
-             new Scanner(new File(\"data.txt\"))",
+            "Scanner reads System.in, a File, or a String: new Scanner(System.in) / \
+             new Scanner(new File(\"data.txt\")) / new Scanner(\"text\")",
         );
         JType::Error
     }
