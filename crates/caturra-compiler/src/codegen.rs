@@ -9207,6 +9207,15 @@ impl BodyGen<'_> {
     /// Emit a condition expression, requiring `boolean` as Java does.
     fn condition(&mut self, cond: &Expr, what: &str) {
         let ty = self.expr(cond);
+        // A `Boolean` in a condition auto-unboxes (JLS §5.1.8), so
+        // `if (aBoolean)` / `while (aBoolean)` work; a null Boolean NPEs at
+        // `booleanValue`, exactly as Java does.
+        if let JType::Boxed(elem) = ty
+            && elem.base_type() == JType::Boolean
+        {
+            self.emit_unbox(elem);
+            return;
+        }
         if ty != JType::Boolean && ty != JType::Error {
             self.error(
                 cond.span(),
@@ -10259,7 +10268,13 @@ impl BodyGen<'_> {
             return JType::Error;
         }
         let ty = field.ty;
-        if !ty.is_numeric() {
+        // A wrapper field (`Integer count; count++`) unboxes, increments, and
+        // reboxes via valueOf, exactly like the local case in `inc_dec`.
+        let boxed = match ty {
+            JType::Boxed(elem) if elem.base_type().is_numeric() => Some(elem),
+            _ => None,
+        };
+        if boxed.is_none() && !ty.is_numeric() {
             self.error(
                 span,
                 format!(
@@ -10291,7 +10306,7 @@ impl BodyGen<'_> {
                 self.code
                     .push_op(if wide { op::DUP2 } else { op::DUP }, ty.width());
             }
-            self.one_more(ty, increment);
+            self.increment_step(ty, boxed, increment);
             if prefix {
                 self.code
                     .push_op(if wide { op::DUP2 } else { op::DUP }, ty.width());
@@ -10324,7 +10339,7 @@ impl BodyGen<'_> {
             self.code
                 .push_op(if wide { op::DUP2_X1 } else { op::DUP_X1 }, ty.width());
         }
-        self.one_more(ty, increment);
+        self.increment_step(ty, boxed, increment);
         if prefix {
             self.code
                 .push_op(if wide { op::DUP2_X1 } else { op::DUP_X1 }, ty.width());
@@ -10332,6 +10347,18 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::PUTFIELD, field_ref, 0);
         self.code.drop_stack(1 + ty.width());
         ty
+    }
+
+    /// The increment step for a field target: a wrapper field unboxes to its
+    /// primitive, adds one, and reboxes via valueOf; a primitive adds directly.
+    fn increment_step(&mut self, ty: JType, boxed: Option<ElemType>, increment: bool) {
+        if let Some(elem) = boxed {
+            self.emit_unbox(elem);
+            self.one_more(elem.base_type(), increment);
+            self.emit_box(elem);
+        } else {
+            self.one_more(ty, increment);
+        }
     }
 
     /// Add (or subtract) one from the numeric value on top of the stack — the
@@ -13210,7 +13237,12 @@ impl BodyGen<'_> {
             return None;
         };
         let index_ty = self.expr(index);
-        if !matches!(index_ty, JType::Int | JType::Char | JType::Error) {
+        // An Integer/Short/Byte/Character index auto-unboxes to int.
+        let index_ty = self.unbox_wrapper(index_ty);
+        if !matches!(
+            index_ty,
+            JType::Int | JType::Char | JType::Short | JType::Byte | JType::Error
+        ) {
             self.error(
                 index.span(),
                 format!(
@@ -16415,10 +16447,23 @@ impl BodyGen<'_> {
         ty
     }
 
+    /// Auto-unbox a wrapper on the stack to its primitive (JLS §5.1.8), for a
+    /// context that needs a primitive — a unary operator, an array index, a
+    /// condition. A non-wrapper passes through unchanged.
+    fn unbox_wrapper(&mut self, ty: JType) -> JType {
+        if let JType::Boxed(elem) = ty {
+            self.emit_unbox(elem);
+            elem.base_type()
+        } else {
+            ty
+        }
+    }
+
     fn unary(&mut self, op: UnaryOp, operand: &Expr, span: SourceSpan) -> JType {
         match op {
             UnaryOp::Neg => {
                 let ty = self.expr(operand);
+                let ty = self.unbox_wrapper(ty);
                 match ty {
                     JType::Double => {
                         self.code.push_op(op::DNEG, 0);
@@ -16451,6 +16496,7 @@ impl BodyGen<'_> {
             }
             UnaryOp::BitNot => {
                 let ty = self.expr(operand);
+                let ty = self.unbox_wrapper(ty);
                 match ty {
                     JType::Int | JType::Char | JType::Short | JType::Byte => {
                         // ~x is x ^ -1.
@@ -16481,6 +16527,7 @@ impl BodyGen<'_> {
             }
             UnaryOp::Not => {
                 let ty = self.expr(operand);
+                let ty = self.unbox_wrapper(ty);
                 if ty == JType::Error {
                     return JType::Error;
                 }
@@ -16851,6 +16898,7 @@ impl BodyGen<'_> {
         };
 
         let cond_ty = self.expr(cond);
+        let cond_ty = self.unbox_wrapper(cond_ty);
         if cond_ty != JType::Boolean && cond_ty != JType::Error {
             self.error(
                 cond.span(),
@@ -16959,6 +17007,25 @@ impl BodyGen<'_> {
                     return JType::Error;
                 };
                 let (slot, ty) = (var.slot, var.ty);
+                // `Integer i; i++` unboxes, increments, and reboxes via
+                // valueOf (JLS §15.14.2 / §5.1.7) — the result is the wrapper,
+                // the old value for postfix, the new for prefix.
+                if let JType::Boxed(elem) = ty
+                    && elem.base_type().is_numeric()
+                {
+                    self.emit_load(slot, ty);
+                    if !prefix {
+                        self.code.push_op(op::DUP, 1);
+                    }
+                    self.emit_unbox(elem);
+                    one_op(self, elem.base_type());
+                    self.emit_box(elem);
+                    if prefix {
+                        self.code.push_op(op::DUP, 1);
+                    }
+                    self.emit_store(slot, ty);
+                    return ty;
+                }
                 if !ty.is_numeric() {
                     self.error(
                         span,

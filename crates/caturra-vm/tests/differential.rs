@@ -2956,6 +2956,87 @@ public class DiffBox {
 "#
 );
 
+// A wrapper auto-unboxes (JLS §5.1.8) in every context that demands a
+// primitive: an `if`/`while`/`for`/ternary CONDITION, a unary `-`/`~`/`!`, an
+// array INDEX, and `++`/`--` on a wrapper local or field (which reboxes via
+// valueOf, JLS §15.14.2). Each of these used to be a compile error.
+differential_test!(
+    diff_wrapper_unboxing_contexts,
+    "DiffUnbox",
+    r#"
+public class DiffUnbox {
+    static Integer counter = 0;
+    Integer instance = 10;
+
+    public static void main(String[] args) {
+        // Boolean condition contexts.
+        Boolean yes = true, no = false;
+        if (yes) System.out.println("if");
+        while (no) System.out.println("never");
+        System.out.println(yes ? "then" : "else");
+        for (Integer k = 3; k > 0; k--) System.out.print(k);
+        System.out.println();
+
+        // Unary operators on a wrapper.
+        Integer i = 5;
+        System.out.println(-i + " " + ~i);
+        System.out.println(!no);
+        long widened = -i;
+        System.out.println(widened);
+
+        // Wrapper as an array index (Integer/Character/Short/Byte).
+        int[] a = {10, 20, 30};
+        Integer ii = 1;
+        Character ci = 2;
+        Short si = 0;
+        Byte bi = 1;
+        System.out.println(a[ii] + " " + a[ci] + " " + a[si] + " " + a[bi]);
+
+        // ++/-- on a wrapper local: old value for postfix, new for prefix.
+        Integer p = 5;
+        System.out.println(p++);
+        System.out.println(p);
+        System.out.println(++p);
+        Long lp = 7L;
+        lp--;
+        System.out.println(lp);
+        Integer comp = 10;
+        comp += 3;
+        System.out.println(comp);
+
+        // ++/-- on a static wrapper field.
+        counter++;
+        System.out.println(counter);
+        System.out.println(counter++);
+        System.out.println(counter);
+
+        // ++/-- on an instance wrapper field.
+        DiffUnbox o = new DiffUnbox();
+        o.instance--;
+        System.out.println(o.instance);
+        System.out.println(o.instance++);
+        System.out.println(o.instance);
+
+        // Boolean field/expression through a switch selector.
+        Integer sw = 2;
+        switch (sw) {
+            case 1: System.out.println("one"); break;
+            case 2: System.out.println("two"); break;
+            default: System.out.println("other");
+        }
+
+        // A null wrapper in a condition throws NPE on unbox.
+        Boolean maybe = null;
+        try {
+            if (maybe) System.out.println("unreached");
+        } catch (NullPointerException e) {
+            System.out.println("NPE");
+        }
+    }
+}
+"#
+);
+
 differential_test!(
     diff_anonymous_classes,
     "DiffAnon",

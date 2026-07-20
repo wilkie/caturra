@@ -538,6 +538,16 @@ map.get(key)` and `Integer count; count += 1;` behave as javac
     compiles them — the latter used to leave a raw `int` in a reference
     slot and fail only when something later read it. The implicit
     narrowing cast still applies (`char c; c += anInteger;`).
+  - A wrapper **auto-unboxes in every context that demands a primitive**
+    (JLS §5.1.8, completed 2026-07-20), not only in assignments and
+    arithmetic: an `if`/`while`/`for`/ternary CONDITION on a `Boolean`, a
+    unary `-`/`~` on a numeric wrapper or `!` on a `Boolean`, a wrapper as an
+    array INDEX (`arr[anInteger]`, also `Character`/`Short`/`Byte`), and
+    `++`/`--` on a wrapper local or field. The increment reboxes through
+    `valueOf` (JLS §15.14.2) — postfix yields the old wrapper, prefix the new
+    — and a `null` wrapper in any of these throws `NullPointerException` on
+    the unbox. Each of these was previously a spurious compile error
+    ("cannot be converted to boolean/int", "++/-- needs a numeric variable").
   - `HashMap<K, V>` / `Map<K, V>` (2026-07-09), **with the JDK's own
     iteration order**. A real map's order looks arbitrary but is a pure
     function of the keys' hash codes, the table length, and insertion
