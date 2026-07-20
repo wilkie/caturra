@@ -2956,6 +2956,29 @@ public class DiffBox {
 "#
 );
 
+// Writing an inherited static field through the subclass name (`Sub.f = v`)
+// resolves to the DECLARING class: it finds the slot (it used to abort with
+// "malformed class: unknown static field") and initializes only the superclass
+// that declares the field, not the subclass named (JLS §12.4.1) — matching how
+// a READ of the same field already behaved.
+differential_test!(
+    diff_inherited_static_field_write,
+    "DiffInheritedStatic",
+    r#"
+class Base { static int f; static { System.out.println("Base init"); } }
+class Sub extends Base { static { System.out.println("Sub init"); } }
+
+public class DiffInheritedStatic {
+    public static void main(String[] args) {
+        Sub.f = 10;
+        System.out.println("assigned " + Sub.f);
+        Sub.f += 5;
+        System.out.println(Sub.f);
+    }
+}
+"#
+);
+
 // Boolean logical operators and shifts. `&`/`|`/`^` on boxed `Boolean` unbox
 // (they used to reach `IAND` on two references — a VerifyError); `&=`/`|=`/`^=`
 // on a boolean are the logical compound assignments (JLS §15.26.2); and a

@@ -147,6 +147,13 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Inherited static field write** (2026-07-20): `Sub.f = v` on a field
+  declared in a superclass resolves to the DECLARING class — it used to abort
+  ("malformed class: unknown static field Sub.f") because the write emitted the
+  referenced subclass in the field ref while the READ path already emitted the
+  owner. Now consistent: the write finds the slot and initializes only the
+  declaring class, not the subclass named (JLS §12.4.1). (The analogous inherited
+  static METHOD call still over-initializes the subclass — a separate open item.)
 - **Boolean logical operators and shifts** (2026-07-20): `&`/`|`/`^` on boxed
   `Boolean` operands now UNBOX (they reached `IAND` on two references — a runtime
   VerifyError that leaked a Rust value); `&=`/`|=`/`^=` on a boolean are the

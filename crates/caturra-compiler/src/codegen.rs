@@ -9882,7 +9882,7 @@ impl BodyGen<'_> {
             && self.lookup(&path[0]).is_none()
             && let Some(class_id) = self.table.class_id(&path[0])
         {
-            let Some((_owner, field)) = self.resolve_field(class_id, name, span) else {
+            let Some((owner, field)) = self.resolve_field(class_id, name, span) else {
                 self.expr(value);
                 self.code.discard();
                 return;
@@ -9896,14 +9896,11 @@ impl BodyGen<'_> {
                 );
                 return;
             }
-            self.assign_field(
-                class_id,
-                &FieldReceiver::Static,
-                &field,
-                op_kind,
-                value,
-                span,
-            );
+            // Emit the DECLARING class in the field ref (`Spf.f`, not the
+            // referenced `Sbf.f`), exactly as the READ path resolves it — so a
+            // write to an inherited static field finds its slot AND initializes
+            // only the declaring class (JLS §12.4.1), not the subclass named.
+            self.assign_field(owner, &FieldReceiver::Static, &field, op_kind, value, span);
             return;
         }
 
