@@ -8675,6 +8675,21 @@ impl BodyGen<'_> {
         self.next_slot += selector_ty.width().max(1);
         self.emit_store(selector_slot, selector_ty);
 
+        // A switch on an enum dereferences the selector (javac compiles it to
+        // `selector.ordinal()` into a switch map), so a NULL selector throws
+        // NPE. caturra compares constants by reference identity, which would
+        // silently fall through to `default`, so force the same NPE by calling
+        // `ordinal()` and discarding the result.
+        if let Some(enum_id) = enum_class {
+            self.emit_load(selector_slot, selector_ty);
+            let enum_name = self.table.class_name(enum_id).to_owned();
+            let ordinal = intern_method_ref(self.pool, &enum_name, "ordinal", "()I");
+            self.code.push_op_u16(op::INVOKEVIRTUAL, ordinal, 1);
+            self.code.drop_stack(1);
+            self.code.push_op(op::POP, 0);
+            self.code.drop_stack(1);
+        }
+
         let end = self.code.new_label();
         let arm_labels: Vec<Label> = arms.iter().map(|_| self.code.new_label()).collect();
         let mut default_arm: Option<usize> = None;
@@ -12836,6 +12851,27 @@ impl BodyGen<'_> {
         // `String.join` is variadic the same way (`join(",", parts)`).
         if class == "String" && method == "join" {
             return self.emit_string_join(args, span);
+        }
+        // `String.valueOf(Object)` — an enum, a StringBuilder, or any object
+        // reference — is `obj == null ? "null" : obj.toString()`, exactly the
+        // null-safe coercion `println(Object)` uses. The typed valueOf
+        // overloads (int/double/char[]/…) fall through to the table below.
+        if class == "String"
+            && method == "valueOf"
+            && let [arg] = args
+            && matches!(
+                self.type_of(arg),
+                JType::Object(_)
+                    | JType::StringBuilder
+                    | JType::List(_)
+                    | JType::Set(_)
+                    | JType::Map { .. }
+                    | JType::Exception(_)
+            )
+        {
+            let ty = self.expr(arg);
+            self.coerce_to_string_for_output(ty);
+            return Some(Some(JType::Str));
         }
         let (jvm_class, methods) = builtin_static_table(class).expect("caller checked");
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();

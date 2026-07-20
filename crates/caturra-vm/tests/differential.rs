@@ -13146,3 +13146,107 @@ public class RejSbEqString {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Enums: null-handling, Comparable, and the final-method rules
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_enum_behaviour,
+    "DiffEnumBehaviour",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+public class DiffEnumBehaviour {
+    interface Speaks { String speak(); }
+    enum C implements Speaks {
+        X { public String speak() { return "x!"; } },
+        Y { public String speak() { return "y!"; } },
+        Z { public String speak() { return "z!"; } }
+    }
+
+    public static void main(String[] args) {
+        // A switch on a null enum throws NPE (not a silent fall-through).
+        C n = null;
+        try {
+            switch (n) { case X: break; default: break; }
+            System.out.println("no throw");
+        } catch (NullPointerException e) {
+            System.out.println("switch NPE");
+        }
+
+        // valueOf(null) throws NPE; valueOf(bad) throws IllegalArgumentException.
+        try { C.valueOf(null); } catch (Exception e) { System.out.println(e.getClass().getName()); }
+        try { C.valueOf("Q"); } catch (Exception e) { System.out.println(e.getClass().getSimpleName()); }
+        System.out.println(C.valueOf("Y"));
+
+        // An enum is Comparable and sortable.
+        Comparable<C> cc = C.X;
+        System.out.println(cc.compareTo(C.Y));
+        List<C> list = new ArrayList<>(Arrays.asList(C.Z, C.Y, C.X));
+        Collections.sort(list);
+        System.out.println(list);
+
+        // String.valueOf of an enum is its name.
+        System.out.println(String.valueOf(C.X));
+        C nul = null;
+        System.out.println(String.valueOf(nul));
+
+        // A per-constant interface method dispatches correctly.
+        System.out.println(C.X.speak());
+
+        // A stray semicolon after a nested member is legal.
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// Enum's final methods may not be overridden (JLS 8.9).
+differential_reject!(
+    reject_enum_override_name,
+    "RejEnumName",
+    r#"
+public class RejEnumName {
+    enum C { X; public String name() { return "z"; } }
+    public static void main(String[] args) {
+        System.out.println(C.X.name());
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_enum_override_ordinal,
+    "RejEnumOrdinal",
+    r"
+public class RejEnumOrdinal {
+    enum C { X; public int ordinal() { return 9; } }
+    public static void main(String[] args) {
+        System.out.println(C.X.ordinal());
+    }
+}
+"
+);
+
+// The legal neighbour: toString MAY be overridden, and a non-final method added.
+differential_test!(
+    diff_enum_legal_overrides,
+    "DiffEnumLegal",
+    r#"
+public class DiffEnumLegal {
+    enum C {
+        X, Y;
+        @Override public String toString() { return "c-" + name(); }
+        int doubled() { return ordinal() * 2; }
+    }
+    public static void main(String[] args) {
+        System.out.println(C.X + " " + C.Y);
+        System.out.println(C.Y.doubled());
+    }
+}
+"#
+);

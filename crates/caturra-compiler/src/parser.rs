@@ -866,6 +866,11 @@ impl Parser<'_> {
                 );
                 break;
             }
+            // A stray `;` between members is an empty declaration (JLS §8.1.6),
+            // legal — e.g. after a nested `enum E { ... };`.
+            if self.eat_symbol(";") {
+                continue;
+            }
             if let Ok(member) = self.member(&name) {
                 match member {
                     Member::Method(method) => methods.push(method),
@@ -930,6 +935,7 @@ impl Parser<'_> {
     /// Parse an `enum` declaration and desugar it to an ordinary class
     /// with synthesized constant fields, a name/ordinal-storing
     /// constructor, and `values`/`valueOf`/`ordinal`/`name`/`toString`.
+    #[allow(clippy::too_many_lines)] // one enum-body parse
     fn enum_decl(&mut self, start: SourceSpan) -> Parsed<ClassDecl> {
         self.pos += 1; // 'enum'
         let (name, name_span) = self.expect_ident("for the enum")?;
@@ -1015,6 +1021,26 @@ impl Parser<'_> {
             }
         }
         self.eat_symbol("}");
+
+        // `Enum`'s `name`/`ordinal`/`equals`/`hashCode`/`compareTo`/
+        // `getDeclaringClass` are FINAL, so an enum may not override them
+        // (JLS §8.9). caturra used the override silently.
+        for method in &methods {
+            if !method.is_static
+                && matches!(
+                    method.name.as_str(),
+                    "name" | "ordinal" | "equals" | "hashCode" | "compareTo" | "getDeclaringClass"
+                )
+            {
+                self.error_at(
+                    method.span,
+                    format!(
+                        "{}() in {name} cannot override {}() in Enum",
+                        method.name, method.name
+                    ),
+                );
+            }
+        }
 
         let span = SourceSpan {
             start: start.start,
@@ -3584,7 +3610,7 @@ struct EnumConstant {
 )] // one desugaring plan
 fn desugar_enum(
     name: String,
-    interfaces: Vec<String>,
+    mut interfaces: Vec<String>,
     constants: Vec<EnumConstant>,
     mut fields: Vec<FieldDecl>,
     mut methods: Vec<MethodDecl>,
@@ -3596,6 +3622,13 @@ fn desugar_enum(
         start: span.start,
         end: span.start,
     };
+    // Every enum extends `java.lang.Enum<E>`, which implements
+    // `Comparable<E>`. Recording it here makes the enum a subtype of
+    // Comparable (`Comparable<C> c = C.X`, `Collections.sort(enumList)`), which
+    // the synthesized `compareTo` already backs.
+    if !interfaces.iter().any(|i| i == "Comparable") {
+        interfaces.push(String::from("Comparable"));
+    }
     let str_ty = TypeRef::Named(String::from("String"));
     let enum_ty = TypeRef::Named(name.clone());
 
@@ -3882,6 +3915,29 @@ fn desugar_enum(
             body: Box::new(loop_body),
             span: zero,
         };
+        let null_check = Stmt::If {
+            cond: Expr::Binary {
+                op: BinaryOp::Eq,
+                lhs: Box::new(var("__n")),
+                rhs: Box::new(Expr::Literal {
+                    value: Literal::Null,
+                    span: zero,
+                }),
+                span: zero,
+            },
+            then: Box::new(Stmt::Throw {
+                value: Expr::NewObject {
+                    class: String::from("NullPointerException"),
+                    type_args: Vec::new(),
+                    args: vec![lit_str("Name is null")],
+                    outer: None,
+                    span: zero,
+                },
+                span: zero,
+            }),
+            els: None,
+            span: zero,
+        };
         let throw = Stmt::Throw {
             value: Expr::NewObject {
                 class: String::from("IllegalArgumentException"),
@@ -3914,16 +3970,25 @@ fn desugar_enum(
                 is_varargs: false,
                 is_final: false,
             }],
-            body: vec![for_each, throw],
+            // `Enum.valueOf` null-checks the name FIRST (JDK:
+            // `Objects.requireNonNull(name, "Name is null")`), so a null name
+            // is a NullPointerException, not the not-found
+            // IllegalArgumentException.
+            body: vec![null_check, for_each, throw],
             annotations: Vec::new(),
             span: zero,
         });
     }
 
-    // An enum that declares an abstract method is implicitly abstract (every
-    // constant supplies a body, so the enum class itself is never instantiated
-    // directly — only its per-constant subclasses are).
-    let is_abstract = methods.iter().any(|m| m.is_abstract);
+    // An enum is implicitly abstract when it declares an abstract method, OR
+    // when EVERY constant has a body — the enum class is then never
+    // instantiated directly (only its per-constant subclasses are), so it need
+    // not implement an interface method itself; each constant's body supplies
+    // it. `enum E implements I { A { m(){...} }, B { m(){...} } }` is the case
+    // that was refused as "E is not abstract and does not override m".
+    let all_constants_have_bodies =
+        !constants.is_empty() && constants.iter().all(|c| c.body.is_some());
+    let is_abstract = methods.iter().any(|m| m.is_abstract) || all_constants_have_bodies;
 
     ClassDecl {
         name,

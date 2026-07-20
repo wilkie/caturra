@@ -1112,10 +1112,26 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
   leading `name`/`ordinal` parameters), and the standard members
   `values()` (fresh array each call), `valueOf(String)` (javac's `No
 enum constant E.X` `IllegalArgumentException` on miss), `ordinal()`,
-  `name()`, and a default `toString()` returning the name (all
-  overridable). `switch` on an enum matches unqualified constant names
-  by reference identity; enum constants are singletons so `==` works.
-  `@Override` and other annotations are parsed and ignored.
+  `name()`, and a default `toString()` returning the name (only
+  `toString` is overridable — `name`/`ordinal`/`equals`/`hashCode`/
+  `compareTo`/`getDeclaringClass` are FINAL in `Enum`, so overriding one is
+  a compile error, JLS §8.9). `switch` on an enum matches unqualified
+  constant names by reference identity; enum constants are singletons so
+  `==` works, and a switch on a NULL selector throws
+  `NullPointerException` (it dereferences the selector), while
+  `valueOf(null)` throws `NullPointerException` ("Name is null") — both
+  fixed 2026-07-19. Every enum is `Comparable` (compareTo by ordinal), so
+  `Comparable<C> c = C.X` and `Collections.sort(enumList)` work, and
+  `String.valueOf(anEnum)` gives its name (the general
+  `String.valueOf(Object)` now coerces any reference via a null-safe
+  `toString`). An enum whose EVERY constant has a body is implicitly
+  abstract, so `enum E implements I { A { m(){…} }, … }` — the interface
+  method supplied per constant — compiles. `@Override` and other
+  annotations are parsed and ignored. **Gaps** (safe-direction, near-zero
+  demand): `getDeclaringClass()`; `java.lang.Enum` as a written type;
+  an enum nested inside another enum; and the not-found `valueOf` message
+  omits the enclosing-class prefix for a NESTED enum (`No enum constant
+  C.X`, not `Outer.C.X`) — the exception type and behaviour are right.
 
 - **Varargs declarations** (2026-07-03): `Type... name` as the last
   parameter (an array at runtime). Overload resolution follows JLS
