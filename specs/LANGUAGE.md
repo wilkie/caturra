@@ -147,6 +147,20 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Deep equals/hashCode** (2026-07-20): every collection compares and hashes
+  STRUCTURALLY all the way down, so a nested `List<List<...>>`, a `Set` of
+  `List`s, and a `Map` with collection values are deep-equal (and hash equal) —
+  before, `equals`/`hashCode` recursed only into a user object's override, so a
+  collection ELEMENT was compared by identity and two structurally-equal nested
+  lists were unequal. The recursion lives in the central `java_equals`/
+  `java_hash_code`, so it also fixes `list.contains(aNestedList)`,
+  `Objects.equals(list1, list2)`, and collection keys/values in a map. An
+  `ArrayDeque`/`PriorityQueue` (a Queue, not a `List`) keeps identity equality,
+  as on a JDK. Each boxed wrapper also hashes as its own type — `Boolean` is
+  1231/1237 (not its 0/1 value), `Long`/`Double`/`Float` fold their bits — where
+  the boxed `hashCode` had returned the raw value. And `String.equals(Object)`
+  accepts any argument (`"1".equals(1)` compiles and is false, the int
+  autoboxing); it had demanded a `String`.
 - **Wrapper dispatch and identity** (2026-07-19): `list.remove(Integer.valueOf(2))`
   removes the VALUE, not the element at index 2. Both `remove(int)` and
   `remove(Object)` exist and caturra stores list elements UNBOXED, so both

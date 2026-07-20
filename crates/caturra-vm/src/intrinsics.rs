@@ -3301,14 +3301,23 @@ fn boxed_virtual(
             let text = boxed_to_string(class_name, value);
             Ok(Some(JValue::Ref(Some(heap.alloc_string(&text)))))
         }
-        "hashCode" => Ok(Some(JValue::Int(match value {
-            JValue::Int(n) => n,
-            JValue::Long(n) => (((n.cast_unsigned() ^ (n.cast_unsigned() >> 32)) & 0xFFFF_FFFF)
-                as u32)
-                .cast_signed(),
-            JValue::Double(n) => java_double_hash(n),
-            _ => 0,
-        }))),
+        // Each wrapper's own `hashCode`, keyed by class: `Boolean` is
+        // 1231/1237 (NOT its 0/1 value), `Long`/`Double`/`Float` fold their
+        // bits, and `Integer`/`Short`/`Byte`/`Character` hash to their value.
+        "hashCode" => {
+            let hash = if class_name == "java/lang/Boolean" {
+                if value == JValue::Int(0) { 1237 } else { 1231 }
+            } else {
+                match value {
+                    JValue::Int(n) => n,
+                    JValue::Long(n) => fold_to_int(n),
+                    JValue::Double(n) => java_double_hash(n),
+                    JValue::Float(n) => float_to_int_bits(n),
+                    JValue::Ref(_) => 0,
+                }
+            };
+            Ok(Some(JValue::Int(hash)))
+        }
         "equals" => {
             // Equal iff the other operand is a wrapper of the same class and
             // value, or a raw unboxed primitive of equal value (caturra stores

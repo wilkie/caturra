@@ -4539,8 +4539,11 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         descriptor: "(Ljava/lang/String;)I",
     },
     BuiltinMethod {
+        // `String.equals(Object)` — an `Object`, not just a `String`, so
+        // `"1".equals(1)` compiles (the int autoboxes) and answers false, as
+        // javac does; the VM already returns false for any non-String arg.
         name: "equals",
-        params: &[BParam::Str],
+        params: &[BParam::Object],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/Object;)Z",
     },

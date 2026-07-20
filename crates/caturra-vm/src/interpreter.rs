@@ -4426,6 +4426,13 @@ impl<'run> Interpreter<'run> {
             };
             return Ok(matches!(returned, Some(JValue::Int(result)) if result != 0));
         }
+        // A collection compares structurally (a nested `List<List<...>>`, a Set
+        // of Lists, a Map of collections) before falling to value/identity.
+        if let JValue::Ref(Some(a_ref)) = a
+            && let Some(result) = self.structural_equals(a_ref, b)?
+        {
+            return Ok(result);
+        }
         Ok(intrinsics::native_equals(&self.heap, a, b))
     }
 
@@ -4448,6 +4455,13 @@ impl<'run> Interpreter<'run> {
                     "{class_name}.hashCode did not return an int"
                 ))),
             };
+        }
+        // A collection hashes by its contents (the contract paired with the
+        // structural `equals` above), recursing for nested collections.
+        if let JValue::Ref(Some(a_ref)) = value
+            && let Some(hash) = self.structural_hash(a_ref)?
+        {
+            return Ok(hash);
         }
         Ok(intrinsics::native_hash(&self.heap, value))
     }
@@ -4519,6 +4533,129 @@ impl<'run> Interpreter<'run> {
     /// The element count of any set-like collection.
     fn set_like_len(&self, reference: HeapRef) -> usize {
         iterated_len_of(&self.heap, reference)
+    }
+
+    /// Whether `reference` is a `List` implementation — what
+    /// `AbstractList.equals` compares against. NOT an `ArrayDeque` or a
+    /// `PriorityQueue`, whose `equals` is identity (they are not Lists).
+    fn is_list_like(&self, reference: HeapRef) -> bool {
+        use crate::value::HeapObject::{
+            ArrayBackedList, ArrayList, LinkedList, Stack, UnmodifiableList,
+        };
+        match self.heap.get(reference) {
+            Some(ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_)) => true,
+            Some(UnmodifiableList(inner)) => self.is_list_like(*inner),
+            _ => false,
+        }
+    }
+
+    /// `AbstractList.equals`: two Lists are equal iff they have the same
+    /// elements in the same order, each compared with `java_equals` (which
+    /// recurses here for a nested collection).
+    fn lists_equal(&mut self, a: HeapRef, b: HeapRef) -> Result<bool, VmError> {
+        let ours = self.list_items(a);
+        let theirs = self.list_items(b);
+        if ours.len() != theirs.len() {
+            return Ok(false);
+        }
+        for (x, y) in ours.into_iter().zip(theirs) {
+            if !self.java_equals(x, y)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// `AbstractMap.equals`: same size, and every mapping of one is present
+    /// with an equal value in the other.
+    fn maps_equal(&mut self, a: HeapRef, b: HeapRef) -> Result<bool, VmError> {
+        use crate::value::HeapObject::{HashMap, TreeMap};
+        if !matches!(self.heap.get(b), Some(HashMap(_) | TreeMap { .. }))
+            || self.map_len(a) != self.map_len(b)
+        {
+            return Ok(false);
+        }
+        for (key, value) in self.map_entries(a) {
+            let Some(at) = self.map_find(b, key)? else {
+                return Ok(false);
+            };
+            let theirs = self.map_value_at(b, at);
+            if !self.java_equals(value, theirs)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// If `a` is a collection, its structural `equals` against `b` (a List
+    /// compares to a List, a Set to any Set, a Map to a Map) — else `None`, so
+    /// the caller falls back to value/identity equality. This is what makes a
+    /// nested `List<List<...>>`, a `Set` of `List`s, or a `Map` with collection
+    /// values deep-equal, everywhere `java_equals` reaches.
+    fn structural_equals(&mut self, a: HeapRef, b: JValue) -> Result<Option<bool>, VmError> {
+        use crate::value::HeapObject::{
+            ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, TreeMap, TreeSet,
+            UnmodifiableList, UnmodifiableSet,
+        };
+        let equal = match self.heap.get(a) {
+            Some(
+                ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | UnmodifiableList(_),
+            ) => match b {
+                JValue::Ref(Some(other)) if self.is_list_like(other) => {
+                    self.lists_equal(a, other)?
+                }
+                _ => false,
+            },
+            Some(HashSet(_) | TreeSet { .. } | UnmodifiableSet(_)) => match b {
+                JValue::Ref(Some(other)) => self.set_like_equals(a, other)?,
+                _ => false,
+            },
+            Some(HashMap(_) | TreeMap { .. }) => match b {
+                JValue::Ref(Some(other)) => self.maps_equal(a, other)?,
+                _ => false,
+            },
+            _ => return Ok(None),
+        };
+        Ok(Some(equal))
+    }
+
+    /// If `a` is a collection, its structural `hashCode` (the contracts that go
+    /// with the `equals` above) — else `None`. A List folds `31*h + element`, a
+    /// Set sums its elements, a Map sums `key ^ value` per entry.
+    fn structural_hash(&mut self, a: HeapRef) -> Result<Option<i32>, VmError> {
+        use crate::value::HeapObject::{
+            ArrayBackedList, ArrayList, HashMap, HashSet, LinkedList, Stack, TreeMap, TreeSet,
+            UnmodifiableList, UnmodifiableSet,
+        };
+        let hash = match self.heap.get(a) {
+            Some(
+                ArrayList(_) | LinkedList(_) | Stack(_) | ArrayBackedList(_) | UnmodifiableList(_),
+            ) => {
+                let mut hash = 1i32;
+                for item in self.list_items(a) {
+                    hash = hash
+                        .wrapping_mul(31)
+                        .wrapping_add(self.java_hash_code(item)?);
+                }
+                hash
+            }
+            Some(HashSet(_) | TreeSet { .. } | UnmodifiableSet(_)) => {
+                let mut sum = 0i32;
+                for element in self.collection_elements(a) {
+                    sum = sum.wrapping_add(self.java_hash_code(element)?);
+                }
+                sum
+            }
+            Some(HashMap(_) | TreeMap { .. }) => {
+                let mut sum = 0i32;
+                for (key, value) in self.map_entries(a) {
+                    sum = sum.wrapping_add(self.java_hash_code(key)? ^ self.java_hash_code(value)?);
+                }
+                sum
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(hash))
     }
 
     fn list_contains(&mut self, list: HeapRef, probe: JValue) -> Result<bool, VmError> {

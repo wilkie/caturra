@@ -2956,6 +2956,74 @@ public class DiffBox {
 "#
 );
 
+// The equals/hashCode tail: each wrapper's own `hashCode` (`Boolean` is
+// 1231/1237, `Long`/`Double`/`Float` fold their bits), `String.equals(Object)`
+// accepts a boxed primitive, and collections compare/hash STRUCTURALLY all the
+// way down — a nested `List<List<>>`, a `Set` of `List`s, a `Map` of
+// collections — while an `ArrayDeque` (not a List) keeps identity equality.
+differential_test!(
+    diff_equals_hashcode_deep,
+    "DiffEq",
+    r#"
+import java.util.*;
+
+public class DiffEq {
+    public static void main(String[] args) {
+        // Boxed wrapper hashCode is the wrapper's own, not the raw value.
+        Boolean t = true, f = false;
+        System.out.println(t.hashCode() + " " + f.hashCode());
+        Long l = 9000000000L;
+        Double d = 3.14;
+        Float fl = 1.5f;
+        System.out.println(l.hashCode() + " " + d.hashCode() + " " + fl.hashCode());
+        Integer i = 42;
+        Character c = 'A';
+        System.out.println(i.hashCode() + " " + c.hashCode());
+
+        // String.equals(Object): a boxed primitive argument answers false.
+        System.out.println("1".equals(1) + " " + "a".equals("a") + " " + "x".equals('x'));
+
+        // Nested List<List<>> equals and hashCode.
+        List<List<Integer>> a1 = new ArrayList<>();
+        a1.add(Arrays.asList(1, 2));
+        a1.add(Arrays.asList(3));
+        List<List<Integer>> a2 = new ArrayList<>();
+        a2.add(new ArrayList<>(Arrays.asList(1, 2)));
+        a2.add(new ArrayList<>(Arrays.asList(3)));
+        System.out.println(a1.equals(a2) + " " + (a1.hashCode() == a2.hashCode()));
+
+        // A Map with List values, across implementations.
+        Map<String, List<Integer>> m1 = new HashMap<>();
+        m1.put("a", Arrays.asList(1, 2));
+        Map<String, List<Integer>> m2 = new TreeMap<>();
+        m2.put("a", new ArrayList<>(Arrays.asList(1, 2)));
+        System.out.println(m1.equals(m2) + " " + (m1.hashCode() == m2.hashCode()));
+
+        // A Set of Lists.
+        Set<List<Integer>> s1 = new HashSet<>();
+        s1.add(Arrays.asList(1, 2));
+        Set<List<Integer>> s2 = new HashSet<>();
+        s2.add(new ArrayList<>(Arrays.asList(1, 2)));
+        System.out.println(s1.equals(s2));
+
+        // list.contains / indexOf ask a nested list structurally.
+        List<List<Integer>> ll = new ArrayList<>();
+        ll.add(Arrays.asList(9, 8));
+        System.out.println(ll.contains(new ArrayList<>(Arrays.asList(9, 8)))
+            + " " + ll.indexOf(Arrays.asList(9, 8)));
+
+        // Objects.equals on collections is structural too.
+        System.out.println(Objects.equals(Arrays.asList(1, 2), Arrays.asList(1, 2)));
+
+        // An ArrayDeque is NOT a List: equals stays identity.
+        Deque<Integer> q1 = new ArrayDeque<>(Arrays.asList(1, 2));
+        Deque<Integer> q2 = new ArrayDeque<>(Arrays.asList(1, 2));
+        System.out.println(Objects.equals(q1, q2) + " " + Objects.equals(q1, q1));
+    }
+}
+"#
+);
+
 // `new Scanner(String)` tokenizes a literal source, and `nextLine` strips a
 // `\r\n` (or lone `\r`) terminator the way the JDK does — a CRLF source yields
 // `a`, not `a\r`.
