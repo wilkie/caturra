@@ -1592,6 +1592,12 @@ impl MethodTable {
                     JType::Char => ElemType::Char,
                     JType::Str => ElemType::Str,
                     JType::Object(id) => ElemType::Object(id),
+                    // `Throwable[]`/`Exception[]` — modelled as `Object[]`
+                    // (`ElemType` has no exception variant), matching what
+                    // `getSuppressed()` returns; reading an element needs a cast
+                    // to reach `getMessage()`. `T[]` (a type variable) likewise
+                    // erases to `Object[]` — the standard `(T[]) new Object[n]`.
+                    JType::Exception(_) | JType::TypeVar => ElemType::Object(self.object_id),
                     JType::Field => ElemType::Field,
                     JType::Method => ElemType::Method,
                     JType::Constructor => ElemType::Constructor,
@@ -1599,11 +1605,6 @@ impl MethodTable {
                     // A wrapper array (`Integer[]`) stores its primitives
                     // directly, like the corresponding primitive array.
                     JType::Boxed(elem) => elem,
-                    // `T[]` erases to `Object[]` — the array of a type
-                    // variable. Without this the dimension peel bailed out and
-                    // the unchecked cast `(T[]) new Object[n]`, the standard
-                    // way to build a generic array, was refused outright.
-                    JType::TypeVar => ElemType::Object(self.object_id),
                     _ => return None,
                 };
                 Some(JType::Array { elem, dims })
@@ -6261,6 +6262,13 @@ const EXCEPTION_METHODS: &[BuiltinMethod] = &[
         params: &[BParam::Throwable],
         ret: BRet::Void,
         descriptor: "(Ljava/lang/Throwable;)V",
+    },
+    // `initCause(t)` sets the cause and returns `this` (for chaining).
+    BuiltinMethod {
+        name: "initCause",
+        params: &[BParam::Throwable],
+        ret: BRet::Throwable,
+        descriptor: "(Ljava/lang/Throwable;)Ljava/lang/Throwable;",
     },
 ];
 
@@ -13384,43 +13392,36 @@ impl BodyGen<'_> {
         let sig = match table.resolve(&class_name, method, &arg_types) {
             Resolution::Found(sig) => sig.clone(),
             Resolution::UnknownName => {
-                // Throwable-descended classes inherit getMessage / toString /
-                // getCause from their library parent.
+                // A throwable-descended user class inherits Throwable's and
+                // Object's methods from its bundled parent — getMessage,
+                // toString, getCause, getClass, getLocalizedMessage, initCause,
+                // add/getSuppressed, printStackTrace. Resolve them uniformly
+                // against the exception method table (the same one a `catch`
+                // variable of a bundled exception uses).
                 if self.table.is_throwable(class_id)
-                    && (method == "getMessage" || method == "toString")
-                    && args.is_empty()
+                    && let Some(chosen) = pick_builtin(
+                        EXCEPTION_METHODS,
+                        method,
+                        &arg_types,
+                        TypeArgs::default(),
+                        self.table,
+                    )
                 {
+                    let mut args_width: u16 = 0;
+                    for (arg, param) in args.iter().zip(chosen.params) {
+                        let param_ty = bparam_type(*param, TypeArgs::default(), self.table);
+                        let actual = self.expr(arg);
+                        self.convert_for_assignment(actual, param_ty, arg.span());
+                        args_width += param_ty.width();
+                    }
                     let method_ref =
-                        intern_method_ref(self.pool, &class_name, method, "()Ljava/lang/String;");
-                    self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-                    self.code.drop_stack(1);
-                    return Some(Some(JType::Str));
-                }
-                if self.table.is_throwable(class_id) && method == "getCause" && args.is_empty() {
-                    let method_ref = intern_method_ref(
-                        self.pool,
-                        &class_name,
-                        "getCause",
-                        "()Ljava/lang/Throwable;",
-                    );
-                    self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-                    self.code.drop_stack(1);
-                    return Some(Some(JType::Exception(0)));
-                }
-                if self.table.is_throwable(class_id) && method == "getSuppressed" && args.is_empty()
-                {
-                    let method_ref = intern_method_ref(
-                        self.pool,
-                        &class_name,
-                        "getSuppressed",
-                        "()[Ljava/lang/Throwable;",
-                    );
-                    self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-                    self.code.drop_stack(1);
-                    return Some(Some(JType::Array {
-                        elem: ElemType::Object(self.table.object_id),
-                        dims: 1,
-                    }));
+                        intern_method_ref(self.pool, &class_name, chosen.name, chosen.descriptor);
+                    let ret = bret_type(chosen.ret, TypeArgs::default(), self.table);
+                    let ret_width = ret.map_or(0, JType::width);
+                    self.code
+                        .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
+                    self.code.drop_stack(1 + args_width);
+                    return Some(ret);
                 }
                 self.error(
                     span,
@@ -17239,6 +17240,18 @@ impl BodyGen<'_> {
             }
             return target;
         }
+        // Casting a reference (commonly an erased `Object` element of a
+        // `getSuppressed()` array) DOWN to a throwable type: a runtime checkcast
+        // to the exception's class, no-op on null.
+        if let JType::Exception(target_id) = target
+            && source.is_reference()
+        {
+            if !matches!(source, JType::Exception(_) | JType::Null) {
+                let class_index = intern_class(self.pool, exception_internal(target_id));
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return target;
+        }
         // Reference casts between class/interface types.
         if let JType::Object(target_id) = target {
             match source {
@@ -18799,7 +18812,7 @@ impl BodyGen<'_> {
     /// Like [`Self::convert_for_assignment`], but aware of the JLS
     /// constant-narrowing rule: an int CONSTANT in range assigns to
     /// byte/short/char without a cast (`byte b = 5;`).
-    #[allow(clippy::too_many_lines)] // one conversion matrix
+    #[allow(clippy::too_many_lines, clippy::match_same_arms)] // one conversion matrix
     fn convert_for_assignment_const(
         &mut self,
         from: JType,
@@ -18898,6 +18911,13 @@ impl BodyGen<'_> {
             (JType::Str, JType::Object(id)) if self.table.class_id("Comparable") == Some(id) => {}
             // A parameterized type and its raw class erase alike.
             (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
+            // A USER exception subclass (typed `Object(id)`) widening to its
+            // bundled throwable superclass: `Exception e = new MyException()`.
+            // `widens` allows it (via `library_throwable_ancestor`); this
+            // assignment matrix gates separately and needed the arm too — the
+            // same split noted for List -> Collection. The reference is
+            // unchanged (a widening reference conversion).
+            (JType::Object(_), JType::Exception(_)) if widens(from, to, self.table) => {}
             // Two erasures that need no code when `widens` (which gated the
             // call) allows them: a LinkedList/TreeSet/TreeMap widening to a
             // wider face, a List/Set/Stack widening to `Collection`, of the

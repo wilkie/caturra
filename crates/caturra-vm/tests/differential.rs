@@ -3032,6 +3032,50 @@ public class DiffIntern {
 "#
 );
 
+// Exception semantics: a user exception subclass widens to its bundled super,
+// inherits Throwable/Object methods (getClass/getLocalizedMessage/getCause),
+// `initCause`/`addSuppressed`/`getSuppressed` work, and a failed cast reports
+// JDK 11's module/loader clause.
+differential_test!(
+    diff_exception_semantics,
+    "DiffExc",
+    r#"
+public class DiffExc {
+    static class E1 extends Exception { E1(String m) { super(m); } }
+
+    public static void main(String[] args) {
+        // A user exception subclass widens to Exception / Throwable.
+        Exception e = new E1("boom");
+        System.out.println(e.getMessage());
+        Throwable t = new E1("x");
+        System.out.println(t.getMessage());
+
+        // Inherited Throwable/Object methods on the subclass's own type.
+        E1 sub = new E1("hi");
+        System.out.println(sub.getClass().getSimpleName());
+        System.out.println(sub.getLocalizedMessage());
+
+        // initCause and the cause chain.
+        Exception outer = new Exception("outer");
+        outer.initCause(new RuntimeException("inner"));
+        System.out.println(outer.getCause().getMessage());
+
+        // addSuppressed / getSuppressed (element reached with a cast).
+        Exception m = new Exception("main");
+        m.addSuppressed(new RuntimeException("s1"));
+        m.addSuppressed(new RuntimeException("s2"));
+        Throwable[] sup = m.getSuppressed();
+        System.out.println(sup.length + " " + ((Throwable) sup[0]).getMessage());
+
+        // A failed cast: the JDK 11 module/loader parenthetical.
+        Object o = "str";
+        try { Integer i = (Integer) o; }
+        catch (ClassCastException c) { System.out.println(c.getMessage()); }
+    }
+}
+"#
+);
+
 // Static-initialization order (JLS §12.4). A class whose <clinit> throws is
 // permanently Erroneous: the first active use throws ExceptionInInitializerError
 // and every LATER one throws NoClassDefFoundError. An inherited static METHOD

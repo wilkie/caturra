@@ -7213,9 +7213,13 @@ impl<'run> Interpreter<'run> {
         }
         let found = resolve_virtual(classes, instance_class, method_name, descriptor);
         let Some((class, method)) = found else {
-            // Throwable-descended classes inherit getMessage/toString.
+            // Throwable-descended classes inherit getMessage / getLocalizedMessage
+            // (its default just calls getMessage) / toString.
             if self.instance_is_throwable(instance_class)
-                && (method_name == "getMessage" || method_name == "toString")
+                && matches!(
+                    method_name,
+                    "getMessage" | "getLocalizedMessage" | "toString"
+                )
                 && descriptor == "()Ljava/lang/String;"
             {
                 let message = self
@@ -7226,7 +7230,7 @@ impl<'run> Interpreter<'run> {
                         JValue::Ref(Some(text)) => self.heap.string_text(text),
                         _ => None,
                     });
-                if method_name == "getMessage" {
+                if method_name == "getMessage" || method_name == "getLocalizedMessage" {
                     return Ok(UserDispatch::Value(Some(match message {
                         Some(text) => JValue::Ref(Some(self.heap.alloc_string(&text))),
                         None => JValue::NULL,
@@ -11848,14 +11852,29 @@ fn is_final_library_class(internal: &str) -> bool {
     )
 }
 
-/// The `ClassCastException` a failed cast raises, named the way Java names it:
-/// BINARY names, dotted. (The module/loader parenthetical a real JVM adds says
-/// where the classes were loaded from, which is not a thing caturra has.)
+/// A JDK 11 `ClassCastException` names each class's module and loader: a `java.*`
+/// class is in `module java.base of loader 'bootstrap'`, a user class in
+/// `unnamed module of loader 'app'`; the two are combined when they match.
+fn class_module_desc(dotted: &str) -> &'static str {
+    if dotted.starts_with("java.") || dotted.starts_with("javax.") {
+        "module java.base of loader 'bootstrap'"
+    } else {
+        "unnamed module of loader 'app'"
+    }
+}
+
+/// The `ClassCastException` a failed cast raises, named the way JDK 11 names it:
+/// BINARY names, dotted, with the module/loader parenthetical.
 fn class_cast_error(actual: &str, target: &str) -> VmError {
+    let (actual, target) = (actual.replace('/', "."), target.replace('/', "."));
+    let (ma, mt) = (class_module_desc(&actual), class_module_desc(&target));
+    let paren = if ma == mt {
+        format!("({actual} and {target} are in {ma})")
+    } else {
+        format!("({actual} is in {ma}; {target} is in {mt})")
+    };
     VmError::UncaughtException(format!(
-        "java.lang.ClassCastException: class {} cannot be cast to class {}",
-        actual.replace('/', "."),
-        target.replace('/', ".")
+        "java.lang.ClassCastException: class {actual} cannot be cast to class {target} {paren}"
     ))
 }
 

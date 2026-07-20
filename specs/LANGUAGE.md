@@ -188,6 +188,18 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   invalid strings still throw. The `%a`/`%A` formatter conversion (hexadecimal
   floating-point) renders the text `Double.toHexString` produces (`0x1.0p0`),
   where it used to throw UnknownFormatConversionException.
+- **Exception semantics** (2026-07-20): a USER exception subclass now widens to
+  its bundled superclass (`Exception e = new MyException()` — the assignment
+  matrix gained the `Object -> Exception` arm `widens` already had); its inherited
+  Throwable/Object methods resolve (`getClass`, `getLocalizedMessage`, `getCause`,
+  `initCause`, `add`/`getSuppressed`, `printStackTrace` — the compiler falls back
+  to the exception method table for any throwable receiver, and the VM aliases
+  `getLocalizedMessage` to `getMessage`). `initCause` is now modelled; a
+  `Throwable[]` type resolves (as `Object[]`, so reading an element needs a cast
+  to `Throwable`, which is now a legal down-cast). A failed cast reports JDK 11's
+  module/loader parenthetical (`... are in module java.base of loader
+  'bootstrap'`). **Gap:** an unwrapped `getSuppressed()[i].getMessage()` still
+  needs an explicit `(Throwable)` cast — `ElemType` has no exception variant.
 - **Static-initialization order** (2026-07-20, JLS §12.4): (1) a class whose
   `<clinit>` throws is permanently Erroneous — the first active use throws
   ExceptionInInitializerError, and every LATER use now throws
