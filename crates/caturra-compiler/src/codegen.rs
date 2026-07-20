@@ -5738,6 +5738,20 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         BRet::OptionalDouble,
         "()Ljava/util/OptionalDouble;",
     ),
+    // `IntStream.findFirst()`/`findAny()` return `OptionalInt`, not `Optional`.
+    // The VM reads the descriptor to pick the OptionalInt kind.
+    bm(
+        "findFirst",
+        &[],
+        BRet::OptionalInt,
+        "()Ljava/util/OptionalInt;",
+    ),
+    bm(
+        "findAny",
+        &[],
+        BRet::OptionalInt,
+        "()Ljava/util/OptionalInt;",
+    ),
     bm(
         "anyMatch",
         &[BParam::Predicate],

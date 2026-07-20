@@ -681,10 +681,16 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     `Collection<E>` (`List<E> l = new Stack<>()`). Only the no-argument
     constructor is offered, matching javac (Stack declares no copy constructor of
     its own). Pinned against a real JDK by `diff_stack_lifo_and_list`.
-  - `java.util.stream.Stream<E>` (2026-07-11), the `collection.stream()`
-    pipeline, modelled **eagerly** — each intermediate op transforms a vector
-    and each terminal op consumes it, which gives identical results to a lazy
-    JDK stream for the finite streams student code builds. Intermediate:
+  - `java.util.stream.Stream<E>` (2026-07-11; made **LAZY** 2026-07-19), the
+    `collection.stream()` pipeline. A stream holds its source plus the pending
+    intermediate ops; nothing runs until a terminal PULLS elements one at a
+    time through the op chain. So side effects INTERLEAVE
+    (`peek(a); filter(a); out(a); peek(bb); …`, not staged), and a
+    short-circuit terminal (`findFirst`/`anyMatch`/`allMatch`/`noneMatch`, or a
+    downstream `limit`) stops the source early — a pipeline whose upstream would
+    throw for a skipped element now completes exactly as a JDK does, where the
+    eager model crashed. `sorted` is a barrier: it materializes the upstream
+    (running its side effects in order) and re-sources. Intermediate:
     `filter`/`map`/`sorted`/`sorted(cmp)`/`distinct`/`limit`/`skip`/`peek`.
     Terminal: `collect(Collectors.toList()/toSet()/joining(...))`,
     `forEach`/`forEachOrdered`, `count`, `anyMatch`/`allMatch`/`noneMatch`. A

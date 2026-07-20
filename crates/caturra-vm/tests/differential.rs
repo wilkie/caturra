@@ -12959,3 +12959,83 @@ public class DiffFormatRendering {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Streams are LAZY: interleaved side effects and short-circuiting
+//
+// The model was eager — every intermediate op ran over the whole vector — so
+// side effects were STAGED (all peeks, then all filters) and a short-circuit
+// terminal still evaluated the whole upstream, which could throw for an element
+// a JDK never touches. Now the terminal PULLS one element at a time.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_streams_are_lazy,
+    "DiffLazyStreams",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+public class DiffLazyStreams {
+    public static void main(String[] args) {
+        List<String> words = new ArrayList<>(Arrays.asList("a", "bb", "ccc"));
+        List<Integer> nums = new ArrayList<>(Arrays.asList(1, 2, 3, 4, 5));
+
+        // One element travels the whole pipeline before the next starts.
+        words.stream()
+            .peek(s -> System.out.println("peek " + s))
+            .filter(s -> { System.out.println("filt " + s); return s.length() > 1; })
+            .forEach(s -> System.out.println("out " + s));
+        System.out.println("--");
+
+        // findFirst stops the source; the filter never runs on 4 or 5.
+        System.out.println(nums.stream()
+            .filter(x -> { System.out.println("f " + x); return x == 3; })
+            .findFirst().get());
+        System.out.println("--");
+
+        // limit stops an upstream peek.
+        System.out.println(nums.stream()
+            .peek(x -> System.out.println("p " + x))
+            .limit(2).collect(Collectors.toList()));
+        System.out.println("--");
+
+        // The over-eager crash: findFirst returns before the element that would
+        // divide by zero.
+        List<Integer> danger = new ArrayList<>(Arrays.asList(1, 2, 0, 4));
+        System.out.println(danger.stream().filter(x -> 10 / x > 0).findFirst().get());
+        System.out.println("--");
+
+        // The match terminals short-circuit.
+        System.out.println(nums.stream().anyMatch(x -> { System.out.println("any " + x); return x == 2; }));
+        System.out.println(nums.stream().allMatch(x -> { System.out.println("all " + x); return x < 3; }));
+        System.out.println(nums.stream().noneMatch(x -> { System.out.println("none " + x); return x == 2; }));
+        System.out.println("--");
+
+        // sorted is a BARRIER: every pre-peek fires, then post-peek in order.
+        List<Integer> jumbled = new ArrayList<>(Arrays.asList(3, 1, 2));
+        jumbled.stream()
+            .peek(x -> System.out.println("pre " + x))
+            .sorted()
+            .peek(x -> System.out.println("post " + x))
+            .forEach(x -> System.out.println("s " + x));
+        System.out.println("--");
+
+        // distinct interleaves; skip drops the leading elements.
+        List<Integer> dups = new ArrayList<>(Arrays.asList(1, 1, 2, 1, 3));
+        dups.stream().peek(x -> System.out.println("d " + x)).distinct().forEach(x -> System.out.println("u " + x));
+        System.out.println(nums.stream().skip(3).collect(Collectors.toList()));
+        System.out.println("--");
+
+        // IntStream: findFirst (now present, OptionalInt), a mapper bounded by
+        // limit, and sum/range.
+        System.out.println(IntStream.range(1, 10).filter(x -> x % 3 == 0).findFirst().getAsInt());
+        System.out.println(IntStream.range(1, 20).limit(3).mapToObj(x -> "n" + x).collect(Collectors.joining(",")));
+        System.out.println(IntStream.range(1, 5).map(x -> x * x).sum());
+    }
+}
+"#
+);

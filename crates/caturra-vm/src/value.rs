@@ -50,6 +50,26 @@ pub enum ComparatorSpec {
     Then(HeapRef, HeapRef),
 }
 
+/// A pending intermediate stream operation. The terminal pulls each source
+/// element through these in order; `sorted` is not here because it is a
+/// barrier that materializes the pipeline instead of deferring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamOp {
+    /// `filter(pred)` — drop an element the predicate rejects.
+    Filter(HeapRef),
+    /// `map`/`mapToInt`/`mapToObj`/… — replace the element with the function's
+    /// result (all one thing here, since primitives are stored unboxed).
+    Map(HeapRef),
+    /// `peek(consumer)` — run the consumer for its side effect, pass through.
+    Peek(HeapRef),
+    /// `limit(n)` — pass the first `n` elements, then stop the source.
+    Limit(usize),
+    /// `skip(n)` — drop the first `n` elements.
+    Skip(usize),
+    /// `distinct()` — pass an element only the first time it is seen.
+    Distinct,
+}
+
 /// What a `Stream.collect(Collectors.…())` gathers its elements into.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollectorKind {
@@ -282,12 +302,17 @@ pub enum HeapObject {
     /// [`crate::map::JavaHashMap`] with each element stored as a key mapped to
     /// a placeholder value.
     HashSet(crate::map::JavaHashMap),
-    /// A `java.util.stream.Stream` (element type erased). Modelled eagerly: the
-    /// vector holds the pipeline's current elements, each intermediate operation
-    /// (`filter`/`map`/`sorted`/…) produces a new one, and a terminal operation
-    /// (`collect`/`forEach`/`count`/…) consumes it. Finite streams give
-    /// identical results to a lazy JDK stream.
-    Stream(Vec<JValue>),
+    /// A `java.util.stream.Stream` (element type erased), modelled LAZILY: the
+    /// source elements plus the pending intermediate operations. Nothing runs
+    /// until a terminal operation PULLS elements one at a time through the op
+    /// chain, so side effects interleave and a short-circuit terminal
+    /// (`findFirst`/`anyMatch`/`limit`) stops the source early — exactly as a
+    /// JDK does, and unlike the previous eager `Vec` that ran every stage in
+    /// full. `sorted` is a barrier: it materializes and re-sources.
+    Stream {
+        source: Vec<JValue>,
+        ops: Vec<StreamOp>,
+    },
     /// The recipe a `Stream.collect` gathers into, from a `Collectors` factory.
     Collector(CollectorKind),
     /// A `Comparator` built by the `Comparator` static factories / combinators

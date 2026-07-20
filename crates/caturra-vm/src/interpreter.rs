@@ -5925,10 +5925,13 @@ impl<'run> Interpreter<'run> {
         use crate::value::HeapObject;
         if method == "stream" && args.is_empty() && self.is_streamable(receiver) {
             let elements = self.collection_elements(receiver);
-            let stream = self.heap.alloc(HeapObject::Stream(elements));
+            let stream = self.heap.alloc(HeapObject::Stream {
+                source: elements,
+                ops: Vec::new(),
+            });
             return Ok(Answered::Value(JValue::Ref(Some(stream))));
         }
-        if matches!(self.heap.get(receiver), Some(HeapObject::Stream(_))) {
+        if matches!(self.heap.get(receiver), Some(HeapObject::Stream { .. })) {
             return self.stream_intrinsic(receiver, method, descriptor, args);
         }
         if matches!(self.heap.get(receiver), Some(HeapObject::Optional { .. })) {
@@ -5969,18 +5972,207 @@ impl<'run> Interpreter<'run> {
         Ok(Answered::No)
     }
 
-    /// The current elements of a `Stream`, detached from the heap borrow.
-    fn stream_elements(&self, stream: HeapRef) -> Vec<JValue> {
+    /// A stream's source vector and pending ops, detached from the heap borrow.
+    fn stream_pipeline(&self, stream: HeapRef) -> (Vec<JValue>, Vec<crate::value::StreamOp>) {
         match self.heap.get(stream) {
-            Some(crate::value::HeapObject::Stream(elements)) => elements.clone(),
-            _ => Vec::new(),
+            Some(crate::value::HeapObject::Stream { source, ops }) => (source.clone(), ops.clone()),
+            _ => (Vec::new(), Vec::new()),
         }
     }
 
-    fn alloc_stream(&mut self, elements: Vec<JValue>) -> JValue {
+    /// Append an intermediate op, returning the new stream. The source is
+    /// SHARED by clone (finite, small), so the chain stays a value pipeline.
+    fn stream_with_op(&mut self, stream: HeapRef, op: crate::value::StreamOp) -> JValue {
+        let (source, mut ops) = self.stream_pipeline(stream);
+        ops.push(op);
         JValue::Ref(Some(
-            self.heap.alloc(crate::value::HeapObject::Stream(elements)),
+            self.heap
+                .alloc(crate::value::HeapObject::Stream { source, ops }),
         ))
+    }
+
+    /// A fresh stream over already-computed elements (for `sorted`, which is a
+    /// materializing barrier, and for the numeric-range factories).
+    fn alloc_stream(&mut self, elements: Vec<JValue>) -> JValue {
+        JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::Stream {
+            source: elements,
+            ops: Vec::new(),
+        })))
+    }
+
+    /// Run the whole pipeline to completion, gathering the surviving elements —
+    /// what a non-short-circuit terminal (collect/count/toArray/sum/…) needs.
+    fn stream_materialize(&mut self, stream: HeapRef) -> Result<Vec<JValue>, VmError> {
+        let (source, ops) = self.stream_pipeline(stream);
+        let mut sink = StreamSink::Collect(Vec::new());
+        self.stream_drive(&source, &ops, &mut sink)?;
+        match sink {
+            StreamSink::Collect(out) => Ok(out),
+            _ => unreachable!("Collect sink"),
+        }
+    }
+
+    /// Pull each source element through `ops`, feeding the survivors to `sink`.
+    /// A `sink` (or a `limit`) may STOP the source early — the whole point of
+    /// the lazy model.
+    fn stream_drive(
+        &mut self,
+        source: &[JValue],
+        ops: &[crate::value::StreamOp],
+        sink: &mut StreamSink,
+    ) -> Result<(), VmError> {
+        let mut states: Vec<StreamOpState> = ops
+            .iter()
+            .map(|op| match op {
+                crate::value::StreamOp::Limit(_) | crate::value::StreamOp::Skip(_) => {
+                    StreamOpState::Counter(0)
+                }
+                crate::value::StreamOp::Distinct => StreamOpState::Seen(Vec::new()),
+                _ => StreamOpState::None,
+            })
+            .collect();
+        for element in source {
+            if !self.stream_feed(ops, &mut states, sink, 0, *element)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Feed one `value` into `ops[i..]`; on reaching the end it goes to `sink`.
+    /// Returns `false` to stop the source (a full `limit`, or a satisfied
+    /// short-circuit sink).
+    fn stream_feed(
+        &mut self,
+        ops: &[crate::value::StreamOp],
+        states: &mut Vec<StreamOpState>,
+        sink: &mut StreamSink,
+        i: usize,
+        value: JValue,
+    ) -> Result<bool, VmError> {
+        use crate::value::StreamOp;
+        if i == ops.len() {
+            return self.stream_sink(sink, value);
+        }
+        match &ops[i] {
+            StreamOp::Filter(pred) => {
+                let pred = *pred;
+                if self.call_test(pred, value)? {
+                    self.stream_feed(ops, states, sink, i + 1, value)
+                } else {
+                    Ok(true)
+                }
+            }
+            StreamOp::Map(function) => {
+                let function = *function;
+                let mapped = self.call_apply(function, value)?;
+                self.stream_feed(ops, states, sink, i + 1, mapped)
+            }
+            StreamOp::Peek(consumer) => {
+                let consumer = *consumer;
+                self.call_functional(consumer, "accept", "(Ljava/lang/Object;)V", value)?;
+                self.stream_feed(ops, states, sink, i + 1, value)
+            }
+            StreamOp::Limit(n) => {
+                let n = *n;
+                let StreamOpState::Counter(emitted) = states[i] else {
+                    unreachable!("limit counter");
+                };
+                if emitted >= n {
+                    return Ok(false);
+                }
+                states[i] = StreamOpState::Counter(emitted + 1);
+                let downstream = self.stream_feed(ops, states, sink, i + 1, value)?;
+                // Stop once this is the n-th element, or if downstream stopped.
+                Ok(downstream && emitted + 1 < n)
+            }
+            StreamOp::Skip(n) => {
+                let n = *n;
+                let StreamOpState::Counter(skipped) = states[i] else {
+                    unreachable!("skip counter");
+                };
+                if skipped < n {
+                    states[i] = StreamOpState::Counter(skipped + 1);
+                    Ok(true)
+                } else {
+                    self.stream_feed(ops, states, sink, i + 1, value)
+                }
+            }
+            StreamOp::Distinct => {
+                // Take the seen set out so the borrow does not span the
+                // `java_equals` calls (which need `&mut self`).
+                let seen = match std::mem::replace(&mut states[i], StreamOpState::None) {
+                    StreamOpState::Seen(seen) => seen,
+                    other => {
+                        states[i] = other;
+                        Vec::new()
+                    }
+                };
+                let mut duplicate = false;
+                for kept in &seen {
+                    if self.java_equals(value, *kept)? {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                let mut seen = seen;
+                if !duplicate {
+                    seen.push(value);
+                }
+                states[i] = StreamOpState::Seen(seen);
+                if duplicate {
+                    Ok(true)
+                } else {
+                    self.stream_feed(ops, states, sink, i + 1, value)
+                }
+            }
+        }
+    }
+
+    /// Deliver one pipeline-output element to the terminal sink.
+    fn stream_sink(&mut self, sink: &mut StreamSink, value: JValue) -> Result<bool, VmError> {
+        Ok(match sink {
+            StreamSink::Collect(out) => {
+                out.push(value);
+                true
+            }
+            StreamSink::FindFirst(slot) => {
+                *slot = Some(value);
+                false // the first element is enough
+            }
+            StreamSink::ForEach(consumer) => {
+                let consumer = *consumer;
+                self.call_functional(consumer, "accept", "(Ljava/lang/Object;)V", value)?;
+                true
+            }
+            StreamSink::AnyMatch { pred, matched } => {
+                let pred = *pred;
+                if self.call_test(pred, value)? {
+                    *matched = true;
+                    false
+                } else {
+                    true
+                }
+            }
+            StreamSink::AllMatch { pred, matched } => {
+                let pred = *pred;
+                if self.call_test(pred, value)? {
+                    true
+                } else {
+                    *matched = false;
+                    false
+                }
+            }
+            StreamSink::NoneMatch { pred, matched } => {
+                let pred = *pred;
+                if self.call_test(pred, value)? {
+                    *matched = false;
+                    false
+                } else {
+                    true
+                }
+            }
+        })
     }
 
     fn alloc_optional(
@@ -6161,105 +6353,162 @@ impl<'run> Interpreter<'run> {
         descriptor: &str,
         args: &[JValue],
     ) -> Result<Answered, VmError> {
-        use crate::value::OptionalKind;
-        let elements = self.stream_elements(receiver);
-        let result = match (method, args) {
+        use crate::value::{OptionalKind, StreamOp};
+        // INTERMEDIATE operations just append to the pending-op list; nothing
+        // is evaluated until a terminal pulls. `sorted` is the exception — it
+        // is a barrier, so it materializes and re-sources.
+        match (method, args) {
             ("filter", [JValue::Ref(Some(pred))]) => {
-                let mut kept = Vec::with_capacity(elements.len());
-                for element in elements {
-                    if self.call_test(*pred, element)? {
-                        kept.push(element);
-                    }
-                }
-                self.alloc_stream(kept)
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Filter(*pred)),
+                ));
             }
-            // `map`/`mapToInt`/`mapToObj` all apply a one-argument function to
-            // each element; the difference (object vs int result) is compile-time
-            // only, since caturra stores primitives unboxed.
             (
                 "map" | "mapToInt" | "mapToObj" | "mapToLong" | "mapToDouble",
                 [JValue::Ref(Some(function))],
             ) => {
-                let mut mapped = Vec::with_capacity(elements.len());
-                for element in elements {
-                    mapped.push(self.call_apply(*function, element)?);
-                }
-                self.alloc_stream(mapped)
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Map(*function)),
+                ));
             }
-            // `IntStream.boxed()` / `asLongStream()` — a no-op here (elements are
-            // stored unboxed either way), just a retyping.
-            ("boxed" | "asLongStream" | "asDoubleStream", []) => self.alloc_stream(elements),
-            // `IntStream.sum()` — add the (unboxed int) elements, wrapping.
+            ("peek", [JValue::Ref(Some(consumer))]) => {
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Peek(*consumer)),
+                ));
+            }
+            ("limit", [count]) => {
+                let n = stream_count_arg(*count);
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Limit(n)),
+                ));
+            }
+            ("skip", [count]) => {
+                let n = stream_count_arg(*count);
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Skip(n)),
+                ));
+            }
+            ("distinct", []) => {
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Distinct),
+                ));
+            }
+            // `boxed`/`asLongStream`/`asDoubleStream` are retypings — no
+            // element change, so the pipeline passes through unchanged.
+            ("boxed" | "asLongStream" | "asDoubleStream", []) => {
+                let (source, ops) = self.stream_pipeline(receiver);
+                return Ok(Answered::Value(JValue::Ref(Some(
+                    self.heap
+                        .alloc(crate::value::HeapObject::Stream { source, ops }),
+                ))));
+            }
+            // `sorted` is a stateful BARRIER: it consumes the whole upstream
+            // (running its side effects in order) before emitting anything, so
+            // materialize now and start a fresh pipeline over the sorted result.
+            ("sorted", []) => {
+                let elements = self.stream_materialize(receiver)?;
+                let sorted = self.merge_sort_by(elements, None)?;
+                return Ok(Answered::Value(self.alloc_stream(sorted)));
+            }
+            ("sorted", [JValue::Ref(Some(comparator))]) => {
+                let elements = self.stream_materialize(receiver)?;
+                let sorted = self.merge_sort_by(elements, Some(*comparator))?;
+                return Ok(Answered::Value(self.alloc_stream(sorted)));
+            }
+            _ => {}
+        }
+
+        // SHORT-CIRCUIT terminals: drive the pipeline with a sink that can stop
+        // the source before every element is produced.
+        match (method, args) {
+            ("findFirst" | "findAny", []) => {
+                let (source, ops) = self.stream_pipeline(receiver);
+                let mut sink = StreamSink::FindFirst(None);
+                self.stream_drive(&source, &ops, &mut sink)?;
+                let StreamSink::FindFirst(found) = sink else {
+                    unreachable!("FindFirst sink");
+                };
+                // An `IntStream` terminal is typed `OptionalInt`; a `Stream`
+                // one `Optional`. The descriptor is the only thing that still
+                // knows which.
+                let kind = if descriptor.contains("OptionalInt") {
+                    OptionalKind::Int
+                } else if descriptor.contains("OptionalDouble") {
+                    OptionalKind::Double
+                } else {
+                    OptionalKind::Ref
+                };
+                return Ok(Answered::Value(self.alloc_optional(found, kind)));
+            }
+            ("anyMatch", [JValue::Ref(Some(pred))]) => {
+                let (source, ops) = self.stream_pipeline(receiver);
+                let mut sink = StreamSink::AnyMatch {
+                    pred: *pred,
+                    matched: false,
+                };
+                self.stream_drive(&source, &ops, &mut sink)?;
+                let StreamSink::AnyMatch { matched, .. } = sink else {
+                    unreachable!()
+                };
+                return Ok(Answered::Value(JValue::Int(i32::from(matched))));
+            }
+            ("allMatch", [JValue::Ref(Some(pred))]) => {
+                let (source, ops) = self.stream_pipeline(receiver);
+                let mut sink = StreamSink::AllMatch {
+                    pred: *pred,
+                    matched: true,
+                };
+                self.stream_drive(&source, &ops, &mut sink)?;
+                let StreamSink::AllMatch { matched, .. } = sink else {
+                    unreachable!()
+                };
+                return Ok(Answered::Value(JValue::Int(i32::from(matched))));
+            }
+            ("noneMatch", [JValue::Ref(Some(pred))]) => {
+                let (source, ops) = self.stream_pipeline(receiver);
+                let mut sink = StreamSink::NoneMatch {
+                    pred: *pred,
+                    matched: true,
+                };
+                self.stream_drive(&source, &ops, &mut sink)?;
+                let StreamSink::NoneMatch { matched, .. } = sink else {
+                    unreachable!()
+                };
+                return Ok(Answered::Value(JValue::Int(i32::from(matched))));
+            }
+            ("forEach" | "forEachOrdered", [JValue::Ref(Some(consumer))]) => {
+                let (source, ops) = self.stream_pipeline(receiver);
+                let mut sink = StreamSink::ForEach(*consumer);
+                self.stream_drive(&source, &ops, &mut sink)?;
+                return Ok(Answered::Void);
+            }
+            _ => {}
+        }
+
+        // The remaining terminals consume every element, so materialize the
+        // whole pipeline (peeks and all) and post-process.
+        let elements = self.stream_materialize(receiver)?;
+        let result = match (method, args) {
             ("sum", []) => {
                 let mut total = 0i32;
-                for element in elements {
+                for element in &elements {
                     if let JValue::Int(n) = element {
-                        total = total.wrapping_add(n);
+                        total = total.wrapping_add(*n);
                     }
                 }
                 JValue::Int(total)
             }
-            // `IntStream.toArray()` — the ints as an `int[]`.
             ("toArray", []) => {
                 let ints: Vec<i32> = elements
-                    .into_iter()
-                    .map(|e| if let JValue::Int(n) = e { n } else { 0 })
+                    .iter()
+                    .map(|e| if let JValue::Int(n) = e { *n } else { 0 })
                     .collect();
                 JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::IntArray(
                     crate::value::IntKind::Int,
                     ints,
                 ))))
             }
-            ("sorted", []) => {
-                let sorted = self.merge_sort_by(elements, None)?;
-                self.alloc_stream(sorted)
-            }
-            ("sorted", [JValue::Ref(Some(comparator))]) => {
-                let sorted = self.merge_sort_by(elements, Some(*comparator))?;
-                self.alloc_stream(sorted)
-            }
-            ("distinct", []) => {
-                let mut unique: Vec<JValue> = Vec::new();
-                for element in elements {
-                    let mut seen = false;
-                    for kept in &unique {
-                        if self.java_equals(element, *kept)? {
-                            seen = true;
-                            break;
-                        }
-                    }
-                    if !seen {
-                        unique.push(element);
-                    }
-                }
-                self.alloc_stream(unique)
-            }
-            ("limit", [count]) => {
-                let count = stream_count_arg(*count);
-                self.alloc_stream(elements.into_iter().take(count).collect())
-            }
-            ("skip", [count]) => {
-                let count = stream_count_arg(*count);
-                self.alloc_stream(elements.into_iter().skip(count).collect())
-            }
-            ("peek", [JValue::Ref(Some(consumer))]) => {
-                for element in &elements {
-                    self.call_functional(*consumer, "accept", "(Ljava/lang/Object;)V", *element)?;
-                }
-                self.alloc_stream(elements)
-            }
-            ("forEach" | "forEachOrdered", [JValue::Ref(Some(consumer))]) => {
-                for element in elements {
-                    self.call_functional(*consumer, "accept", "(Ljava/lang/Object;)V", element)?;
-                }
-                return Ok(Answered::Void);
-            }
             ("count", []) => JValue::Long(i64::try_from(elements.len()).unwrap_or(i64::MAX)),
-            ("findFirst" | "findAny", []) => {
-                self.alloc_optional(elements.first().copied(), OptionalKind::Ref)
-            }
-            // `Stream.max`/`min(Comparator)` — the extreme by the comparator,
-            // keeping the accumulator on ties (Java's `maxBy`/`minBy`).
             ("max" | "min", [JValue::Ref(Some(comparator))]) => {
                 let want_max = method == "max";
                 let mut best: Option<JValue> = None;
@@ -6276,7 +6525,6 @@ impl<'run> Interpreter<'run> {
                 }
                 self.alloc_optional(best, OptionalKind::Ref)
             }
-            // `IntStream.max`/`min()` — natural int ordering.
             ("max" | "min", []) => {
                 let want_max = method == "max";
                 let mut best: Option<i32> = None;
@@ -6291,7 +6539,6 @@ impl<'run> Interpreter<'run> {
                 }
                 self.alloc_optional(best.map(JValue::Int), OptionalKind::Int)
             }
-            // `IntStream.average()` — the mean as an OptionalDouble.
             ("average", []) => {
                 let value = if elements.is_empty() {
                     None
@@ -6311,23 +6558,6 @@ impl<'run> Interpreter<'run> {
                     Some(JValue::Double(mean))
                 };
                 self.alloc_optional(value, OptionalKind::Double)
-            }
-            ("anyMatch" | "allMatch" | "noneMatch", [JValue::Ref(Some(pred))]) => {
-                let mut any = false;
-                let mut all = true;
-                for element in elements {
-                    if self.call_test(*pred, element)? {
-                        any = true;
-                    } else {
-                        all = false;
-                    }
-                }
-                let matched = match method {
-                    "anyMatch" => any,
-                    "allMatch" => all,
-                    _ => !any,
-                };
-                JValue::Int(i32::from(matched))
             }
             ("collect", [JValue::Ref(Some(collector))]) => {
                 self.stream_collect(elements, *collector)?
@@ -6965,7 +7195,10 @@ impl<'run> Interpreter<'run> {
                 *to
             };
             let ints: Vec<JValue> = (*from..end).map(JValue::Int).collect();
-            let stream = self.heap.alloc(crate::value::HeapObject::Stream(ints));
+            let stream = self.heap.alloc(crate::value::HeapObject::Stream {
+                source: ints,
+                ops: Vec::new(),
+            });
             frame.stack.push(JValue::Ref(Some(stream)));
             return Ok(None);
         }
@@ -9884,6 +10117,26 @@ enum UserDispatch<'run> {
 /// guard is a pointer comparison. Without this, every call re-scanned the
 /// descriptor, hashed it, hashed the receiver's class name, and walked the
 /// superclass chain comparing method names.
+/// Per-op mutable state during a single `stream_drive` (limit/skip counters,
+/// the distinct seen-set). Parallel to the op list.
+enum StreamOpState {
+    None,
+    Counter(usize),
+    Seen(Vec<JValue>),
+}
+
+/// Where a stream terminal collects its result. The variants that carry a
+/// predicate are the short-circuiting matches; `matched` holds the answer so
+/// far (initialised so an empty stream gives the JDK's result).
+enum StreamSink {
+    Collect(Vec<JValue>),
+    ForEach(HeapRef),
+    FindFirst(Option<JValue>),
+    AnyMatch { pred: HeapRef, matched: bool },
+    AllMatch { pred: HeapRef, matched: bool },
+    NoneMatch { pred: HeapRef, matched: bool },
+}
+
 struct VirtualSite<'run> {
     argc: usize,
     widths: Rc<[u16]>,
