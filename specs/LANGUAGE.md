@@ -147,6 +147,16 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Interface inheritance semantics** (2026-07-20): a `private` interface method
+  is not inherited (JLS §9.4), so calling it on an implementing class is now the
+  compile-time "cannot find symbol" javac gives, not a method that resolved and
+  died at run time — the resolver skips an inherited interface's `private` (and,
+  as before, `static`) methods. And a type that inherits the same DEFAULT method
+  from two UNRELATED interfaces without overriding is an ambiguous inheritance
+  (JLS §8.4.8): `class C implements A, B` (both `default x()`) — and equally
+  `interface AB extends A, B` — is now the "types A and B are incompatible" error
+  rather than a silent arbitrary pick. A related override (a sub-interface's more
+  specific default, or the type's own) resolves it, as on javac.
 - **Interface member validation** (2026-07-20, JLS §9.4): an interface method
   may not be `protected` or `final`, `static` and `default` are mutually
   exclusive, a `static`/`default`/`private` method must have a body while a plain

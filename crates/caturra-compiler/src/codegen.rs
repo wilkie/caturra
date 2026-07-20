@@ -1040,6 +1040,22 @@ impl MethodTable {
                         ));
                     }
                 }
+
+                // A type inheriting the same default from two unrelated
+                // interfaces, without overriding, is an ambiguous inheritance
+                // (JLS §8.4.8) — a class OR an interface (`interface AB extends
+                // A, B` where both default the same method) must resolve it.
+                if let Some((method_name, a, b)) = self.conflicting_default(info.id) {
+                    diagnostics.push(Diagnostic::error(
+                        path,
+                        format!(
+                            "types {a} and {b} are incompatible; class {} inherits unrelated \
+                             defaults for {method_name}() from types {a} and {b}",
+                            class.name
+                        ),
+                        class.span,
+                    ));
+                }
             }
         }
     }
@@ -1132,6 +1148,89 @@ impl MethodTable {
 
     /// Find one abstract method (from the superclass chain or any
     /// interface) with no concrete implementation in the chain.
+    /// Whether the class (or an ancestor CLASS) declares a concrete override
+    /// of `name(params)`, so an inherited interface default is not in force.
+    fn class_overrides(&self, class: ClassId, name: &str, params: &[JType]) -> bool {
+        let mut current = Some(class);
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                break;
+            }
+            let Some(info) = self.info_by_id(id) else {
+                break;
+            };
+            // The type's OWN concrete declaration counts (a class override, or
+            // an interface resolving its inherited conflict with its own
+            // default); ancestors are reached only through `superclass`, which
+            // is a class chain, so no inherited interface default sneaks in.
+            if info.methods.iter().any(|m| {
+                m.name == name && !m.is_abstract && self.params_override(&m.params, params)
+            }) {
+                return true;
+            }
+            current = info.superclass;
+        }
+        false
+    }
+
+    /// A concrete class that inherits DEFAULT methods with the same signature
+    /// from two UNRELATED interfaces, without overriding — JLS §8.4.8 / §9.4.1.3:
+    /// "types A and B are incompatible". caturra used to pick one arbitrarily
+    /// and run. Returns `(method, interface A, interface B)`.
+    fn conflicting_default(&self, class: ClassId) -> Option<(String, String, String)> {
+        let mut ifaces: Vec<ClassId> = Vec::new();
+        let mut stack = vec![class];
+        let mut steps = 0usize;
+        while let Some(id) = stack.pop() {
+            steps += 1;
+            if steps > self.class_names.len() * 4 {
+                break;
+            }
+            if let Some(info) = self.info_by_id(id) {
+                if info.is_interface && id != class {
+                    ifaces.push(id);
+                }
+                if let Some(parent) = info.superclass {
+                    stack.push(parent);
+                }
+                stack.extend(info.interfaces.iter().copied());
+            }
+        }
+        ifaces.sort_by_key(|id| id.0);
+        ifaces.dedup();
+        let is_default = |m: &MethodSig| !m.is_abstract && !m.is_static && !m.is_private;
+        for i in 0..ifaces.len() {
+            for j in (i + 1)..ifaces.len() {
+                let (a, b) = (ifaces[i], ifaces[j]);
+                // A sub-interface's default overrides its parent's — only
+                // UNRELATED interfaces conflict.
+                if self.is_subtype(a, b) || self.is_subtype(b, a) {
+                    continue;
+                }
+                let (Some(ia), Some(ib)) = (self.info_by_id(a), self.info_by_id(b)) else {
+                    continue;
+                };
+                for ma in ia.methods.iter().filter(|m| is_default(m)) {
+                    for mb in ib.methods.iter().filter(|m| is_default(m)) {
+                        if ma.name == mb.name
+                            && ma.params == mb.params
+                            && !self.class_overrides(class, &ma.name, &ma.params)
+                        {
+                            return Some((
+                                ma.name.clone(),
+                                self.class_name(a).to_owned(),
+                                self.class_name(b).to_owned(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn missing_abstract_method(&self, class: ClassId) -> Option<(String, String)> {
         // Collect every abstract signature visible to this class.
         let mut required: Vec<(&MethodSig, ClassId)> = Vec::new();
@@ -1590,9 +1689,15 @@ impl MethodTable {
                 // `C implements I` cannot call `C.hi()` or `c.hi()` for a
                 // static `I.hi()` — only `I.hi()`. javac says "cannot find
                 // symbol"; caturra used to compile it and die at run time.
-                let skip_static = info.is_interface && Some(id) != start;
+                // An interface reached THROUGH an implementor (not named
+                // directly) does not contribute its `static` methods (JLS
+                // §8.4.8) nor its `private` methods (JLS §9.4, not inherited) —
+                // a private interface method is visible only inside the
+                // interface, so `c.helper()` on an implementing class is "cannot
+                // find symbol", not a method that resolves and dies at run time.
+                let skip_inherited = info.is_interface && Some(id) != start;
                 for m in &info.methods {
-                    if skip_static && m.is_static {
+                    if skip_inherited && (m.is_static || m.is_private) {
                         continue;
                     }
                     if m.name == name

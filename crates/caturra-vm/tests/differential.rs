@@ -3013,18 +3013,71 @@ public class DiffIfaceMembers {
 );
 
 // JLS §9.4 interface-member rules, each silently accepted before.
-differential_reject!(reject_iface_static_default, "RejISD",
-    "interface F { static default int m() { return 1; } }\npublic class RejISD { public static void main(String[] a) {} }");
-differential_reject!(reject_iface_final_default, "RejIFD",
-    "interface F { final default int m() { return 1; } }\npublic class RejIFD { public static void main(String[] a) {} }");
-differential_reject!(reject_iface_protected, "RejIP",
-    "interface F { protected int m(); }\npublic class RejIP { public static void main(String[] a) {} }");
-differential_reject!(reject_iface_default_no_body, "RejIDN",
-    "interface F { default int m(); }\npublic class RejIDN { public static void main(String[] a) {} }");
-differential_reject!(reject_iface_const_no_init, "RejICN",
-    "interface F { int X; }\npublic class RejICN { public static void main(String[] a) {} }");
-differential_reject!(reject_iface_default_overrides_object, "RejIDO",
-    "interface F { default String toString() { return \"y\"; } }\npublic class RejIDO { public static void main(String[] a) {} }");
+differential_reject!(
+    reject_iface_static_default,
+    "RejISD",
+    "interface F { static default int m() { return 1; } }\npublic class RejISD { public static void main(String[] a) {} }"
+);
+differential_reject!(
+    reject_iface_final_default,
+    "RejIFD",
+    "interface F { final default int m() { return 1; } }\npublic class RejIFD { public static void main(String[] a) {} }"
+);
+differential_reject!(
+    reject_iface_protected,
+    "RejIP",
+    "interface F { protected int m(); }\npublic class RejIP { public static void main(String[] a) {} }"
+);
+differential_reject!(
+    reject_iface_default_no_body,
+    "RejIDN",
+    "interface F { default int m(); }\npublic class RejIDN { public static void main(String[] a) {} }"
+);
+differential_reject!(
+    reject_iface_const_no_init,
+    "RejICN",
+    "interface F { int X; }\npublic class RejICN { public static void main(String[] a) {} }"
+);
+differential_reject!(
+    reject_iface_default_overrides_object,
+    "RejIDO",
+    "interface F { default String toString() { return \"y\"; } }\npublic class RejIDO { public static void main(String[] a) {} }"
+);
+
+// A private interface method is not inherited (JLS §9.4): calling it on an
+// implementing class is "cannot find symbol", not a method that resolves and
+// crashes at run time.
+differential_reject!(
+    reject_private_iface_method_from_class,
+    "RejPIM",
+    "interface F { private int helper() { return 42; } default int m() { return helper(); } }\npublic class RejPIM { static class C implements F {}\n  public static void main(String[] a) { System.out.println(new C().helper()); } }"
+);
+
+// A class (or interface) inheriting the same default from two UNRELATED
+// interfaces without overriding is an ambiguous inheritance (JLS §8.4.8).
+differential_reject!(
+    reject_unrelated_diamond_defaults,
+    "RejDia",
+    "interface A { default String x() { return \"A\"; } }\ninterface B { default String x() { return \"B\"; } }\npublic class RejDia { static class C implements A, B {}\n  public static void main(String[] z) { System.out.println(\"x\"); } }"
+);
+
+// But a RELATED override (a sub-interface's default, or the class's own) is fine.
+differential_test!(
+    diff_default_conflict_resolved,
+    "DiffDiamondOk",
+    r#"
+interface A { default String x() { return "A"; } }
+interface B extends A { default String x() { return "B"; } }
+
+public class DiffDiamondOk {
+    static class C implements A, B { }
+    static class D implements A, B { public String x() { return "D"; } }
+    public static void main(String[] args) {
+        System.out.println(new C().x() + " " + new D().x());
+    }
+}
+"#
+);
 
 // Constant-expression narrowing (JLS §5.2): a constant of type byte/short/char/
 // int whose value fits assigns to a narrower byte/short/char without a cast —
