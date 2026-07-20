@@ -250,6 +250,12 @@ pub enum HeapObject {
     /// `Collections.emptyList`). Java's is a view too: a later `add` to the
     /// backing list shows through, and every mutator throws.
     UnmodifiableList(HeapRef),
+    /// `Arrays.asList(array)` — a FIXED-SIZE list backed by the array itself.
+    /// `set` writes through to the array and vice versa; `add`/`remove` throw
+    /// `UnsupportedOperationException`. Only a REFERENCE array can back one:
+    /// `Arrays.asList(int[])` is a one-element `List<int[]>` in Java, not a
+    /// list of the ints.
+    ArrayBackedList(HeapRef),
     /// An unmodifiable *view* of a set (`Collections.unmodifiableSet`,
     /// `emptySet`, `singleton`). Reads delegate to the backing `HashSet`/
     /// `TreeSet`; every mutator throws `UnsupportedOperationException`.
@@ -522,6 +528,12 @@ impl Heap {
                 | HeapObject::ArrayDeque(values)
                 | HeapObject::Stack(values),
             ) => Some(values),
+            // A view reads straight out of the array it is backed by, so a
+            // write to either side is visible from the other.
+            Some(HeapObject::ArrayBackedList(array)) => match self.get(*array) {
+                Some(HeapObject::RefArray(_, values)) => Some(values),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -529,6 +541,15 @@ impl Heap {
     /// The mutable backing vector of an `ArrayList` or a `LinkedList`.
     #[must_use]
     pub fn list_values_mut(&mut self, reference: HeapRef) -> Option<&mut Vec<JValue>> {
+        // A view writes THROUGH to its array, so `list.set(0, x)` changes
+        // `array[0]`. Resolved first because the borrow cannot span the match.
+        if let Some(HeapObject::ArrayBackedList(array)) = self.get(reference) {
+            let array = *array;
+            return match self.get_mut(array) {
+                Some(HeapObject::RefArray(_, values)) => Some(values),
+                _ => None,
+            };
+        }
         match self.get_mut(reference) {
             Some(
                 HeapObject::ArrayList(values)

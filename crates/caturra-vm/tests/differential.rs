@@ -12837,3 +12837,65 @@ public class DiffLegalCatch {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Arrays.asList is a FIXED-SIZE, write-through view; Collections.nCopies is
+// immutable
+//
+// caturra returned an independent mutable copy: `set` did not reach the array,
+// `add` succeeded where a JDK throws, and nCopies allowed a `set`.
+// ---------------------------------------------------------------------------
+
+differential_test!(
+    diff_arrays_aslist_is_a_view,
+    "DiffAsList",
+    r#"
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+
+public class DiffAsList {
+    public static void main(String[] args) {
+        String[] backing = { "a", "b", "c" };
+        List<String> view = Arrays.asList(backing);
+
+        // set() writes THROUGH to the array ...
+        view.set(0, "Z");
+        System.out.println(backing[0]);
+        // ... and a change to the array shows in the list.
+        backing[1] = "Y";
+        System.out.println(view);
+
+        // Length-changing operations throw; set() and sort() do not.
+        try { view.add("d"); System.out.println("added"); }
+        catch (UnsupportedOperationException e) { System.out.println("add UOE"); }
+        try { view.remove(0); System.out.println("removed"); }
+        catch (UnsupportedOperationException e) { System.out.println("remove UOE"); }
+        Collections.sort(view);
+        System.out.println(view + " " + Arrays.toString(backing));
+
+        // The varargs form is a view too.
+        List<String> varargs = Arrays.asList("p", "q");
+        try { varargs.add("r"); }
+        catch (UnsupportedOperationException e) { System.out.println("varargs UOE"); }
+        varargs.set(1, "z");
+        System.out.println(varargs);
+
+        // The read API is unaffected.
+        System.out.println(view.size() + " " + view.get(0) + " "
+            + view.contains("Z") + " " + view.indexOf("Z"));
+
+        // A copy through the constructor is independent and mutable.
+        List<String> copy = new java.util.ArrayList<>(Arrays.asList("m", "n"));
+        copy.add("o");
+        System.out.println(copy);
+
+        // Collections.nCopies is IMMUTABLE.
+        List<String> repeated = Collections.nCopies(3, "x");
+        System.out.println(repeated + " " + repeated.size() + " " + repeated.get(1));
+        try { repeated.set(0, "y"); System.out.println("set ok"); }
+        catch (UnsupportedOperationException e) { System.out.println("nCopies UOE"); }
+    }
+}
+"#
+);

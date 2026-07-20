@@ -418,9 +418,14 @@ pub fn invoke_special(
         // `new ArrayList<>(collection)` — copy the source collection's items.
         ("<init>", "(Ljava/util/Collection;)V") => {
             let items = match args.first() {
-                Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
-                    Some(HeapObject::ArrayList(items)) => items.clone(),
-                    _ => return Err(throw("java.lang.ClassCastException: not a Collection")),
+                // `list_values` reads through an `Arrays.asList` view too, so
+                // `new ArrayList<>(Arrays.asList(...))` — the standard way to
+                // get a mutable copy — works. (The richer collection sources
+                // are handled by the interpreter's own copy path; this arm
+                // only sees the list-shaped ones.)
+                Some(JValue::Ref(Some(reference))) => match heap.list_values(*reference) {
+                    Some(items) => items.clone(),
+                    None => return Err(throw("java.lang.ClassCastException: not a Collection")),
                 },
                 Some(JValue::Ref(None)) => return Err(throw("java.lang.NullPointerException")),
                 _ => Vec::new(),
@@ -515,9 +520,10 @@ pub fn invoke_virtual(
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
         (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
         (HeapObject::Reader { .. }, _) => reader_method(heap, console, receiver, method),
-        (HeapObject::ArrayList(_) | HeapObject::LinkedList(_), _) => {
-            list_method(heap, receiver, method, descriptor, args)
-        }
+        (
+            HeapObject::ArrayList(_) | HeapObject::LinkedList(_) | HeapObject::ArrayBackedList(_),
+            _,
+        ) => list_method(heap, receiver, method, descriptor, args),
         // An ArrayDeque shares the LinkedList `Deque` semantics (head-based
         // push/pop through `list_method`) but forbids null elements, so guard
         // every insertion before delegating.

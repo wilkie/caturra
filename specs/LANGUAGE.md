@@ -88,6 +88,17 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   refused as javac refuses them — assignment to a wrapper is a boxing
   conversion, and boxing does not narrow. A wrapper target whose result already
   fits (`Integer i += 2`, `Double d += 2`, `i++`) is unaffected.
+- **`Arrays.asList` is a fixed-size, write-through view** (2026-07-19): backed
+  by the array (`new HeapObject::ArrayBackedList`), so `list.set(0, x)` writes
+  to `array[0]` and vice versa, while `add`/`remove` and the other
+  length-changing operations throw `UnsupportedOperationException` — it used to
+  be an independent mutable copy. `Collections.nCopies` is now immutable too
+  (wrapped in the existing `UnmodifiableList`). `new ArrayList<>(view)` still
+  makes an independent mutable copy. **Documented gap:** `Arrays.asList` of a
+  PRIMITIVE array (`asList(int[])`) still returns a list of the elements rather
+  than the one-element `List<int[]>` Java produces — a deliberate Java gotcha
+  javac itself warns about, near-zero in practice, and it needs the nested
+  array-element machinery to model.
 - **try-with-resources** (2026-07-19) follows JLS §14.20.3's translation
   rather than the bare `finally { r.close(); }` it used to desugar to. The
   body's exception WINS and `close()`'s is attached as suppressed (reachable

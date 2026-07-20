@@ -3195,7 +3195,9 @@ impl<'run> Interpreter<'run> {
                 | HeapObject::ArrayDeque(items)
                 | HeapObject::Stack(items),
             ) => Renderable::List(items.clone()),
-            Some(HeapObject::UnmodifiableList(_)) => Renderable::List(self.list_items(reference)),
+            Some(HeapObject::UnmodifiableList(_) | HeapObject::ArrayBackedList(_)) => {
+                Renderable::List(self.list_items(reference))
+            }
             Some(HeapObject::HashMap(map)) => Renderable::Map(map.entries_in_order()),
             // A TreeMap prints `{k=v, ...}` with its entries already key-sorted.
             Some(HeapObject::TreeMap { entries, .. }) => Renderable::Map(entries.clone()),
@@ -3327,7 +3329,11 @@ impl<'run> Interpreter<'run> {
                         "java.lang.IllegalArgumentException: List length = {count}"
                     )));
                 };
-                let list = self.heap.alloc(HeapObject::ArrayList(vec![*value; count]));
+                // Immutable (JLS: `Collections.nCopies` returns an
+                // immutable list), so wrap the backing list — a `set` throws
+                // UnsupportedOperationException like every other mutator.
+                let backing = self.heap.alloc(HeapObject::ArrayList(vec![*value; count]));
+                let list = self.heap.alloc(HeapObject::UnmodifiableList(backing));
                 frame.stack.push(JValue::Ref(Some(list)));
                 return Ok(true);
             }
@@ -3651,10 +3657,23 @@ impl<'run> Interpreter<'run> {
         // `asList` builds a list from the varargs array the compiler packed,
         // keeping the elements as a list stores them: unboxed.
         if let ("asList", [JValue::Ref(Some(elements))]) = (method_name, args) {
-            let items = self.array_elements(*elements).ok_or_else(|| {
-                VmError::UnknownIntrinsic(String::from("Arrays.asList needs an array"))
-            })?;
-            let list = self.heap.alloc(crate::value::HeapObject::ArrayList(items));
+            let elements = *elements;
+            // A REFERENCE array backs the list directly: `Arrays.asList` is a
+            // fixed-size VIEW, so `list.set(0, x)` is visible as `array[0]`.
+            // A primitive array cannot back one (the compiler only passes one
+            // here for the varargs-packed form), so those still copy.
+            let list = if matches!(
+                self.heap.get(elements),
+                Some(crate::value::HeapObject::RefArray(_, _))
+            ) {
+                self.heap
+                    .alloc(crate::value::HeapObject::ArrayBackedList(elements))
+            } else {
+                let items = self.array_elements(elements).ok_or_else(|| {
+                    VmError::UnknownIntrinsic(String::from("Arrays.asList needs an array"))
+                })?;
+                self.heap.alloc(crate::value::HeapObject::ArrayList(items))
+            };
             frame.stack.push(JValue::Ref(Some(list)));
             return Ok(true);
         }
@@ -4253,6 +4272,7 @@ impl<'run> Interpreter<'run> {
             self.heap.get(receiver),
             Some(
                 HeapObject::ArrayList(_)
+                    | HeapObject::ArrayBackedList(_)
                     | HeapObject::LinkedList(_)
                     | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
@@ -5878,6 +5898,7 @@ impl<'run> Interpreter<'run> {
             self.heap.get(reference),
             Some(
                 HeapObject::ArrayList(_)
+                    | HeapObject::ArrayBackedList(_)
                     | HeapObject::LinkedList(_)
                     | HeapObject::ArrayDeque(_)
                     | HeapObject::Stack(_)
@@ -6369,6 +6390,7 @@ impl<'run> Interpreter<'run> {
         match self.heap.get(reference) {
             Some(
                 HeapObject::ArrayList(_)
+                | HeapObject::ArrayBackedList(_)
                 | HeapObject::LinkedList(_)
                 | HeapObject::ArrayDeque(_)
                 | HeapObject::Stack(_)
@@ -7929,6 +7951,19 @@ impl<'run> Interpreter<'run> {
         } else {
             receiver
         };
+        // `Arrays.asList` is FIXED-SIZE, not immutable: `set` writes through to
+        // the backing array, but anything that would change the LENGTH throws.
+        // Returning a freely mutable copy let `add` succeed here and fail on a
+        // real JDK, and hid the write-through entirely.
+        if matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::ArrayBackedList(_))
+        ) && FIXED_SIZE_REFUSED.contains(&method_name)
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.UnsupportedOperationException",
+            )));
+        }
 
         // The enhanced-for loop's fail-fast element fetch. A for-each compiles
         // to an index loop rather than a real iterator, so the comodification
@@ -8167,7 +8202,9 @@ impl<'run> Interpreter<'run> {
             ) => class_name.to_string(),
             Some(HeapObject::JavaString(_)) => String::from("java/lang/String"),
             Some(HeapObject::StringBuilder(_)) => String::from("java/lang/StringBuilder"),
-            Some(HeapObject::ArrayList(_)) => String::from("java/util/ArrayList"),
+            Some(HeapObject::ArrayList(_) | HeapObject::ArrayBackedList(_)) => {
+                String::from("java/util/ArrayList")
+            }
             Some(HeapObject::LinkedList(_)) => String::from("java/util/LinkedList"),
             Some(HeapObject::ArrayDeque(_)) => String::from("java/util/ArrayDeque"),
             Some(HeapObject::Stack(_)) => String::from("java/util/Stack"),
@@ -9779,6 +9816,19 @@ const LIST_MUTATORS: &[&str] = &[
     "removeIf",
     "replaceAll",
     "sort",
+];
+
+/// The list methods a FIXED-SIZE list refuses (JLS: `Arrays.asList` supports
+/// `set` but not anything that changes the length). `sort` and `replaceAll`
+/// are absent on purpose: both work through `set`, and a JDK allows them.
+const FIXED_SIZE_REFUSED: &[&str] = &[
+    "add",
+    "remove",
+    "clear",
+    "addAll",
+    "removeAll",
+    "retainAll",
+    "removeIf",
 ];
 
 /// Java's marker for a container that holds itself, instead of recursing.
