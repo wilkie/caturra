@@ -195,6 +195,12 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   owner. Now consistent: the write finds the slot and initializes only the
   declaring class, not the subclass named (JLS §12.4.1). (The analogous inherited
   static METHOD call still over-initializes the subclass — a separate open item.)
+- **JDK 11 NullPointerException messages** (2026-07-20): a VM-raised NPE in JDK
+  11 has a NULL detail message — the "helpful" JEP-358 text ("cannot invoke
+  \"String.length()\" because ... is null") is JDK 14+, enabled by default only
+  in 15. caturra had synthesized the JDK-14 messages for a null method receiver,
+  field read/write, array access, unbox, and `throw null`; all are now null, so
+  `getMessage()` matches JDK 11.
 - **Boolean logical operators and shifts** (2026-07-20): `&`/`|`/`^` on boxed
   `Boolean` operands now UNBOX (they reached `IAND` on two references — a runtime
   VerifyError that leaked a Rust value); `&=`/`|=`/`^=` on a boolean are the

@@ -2984,6 +2984,32 @@ public class DiffObjectCast {
 "#
 );
 
+// A VM-raised NullPointerException in JDK 11 has a NULL detail message —
+// JEP-358's helpful messages ("cannot invoke ... because ... is null") are JDK
+// 14+. caturra had synthesized the JDK-14 text; every getMessage() is now null.
+differential_test!(
+    diff_jdk11_npe_messages,
+    "DiffNpeMsg",
+    r#"
+public class DiffNpeMsg {
+    static class P { int v; }
+    public static void main(String[] args) {
+        Integer x = null;
+        try { int y = x; } catch (NullPointerException e) { System.out.println("unbox:" + e.getMessage()); }
+        try { throw null; } catch (NullPointerException e) { System.out.println("throw:" + e.getMessage()); }
+        String s = null;
+        try { s.length(); } catch (NullPointerException e) { System.out.println("invoke:" + e.getMessage()); }
+        int[] arr = null;
+        try { int z = arr[0]; } catch (NullPointerException e) { System.out.println("index:" + e.getMessage()); }
+        try { int n = arr.length; } catch (NullPointerException e) { System.out.println("length:" + e.getMessage()); }
+        P p = null;
+        try { int f = p.v; } catch (NullPointerException e) { System.out.println("read:" + e.getMessage()); }
+        try { p.v = 3; } catch (NullPointerException e) { System.out.println("assign:" + e.getMessage()); }
+    }
+}
+"#
+);
+
 // Math special cases: IEEEremainder with an infinite divisor returns the finite
 // dividend (not NaN); pow with a NaN exponent is NaN (not C99's 1.0); and the
 // float overloads of ulp/nextAfter answer in FLOAT precision, not double.

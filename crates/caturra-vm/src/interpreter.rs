@@ -1665,8 +1665,10 @@ impl<'run> Interpreter<'run> {
 
                         op::ATHROW => {
                             let reference = frame.pop_ref()?.ok_or_else(|| {
+                                // A VM-raised NPE in JDK 11 has a NULL message
+                                // (JEP-358 helpful messages are JDK 14+).
                                 VmError::UncaughtException(String::from(
-                                    "java.lang.NullPointerException: cannot throw null",
+                                    "java.lang.NullPointerException",
                                 ))
                             })?;
                             self.last_thrown = Some(reference);
@@ -2398,10 +2400,8 @@ impl<'run> Interpreter<'run> {
                 .constant_pool
                 .get_member_ref(index)
                 .map_or("?", |(_, name, _)| name);
-            VmError::UncaughtException(format!(
-                "java.lang.NullPointerException: cannot read field \"{name}\" \
-                 because the object is null"
-            ))
+            let _ = name;
+            VmError::UncaughtException(String::from("java.lang.NullPointerException"))
         })?;
         // Memoized slot for this call site. A different receiver shape falls
         // through to the full resolution below, so semantics are unchanged.
@@ -2448,10 +2448,8 @@ impl<'run> Interpreter<'run> {
                 .constant_pool
                 .get_member_ref(index)
                 .map_or("?", |(_, name, _)| name);
-            VmError::UncaughtException(format!(
-                "java.lang.NullPointerException: cannot assign field \"{name}\" \
-                 because the object is null"
-            ))
+            let _ = name;
+            VmError::UncaughtException(String::from("java.lang.NullPointerException"))
         })?;
         // Memoized slot for this call site.
         if let Some(&slot) = self.field_slots.get(&site)
@@ -8380,10 +8378,9 @@ impl<'run> Interpreter<'run> {
             primitive => Some(self.box_primitive_value(primitive)),
         };
         let Some(receiver) = receiver else {
-            return Err(VmError::UncaughtException(format!(
-                "java.lang.NullPointerException: cannot invoke \"{}.{method_name}()\" \
-                 because the receiver is null",
-                target_class.replace('/', ".")
+            let _ = (target_class, method_name);
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
             )));
         };
 
@@ -8822,10 +8819,9 @@ impl<'run> Interpreter<'run> {
                 )));
             };
             let Some(receiver_ref) = receiver_ref else {
-                return Err(VmError::UncaughtException(format!(
-                    "java.lang.NullPointerException: cannot invoke \"{}.{name}()\" \
-                     because the receiver is null",
-                    declaring.replace('/', ".")
+                let _ = (declaring, name);
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
                 )));
             };
             let belongs = matches!(
@@ -11505,9 +11501,8 @@ fn default_for_descriptor(descriptor: &str) -> JValue {
 }
 
 fn null_array() -> VmError {
-    VmError::UncaughtException(String::from(
-        "java.lang.NullPointerException: the array is null",
-    ))
+    // A VM-raised NPE in JDK 11 has a null message (JEP-358 is JDK 14+).
+    VmError::UncaughtException(String::from("java.lang.NullPointerException"))
 }
 
 /// Validate an array creation size (JVMS: negative →
