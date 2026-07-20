@@ -2984,6 +2984,33 @@ public class DiffObjectCast {
 "#
 );
 
+// Math special cases: IEEEremainder with an infinite divisor returns the finite
+// dividend (not NaN); pow with a NaN exponent is NaN (not C99's 1.0); and the
+// float overloads of ulp/nextAfter answer in FLOAT precision, not double.
+differential_test!(
+    diff_math_special_cases,
+    "DiffMathSpecial",
+    r#"
+public class DiffMathSpecial {
+    public static void main(String[] args) {
+        System.out.println(Math.IEEEremainder(3.0, Double.POSITIVE_INFINITY));
+        System.out.println(Math.IEEEremainder(-7.5, Double.POSITIVE_INFINITY));
+        System.out.println(Math.IEEEremainder(5.3, 2.0));
+        System.out.println(Math.pow(1.0, Double.NaN));
+        System.out.println(Math.pow(2.0, 3.0));
+        System.out.println(Math.pow(Double.NaN, 0.0));
+        float u = Math.ulp(0.0f);
+        System.out.println(u);
+        System.out.println(Math.ulp(1.0f));
+        float x = Math.nextAfter(1.0f, 2.0f);
+        System.out.println(x);
+        System.out.println(Math.nextAfter(1.0f, 0.0f));
+        System.out.println(Math.ulp(0.0));
+    }
+}
+"#
+);
+
 // A valid interface exercising every member kind — an abstract method, a
 // default method, a static method, a private helper, and a constant — still
 // compiles and runs after the JLS §9.4 modifier validation was added.

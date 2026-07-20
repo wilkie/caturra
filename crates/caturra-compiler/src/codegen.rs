@@ -6356,6 +6356,11 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     // overflows to Float.POSITIVE_INFINITY rather than widening to a double).
     bm("nextUp", &[F], BRet::Float, "(F)F"),
     bm("nextDown", &[F], BRet::Float, "(F)F"),
+    // `ulp(float)` returns a float (Float.MIN_VALUE, not Double.MIN_VALUE), and
+    // `nextAfter(float, double)` returns a float — without these the float
+    // argument widened to the double overload and answered double precision.
+    bm("ulp", &[F], BRet::Float, "(F)F"),
+    bm("nextAfter", &[F, D], BRet::Float, "(FD)F"),
     bm("fma", &[D, D, D], BRet::Double, "(DDD)D"),
     bm("IEEEremainder", &[D, D], BRet::Double, "(DD)D"),
     bm("getExponent", &[D], BRet::Int, "(D)I"),
@@ -8110,14 +8115,38 @@ fn pick_builtin<'m>(
     // Without this, `list.remove(Integer.valueOf(2))` picked whichever
     // overload came first in the table and removed by POSITION, the classic
     // Java trap, silently.
-    if let Some(unboxed) = applicable.iter().find(|m| {
-        descriptor_param_kinds(m.descriptor)
-            .zip(args.iter())
-            .all(|(is_reference, arg)| is_reference == arg.is_reference())
+    let phase1: Vec<&BuiltinMethod> = applicable
+        .iter()
+        .copied()
+        .filter(|m| {
+            descriptor_param_kinds(m.descriptor)
+                .zip(args.iter())
+                .all(|(is_reference, arg)| is_reference == arg.is_reference())
+        })
+        .collect();
+    let pool = if phase1.is_empty() {
+        &applicable
+    } else {
+        &phase1
+    };
+    // The most-specific applicable (JLS §15.12.2.5): its every parameter widens
+    // to the corresponding parameter of every other candidate. Needed for
+    // primitive overloads like `nextAfter(float, double)` vs `(double, double)`
+    // called with `(float, float)`, where neither is an exact match.
+    if let Some(most) = pool.iter().find(|m| {
+        pool.iter().all(|other| {
+            m.params.iter().zip(other.params).all(|(p, q)| {
+                let (pt, qt) = (
+                    bparam_type(*p, type_args, table),
+                    bparam_type(*q, type_args, table),
+                );
+                pt == qt || widens(pt, qt, table)
+            })
+        })
     }) {
-        return Some(unboxed);
+        return Some(most);
     }
-    applicable.first().copied()
+    pool.first().copied()
 }
 
 /// Whether each parameter of a method descriptor is a REFERENCE type, in

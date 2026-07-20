@@ -3969,6 +3969,12 @@ fn java_round_float(a: f32) -> i32 {
 /// matches the JDK bit-for-bit for non-integer / non-representable results.
 #[allow(clippy::float_cmp)]
 fn java_pow(a: f64, b: f64) -> f64 {
+    // A NaN exponent always gives NaN (JLS/Math.pow) — unlike C99/Rust's
+    // `powf`, which returns 1.0 for `pow(1.0, NaN)`. The zero-exponent cases
+    // (b == ±0.0) are not NaN, so `pow(NaN, 0)` still reaches `1.0` below.
+    if b.is_nan() {
+        return f64::NAN;
+    }
     // Java's one deviation from IEEE 754: |x| == 1 with an infinite exponent.
     if a.abs() == 1.0 && b.is_infinite() {
         return f64::NAN;
@@ -4107,6 +4113,35 @@ fn math_static(
         ("nextDown", [JValue::Double(v)]) => d(v.next_down()),
         ("nextUp", [JValue::Float(v)]) => Ok(Some(JValue::Float(v.next_up()))),
         ("nextDown", [JValue::Float(v)]) => Ok(Some(JValue::Float(v.next_down()))),
+        // `ulp(float)` in float precision — `ulp(0.0f)` is Float.MIN_VALUE.
+        ("ulp", [JValue::Float(v)]) => {
+            let v = v.abs();
+            Ok(Some(JValue::Float(if v.is_nan() {
+                f32::NAN
+            } else if v.is_infinite() {
+                f32::INFINITY
+            } else if v == f32::MAX {
+                f32::MAX - f32::from_bits(f32::MAX.to_bits() - 1)
+            } else {
+                v.next_up() - v
+            })))
+        }
+        // `nextAfter(float start, double direction)` returns a float.
+        ("nextAfter", [JValue::Float(start), JValue::Double(direction)]) => {
+            let (s, dir) = (*start, *direction);
+            Ok(Some(JValue::Float(if s.is_nan() || dir.is_nan() {
+                f32::NAN
+            } else if f64::from(s) == dir {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    dir as f32
+                }
+            } else if dir > f64::from(s) {
+                s.next_up()
+            } else {
+                s.next_down()
+            })))
+        }
         ("nextAfter", [JValue::Double(start), JValue::Double(direction)]) => {
             d(if start.is_nan() || direction.is_nan() {
                 f64::NAN
@@ -4120,12 +4155,20 @@ fn math_static(
         }
         ("fma", [JValue::Double(a), JValue::Double(b), JValue::Double(c)]) => d(a.mul_add(*b, *c)),
         ("IEEEremainder", [JValue::Double(a), JValue::Double(b)]) => {
-            let quotient = (a / b).round_ties_even();
-            d(if quotient.is_infinite() || quotient.is_nan() {
-                f64::NAN
-            } else {
-                a - quotient * b
-            })
+            // Per the spec's infinity cases: a NaN operand, an infinite
+            // dividend, or a zero divisor gives NaN; a finite dividend with an
+            // infinite divisor gives the DIVIDEND (not `a - 0*inf`, which is the
+            // NaN caturra produced). Otherwise the IEEE remainder.
+            d(
+                if a.is_nan() || b.is_nan() || a.is_infinite() || *b == 0.0 {
+                    f64::NAN
+                } else if b.is_infinite() {
+                    *a
+                } else {
+                    let quotient = (a / b).round_ties_even();
+                    a - quotient * b
+                },
+            )
         }
         ("getExponent", [JValue::Double(v)]) => {
             let bits = (v.to_bits() >> 52) & 0x7FF;
