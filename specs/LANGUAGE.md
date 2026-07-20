@@ -147,6 +147,10 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Primitive-to-`Object` cast** (2026-07-20): `(Object) i` performs a boxing
+  conversion (JLS §5.5.1), the cast counterpart of `Object o = i;` — so
+  `((Object)(long) 5).getClass()` is `Long`. It was rejected as an incompatible
+  type even though the assignment form already boxed.
 - **Constant-expression narrowing** (2026-07-20, JLS §5.2): a constant of type
   byte/short/char/int whose value fits assigns to a narrower byte/short/char
   without a cast — not only an int literal (`byte b = 5`) but a char literal

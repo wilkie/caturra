@@ -2956,6 +2956,34 @@ public class DiffBox {
 "#
 );
 
+// A primitive cast to `Object` performs a boxing conversion (JLS §5.5.1) —
+// `(Object) i` is `(Object) Integer.valueOf(i)` — so `getClass()` reports the
+// natural wrapper. It used to be rejected as an incompatible type, though the
+// equivalent assignment `Object o = i;` already boxed.
+differential_test!(
+    diff_primitive_to_object_cast,
+    "DiffObjectCast",
+    r#"
+import java.util.*;
+
+public class DiffObjectCast {
+    public static void main(String[] args) {
+        int i = 7;
+        Object o = (Object) i;
+        System.out.println(o + " " + o.getClass().getName());
+        System.out.println(((Object) (long) 5).getClass().getName());
+        System.out.println(((Object) 3.5).getClass().getName());
+        System.out.println(((Object) 'x').getClass().getName());
+        System.out.println(((Object) true).getClass().getName());
+        List<Object> list = new ArrayList<>();
+        list.add((Object) 42);
+        list.add((Object) 'z');
+        System.out.println(list);
+    }
+}
+"#
+);
+
 // Constant-expression narrowing (JLS §5.2): a constant of type byte/short/char/
 // int whose value fits assigns to a narrower byte/short/char without a cast —
 // including a char literal, a constant `final` variable, and folded arithmetic.

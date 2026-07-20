@@ -17119,6 +17119,17 @@ impl BodyGen<'_> {
                 source if source.is_reference() && target_id == self.table.object_id => {
                     return target;
                 }
+                // A primitive cast to `Object` performs a BOXING conversion
+                // (JLS §5.5.1) — `(Object) i` is `(Object) Integer.valueOf(i)`,
+                // the cast counterpart of the assignment `Object o = i;` that
+                // already worked. `((Object)(long) 5).getClass()` is Long.
+                source
+                    if target_id == self.table.object_id && boxable_primitive(source).is_some() =>
+                {
+                    let elem = boxable_primitive(source).expect("checked by the guard");
+                    self.emit_box(elem);
+                    return target;
+                }
                 _ => {
                     self.error(
                         span,
