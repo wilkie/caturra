@@ -355,6 +355,8 @@ struct Modifiers {
     is_static: bool,
     is_final: bool,
     is_abstract: bool,
+    is_protected: bool,
+    is_default: bool,
 }
 
 /// Parsed class-level modifiers.
@@ -693,7 +695,12 @@ impl Parser<'_> {
                     modifiers.is_abstract = true;
                     self.pos += 1;
                 }
-                Some(TokenKind::Keyword(Keyword::Protected | Keyword::Default)) => {
+                Some(TokenKind::Keyword(Keyword::Protected)) => {
+                    modifiers.is_protected = true;
+                    self.pos += 1;
+                }
+                Some(TokenKind::Keyword(Keyword::Default)) => {
+                    modifiers.is_default = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Symbol("@")) => self.skip_annotation(),
@@ -871,7 +878,7 @@ impl Parser<'_> {
             if self.eat_symbol(";") {
                 continue;
             }
-            if let Ok(member) = self.member(&name) {
+            if let Ok(member) = self.member(&name, is_interface) {
                 match member {
                     Member::Method(method) => methods.push(method),
                     Member::Fields(mut declared) => {
@@ -998,7 +1005,7 @@ impl Parser<'_> {
                 );
                 break;
             }
-            if let Ok(member) = self.member(&name) {
+            if let Ok(member) = self.member(&name, false) {
                 match member {
                     Member::Method(method) => methods.push(method),
                     Member::Fields(mut declared) => {
@@ -1081,7 +1088,56 @@ impl Parser<'_> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per member kind
-    fn member(&mut self, class_name: &str) -> Parsed<Member> {
+    /// The modifier and body rules for an INTERFACE method (JLS §9.4): no
+    /// `protected`/`final`; `static` and `default` are mutually exclusive; a
+    /// `static`/`default`/`private` method must have a body while a plain
+    /// (abstract) one must not; and a `default` method cannot override a member
+    /// of `java.lang.Object`. Each was silently accepted before.
+    fn validate_interface_method(
+        &mut self,
+        modifiers: Modifiers,
+        iface_name: &str,
+        name: &str,
+        params_len: usize,
+        has_body: bool,
+        span: SourceSpan,
+    ) {
+        if modifiers.is_protected {
+            self.error_at(span, "modifier protected not allowed here");
+        }
+        if modifiers.is_final {
+            self.error_at(span, "modifier final not allowed here");
+        }
+        if modifiers.is_static && modifiers.is_default {
+            self.error_at(span, "illegal combination of modifiers: static and default");
+        }
+        let concrete = modifiers.is_static || modifiers.is_default || modifiers.is_private;
+        if has_body && !concrete {
+            self.error_at(span, "interface abstract methods cannot have body");
+        }
+        if !has_body && concrete {
+            self.error_at(span, "missing method body, or declare abstract");
+        }
+        // A `default` method cannot override `Object`'s `toString`/`hashCode`/
+        // `equals` (JLS §9.4.1.2).
+        let overrides_object = modifiers.is_default
+            && matches!(
+                (name, params_len),
+                ("toString" | "hashCode", 0) | ("equals", 1)
+            );
+        if overrides_object {
+            self.error_at(
+                span,
+                format!(
+                    "default method {name} in interface {iface_name} \
+                     overrides a member of java.lang.Object"
+                ),
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // one member-declaration parse: field / method / ctor / nested
+    fn member(&mut self, class_name: &str, is_interface: bool) -> Parsed<Member> {
         let start = self.here();
         let modifiers = self.modifiers();
         let annotations = std::mem::take(&mut self.pending_annotations);
@@ -1169,6 +1225,12 @@ impl Parser<'_> {
                         Some(self.expression()?)
                     }
                 } else {
+                    // An interface field is implicitly `public static final`
+                    // (JLS §9.3), so it MUST have an initializer — `interface F
+                    // { int X; }` is javac's "= expected", not a valid field.
+                    if is_interface {
+                        self.error_at(current.1, "= expected");
+                    }
                     None
                 };
                 fields.push(FieldDecl {
@@ -1192,6 +1254,16 @@ impl Parser<'_> {
 
         let (params, body) = self.method_rest(name_span, true)?;
         let is_abstract = body.is_none();
+        if is_interface {
+            self.validate_interface_method(
+                modifiers,
+                class_name,
+                &name,
+                params.len(),
+                body.is_some(),
+                name_span,
+            );
+        }
         Ok(Member::Method(MethodDecl {
             name,
             is_static: modifiers.is_static,
@@ -3169,7 +3241,7 @@ impl Parser<'_> {
         let mut nested = Vec::new();
         let mut order = 0usize;
         while !self.at_symbol("}") && self.peek().is_some() {
-            if let Ok(member) = self.member(supertype) {
+            if let Ok(member) = self.member(supertype, false) {
                 match member {
                     Member::Method(m) => methods.push(m),
                     Member::Fields(mut declared) => {

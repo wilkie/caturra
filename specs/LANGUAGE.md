@@ -147,6 +147,15 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Interface member validation** (2026-07-20, JLS §9.4): an interface method
+  may not be `protected` or `final`, `static` and `default` are mutually
+  exclusive, a `static`/`default`/`private` method must have a body while a plain
+  abstract one must not, and a `default` method may not override
+  `toString`/`hashCode`/`equals` from `java.lang.Object` — all silently accepted
+  before (the `protected`/`default` modifiers were parsed and discarded). An
+  interface field, implicitly `public static final`, must have an initializer
+  (`interface F { int X; }` is now the "= expected" error). Valid interfaces —
+  abstract + default + static + private methods and constants — are unaffected.
 - **Primitive-to-`Object` cast** (2026-07-20): `(Object) i` performs a boxing
   conversion (JLS §5.5.1), the cast counterpart of `Object o = i;` — so
   `((Object)(long) 5).getClass()` is `Long`. It was rejected as an incompatible

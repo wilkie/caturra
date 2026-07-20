@@ -2984,6 +2984,48 @@ public class DiffObjectCast {
 "#
 );
 
+// A valid interface exercising every member kind — an abstract method, a
+// default method, a static method, a private helper, and a constant — still
+// compiles and runs after the JLS §9.4 modifier validation was added.
+differential_test!(
+    diff_interface_member_kinds,
+    "DiffIfaceMembers",
+    r#"
+interface Greeter {
+    int BASE = 10;
+    String name();
+    default String greet() { return "hi " + name() + suffix(); }
+    private String suffix() { return "!"; }
+    static int base() { return BASE; }
+}
+
+public class DiffIfaceMembers {
+    static class Bob implements Greeter {
+        public String name() { return "bob"; }
+    }
+    public static void main(String[] args) {
+        Greeter g = new Bob();
+        System.out.println(g.greet());
+        System.out.println(Greeter.base());
+    }
+}
+"#
+);
+
+// JLS §9.4 interface-member rules, each silently accepted before.
+differential_reject!(reject_iface_static_default, "RejISD",
+    "interface F { static default int m() { return 1; } }\npublic class RejISD { public static void main(String[] a) {} }");
+differential_reject!(reject_iface_final_default, "RejIFD",
+    "interface F { final default int m() { return 1; } }\npublic class RejIFD { public static void main(String[] a) {} }");
+differential_reject!(reject_iface_protected, "RejIP",
+    "interface F { protected int m(); }\npublic class RejIP { public static void main(String[] a) {} }");
+differential_reject!(reject_iface_default_no_body, "RejIDN",
+    "interface F { default int m(); }\npublic class RejIDN { public static void main(String[] a) {} }");
+differential_reject!(reject_iface_const_no_init, "RejICN",
+    "interface F { int X; }\npublic class RejICN { public static void main(String[] a) {} }");
+differential_reject!(reject_iface_default_overrides_object, "RejIDO",
+    "interface F { default String toString() { return \"y\"; } }\npublic class RejIDO { public static void main(String[] a) {} }");
+
 // Constant-expression narrowing (JLS §5.2): a constant of type byte/short/char/
 // int whose value fits assigns to a narrower byte/short/char without a cast —
 // including a char literal, a constant `final` variable, and folded arithmetic.
