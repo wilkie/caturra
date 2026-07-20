@@ -2956,6 +2956,93 @@ public class DiffBox {
 "#
 );
 
+// Boolean logical operators and shifts. `&`/`|`/`^` on boxed `Boolean` unbox
+// (they used to reach `IAND` on two references — a VerifyError); `&=`/`|=`/`^=`
+// on a boolean are the logical compound assignments (JLS §15.26.2); and a
+// compound shift's count is an independent integral operand. Each of local,
+// field, static, and array targets is exercised.
+differential_test!(
+    diff_boolean_and_shift_operators,
+    "DiffBoolShift",
+    r#"
+public class DiffBoolShift {
+    boolean bf = true;
+    int shf = 4;
+    static boolean sbf = false;
+    long lf = 4;
+    Integer boxedShift = 8;
+
+    public static void main(String[] args) {
+        // Plain, boxed, and mixed boolean bitwise.
+        boolean p = true, q = false;
+        System.out.println((p & q) + " " + (p | q) + " " + (p ^ q));
+        Boolean x = Boolean.TRUE, y = Boolean.FALSE;
+        System.out.println((x & y) + " " + (x | y) + " " + (x ^ x));
+        System.out.println(x & q);
+
+        // Boolean compound assignment on every target kind.
+        boolean r = true;
+        r ^= true;
+        System.out.println(r);
+        r &= false;
+        r |= true;
+        System.out.println(r);
+        DiffBoolShift o = new DiffBoolShift();
+        o.bf ^= true;
+        System.out.println(o.bf);
+        sbf |= true;
+        System.out.println(sbf);
+        boolean[] ba = {true};
+        ba[0] &= false;
+        System.out.println(ba[0]);
+
+        // Shift compound assignment: local, field, static-long, array, wrapper,
+        // byte-narrowing, and an Integer count.
+        int z = 1;
+        z <<= 3;
+        System.out.println(z);
+        int w = 256;
+        w >>= 2;
+        System.out.println(w);
+        int u = -8;
+        u >>>= 1;
+        System.out.println(u);
+        o.shf <<= 3;
+        System.out.println(o.shf);
+        o.lf <<= 40;
+        System.out.println(o.lf);
+        o.boxedShift <<= 2;
+        System.out.println(o.boxedShift);
+        byte b = 4;
+        b <<= 2;
+        System.out.println(b);
+        int[] ia = {2};
+        ia[0] <<= 4;
+        System.out.println(ia[0]);
+        int v = 7;
+        v <<= Integer.valueOf(2);
+        System.out.println(v);
+    }
+}
+"#
+);
+
+// A shift count must be integral (JLS §15.19), even in a compound assignment —
+// `x <<= 1.5` is a COMPILE error, not the runtime VerifyError caturra produced.
+differential_reject!(
+    reject_compound_shift_double_count,
+    "RejectShiftDouble",
+    r"
+public class RejectShiftDouble {
+    public static void main(String[] args) {
+        int x = 4;
+        x <<= 1.5;
+        System.out.println(x);
+    }
+}
+"
+);
+
 // The equals/hashCode tail: each wrapper's own `hashCode` (`Boolean` is
 // 1231/1237, `Long`/`Double`/`Float` fold their bits), `String.equals(Object)`
 // accepts a boxed primitive, and collections compare/hash STRUCTURALLY all the

@@ -147,6 +147,15 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Boolean logical operators and shifts** (2026-07-20): `&`/`|`/`^` on boxed
+  `Boolean` operands now UNBOX (they reached `IAND` on two references — a runtime
+  VerifyError that leaked a Rust value); `&=`/`|=`/`^=` on a boolean are the
+  logical compound assignments (JLS §15.26.2), the only compound forms a boolean
+  accepts, wired on local, field, static, and array targets; and a compound
+  shift (`x <<= n`) treats its count as an independent integral operand
+  (JLS §15.19), so `x <<= 1.5` is a COMPILE error rather than a VerifyError, and
+  a wrapper shift target that cannot take the int/long result (`Byte b; b <<= 2`)
+  is refused as javac refuses it.
 - **Deep equals/hashCode** (2026-07-20): every collection compares and hashes
   STRUCTURALLY all the way down, so a nested `List<List<...>>`, a `Set` of
   `List`s, and a `Map` with collection values are deep-equal (and hash equal) —

@@ -9701,6 +9701,111 @@ impl BodyGen<'_> {
                 // work. The result boxes back when the target is a wrapper.
                 let target = numeric_view(var_ty);
                 let operand = numeric_view(value_ty);
+                // `b &= x`, `b |= x`, `b ^= x` on a boolean are the logical
+                // compound assignments (JLS §15.26.2) — the ONLY compound forms
+                // a boolean accepts. Load, unbox both if boxed, apply the
+                // boolean bitwise op, rebox, store.
+                if target == JType::Boolean
+                    && operand == JType::Boolean
+                    && matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+                {
+                    self.emit_load(slot, var_ty);
+                    if let JType::Boxed(elem) = var_ty {
+                        self.emit_unbox(elem);
+                    }
+                    let actual = self.expr(value);
+                    self.unbox_wrapper(actual);
+                    let opcode = match op {
+                        BinaryOp::BitAnd => op::IAND,
+                        BinaryOp::BitOr => op::IOR,
+                        _ => op::IXOR,
+                    };
+                    self.code.push_op(opcode, 0);
+                    self.code.drop_stack(1);
+                    if let JType::Boxed(elem) = var_ty {
+                        self.emit_box(elem);
+                    }
+                    self.emit_store(slot, var_ty);
+                    if let Some(var) = self.lookup(name) {
+                        var.assigned = true;
+                    }
+                    return;
+                }
+                // A compound SHIFT (`x <<= n`) is special: the count is an
+                // independent integral operand (JLS §15.19), never promoted
+                // against the target, so `x <<= 1.5` is a COMPILE error — not
+                // the runtime VerifyError the general numeric path produced.
+                if matches!(op, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr) {
+                    let integral = |t: JType| {
+                        matches!(
+                            t,
+                            JType::Int | JType::Char | JType::Long | JType::Short | JType::Byte
+                        )
+                    };
+                    if !integral(target) || !integral(operand) {
+                        if value_ty != JType::Error {
+                            self.error(
+                                span,
+                                format!(
+                                    "operator '{}' cannot be applied to {} and {}",
+                                    compound_symbol(op),
+                                    var_ty.describe(self.table),
+                                    value_ty.describe(self.table)
+                                ),
+                            );
+                        }
+                        return;
+                    }
+                    let long_shift = target == JType::Long;
+                    let shift_ty = if long_shift { JType::Long } else { JType::Int };
+                    // A wrapper target takes the shift result (int/long) by a
+                    // boxing conversion, which cannot narrow — so `Byte b; b <<=
+                    // 2` is refused (int → Byte), while `Integer`/`Long` are fine.
+                    if let JType::Boxed(elem) = var_ty
+                        && shift_ty != elem.base_type()
+                    {
+                        self.error(
+                            span,
+                            format!(
+                                "incompatible types: {} cannot be converted to {}",
+                                shift_ty.describe(self.table),
+                                var_ty.describe(self.table)
+                            ),
+                        );
+                        self.expr(value);
+                        self.code.discard();
+                        return;
+                    }
+                    self.emit_load(slot, var_ty);
+                    self.numeric_conversion(var_ty, shift_ty);
+                    let actual = self.expr(value);
+                    let actual = self.unbox_wrapper(actual);
+                    if actual == JType::Long {
+                        self.code.push_op(op::L2I, 0);
+                        self.code.drop_stack(1);
+                    } else {
+                        self.numeric_conversion(actual, JType::Int);
+                    }
+                    let opcode = match (op, long_shift) {
+                        (BinaryOp::Shl, false) => op::ISHL,
+                        (BinaryOp::Shr, false) => op::ISHR,
+                        (BinaryOp::Ushr, false) => op::IUSHR,
+                        (BinaryOp::Shl, true) => op::LSHL,
+                        (BinaryOp::Shr, true) => op::LSHR,
+                        _ => op::LUSHR,
+                    };
+                    self.code.push_op(opcode, 0);
+                    self.code.drop_stack(1);
+                    self.narrow_back(shift_ty, target);
+                    if let JType::Boxed(elem) = var_ty {
+                        self.emit_box(elem);
+                    }
+                    self.emit_store(slot, var_ty);
+                    if let Some(var) = self.lookup(name) {
+                        var.assigned = true;
+                    }
+                    return;
+                }
                 if target == JType::Boolean || !target.is_numeric() || !operand.is_numeric() {
                     if target == JType::Boolean {
                         self.error(span, "compound assignment cannot be applied to a boolean");
@@ -9935,6 +10040,127 @@ impl BodyGen<'_> {
                 // A wrapper field or value unboxes first, and boxes back.
                 let target = numeric_view(field.ty);
                 let operand = numeric_view(value_ty);
+                // A read-modify-write of the field: load it (the receiver, if
+                // any, is already on the stack — DUP it so it survives the GET
+                // for the later PUT), then combine, then store.
+                let load_field = |s: &mut Self| {
+                    if !is_static {
+                        s.code.push_op(op::DUP, 1);
+                    }
+                    s.code.push_op_u16(
+                        if is_static {
+                            op::GETSTATIC
+                        } else {
+                            op::GETFIELD
+                        },
+                        field_ref,
+                        field.ty.width(),
+                    );
+                    if !is_static {
+                        s.code.drop_stack(1);
+                    }
+                };
+                let store_field = |s: &mut Self| {
+                    if is_static {
+                        s.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
+                        s.code.drop_stack(field.ty.width());
+                    } else {
+                        s.code.push_op_u16(op::PUTFIELD, field_ref, 0);
+                        s.code.drop_stack(1 + field.ty.width());
+                    }
+                };
+                // Boolean logical compound (&= |= ^=) and shift compound
+                // (<<= >>= >>>=) — the two forms the general numeric path below
+                // cannot express (see the local-variable case for the rules).
+                if target == JType::Boolean
+                    && operand == JType::Boolean
+                    && matches!(
+                        op_kind,
+                        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                    )
+                {
+                    load_field(self);
+                    if let JType::Boxed(elem) = field.ty {
+                        self.emit_unbox(elem);
+                    }
+                    let actual = self.expr(value);
+                    self.unbox_wrapper(actual);
+                    let opcode = match op_kind {
+                        BinaryOp::BitAnd => op::IAND,
+                        BinaryOp::BitOr => op::IOR,
+                        _ => op::IXOR,
+                    };
+                    self.code.push_op(opcode, 0);
+                    self.code.drop_stack(1);
+                    if let JType::Boxed(elem) = field.ty {
+                        self.emit_box(elem);
+                    }
+                    store_field(self);
+                    return;
+                }
+                if matches!(op_kind, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr) {
+                    let integral = |t: JType| {
+                        matches!(
+                            t,
+                            JType::Int | JType::Char | JType::Long | JType::Short | JType::Byte
+                        )
+                    };
+                    if !integral(target) || !integral(operand) {
+                        if value_ty != JType::Error {
+                            self.error(
+                                span,
+                                format!(
+                                    "operator '{}' cannot be applied to {} and {}",
+                                    compound_symbol(op_kind),
+                                    field.ty.describe(self.table),
+                                    value_ty.describe(self.table)
+                                ),
+                            );
+                        }
+                        return;
+                    }
+                    let long_shift = target == JType::Long;
+                    let shift_ty = if long_shift { JType::Long } else { JType::Int };
+                    if let JType::Boxed(elem) = field.ty
+                        && shift_ty != elem.base_type()
+                    {
+                        self.error(
+                            span,
+                            format!(
+                                "incompatible types: {} cannot be converted to {}",
+                                shift_ty.describe(self.table),
+                                field.ty.describe(self.table)
+                            ),
+                        );
+                        return;
+                    }
+                    load_field(self);
+                    self.numeric_conversion(field.ty, shift_ty);
+                    let actual = self.expr(value);
+                    let actual = self.unbox_wrapper(actual);
+                    if actual == JType::Long {
+                        self.code.push_op(op::L2I, 0);
+                        self.code.drop_stack(1);
+                    } else {
+                        self.numeric_conversion(actual, JType::Int);
+                    }
+                    let opcode = match (op_kind, long_shift) {
+                        (BinaryOp::Shl, false) => op::ISHL,
+                        (BinaryOp::Shr, false) => op::ISHR,
+                        (BinaryOp::Ushr, false) => op::IUSHR,
+                        (BinaryOp::Shl, true) => op::LSHL,
+                        (BinaryOp::Shr, true) => op::LSHR,
+                        _ => op::LUSHR,
+                    };
+                    self.code.push_op(opcode, 0);
+                    self.code.drop_stack(1);
+                    self.narrow_back(shift_ty, target);
+                    if let JType::Boxed(elem) = field.ty {
+                        self.emit_box(elem);
+                    }
+                    store_field(self);
+                    return;
+                }
                 if target == JType::Boolean || !target.is_numeric() || !operand.is_numeric() {
                     if value_ty != JType::Error {
                         self.error(
@@ -9950,21 +10176,7 @@ impl BodyGen<'_> {
                     return;
                 }
                 let promoted = promote(target, operand);
-                if !is_static {
-                    self.code.push_op(op::DUP, 1);
-                }
-                self.code.push_op_u16(
-                    if is_static {
-                        op::GETSTATIC
-                    } else {
-                        op::GETFIELD
-                    },
-                    field_ref,
-                    field.ty.width(),
-                );
-                if !is_static {
-                    self.code.drop_stack(1);
-                }
+                load_field(self);
                 self.numeric_conversion(field.ty, promoted);
                 let actual = self.expr(value);
                 self.numeric_conversion(actual, promoted);
@@ -13300,6 +13512,7 @@ impl BodyGen<'_> {
     }
 
     /// `a[i] = v`, `a[i] += v`, `a[i]++` (as `+= 1`).
+    #[allow(clippy::too_many_lines)] // plain / boolean-compound / shift / arithmetic arms
     fn assign_element(
         &mut self,
         array: &Expr,
@@ -13346,6 +13559,78 @@ impl BodyGen<'_> {
                 // A wrapper value unboxes first; array elements are already
                 // primitive here.
                 let operand = numeric_view(value_ty);
+                // Boolean logical compound (`ba[i] ^= x`) and shift compound
+                // (`ia[i] <<= n`) — the forms the general numeric path cannot
+                // express (arrayref+index are on the stack; DUP2 for the RMW).
+                if element == JType::Boolean
+                    && operand == JType::Boolean
+                    && matches!(
+                        op_kind,
+                        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+                    )
+                {
+                    self.code.push_op(op::DUP2, 2);
+                    self.xaload(element);
+                    let actual = self.expr(value);
+                    self.unbox_wrapper(actual);
+                    let opcode = match op_kind {
+                        BinaryOp::BitAnd => op::IAND,
+                        BinaryOp::BitOr => op::IOR,
+                        _ => op::IXOR,
+                    };
+                    self.code.push_op(opcode, 0);
+                    self.code.drop_stack(1);
+                    self.xastore(element);
+                    return;
+                }
+                if matches!(op_kind, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr) {
+                    let integral = |t: JType| {
+                        matches!(
+                            t,
+                            JType::Int | JType::Char | JType::Long | JType::Short | JType::Byte
+                        )
+                    };
+                    if !integral(element) || !integral(operand) {
+                        if value_ty != JType::Error {
+                            self.error(
+                                span,
+                                format!(
+                                    "operator '{}' cannot be applied to {} and {}",
+                                    compound_symbol(op_kind),
+                                    element.describe(self.table),
+                                    value_ty.describe(self.table)
+                                ),
+                            );
+                        }
+                        return;
+                    }
+                    let long_shift = element == JType::Long;
+                    let shift_ty = if long_shift { JType::Long } else { JType::Int };
+                    self.code.push_op(op::DUP2, 2);
+                    self.xaload(element);
+                    self.numeric_conversion(element, shift_ty);
+                    let actual = self.expr(value);
+                    let actual = self.unbox_wrapper(actual);
+                    if actual == JType::Long {
+                        self.code.push_op(op::L2I, 0);
+                        self.code.drop_stack(1);
+                    } else {
+                        self.numeric_conversion(actual, JType::Int);
+                    }
+                    let opcode = match (op_kind, long_shift) {
+                        (BinaryOp::Shl, false) => op::ISHL,
+                        (BinaryOp::Shr, false) => op::ISHR,
+                        (BinaryOp::Ushr, false) => op::IUSHR,
+                        (BinaryOp::Shl, true) => op::LSHL,
+                        (BinaryOp::Shr, true) => op::LSHR,
+                        _ => op::LUSHR,
+                    };
+                    self.code.push_op(opcode, 0);
+                    self.code.drop_stack(1);
+                    self.narrow_back(shift_ty, element);
+                    self.xastore(element);
+                    return;
+                }
                 if element == JType::Boolean || !element.is_numeric() || !operand.is_numeric() {
                     if value_ty != JType::Error {
                         self.error(
@@ -17448,11 +17733,16 @@ impl BodyGen<'_> {
         } else {
             JType::Int
         };
+        // A boxed operand unboxes on either side. `numeric_conversion` does it
+        // for the integral case, but the boolean case skips it — so
+        // `Boolean & Boolean` reached `IAND` on two references (a VerifyError).
         let actual = self.expr(lhs);
+        let actual = self.unbox_wrapper(actual);
         if integral {
             self.numeric_conversion(actual, target);
         }
         let actual = self.expr(rhs);
+        let actual = self.unbox_wrapper(actual);
         if integral {
             self.numeric_conversion(actual, target);
         }
