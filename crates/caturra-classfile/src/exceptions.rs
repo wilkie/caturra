@@ -58,6 +58,9 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/lang/ExceptionInInitializerError",
         "java/lang/LinkageError",
     ),
+    // Thrown on every active use of a class whose initialization already failed
+    // abruptly (JLS §12.4.2 — the class is permanently Erroneous).
+    ("java/lang/NoClassDefFoundError", "java/lang/LinkageError"),
     ("java/lang/VerifyError", "java/lang/LinkageError"),
     (
         "java/lang/IllegalArgumentException",

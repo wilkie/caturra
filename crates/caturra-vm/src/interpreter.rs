@@ -87,6 +87,9 @@ pub(crate) struct Interpreter<'run> {
     /// Classes whose initialization has started (JVMS §5.5: recursive
     /// initialization by the same thread proceeds).
     init_started: std::collections::HashSet<String>,
+    /// Classes whose `<clinit>` threw: permanently Erroneous (JLS §12.4.2).
+    /// Every later active use throws `NoClassDefFoundError`.
+    init_failed: std::collections::HashSet<String>,
     remaining_instructions: u64,
     max_call_depth: u32,
     /// Frames suspended beneath a nested run (see
@@ -191,6 +194,7 @@ impl<'run> Interpreter<'run> {
             static_inited: std::collections::HashSet::new(),
             field_templates: HashMap::new(),
             init_started: std::collections::HashSet::new(),
+            init_failed: std::collections::HashSet::new(),
             remaining_instructions: max_instructions,
             max_call_depth,
             suspended_runs: Vec::new(),
@@ -2237,6 +2241,14 @@ impl<'run> Interpreter<'run> {
             // ExceptionInInitializerError (JVMS §5.5), with the original as its
             // cause. Once wrapped the class is EIIE, itself an Error, so a
             // nested `<clinit>` boundary does not double-wrap.
+            // A `<clinit>` that throws (anything — Error or not) leaves its
+            // class permanently Erroneous (JLS §12.4.2): every later active use
+            // must throw NoClassDefFoundError.
+            if frame.method_name == "<clinit>"
+                && let Some(failed) = frame.class.class_name()
+            {
+                self.init_failed.insert(failed.to_owned());
+            }
             if frame.method_name == "<clinit>"
                 && !caturra_classfile::exceptions::is_exception_subclass(
                     &dotted.replace('.', "/"),
@@ -2775,6 +2787,15 @@ impl<'run> Interpreter<'run> {
         &mut self,
         class_name: &str,
     ) -> Result<Option<Vec<Frame<'run>>>, VmError> {
+        // An active use of an already-failed class throws NoClassDefFoundError
+        // (JLS §12.4.2) — the class does not re-initialize and its fields do not
+        // read as defaults.
+        if self.init_failed.contains(class_name) {
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.NoClassDefFoundError: Could not initialize class {}",
+                class_name.replace('/', ".")
+            )));
+        }
         if self.init_started.contains(class_name) || !self.classes.contains_key(class_name) {
             return Ok(None);
         }

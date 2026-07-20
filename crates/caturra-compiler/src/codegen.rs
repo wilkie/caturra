@@ -1666,6 +1666,27 @@ impl MethodTable {
         None
     }
 
+    /// The class that DECLARES the static method `sig` reachable from `class`,
+    /// walking the superclass chain (a static method is inherited from a
+    /// superCLASS, not an interface — JLS §8.4.8). Falls back to `class`.
+    fn static_method_owner(&self, class: &str, sig: &MethodSig) -> String {
+        let mut current = self.classes.get(class).map(|info| info.id);
+        while let Some(id) = current {
+            let Some(info) = self.info_by_id(id) else {
+                break;
+            };
+            if info
+                .methods
+                .iter()
+                .any(|m| m.is_static && m.name == sig.name && m.params == sig.params)
+            {
+                return self.class_name(id).to_owned();
+            }
+            current = info.superclass;
+        }
+        class.to_owned()
+    }
+
     /// Resolve `class.name(args)`: applicable-by-widening, exact match
     /// first, then the unique most-specific method.
     #[allow(clippy::too_many_lines)] // the JLS 15.12.2 phase ladder, in order
@@ -14404,7 +14425,12 @@ impl BodyGen<'_> {
         }
 
         let args_width = self.emit_call_args(args, &sig, span);
-        let method_ref = intern_method_ref(self.pool, class, method, &sig.descriptor(self.table));
+        // Emit the DECLARING class in the method ref (`Spp.m`, not the
+        // referenced subclass `Sbb.m`) so a call to an INHERITED static method
+        // through the subclass name initializes only the declaring class, not
+        // the subclass (JLS §12.4.1) — mirroring the inherited static FIELD.
+        let owner = self.table.static_method_owner(class, &sig);
+        let method_ref = intern_method_ref(self.pool, &owner, method, &sig.descriptor(self.table));
         let ret_width = sig.ret.map_or(0, JType::width);
         self.code
             .push_op_u16(op::INVOKESTATIC, method_ref, ret_width);

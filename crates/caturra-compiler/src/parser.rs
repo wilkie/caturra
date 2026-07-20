@@ -3686,7 +3686,7 @@ fn desugar_enum(
     constants: Vec<EnumConstant>,
     mut fields: Vec<FieldDecl>,
     mut methods: Vec<MethodDecl>,
-    init_blocks: Vec<InitBlock>,
+    mut init_blocks: Vec<InitBlock>,
     nested: Vec<ClassDecl>,
     span: SourceSpan,
 ) -> ClassDecl {
@@ -3717,11 +3717,17 @@ fn desugar_enum(
         span: zero,
     };
 
-    // Shift user fields/blocks after the synthesized constant + array
-    // initializers so those run first in <clinit>.
+    // Shift user fields AND static-initializer BLOCKS after the synthesized
+    // constant initializers so every constant is constructed first in <clinit>
+    // (JLS §8.9.2 — the enum constants are implicit `static final` fields
+    // declared before any explicit static block). Only the fields were shifted,
+    // so an explicit `static { ... }` ran BETWEEN two constant constructions.
     let synth_order = constants.len() + 1;
     for field in &mut fields {
         field.order += synth_order;
+    }
+    for block in &mut init_blocks {
+        block.order += synth_order;
     }
 
     // Hidden instance fields (no initializer; set by the constructor).

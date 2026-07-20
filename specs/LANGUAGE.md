@@ -188,6 +188,17 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   invalid strings still throw. The `%a`/`%A` formatter conversion (hexadecimal
   floating-point) renders the text `Double.toHexString` produces (`0x1.0p0`),
   where it used to throw UnknownFormatConversionException.
+- **Static-initialization order** (2026-07-20, JLS §12.4): (1) a class whose
+  `<clinit>` throws is permanently Erroneous — the first active use throws
+  ExceptionInInitializerError, and every LATER use now throws
+  `NoClassDefFoundError: Could not initialize class X` (a new `init_failed` set;
+  the class no longer re-initializes or reads its fields as defaults). (2) An
+  inherited static METHOD called through a subclass name (`Sub.m()`) emits the
+  DECLARING class in the method ref, so only that class initializes — the method
+  counterpart of the inherited static-field fix. (3) An enum's explicit `static`
+  block runs AFTER all constants are constructed (the constant initializers, not
+  just the user fields, now precede it in `<clinit>`); it used to run BETWEEN two
+  constant constructions.
 - **Inherited static field write** (2026-07-20): `Sub.f = v` on a field
   declared in a superclass resolves to the DECLARING class — it used to abort
   ("malformed class: unknown static field Sub.f") because the write emitted the

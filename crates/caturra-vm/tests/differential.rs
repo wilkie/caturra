@@ -3032,6 +3032,41 @@ public class DiffIntern {
 "#
 );
 
+// Static-initialization order (JLS §12.4). A class whose <clinit> throws is
+// permanently Erroneous: the first active use throws ExceptionInInitializerError
+// and every LATER one throws NoClassDefFoundError. An inherited static METHOD
+// called through a subclass initializes only the DECLARING class. And an enum's
+// explicit static block runs AFTER all its constants are constructed.
+differential_test!(
+    diff_static_init_order,
+    "DiffStaticInit",
+    r#"
+class Boom { static int x = 1; static { if (true) throw new RuntimeException("boom"); } }
+class Base { static void m() { System.out.println("m ran"); } static { System.out.println("Base init"); } }
+class Sub extends Base { static { System.out.println("Sub init"); } }
+enum Color {
+    RED, GREEN;
+    static { System.out.println("Color static block"); }
+    Color() { System.out.println("ctor " + name()); }
+}
+
+public class DiffStaticInit {
+    public static void main(String[] args) {
+        // Failed init: EIIE first, NoClassDefFoundError after.
+        try { int y = Boom.x; } catch (Throwable t) { System.out.println("1: " + t); }
+        try { int y = Boom.x; } catch (Throwable t) { System.out.println("2: " + t); }
+
+        // Inherited static method through the subclass name inits only Base.
+        Sub.m();
+
+        // The enum's static block runs after RED and GREEN are constructed.
+        System.out.println("before");
+        System.out.println(Color.RED);
+    }
+}
+"#
+);
+
 // Math special cases: IEEEremainder with an infinite divisor returns the finite
 // dividend (not NaN); pow with a NaN exponent is NaN (not C99's 1.0); and the
 // float overloads of ulp/nextAfter answer in FLOAT precision, not double.
