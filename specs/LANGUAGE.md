@@ -160,6 +160,17 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   `==` to another. Two more silent-vanish paths closed alongside: a comparison
   whose operand does not type, and `new Integer("7")`, which the emitter
   modelled and `type_of` did not.
+- **`Short`/`Byte` wrappers** (2026-07-20): `Short.valueOf((short) 5)` and
+  `Byte.valueOf((byte) 3)` box instead of crashing with a "not a String"
+  `ClassCastException` — the descriptor returned the wrapper (so the VM
+  autoboxed) but the compiler typed the result as a primitive and re-boxed it,
+  and the second `valueOf` reached the String-parsing arm. Typed `BRet::Wrapper`
+  now, like `Integer.valueOf(int)`. Two more divergences fell out: `Short.compare`
+  and `Byte.compare` return `x - y` (the JDK source), NOT the -1/0/1 sign
+  `Integer.compare` gives; and the `parseShort`/`parseByte` range
+  `NumberFormatException` message is `Value out of range. Value:"99999"
+  Radix:10` with NO trailing `(Short)` — caturra had appended a spurious class
+  suffix. `Short.valueOf(Object)` remains a compile error, as on javac.
 - **A call can no longer vanish** (2026-07-19): when an argument's type could
   not be determined, `builtin_instance_call` emitted the arguments "for nested
   diagnostics" and bailed — and when there were none, the call disappeared

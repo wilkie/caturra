@@ -6431,10 +6431,15 @@ const SHORT_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(S)Ljava/lang/String;",
     ),
+    // A wrapper descriptor, so the VM autoboxes the return; the static type
+    // must therefore be the WRAPPER (`BRet::Wrapper`), not a primitive — else
+    // the compiler re-boxes the already-boxed reference and the second
+    // `valueOf` reaches the String-parsing arm on a Short (a "not a String"
+    // ClassCastException). Same reasoning as `Integer.valueOf(int)`.
     bm(
         "valueOf",
         &[BParam::Short],
-        BRet::Short,
+        BRet::Wrapper(ElemType::Short),
         "(S)Ljava/lang/Short;",
     ),
     bm(
@@ -6461,10 +6466,11 @@ const BYTE_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(B)Ljava/lang/String;",
     ),
+    // `BRet::Wrapper` for the same reason as `Short.valueOf(short)` above.
     bm(
         "valueOf",
         &[BParam::Byte],
-        BRet::Byte,
+        BRet::Wrapper(ElemType::Byte),
         "(B)Ljava/lang/Byte;",
     ),
     bm(

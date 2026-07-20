@@ -2956,6 +2956,52 @@ public class DiffBox {
 "#
 );
 
+// `Short` and `Byte`: `valueOf(short)`/`valueOf(byte)` box (they used to crash
+// with a "not a String" ClassCastException — the compiler re-boxed the VM's
+// already-boxed result), `compare` returns `x - y` (NOT the -1/0/1 sign
+// `Integer.compare` gives), and the parse/range messages match the JDK's.
+differential_test!(
+    diff_short_byte_wrappers,
+    "DiffSmallInt",
+    r#"
+public class DiffSmallInt {
+    public static void main(String[] args) {
+        // valueOf boxes — the primitive and the String forms.
+        Short s = Short.valueOf((short) 5);
+        Short s2 = Short.valueOf("42");
+        Byte b = Byte.valueOf((byte) 3);
+        Byte b2 = Byte.valueOf("7");
+        System.out.println(s + " " + s2 + " " + b + " " + b2);
+
+        // parse and the wrapper constants.
+        System.out.println(Short.parseShort("100") + " " + Byte.parseByte("9"));
+        System.out.println(Short.MAX_VALUE + " " + Short.MIN_VALUE
+            + " " + Byte.MAX_VALUE + " " + Byte.MIN_VALUE);
+
+        // compare returns the DIFFERENCE, not the sign.
+        System.out.println(Short.compare((short) 3, (short) 5));
+        System.out.println(Short.compare((short) 9, (short) 2));
+        System.out.println(Byte.compare((byte) 1, (byte) 1));
+        System.out.println(Byte.compare((byte) 7, (byte) 4));
+
+        // toString, hashCode, equals, and cached identity.
+        System.out.println(Short.toString((short) 8) + " " + Byte.toString((byte) 4));
+        Short a = (short) 5, c = (short) 5;
+        System.out.println((a == c) + " " + a.equals(c));
+        System.out.println(a.intValue() + " " + a.doubleValue() + " " + a.hashCode());
+
+        // The parse/range NumberFormatException messages.
+        try { Short.parseShort("99999"); }
+        catch (NumberFormatException e) { System.out.println(e.getMessage()); }
+        try { Byte.parseByte("200"); }
+        catch (NumberFormatException e) { System.out.println(e.getMessage()); }
+        try { Short.valueOf("abc"); }
+        catch (NumberFormatException e) { System.out.println(e.getMessage()); }
+    }
+}
+"#
+);
+
 // `java.util.Objects`: the null-safe static helpers. `equals`/`hashCode`
 // dispatch a user override; `hash` folds like `Arrays.hashCode`; `toString`
 // renders like `String.valueOf`; `requireNonNull` returns its argument's

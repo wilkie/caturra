@@ -4738,7 +4738,7 @@ fn small_int_static(
             let text = parse_int_text(heap, text)?;
             let value: i32 = text.parse().map_err(|_| number_format(&text))?;
             if value < lo || value > hi {
-                return Err(number_format_range(&text, class));
+                return Err(number_format_range(&text));
             }
             Ok(Some(JValue::Int(value)))
         }
@@ -4747,11 +4747,10 @@ fn small_int_static(
             let reference = heap.alloc_string(&v.to_string());
             Ok(Some(JValue::Ref(Some(reference))))
         }
-        ("compare", [JValue::Int(a), JValue::Int(b)]) => Ok(Some(JValue::Int(match a.cmp(b) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
-        }))),
+        // `Short.compare`/`Byte.compare` return `x - y` (the JDK source), NOT
+        // the -1/0/1 sign that `Integer.compare` gives — the values are small
+        // enough that the subtraction cannot overflow.
+        ("compare", [JValue::Int(a), JValue::Int(b)]) => Ok(Some(JValue::Int(a - b))),
         ("reverseBytes", [JValue::Int(v)]) => {
             #[allow(clippy::cast_possible_truncation)]
             let value = *v as i16;
@@ -4762,9 +4761,11 @@ fn small_int_static(
 }
 
 /// javac range message for `Byte.parseByte("200")`.
-fn number_format_range(text: &str, class: &str) -> VmError {
+fn number_format_range(text: &str) -> VmError {
+    // `Short.parseShort`/`Byte.parseByte` range-check the result of
+    // `Integer.parseInt(s, radix)` and throw exactly this — no class suffix.
     VmError::UncaughtException(format!(
-        "java.lang.NumberFormatException: Value out of range. Value:\"{text}\" Radix:10          ({class})"
+        "java.lang.NumberFormatException: Value out of range. Value:\"{text}\" Radix:10"
     ))
 }
 
