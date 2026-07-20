@@ -3836,6 +3836,26 @@ fn const_literal_as_int(lit: &Literal) -> Option<i64> {
     }
 }
 
+/// Fold a binary operator over two constant integer operands (i64), for
+/// [`Codegen::const_int`]. Arithmetic and integer bitwise only — a comparison
+/// or a shift (width-dependent) is not an int constant here, so it returns
+/// `None` and the whole expression falls back to non-constant.
+fn fold_const_int(op: BinaryOp, l: i64, r: i64) -> Option<i64> {
+    Some(match op {
+        BinaryOp::Add => l.wrapping_add(r),
+        BinaryOp::Sub => l.wrapping_sub(r),
+        BinaryOp::Mul => l.wrapping_mul(r),
+        // A division by a zero constant is not a compile-time constant
+        // expression (JLS §15.29), so it is not foldable.
+        BinaryOp::Div if r != 0 => l.wrapping_div(r),
+        BinaryOp::Rem if r != 0 => l.wrapping_rem(r),
+        BinaryOp::BitAnd => l & r,
+        BinaryOp::BitOr => l | r,
+        BinaryOp::BitXor => l ^ r,
+        _ => return None,
+    })
+}
+
 fn constant_int_value(expr: &Expr) -> Option<i64> {
     match expr {
         Expr::Literal {
@@ -8770,6 +8790,27 @@ impl BodyGen<'_> {
                         self.error(value.span(), "case labels must be constants");
                         continue;
                     };
+                    // JLS §14.11: a case constant must be assignable to the
+                    // selector's type, so a `byte`/`short`/`char` selector
+                    // rejects a label outside its range (`switch (aByte) { case
+                    // 200: }`) — the same lossy-conversion error as `byte b =
+                    // 200`, which caturra silently accepted.
+                    let fits = match selector_ty {
+                        JType::Byte => i8::try_from(constant).is_ok(),
+                        JType::Short => i16::try_from(constant).is_ok(),
+                        JType::Char => (0..=i64::from(u16::MAX)).contains(&constant),
+                        _ => true,
+                    };
+                    if !fits {
+                        self.error(
+                            value.span(),
+                            format!(
+                                "incompatible types: possible lossy conversion from int to {}",
+                                selector_ty.describe(self.table)
+                            ),
+                        );
+                        continue;
+                    }
                     if seen_ints.contains(&constant) {
                         self.error(value.span(), "duplicate case label");
                     }
@@ -9191,12 +9232,8 @@ impl BodyGen<'_> {
             }
             (Some(expected), Some(value)) => {
                 let actual = self.expr(value);
-                self.convert_for_assignment_const(
-                    actual,
-                    expected,
-                    value.span(),
-                    constant_int_value(value),
-                );
+                let value_const = self.const_int(value);
+                self.convert_for_assignment_const(actual, expected, value.span(), value_const);
                 // Enclosing finally blocks run with the return value
                 // parked on the stack (they balance to empty).
                 self.emit_pending_finallys(None);
@@ -9510,12 +9547,8 @@ impl BodyGen<'_> {
                     }
                 } else {
                     let init_ty = self.expr(init);
-                    self.convert_for_assignment_const(
-                        init_ty,
-                        var_ty,
-                        init.span(),
-                        constant_int_value(init),
-                    );
+                    let init_const = self.const_int(init);
+                    self.convert_for_assignment_const(init_ty, var_ty, init.span(), init_const);
                 }
                 self.emit_store(slot, var_ty);
                 true
@@ -9570,7 +9603,8 @@ impl BodyGen<'_> {
             .as_ref()
             .expect("var requires an initializer");
         let init_ty = self.expr(init);
-        self.convert_for_assignment_const(init_ty, var_ty, init.span(), constant_int_value(init));
+        let init_const = self.const_int(init);
+        self.convert_for_assignment_const(init_ty, var_ty, init.span(), init_const);
         self.emit_store(slot, var_ty);
         self.record_local_debug(&declarator.name, var_ty, slot);
         let _ = span;
@@ -9659,12 +9693,8 @@ impl BodyGen<'_> {
                     );
                 }
                 let value_ty = self.expr(value);
-                self.convert_for_assignment_const(
-                    value_ty,
-                    var_ty,
-                    value.span(),
-                    constant_int_value(value),
-                );
+                let value_const = self.const_int(value);
+                self.convert_for_assignment_const(value_ty, var_ty, value.span(), value_const);
                 self.emit_store(slot, var_ty);
                 if let Some(var) = self.lookup(name) {
                     var.assigned = true;
@@ -9984,12 +10014,8 @@ impl BodyGen<'_> {
         match op_kind {
             None => {
                 let value_ty = self.expr(value);
-                self.convert_for_assignment_const(
-                    value_ty,
-                    field.ty,
-                    value.span(),
-                    constant_int_value(value),
-                );
+                let value_const = self.const_int(value);
+                self.convert_for_assignment_const(value_ty, field.ty, value.span(), value_const);
                 if is_static {
                     self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
                     self.code.drop_stack(field.ty.width());
@@ -10216,7 +10242,8 @@ impl BodyGen<'_> {
             }
         } else {
             let init_ty = self.expr(init);
-            self.convert_for_assignment_const(init_ty, ty, init.span(), constant_int_value(init));
+            let init_const = self.const_int(init);
+            self.convert_for_assignment_const(init_ty, ty, init.span(), init_const);
         }
         let field_ref = intern_field_ref(
             self.pool,
@@ -13527,12 +13554,8 @@ impl BodyGen<'_> {
         match op_kind {
             None => {
                 let value_ty = self.expr(value);
-                self.convert_for_assignment_const(
-                    value_ty,
-                    element,
-                    value.span(),
-                    constant_int_value(value),
-                );
+                let value_const = self.const_int(value);
+                self.convert_for_assignment_const(value_ty, element, value.span(), value_const);
                 self.xastore(element);
             }
             Some(op_kind) => {
@@ -16635,12 +16658,8 @@ impl BodyGen<'_> {
                 self.emit_array_literal(nested, element, value.span());
             } else {
                 let value_ty = self.expr(value);
-                self.convert_for_assignment_const(
-                    value_ty,
-                    element,
-                    value.span(),
-                    constant_int_value(value),
-                );
+                let value_const = self.const_int(value);
+                self.convert_for_assignment_const(value_ty, element, value.span(), value_const);
             }
             self.xastore(element);
         }
@@ -18191,6 +18210,63 @@ impl BodyGen<'_> {
         coerce_const_to_type(lit, var_ty)
     }
 
+    /// The compile-time value of a constant INTEGER expression (JLS §15.28),
+    /// resolving `final` constant variables and folding arithmetic — used to
+    /// decide whether a narrowing assignment (`byte b = expr`, JLS §5.2) is
+    /// allowed. Computed in i64; a wrapping int overflow can only make the value
+    /// LESS likely to fit a narrow target, so any imprecision keeps the outcome
+    /// on the safe (stricter-than-javac) side. Shifts are not folded (their
+    /// width-dependent count masking is ambiguous here), which just leaves the
+    /// expression non-constant — again the safe direction.
+    fn const_int(&mut self, expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Literal {
+                value: Literal::Int(v),
+                ..
+            } => Some(*v),
+            Expr::Literal {
+                value: Literal::Char(c),
+                ..
+            } => Some(i64::from(u32::from(*c))),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                operand,
+                ..
+            } => Some(self.const_int(operand)?.wrapping_neg()),
+            Expr::Unary {
+                op: UnaryOp::BitNot,
+                operand,
+                ..
+            } => Some(!self.const_int(operand)?),
+            Expr::Binary { op, lhs, rhs, .. } => {
+                let l = self.const_int(lhs)?;
+                let r = self.const_int(rhs)?;
+                fold_const_int(*op, l, r)
+            }
+            Expr::Cast { ty, operand, .. } => {
+                let v = self.const_int(operand)?;
+                match self.table.resolve_type(ty)? {
+                    #[allow(clippy::cast_possible_truncation)]
+                    JType::Byte => Some(i64::from(v as i8)),
+                    #[allow(clippy::cast_possible_truncation)]
+                    JType::Short => Some(i64::from(v as i16)),
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    JType::Char => Some(i64::from(v as u16)),
+                    #[allow(clippy::cast_possible_truncation)]
+                    JType::Int => Some(i64::from(v as i32)),
+                    JType::Long => Some(v),
+                    _ => None,
+                }
+            }
+            Expr::Name { .. } => match self.const_eval(expr)? {
+                Literal::Int(v) => Some(v),
+                Literal::Char(c) => Some(i64::from(u32::from(c))),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Evaluate a constant expression (JLS §15.29) to its literal value, or
     /// `None` if it is not a compile-time constant. Handles literals, constant
     /// variables (`final` locals, `static final` fields), and constant string
@@ -18555,9 +18631,13 @@ impl BodyGen<'_> {
         span: SourceSpan,
         constant: Option<i64>,
     ) {
-        // Constant narrowing (JLS §5.2): the value is already an int
-        // on the stack; in-range constants need no code at all.
-        if from == JType::Int
+        // Constant narrowing (JLS §5.2): a constant of type byte/short/char/int
+        // whose value fits the target byte/short/char assigns without a cast
+        // (`byte b = 5;`, `byte b = 'A';`, `char c = FINAL_INT;`). The value is
+        // already an int on the stack (byte/short/char are ints at runtime), so
+        // an in-range constant needs no code — and the target must be narrower
+        // than the source's runtime width, which byte/short/char always are.
+        if matches!(from, JType::Int | JType::Char | JType::Short | JType::Byte)
             && let Some(value) = constant
         {
             let in_range = match to {

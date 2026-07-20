@@ -2956,6 +2956,66 @@ public class DiffBox {
 "#
 );
 
+// Constant-expression narrowing (JLS §5.2): a constant of type byte/short/char/
+// int whose value fits assigns to a narrower byte/short/char without a cast —
+// including a char literal, a constant `final` variable, and folded arithmetic.
+differential_test!(
+    diff_constant_narrowing,
+    "DiffConstNarrow",
+    r#"
+public class DiffConstNarrow {
+    static final int MASK = 0xFF;
+
+    public static void main(String[] args) {
+        byte b1 = 'A';
+        System.out.println(b1);
+        final byte x = 1, y = 2;
+        byte b2 = x + y;
+        System.out.println(b2);
+        final int c = 65;
+        char ch = c;
+        System.out.println(ch);
+        short s = 100 + 27;
+        System.out.println(s);
+        byte b3 = 10 * 12 - 5;
+        System.out.println(b3);
+        char c2 = 'a' + 1;
+        System.out.println(c2);
+        byte m = (byte) (300 & MASK);
+        System.out.println(m);
+        byte[] arr = {1, 'A', 10 + 20};
+        System.out.println(arr[1] + " " + arr[2]);
+
+        // A case label is range-checked against a byte/short/char selector, so
+        // an IN-range label still works.
+        byte sel = 100;
+        switch (sel) {
+            case 100: System.out.println("hit"); break;
+            case 5: System.out.println("miss"); break;
+        }
+    }
+}
+"#
+);
+
+// JLS §14.11: a case label outside the byte selector's range is a lossy
+// conversion — a compile error, which caturra used to silently accept.
+differential_reject!(
+    reject_case_label_out_of_byte_range,
+    "RejectCaseByte",
+    r"
+public class RejectCaseByte {
+    public static void main(String[] args) {
+        byte b = 1;
+        switch (b) {
+            case 1: break;
+            case 200: break;
+        }
+    }
+}
+"
+);
+
 // `Double.parseDouble`/`Float.parseFloat` accept the Java grammar Rust's parser
 // rejects — a trailing type suffix (`1.0f`, `3.14d`) and the hexadecimal form
 // (`0x1.8p1`) — instead of throwing; and `%a`/`%A` render the hex-float text

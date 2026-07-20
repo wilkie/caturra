@@ -147,6 +147,17 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   JDK's "type (and possibly null) check": before, the first insert compared
   against nothing, so `null` and a non-`Comparable` element were accepted and
   only the SECOND insert complained.
+- **Constant-expression narrowing** (2026-07-20, JLS §5.2): a constant of type
+  byte/short/char/int whose value fits assigns to a narrower byte/short/char
+  without a cast — not only an int literal (`byte b = 5`) but a char literal
+  (`byte b = 'A'`), a constant `final` variable (`final int c = 65; char ch =
+  c`), and folded arithmetic (`byte b = x + y` for final `x`, `y`). A new
+  `const_int` resolves constant variables (reusing `const_eval`) and folds the
+  arithmetic and integer-bitwise operators in i64 — a wrapping overflow only
+  makes a value LESS likely to fit, so any imprecision stays stricter than javac,
+  never looser. The same rule now range-checks a switch case label against a
+  byte/short/char selector (JLS §14.11), so `switch (aByte) { case 200: }` is the
+  compile error javac gives instead of a silently-accepted always-false label.
 - **Float parsing and hex-float formatting** (2026-07-20): `Double.parseDouble`
   and `Float.parseFloat` accept the Java grammar Rust's parser rejects — a
   trailing type suffix (`"1.0f"`, `"3.14d"`) and the hexadecimal form
