@@ -1780,12 +1780,30 @@ impl MethodTable {
             return match varargs_applicable.len() {
                 0 => Resolution::NoneApplicable,
                 1 => Resolution::Found(varargs_applicable[0]),
-                _ => Resolution::Ambiguous(
-                    varargs_applicable
+                // Several varargs overloads apply: pick the most specific
+                // (JLS §15.12.2.5), so `f(Integer...)` beats `f(Object...)` for
+                // int arguments rather than being reported ambiguous.
+                _ => {
+                    let most_specific: Vec<&MethodSig> = varargs_applicable
                         .iter()
-                        .map(|m| m.describe(self))
-                        .collect(),
-                ),
+                        .copied()
+                        .filter(|m| {
+                            varargs_applicable
+                                .iter()
+                                .all(|other| self.varargs_at_least_as_specific(m, other))
+                        })
+                        .collect();
+                    if most_specific.len() == 1 {
+                        Resolution::Found(most_specific[0])
+                    } else {
+                        Resolution::Ambiguous(
+                            varargs_applicable
+                                .iter()
+                                .map(|m| m.describe(self))
+                                .collect(),
+                        )
+                    }
+                }
             };
         }
         match applicable.len() {
@@ -1817,6 +1835,33 @@ impl MethodTable {
                 }
             }
         }
+    }
+
+    /// Whether varargs method `m` is at least as specific as `other`
+    /// (JLS §15.12.2.5): each fixed parameter widens to the other's, and `m`'s
+    /// varargs ELEMENT widens to `other`'s — with `Object...` treated as the
+    /// least specific, so any element beats it.
+    fn varargs_at_least_as_specific(&self, m: &MethodSig, other: &MethodSig) -> bool {
+        if m.params.len() != other.params.len() {
+            return false;
+        }
+        let last = m.params.len() - 1;
+        for (index, (mp, op)) in m.params.iter().zip(&other.params).enumerate() {
+            let ok = if index == last {
+                match (mp.element_type(), op.element_type()) {
+                    (Some(me), Some(oe)) => {
+                        widens(me, oe, self) || oe == JType::Object(self.object_id)
+                    }
+                    _ => mp == op,
+                }
+            } else {
+                widens(*mp, *op, self)
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
     }
 
     /// Whether a varargs method accepts `args` in spread or array form:

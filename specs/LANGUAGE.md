@@ -157,6 +157,15 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   `interface AB extends A, B` — is now the "types A and B are incompatible" error
   rather than a silent arbitrary pick. A related override (a sub-interface's more
   specific default, or the type's own) resolves it, as on javac.
+- **Varargs overload resolution picks the most specific** (2026-07-21, JLS
+  §15.12.2.5): when several varargs methods apply, `f(Integer...)`/`f(String...)`
+  beats `f(Object...)` (its element is more specific, and `Object...` is the
+  least specific) instead of caturra reporting the call ambiguous. The
+  fixed-arity path already did this; the varargs path only counted candidates.
+  **Documented gap:** two overloads that differ ONLY as `f(int...)` vs
+  `f(Integer...)` are still rejected as duplicate definitions — caturra stores
+  wrapper arrays unboxed, so both erase to `int[]` (the same representation limit
+  behind passing an `Integer[]` to `Object...`).
 - **Interface member validation** (2026-07-20, JLS §9.4): an interface method
   may not be `protected` or `final`, `static` and `default` are mutually
   exclusive, a `static`/`default`/`private` method must have a body while a plain

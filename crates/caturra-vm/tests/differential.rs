@@ -3032,13 +3032,38 @@ public class DiffIntern {
 "#
 );
 
+// Varargs overload resolution picks the MOST SPECIFIC applicable method
+// (JLS §15.12.2.5): `f(Integer...)`/`f(String...)` beats `f(Object...)` rather
+// than being reported ambiguous, and a lone varargs method still resolves.
+differential_test!(
+    diff_varargs_most_specific,
+    "DiffVarSpec",
+    r#"
+public class DiffVarSpec {
+    static String f(Object... xs) { return "obj"; }
+    static String f(Integer... xs) { return "int"; }
+    static String g(String... xs) { return "str"; }
+    static String g(Object... xs) { return "gobj"; }
+    static int sum(int... xs) { int t = 0; for (int x : xs) t += x; return t; }
+
+    public static void main(String[] args) {
+        System.out.println(f(1, 2));
+        System.out.println(f("x", "y"));
+        System.out.println(g("a", "b"));
+        System.out.println(g(1, 2));
+        System.out.println(sum(1, 2, 3));
+    }
+}
+"#
+);
+
 // Integer/Long radix API: the radix and decode overloads (toString(long,int),
 // parse/valueOf(String,int), parseUnsigned*, decode), and the radix-range and
 // unsigned-overflow NumberFormatException messages the JDK actually gives.
 differential_test!(
     diff_integer_long_radix_api,
     "DiffRadix",
-    r#"
+    r##"
 public class DiffRadix {
     public static void main(String[] args) {
         System.out.println(Long.toString(255L, 16));
@@ -3060,7 +3085,7 @@ public class DiffRadix {
         catch (NumberFormatException e) { System.out.println(e.getMessage()); }
     }
 }
-"#
+"##
 );
 
 // Exception semantics: a user exception subclass widens to its bundled super,
