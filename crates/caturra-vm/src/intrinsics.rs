@@ -4231,6 +4231,106 @@ fn int_to_string_radix(value: i32, radix: i32) -> String {
     digits.iter().rev().collect()
 }
 
+/// `Long.toString(long, radix)`: lowercase digits, radix clamped to 10 when out
+/// of range (as the JDK does).
+fn long_to_string_radix(value: i64, radix: i32) -> String {
+    let radix = if (2..=36).contains(&radix) { radix } else { 10 };
+    let radix = u32::try_from(radix).expect("radix in range");
+    let mut magnitude = value.unsigned_abs();
+    let mut digits = Vec::new();
+    loop {
+        let digit = u32::try_from(magnitude % u64::from(radix)).expect("digit < radix");
+        digits.push(char::from_digit(digit, radix).expect("valid digit"));
+        magnitude /= u64::from(radix);
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if value < 0 {
+        digits.push('-');
+    }
+    digits.iter().rev().collect()
+}
+
+/// Validate a parse radix, throwing the JDK's `Character.MIN_RADIX`/`MAX_RADIX`
+/// `NumberFormatException` (not the generic "For input string") when out of range.
+fn checked_radix(radix: i32) -> Result<u32, VmError> {
+    if radix < 2 {
+        return Err(throw(format!(
+            "java.lang.NumberFormatException: radix {radix} less than Character.MIN_RADIX"
+        )));
+    }
+    if radix > 36 {
+        return Err(throw(format!(
+            "java.lang.NumberFormatException: radix {radix} greater than Character.MAX_RADIX"
+        )));
+    }
+    Ok(u32::try_from(radix).expect("2..=36"))
+}
+
+/// `Integer.decode`/`Long.decode`: an optional sign, then `0x`/`0X`/`#` (hex),
+/// a leading `0` (octal), or decimal. Returned as i64 for the caller to range.
+fn decode_integer(text: &str) -> Result<i64, VmError> {
+    let nfe = || {
+        throw(format!(
+            "java.lang.NumberFormatException: For input string: \"{text}\""
+        ))
+    };
+    let (neg, body) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let (radix, digits) =
+        if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+            (16, hex)
+        } else if let Some(hex) = body.strip_prefix('#') {
+            (16, hex)
+        } else if let Some(oct) = body.strip_prefix('0').filter(|rest| !rest.is_empty()) {
+            (8, oct)
+        } else {
+            (10, body)
+        };
+    let magnitude = i64::from_str_radix(digits, radix).map_err(|_| nfe())?;
+    Ok(if neg { -magnitude } else { magnitude })
+}
+
+/// `Integer.parseUnsignedInt(s[, radix])`: a leading minus is its own error, a
+/// value beyond `0xFFFF_FFFF` "exceeds range of unsigned int." (the JDK's own
+/// wording), and the result is the bit-pattern stored signed.
+fn parse_unsigned_int(text: &str, radix: u32) -> Result<Option<JValue>, VmError> {
+    if text.starts_with('-') {
+        return Err(throw(format!(
+            "java.lang.NumberFormatException: Illegal leading minus sign \
+             on unsigned string {text}."
+        )));
+    }
+    match u64::from_str_radix(text, radix)
+        .ok()
+        .and_then(|v| u32::try_from(v).ok())
+    {
+        Some(value) => Ok(Some(JValue::Int(value.cast_signed()))),
+        None if u64::from_str_radix(text, radix).is_ok() => Err(throw(format!(
+            "java.lang.NumberFormatException: String value {text} exceeds range of unsigned int."
+        ))),
+        None => Err(number_format(text)),
+    }
+}
+
+/// `Long.parseUnsignedLong(s[, radix])`: the 64-bit counterpart — a leading
+/// minus is its own error; the full `u64` range is valid, stored signed.
+fn parse_unsigned_long(text: &str, radix: u32) -> Result<Option<JValue>, VmError> {
+    if text.starts_with('-') {
+        return Err(throw(format!(
+            "java.lang.NumberFormatException: Illegal leading minus sign \
+             on unsigned string {text}."
+        )));
+    }
+    u64::from_str_radix(text, radix).map_or_else(
+        |_| Err(number_format(text)),
+        |value| Ok(Some(JValue::Long(value.cast_signed()))),
+    )
+}
+
 fn parse_int_text(heap: &Heap, value: &JValue) -> Result<String, VmError> {
     match value {
         JValue::Ref(Some(reference)) => heap
@@ -4265,25 +4365,24 @@ fn integer_static(
             let text = parse_int_text(heap, text)?;
             text.parse().map_or_else(|_| Err(number_format(&text)), i)
         }
-        ("parseInt", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
+        ("parseInt" | "valueOf", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
             let text = parse_int_text(heap, text)?;
-            let radix = u32::try_from(*radix).ok().filter(|r| (2..=36).contains(r));
-            radix
-                .and_then(|r| i32::from_str_radix(&text, r).ok())
-                .map_or_else(|| Err(number_format(&text)), i)
+            let radix = checked_radix(*radix)?;
+            i32::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), i)
+        }
+        ("decode", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            let value = decode_integer(&text)?;
+            i32::try_from(value).map_or_else(|_| Err(number_format(&text)), i)
+        }
+        ("parseUnsignedInt", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
+            let text = parse_int_text(heap, text)?;
+            let radix = checked_radix(*radix)?;
+            parse_unsigned_int(&text, radix)
         }
         ("parseUnsignedInt", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
-            // JDK 11 rejects a leading minus with its own message, before the
-            // general "For input string" one.
-            if text.starts_with('-') {
-                return Err(throw(format!(
-                    "java.lang.NumberFormatException: Illegal leading minus sign \
-                     on unsigned string {text}."
-                )));
-            }
-            text.parse::<u32>()
-                .map_or_else(|_| Err(number_format(&text)), |v| i(v.cast_signed()))
+            parse_unsigned_int(&text, 10)
         }
         ("toString", [JValue::Int(v)]) => s(heap, v.to_string()),
         ("toString", [JValue::Int(v), JValue::Int(radix)]) => {
@@ -4779,8 +4878,29 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
             let text = parse_int_text(heap, text)?;
             text.parse().map_or_else(|_| Err(number_format(&text)), l)
         }
+        ("parseLong" | "valueOf", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
+            let text = parse_int_text(heap, text)?;
+            let radix = checked_radix(*radix)?;
+            i64::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), l)
+        }
+        ("parseUnsignedLong", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            parse_unsigned_long(&text, 10)
+        }
+        ("parseUnsignedLong", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
+            let text = parse_int_text(heap, text)?;
+            let radix = checked_radix(*radix)?;
+            parse_unsigned_long(&text, radix)
+        }
+        ("decode", [text @ JValue::Ref(_)]) => {
+            let text = parse_int_text(heap, text)?;
+            l(decode_integer(&text)?)
+        }
         ("valueOf", [JValue::Long(v)]) => l(*v),
         ("toString", [JValue::Long(v)]) => s(heap, v.to_string()),
+        ("toString", [JValue::Long(v), JValue::Int(radix)]) => {
+            s(heap, long_to_string_radix(*v, *radix))
+        }
         ("toBinaryString", [JValue::Long(v)]) => s(heap, format!("{:b}", v.cast_unsigned())),
         ("toOctalString", [JValue::Long(v)]) => s(heap, format!("{:o}", v.cast_unsigned())),
         ("toHexString", [JValue::Long(v)]) => s(heap, format!("{:x}", v.cast_unsigned())),

@@ -6471,6 +6471,26 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     bm("rotateLeft", &[I, I], BRet::Int, "(II)I"),
     bm("rotateRight", &[I, I], BRet::Int, "(II)I"),
     bm("parseUnsignedInt", &[S], BRet::Int, "(Ljava/lang/String;)I"),
+    bm(
+        "parseUnsignedInt",
+        &[S, I],
+        BRet::Int,
+        "(Ljava/lang/String;I)I",
+    ),
+    // The radix and decode forms answer an Integer (a wrapper descriptor, VM
+    // returns the primitive, arg is a reference so no re-box — like valueOf(String)).
+    bm(
+        "valueOf",
+        &[S, I],
+        BRet::Int,
+        "(Ljava/lang/String;I)Ljava/lang/Integer;",
+    ),
+    bm(
+        "decode",
+        &[S],
+        BRet::Int,
+        "(Ljava/lang/String;)Ljava/lang/Integer;",
+    ),
     bm("toUnsignedString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     bm("toUnsignedLong", &[I], BRet::Long, "(I)J"),
     bm(
@@ -6670,7 +6690,33 @@ const FLOAT_METHODS: &[BuiltinMethod] = &[
 
 const LONG_METHODS: &[BuiltinMethod] = &[
     bm("parseLong", &[S], BRet::Long, "(Ljava/lang/String;)J"),
+    bm("parseLong", &[S, I], BRet::Long, "(Ljava/lang/String;I)J"),
+    bm(
+        "parseUnsignedLong",
+        &[S],
+        BRet::Long,
+        "(Ljava/lang/String;)J",
+    ),
+    bm(
+        "parseUnsignedLong",
+        &[S, I],
+        BRet::Long,
+        "(Ljava/lang/String;I)J",
+    ),
+    bm(
+        "valueOf",
+        &[S, I],
+        BRet::Long,
+        "(Ljava/lang/String;I)Ljava/lang/Long;",
+    ),
+    bm(
+        "decode",
+        &[S],
+        BRet::Long,
+        "(Ljava/lang/String;)Ljava/lang/Long;",
+    ),
     bm("toString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
+    bm("toString", &[L, I], BRet::Str, "(JI)Ljava/lang/String;"),
     bm("toBinaryString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
     bm("toOctalString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
     bm("toHexString", &[L], BRet::Str, "(J)Ljava/lang/String;"),

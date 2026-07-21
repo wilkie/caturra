@@ -268,6 +268,15 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   `==` to another. Two more silent-vanish paths closed alongside: a comparison
   whose operand does not type, and `new Integer("7")`, which the emitter
   modelled and `type_of` did not.
+- **Integer/Long radix and decode API** (2026-07-21): the radix overloads —
+  `Long.toString(long, int)`, `parseLong`/`parseInt`/`valueOf(String, int)`,
+  `parseUnsignedInt`/`parseUnsignedLong(String[, int])`, and
+  `Integer.decode`/`Long.decode` (sign + `0x`/`0X`/`#` hex, leading-`0` octal,
+  decimal) — were absent (or `decode` blamed "system properties"). Added across
+  the compiler tables and the VM. An out-of-range radix now throws
+  `radix N less than/greater than Character.MIN_RADIX/MAX_RADIX`, and a
+  `parseUnsignedInt` overflow `String value N exceeds range of unsigned int.` —
+  the JDK's own wording, not the generic "For input string".
 - **`Short`/`Byte` wrappers** (2026-07-20): `Short.valueOf((short) 5)` and
   `Byte.valueOf((byte) 3)` box instead of crashing with a "not a String"
   `ClassCastException` — the descriptor returned the wrapper (so the VM

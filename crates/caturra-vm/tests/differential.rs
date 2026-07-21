@@ -3032,6 +3032,37 @@ public class DiffIntern {
 "#
 );
 
+// Integer/Long radix API: the radix and decode overloads (toString(long,int),
+// parse/valueOf(String,int), parseUnsigned*, decode), and the radix-range and
+// unsigned-overflow NumberFormatException messages the JDK actually gives.
+differential_test!(
+    diff_integer_long_radix_api,
+    "DiffRadix",
+    r#"
+public class DiffRadix {
+    public static void main(String[] args) {
+        System.out.println(Long.toString(255L, 16));
+        System.out.println(Long.parseLong("ff", 16));
+        System.out.println(Integer.parseUnsignedInt("ff", 16));
+        System.out.println(Long.parseUnsignedLong("18446744073709551615"));
+        System.out.println(Integer.valueOf("ff", 16));
+        System.out.println(Long.valueOf("ff", 16));
+        System.out.println(Integer.decode("0x1F"));
+        System.out.println(Long.decode("#FF"));
+        System.out.println(Integer.decode("-010"));
+        System.out.println(Integer.parseUnsignedInt("4294967295"));
+
+        try { Integer.parseInt("10", 40); }
+        catch (NumberFormatException e) { System.out.println(e.getMessage()); }
+        try { Integer.parseInt("10", 1); }
+        catch (NumberFormatException e) { System.out.println(e.getMessage()); }
+        try { Integer.parseUnsignedInt("4294967296"); }
+        catch (NumberFormatException e) { System.out.println(e.getMessage()); }
+    }
+}
+"#
+);
+
 // Exception semantics: a user exception subclass widens to its bundled super,
 // inherits Throwable/Object methods (getClass/getLocalizedMessage/getCause),
 // `initCause`/`addSuppressed`/`getSuppressed` work, and a failed cast reports
