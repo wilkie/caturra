@@ -4718,6 +4718,12 @@ impl<'run> Interpreter<'run> {
             return Ok(Answered::No);
         }
         let result = match (method_name, descriptor, args) {
+            // A null action throws NPE (Map/Iterable.forEach null-checks it).
+            ("forEach", _, [JValue::Ref(None)]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
             ("forEach", _, [JValue::Ref(Some(consumer))]) => {
                 self.list_for_each(receiver, *consumer)?;
                 return Ok(Answered::Void);
@@ -5117,6 +5123,11 @@ impl<'run> Interpreter<'run> {
                 }
                 return Ok(Answered::Void);
             }
+            ("forEach", [JValue::Ref(None)]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
             ("forEach", [JValue::Ref(Some(consumer))]) => {
                 self.map_for_each(receiver, *consumer)?;
                 return Ok(Answered::Void);
@@ -5340,6 +5351,11 @@ impl<'run> Interpreter<'run> {
                     }
                 }
                 JValue::Int(i32::from(changed))
+            }
+            ("forEach", [JValue::Ref(None)]) => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
             }
             ("forEach", [JValue::Ref(Some(consumer))]) => {
                 self.set_for_each(receiver, *consumer)?;
@@ -7205,7 +7221,10 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<UserDispatch<'run>, VmError> {
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        if !classes.contains_key(instance_class) {
+        // A bare `new Object()` is not a loaded user class, but its contract
+        // methods (equals/hashCode/toString/getClass) still dispatch — via the
+        // Object-method fallback below. Only a genuinely unknown class errors.
+        if !classes.contains_key(instance_class) && instance_class != "java/lang/Object" {
             return Err(VmError::MalformedClass {
                 name: instance_class.to_owned(),
                 reason: String::from("instance of an unloaded class"),
@@ -7267,9 +7286,10 @@ impl<'run> Interpreter<'run> {
                 ));
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(array)))));
             }
-            // Object.toString() default: "ClassName@<hex>".
+            // Object.toString() default: getName() + "@" + hex — the binary
+            // name is DOTTED (`java.lang.Object@...`, not `java/lang/Object`).
             if method_name == "toString" && descriptor == "()Ljava/lang/String;" {
-                let text = format!("{instance_class}@{receiver:x}");
+                let text = format!("{}@{receiver:x}", instance_class.replace('/', "."));
                 let reference = self.heap.alloc_string(&text);
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
             }
@@ -8603,6 +8623,32 @@ impl<'run> Interpreter<'run> {
                 }
                 _ => {}
             }
+        }
+        // The wildcard/Object for-each fetch on a LIST (`for (Object o :
+        // List<?>)`): return the element BOXED. The list stores its primitives
+        // unboxed, but the `Object` loop variable needs a reference — the plain
+        // `get` would leave a bare `int` and the loop's store to the reference
+        // slot VerifyErrors. (The Set/PriorityQueue `__get` paths are separate.)
+        if method_name == "__get"
+            && let [JValue::Int(index)] = args.as_slice()
+            && self.heap.list_values(receiver).is_some()
+        {
+            let position = usize::try_from(*index).unwrap_or(usize::MAX);
+            let raw = self
+                .heap
+                .list_values(receiver)
+                .and_then(|values| values.get(position).copied());
+            let Some(raw) = raw else {
+                return Err(VmError::UncaughtException(format!(
+                    "java.lang.IndexOutOfBoundsException: Index {position} out of bounds"
+                )));
+            };
+            let boxed = match raw {
+                JValue::Ref(_) => raw,
+                primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+            };
+            frame.stack.push(boxed);
+            return Ok(None);
         }
         // Turning a value into text can call a user `toString()`, which needs
         // the interpreter; the intrinsic layer holds only the heap.

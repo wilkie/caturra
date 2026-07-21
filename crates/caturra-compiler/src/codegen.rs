@@ -10632,6 +10632,30 @@ impl BodyGen<'_> {
 
     /// The instance-field initializers, in declaration order.
     fn emit_instance_field_initializers(&mut self, class_decl: &ClassDecl) {
+        // An inner class's `__caturraOuter` link must be set BEFORE the field
+        // initializers, because a field initializer may read an enclosing
+        // instance field through it (`int doubled = base * 2;`). The
+        // constructor also stores it (the inner-class pass), but that runs
+        // after the initializers — too late. `this` is slot 0, so the outer
+        // instance is the first constructor parameter, slot 1.
+        if class_decl.is_inner
+            && let Some((_, field)) = self
+                .table
+                .field(&class_decl.name, crate::capture::OUTER_FIELD)
+        {
+            let outer_ty = field.ty;
+            let descriptor = outer_ty.descriptor(self.table);
+            let field_ref = intern_field_ref(
+                self.pool,
+                &class_decl.name,
+                crate::capture::OUTER_FIELD,
+                &descriptor,
+            );
+            self.code.push_op(op::ALOAD_0, 1);
+            self.emit_load(1, outer_ty);
+            self.code.push_op_u16(op::PUTFIELD, field_ref, 0);
+            self.code.drop_stack(2);
+        }
         self.emit_ordered_initializers(class_decl, false);
     }
 
@@ -13932,6 +13956,7 @@ impl BodyGen<'_> {
 
     /// `for (Type name : array) body`, desugared to an indexed loop
     /// over synthetic (unnamed) locals.
+    #[allow(clippy::too_many_lines)] // one arm per iterable kind + the array path
     fn for_each(
         &mut self,
         ty: &TypeRef,
@@ -13945,7 +13970,16 @@ impl BodyGen<'_> {
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
             JType::List(elem) | JType::Stack(elem) | JType::LinkedList { elem, .. } => {
-                Some(("get", elem_value_type(elem, self.table)))
+                // A WILDCARD element (`List<?>`) resolves to `Object`, but the
+                // list may store unboxed primitives, so the fetch must BOX (the
+                // unboxed `get` would leave an `int` where the `Object` loop
+                // variable needs a reference — a VerifyError). A concrete
+                // element uses the plain `get` and boxes on assignment if needed.
+                if matches!(elem, ElemType::Wildcard { .. }) {
+                    Some(("__get", boxed_or_nested(Some(elem), self.table)))
+                } else {
+                    Some(("get", elem_value_type(elem, self.table)))
+                }
             }
             JType::Set(elem) | JType::TreeSet(elem) | JType::Collection(elem) => {
                 Some(("__get", boxed_or_nested(Some(elem), self.table)))

@@ -220,6 +220,17 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   block runs AFTER all constants are constructed (the constant initializers, not
   just the user fields, now precede it in `<clinit>`); it used to run BETWEEN two
   constant constructions.
+- **Four round-5 crashes fixed** (2026-07-21): (1) a method call on a bare `new
+  Object()` (equals/hashCode/toString/getClass) aborted with "malformed class
+  java.lang.Object" — the unloaded-class guard now lets `java/lang/Object` reach
+  the Object-method fallback, and the default `toString` dots the name. (2) a
+  for-each over a wildcard `List<?>` holding boxed ints VerifyError'd — the
+  wildcard element resolves to `Object` but the list stores primitives unboxed,
+  so the fetch now BOXES (a new list `__get` at the interpreter level). (3)
+  `Map`/`List`/`Set.forEach(null)` throws NullPointerException instead of an
+  internal "unknown native member". (4) an inner-class FIELD initializer reading
+  an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
+  before the field initializers, not after.
 - **Inherited static field write** (2026-07-20): `Sub.f = v` on a field
   declared in a superclass resolves to the DECLARING class — it used to abort
   ("malformed class: unknown static field Sub.f") because the write emitted the

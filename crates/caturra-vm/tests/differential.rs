@@ -3032,6 +3032,47 @@ public class DiffIntern {
 "#
 );
 
+// Four round-5 crashes: a method call on a bare `new Object()`; a for-each over
+// a wildcard `List<?>` holding boxed ints; `Map.forEach(null)` (must throw NPE,
+// not an internal error); and an inner-class FIELD initializer reading an
+// enclosing instance field (the `__caturraOuter` link must be set first).
+differential_test!(
+    diff_round5_crashes,
+    "DiffR5Crash",
+    r#"
+import java.util.*;
+import java.util.function.BiConsumer;
+
+public class DiffR5Crash {
+    int base = 50;
+    class Inner {
+        int doubled = base * 2;
+        int get() { return doubled; }
+    }
+
+    static void show(List<?> l) { for (Object o : l) System.out.print(o + " "); System.out.println(); }
+
+    public static void main(String[] args) {
+        Object o = new Object();
+        System.out.println(o.equals(o) + " " + (o.hashCode() == o.hashCode()));
+        System.out.println(o.toString().startsWith("java.lang.Object@"));
+        System.out.println(o.getClass().getName());
+
+        show(Arrays.asList(1, 2, 3));
+        show(Arrays.asList("a", "b"));
+
+        HashMap<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        BiConsumer<String, Integer> f = null;
+        try { m.forEach(f); System.out.println("no npe"); }
+        catch (NullPointerException e) { System.out.println("NPE"); }
+
+        System.out.println(new DiffR5Crash().new Inner().get());
+    }
+}
+"#
+);
+
 // Varargs overload resolution picks the MOST SPECIFIC applicable method
 // (JLS §15.12.2.5): `f(Integer...)`/`f(String...)` beats `f(Object...)` rather
 // than being reported ambiguous, and a lone varargs method still resolves.
