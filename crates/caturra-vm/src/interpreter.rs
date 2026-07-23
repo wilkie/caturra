@@ -33,6 +33,13 @@ pub(crate) struct Interpreter<'run> {
     pub heap: Heap,
     pub intrinsic_statics: IntrinsicStatics,
     string_pool: HashMap<String, HeapRef>,
+    /// One `Class` object per class name, as a real JVM has (`Foo.class ==
+    /// Foo.class`, and every `getClass()` on a `Foo` returns the SAME
+    /// reference). Minting a fresh one per query made the textbook `equals`
+    /// idiom — `if (getClass() != o.getClass()) return false;` — always take
+    /// the `false` branch, so `equals`, `List.contains` and `HashSet` dedup all
+    /// silently disagreed with a real JDK.
+    class_pool: HashMap<String, HeapRef>,
     rng: intrinsics::JavaRng,
     /// Static field values per user class, created on first use.
     statics: HashMap<String, HashMap<String, JValue>>,
@@ -178,6 +185,7 @@ impl<'run> Interpreter<'run> {
             heap: Heap::new(),
             intrinsic_statics: IntrinsicStatics::default(),
             string_pool: HashMap::new(),
+            class_pool: HashMap::new(),
             rng: intrinsics::JavaRng::new(random_seed),
             statics: HashMap::new(),
             field_slots: HashMap::new(),
@@ -236,6 +244,19 @@ impl<'run> Interpreter<'run> {
         }
         let reference = self.heap.alloc_string(text);
         self.string_pool.insert(text.to_owned(), reference);
+        reference
+    }
+
+    /// The `Class` object for `name` — the SAME reference every time, as on a
+    /// real JVM where a class has exactly one `Class` instance.
+    pub fn intern_class(&mut self, name: String) -> HeapRef {
+        if let Some(existing) = self.class_pool.get(&name) {
+            return *existing;
+        }
+        let reference = self
+            .heap
+            .alloc(crate::value::HeapObject::Class { name: name.clone() });
+        self.class_pool.insert(name, reference);
         reference
     }
 
@@ -3754,20 +3775,34 @@ impl<'run> Interpreter<'run> {
             let elements = *elements;
             // A REFERENCE array backs the list directly: `Arrays.asList` is a
             // fixed-size VIEW, so `list.set(0, x)` is visible as `array[0]`.
-            // A primitive array cannot back one (the compiler only passes one
-            // here for the varargs-packed form), so those still copy.
-            let list = if matches!(
+            //
+            // A PRIMITIVE array cannot back one — its elements live in a
+            // `Vec<i32>`/`Vec<f64>`, not the `Vec<JValue>` a list reads — so
+            // those are copied into a private reference array instead. The
+            // copy is still FIXED-SIZE, which is the half that matters: it is
+            // what makes `Arrays.asList(1, 2, 3).add(4)` the
+            // UnsupportedOperationException a real JDK throws rather than a
+            // silent success. Only the write-through to the caller's own array
+            // is lost, and only for a wrapper array — which caturra stores
+            // unboxed, so it is a primitive array here (the same
+            // representation limit behind `Integer[]` vs `int[]` elsewhere).
+            let backing = if matches!(
                 self.heap.get(elements),
                 Some(crate::value::HeapObject::RefArray(_, _))
             ) {
-                self.heap
-                    .alloc(crate::value::HeapObject::ArrayBackedList(elements))
+                elements
             } else {
                 let items = self.array_elements(elements).ok_or_else(|| {
                     VmError::UnknownIntrinsic(String::from("Arrays.asList needs an array"))
                 })?;
-                self.heap.alloc(crate::value::HeapObject::ArrayList(items))
+                self.heap.alloc(crate::value::HeapObject::RefArray(
+                    String::from("[Ljava/lang/Object;"),
+                    items,
+                ))
             };
+            let list = self
+                .heap
+                .alloc(crate::value::HeapObject::ArrayBackedList(backing));
             frame.stack.push(JValue::Ref(Some(list)));
             return Ok(true);
         }
@@ -7295,9 +7330,7 @@ impl<'run> Interpreter<'run> {
             }
             // Object.getClass(): a reflection `Class` handle.
             if method_name == "getClass" && descriptor == "()Ljava/lang/Class;" {
-                let reference = self.heap.alloc(crate::value::HeapObject::Class {
-                    name: instance_class.to_owned(),
-                });
+                let reference = self.intern_class(instance_class.to_owned());
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
             }
             // Object.equals(Object): reference identity when not overridden.
@@ -7417,7 +7450,7 @@ impl<'run> Interpreter<'run> {
                 }
                 _ => String::new(),
             };
-            let reference = self.heap.alloc(crate::value::HeapObject::Class { name });
+            let reference = self.intern_class(name);
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
         }
@@ -7483,7 +7516,7 @@ impl<'run> Interpreter<'run> {
             };
             let value = match name {
                 Some(name) if self.classes.contains_key(&name) => {
-                    let reference = self.heap.alloc(crate::value::HeapObject::Class { name });
+                    let reference = self.intern_class(name);
                     JValue::Ref(Some(reference))
                 }
                 other => {
@@ -8585,7 +8618,7 @@ impl<'run> Interpreter<'run> {
         // String or a boxed Integer from a reflective `Object[]`).
         if method_name == "getClass" && descriptor == "()Ljava/lang/Class;" {
             let name = self.object_class_name(receiver);
-            let reference = self.heap.alloc(crate::value::HeapObject::Class { name });
+            let reference = self.intern_class(name);
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
         }
@@ -9420,8 +9453,27 @@ impl<'run> Interpreter<'run> {
                         let binary = name.replace('/', ".");
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&binary)))))
                     }
+                    // `Class` inherits `Object`'s identity `equals`/`hashCode`,
+                    // and identity is meaningful because a class has exactly
+                    // one `Class` instance (see `intern_class`).
+                    "equals" => Ok(Some(JValue::Int(i32::from(
+                        matches!(args.first(), Some(JValue::Ref(Some(other))) if *other == receiver),
+                    )))),
+                    "hashCode" => Ok(Some(JValue::Int(
+                        i32::try_from(receiver).unwrap_or(i32::MAX),
+                    ))),
                     "getSimpleName" => {
-                        let simple = simple_class_name(&name);
+                        // JLS: an ANONYMOUS class has no simple name — the JDK
+                        // returns "". caturra synthesizes one (`Anon$N`) so it
+                        // can be a real class, and was handing that name back;
+                        // an enum constant WITH A BODY is an anonymous subclass,
+                        // so `E.X.getClass().getSimpleName()` printed `Anon$1`
+                        // where a JDK prints nothing at all.
+                        let simple = if is_synthesized_anonymous(&name) {
+                            ""
+                        } else {
+                            simple_class_name(&name)
+                        };
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(simple)))))
                     }
                     // `Class.toString()` is "class <name>" (used when a Class is
@@ -9472,7 +9524,7 @@ impl<'run> Interpreter<'run> {
                         match super_name {
                             Some(super_name) => {
                                 let simple = simple_class_name(&super_name).to_owned();
-                                let reference = self.heap.alloc(HeapObject::Class { name: simple });
+                                let reference = self.intern_class(simple);
                                 Ok(Some(JValue::Ref(Some(reference))))
                             }
                             // `Object` (or an unloaded root) has no super.
@@ -9763,7 +9815,7 @@ impl<'run> Interpreter<'run> {
                     "getModifiers" => Ok(Some(JValue::Int(i32::from(access)))),
                     "getType" => {
                         let type_name = intrinsics::type_name_of_descriptor(&descriptor);
-                        let reference = self.heap.alloc(HeapObject::Class { name: type_name });
+                        let reference = self.intern_class(type_name);
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
                     // `Field.getGenericType()`: a ParameterizedType when the
@@ -9845,19 +9897,18 @@ impl<'run> Interpreter<'run> {
                     "getReturnType" => {
                         let ret = descriptor.rsplit(')').next().unwrap_or("V");
                         let type_name = intrinsics::type_name_of_descriptor(ret);
-                        let reference = self.heap.alloc(HeapObject::Class { name: type_name });
+                        let reference = self.intern_class(type_name);
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
                     "getParameterTypes" => {
                         let params = parse_descriptor_params(&descriptor);
-                        let refs: Vec<JValue> = params
+                        let names: Vec<String> = params
                             .iter()
-                            .map(|p| {
-                                let type_name = intrinsics::type_name_of_descriptor(p);
-                                JValue::Ref(Some(
-                                    self.heap.alloc(HeapObject::Class { name: type_name }),
-                                ))
-                            })
+                            .map(|p| intrinsics::type_name_of_descriptor(p))
+                            .collect();
+                        let refs: Vec<JValue> = names
+                            .into_iter()
+                            .map(|name| JValue::Ref(Some(self.intern_class(name))))
                             .collect();
                         let array = self.heap.alloc(HeapObject::RefArray(
                             String::from("[Ljava/lang/Class;"),
@@ -9884,13 +9935,13 @@ impl<'run> Interpreter<'run> {
                     // Each type argument becomes a `Class` (its `toString` is
                     // "class <name>", which the helpers concatenate).
                     "getActualTypeArguments" => {
-                        let refs: Vec<JValue> = args
+                        let names: Vec<String> = args
                             .iter()
-                            .map(|name| {
-                                JValue::Ref(Some(self.heap.alloc(HeapObject::Class {
-                                    name: simple_class_name(name).to_owned(),
-                                })))
-                            })
+                            .map(|name| simple_class_name(name).to_owned())
+                            .collect();
+                        let refs: Vec<JValue> = names
+                            .into_iter()
+                            .map(|name| JValue::Ref(Some(self.intern_class(name))))
                             .collect();
                         let array = self.heap.alloc(HeapObject::RefArray(
                             String::from("[Ljava/lang/reflect/Type;"),
@@ -9899,9 +9950,7 @@ impl<'run> Interpreter<'run> {
                         Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getRawType" => {
-                        let reference = self.heap.alloc(HeapObject::Class {
-                            name: simple_class_name(&raw).to_owned(),
-                        });
+                        let reference = self.intern_class(simple_class_name(&raw).to_owned());
                         Ok(Some(JValue::Ref(Some(reference))))
                     }
                     "getTypeName" | "toString" => {
@@ -11377,6 +11426,14 @@ impl Frame<'_> {
 }
 
 /// `[a, b, c]` capped at 20 elements for the locals view.
+/// Whether a class name is one the compiler synthesized for an ANONYMOUS class
+/// (`new Runnable() { ... }`, and an enum constant with a body). Such a class
+/// has no simple name in Java; the reserved `Anon$` prefix is not writable in
+/// source, so this cannot mistake a user class for one.
+fn is_synthesized_anonymous(name: &str) -> bool {
+    simple_class_name(name).starts_with("Anon$")
+}
+
 /// The simple name of a (possibly `/`- or `.`-qualified) class name.
 /// caturra is a flat namespace, so this is usually a no-op.
 fn simple_class_name(name: &str) -> &str {

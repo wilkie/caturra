@@ -231,6 +231,56 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **A `Class` object is a singleton** (2026-07-23): every `Foo.class` and every
+  `getClass()` on a `Foo` now returns the SAME reference, as on a real JVM
+  (a new `class_pool` beside the string pool). Minting a fresh `Class` per query
+  made the textbook `equals` idiom — `if (getClass() != o.getClass()) return
+  false;` — always take the `false` branch, so a class written that way was
+  never equal to anything: `equals` said false, `List.contains` said false, and
+  a `HashSet` never deduplicated. Found while probing enum reflection, not by an
+  audit round. `Class.equals`/`hashCode` now resolve too (identity, which is
+  what interning makes meaningful).
+- **Enum semantics, the silent/invalid batch** (2026-07-23):
+  - `==` between two DIFFERENT enums, or an enum and a `String`, is javac's
+    "incomparable types" (JLS §15.21.3 — an enum is implicitly `final` and
+    extends only `java.lang.Enum`). caturra compiled both into an identity test
+    that was always `false`, which reads as a legitimate answer. `null`,
+    `Object`, an interface the enum implements, and the same enum are unaffected.
+  - `A.X.compareTo(B.Y)` across two enums, and `card.compareTo(2)` on any
+    `Comparable<Card>`, are now rejected. The erased `Comparable.compareTo(T)`
+    inherited from a generic supertype is OVERRIDDEN by a nearer same-arity
+    declaration, not overloaded by it — offering both made EVERY argument
+    applicable, so the cross-enum compare ran and `A.X.compareTo("s")` reached
+    the enum body with a String and died on "unknown field `__ordinal`".
+  - A case label naming a constant of a DIFFERENT enum, a qualified name
+    (`case A.X:`), or a typo is javac's "an enum switch case label must be the
+    unqualified name of an enumeration constant" — it used to abort at class
+    load with "malformed class: unknown static field A.B.P".
+  - `Enum.valueOf`'s message names the enum canonically (`No enum constant
+    Outer.Level.LOW`); the enclosing chain is applied when nested classes are
+    hoisted, which is where it becomes known.
+  - `getDeclaringClass()` is modelled — the enum TYPE, which for a constant WITH
+    A BODY is not `getClass()`, that being the constant's anonymous subclass.
+  - `getSimpleName()` of a synthesized ANONYMOUS class is `""`, as the JDK's is
+    (it was reporting caturra's internal `Anon$N`).
+- **An assignment used as an expression evaluates its target once**
+  (2026-07-23, JLS §15.26.1/§15.26): `int v = (a[next()] = 5);` called `next()`
+  TWICE and left `v` holding the element at the SECOND index; `(get().f = 7)`
+  called `get()` twice and yielded `0`. The expression form stored and then READ
+  THE TARGET BACK; it now duplicates the stored value under the store's operands
+  (`dup_x2` / `dup2_x2` for an array, `dup_x1` / `dup2_x1` for a field, `dup` for
+  a static), which is both the correct value and a single evaluation. Every
+  target shape and every element width is pinned, including the compound and
+  `String +=` forms.
+- **`Arrays.asList` is fixed-size for every argument shape** (2026-07-23):
+  `Arrays.asList(1, 2, 3).add(4)` used to succeed here and throw
+  `UnsupportedOperationException` on a real JDK — only the inline
+  reference-varargs form got the fixed-size view. A primitive-backed array is
+  now copied into a private reference array that still backs a view, so
+  `add`/`remove`/`clear` throw and `set` works. **Gap:** `set` on
+  `Arrays.asList(anIntegerArray)` does not write through to the caller's array —
+  caturra stores a wrapper array unboxed, so there is no `Vec<JValue>` to share
+  (the `Integer[]` vs `int[]` representation limit again).
 - **Generics, the deep round** (2026-07-23): seven round-5 findings, all of them
   ordinary generic Java that caturra REJECTED.
   1. **`java.lang.Number` is a type.** It used to answer only `instanceof`

@@ -14523,3 +14523,327 @@ public class DiffUserGeneric {
 }
 "#
 );
+
+// A `Class` object is a SINGLETON per class, as on a real JVM. Minting a fresh
+// one per query made the textbook `equals` idiom — `if (getClass() !=
+// o.getClass()) return false;` — always take the false branch, so `equals`,
+// `List.contains` and `HashSet` dedup all silently disagreed with a JDK.
+differential_test!(
+    diff_class_object_identity,
+    "DiffClassIdentity",
+    r"
+import java.util.*;
+
+public class DiffClassIdentity {
+    static class P {
+        int x;
+        P(int x) { this.x = x; }
+        @Override public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            return x == ((P) o).x;
+        }
+        @Override public int hashCode() { return x; }
+    }
+
+    enum E { X, Y }
+
+    public static void main(String[] args) {
+        System.out.println(new P(1).equals(new P(1)));
+        System.out.println(new P(1).equals(new P(2)));
+
+        List<P> l = new ArrayList<>();
+        l.add(new P(1));
+        System.out.println(l.contains(new P(1)));
+
+        Set<P> s = new HashSet<>();
+        s.add(new P(2));
+        s.add(new P(2));
+        System.out.println(s.size());
+
+        System.out.println(E.class == E.class);
+        System.out.println(E.X.getClass() == E.Y.getClass());
+        System.out.println(new P(1).getClass() == new P(2).getClass());
+        System.out.println(E.class.equals(P.class));
+    }
+}
+"
+);
+
+// An enum is implicitly final and extends only `java.lang.Enum`, so `==` can
+// only compare it with the same enum, `null`, `Object`, or an interface
+// (JLS 15.21.3). caturra compiled the rest into an always-false identity test.
+differential_test!(
+    diff_enum_comparisons,
+    "DiffEnumCompare",
+    r"
+import java.util.*;
+
+public class DiffEnumCompare {
+    enum A { X, Y }
+    interface Marker {}
+    enum M implements Marker { P }
+
+    public static void main(String[] args) {
+        A a = A.X;
+        System.out.println(a == A.X);
+        System.out.println(a != A.Y);
+        System.out.println(a == null);
+        Object o = a;
+        System.out.println(o == a);
+        Marker m = M.P;
+        System.out.println(m == M.P);
+        System.out.println(A.values()[0] == A.X);
+        System.out.println(A.X.equals(A.X));
+
+        System.out.println(A.X.compareTo(A.Y));
+        System.out.println(A.Y.compareTo(A.X));
+        List<A> list = new ArrayList<>(Arrays.asList(A.Y, A.X));
+        Collections.sort(list);
+        System.out.println(list);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_cross_enum_equality,
+    "RejCrossEnumEq",
+    r"
+public class RejCrossEnumEq {
+    enum A { X }
+    enum B { X }
+    public static void main(String[] args) {
+        System.out.println(A.X == B.X);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_enum_equals_string,
+    "RejEnumEqStr",
+    r#"
+public class RejEnumEqStr {
+    enum A { X }
+    public static void main(String[] args) {
+        A a = A.X;
+        System.out.println(a == "X");
+    }
+}
+"#
+);
+
+// `Enum.compareTo` takes the enum's OWN type. The erased `Comparable.compareTo(T)`
+// is overridden by it, not overloaded — offering both made every argument
+// applicable, so a cross-enum compare ran and a String argument reached the
+// enum body and died on a missing field.
+differential_reject!(
+    reject_cross_enum_compare_to,
+    "RejCrossEnumCmp",
+    r"
+public class RejCrossEnumCmp {
+    enum A { X, Y }
+    enum B { P, Q }
+    public static void main(String[] args) {
+        System.out.println(A.X.compareTo(B.Q));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_comparable_compare_to_wrong_type,
+    "RejCmpWrongType",
+    r"
+public class RejCmpWrongType {
+    static class Card implements Comparable<Card> {
+        int v;
+        Card(int v) { this.v = v; }
+        public int compareTo(Card o) { return Integer.compare(v, o.v); }
+    }
+    public static void main(String[] args) {
+        System.out.println(new Card(1).compareTo(2));
+    }
+}
+"
+);
+
+// JLS 14.11: an enum case label is the UNQUALIFIED name of a constant of the
+// SELECTOR's enum. caturra emitted a `getstatic` for whatever was written, so
+// a constant of another enum, a qualified name, or a typo aborted at class
+// load with "unknown static field" instead of being a compile error.
+differential_reject!(
+    reject_case_label_from_another_enum,
+    "RejCaseOtherEnum",
+    r#"
+public class RejCaseOtherEnum {
+    enum A { X, Y }
+    enum B { P, Q }
+    public static void main(String[] args) {
+        A v = A.X;
+        switch (v) {
+            case P: System.out.println("p"); break;
+            default: System.out.println("d");
+        }
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_qualified_enum_case_label,
+    "RejCaseQualified",
+    r#"
+public class RejCaseQualified {
+    enum A { X, Y }
+    public static void main(String[] args) {
+        A v = A.X;
+        switch (v) {
+            case A.X: System.out.println("x"); break;
+            default: System.out.println("d");
+        }
+    }
+}
+"#
+);
+
+// `Enum.valueOf`'s message names the enum canonically, and `getDeclaringClass`
+// is the enum TYPE — which for a constant WITH A BODY is not `getClass()`,
+// that being the constant's anonymous subclass (whose simple name is "").
+differential_test!(
+    diff_enum_reflection,
+    "DiffEnumReflect",
+    r#"
+public class DiffEnumReflect {
+    enum Level { low, high }
+
+    enum Bodied {
+        X { int v() { return 1; } },
+        Y { int v() { return 2; } };
+        abstract int v();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(Level.valueOf("low"));
+        try {
+            Level.valueOf("LOW");
+        } catch (IllegalArgumentException e) {
+            System.out.println(e.getMessage());
+        }
+        try {
+            Level.valueOf(null);
+        } catch (NullPointerException e) {
+            System.out.println(e.getMessage());
+        }
+        System.out.println(Level.low.getDeclaringClass().getSimpleName());
+        System.out.println(Bodied.X.getDeclaringClass().getSimpleName());
+        System.out.println("[" + Bodied.X.getClass().getSimpleName() + "]");
+        System.out.println(Level.low.getClass().getSimpleName());
+        System.out.println(Bodied.X.v() + " " + Bodied.Y.v());
+        System.out.println(Level.low.getDeclaringClass() == Level.high.getDeclaringClass());
+    }
+}
+"#
+);
+
+// JLS 15.26.1: an assignment evaluates its target ONCE, and its value is the
+// value ASSIGNED. caturra stored and then READ THE TARGET BACK, so the array
+// or receiver expression ran a second time — side effects twice, and the
+// expression yielded whatever the second evaluation happened to address.
+differential_test!(
+    diff_assignment_as_an_expression,
+    "DiffAssignExpr",
+    r#"
+public class DiffAssignExpr {
+    static int calls = 0;
+    static int[] ia = new int[3];
+    static long[] la = new long[3];
+    static double[] da = new double[3];
+    static String[] sa = new String[3];
+    static byte[] ba = new byte[3];
+    static boolean[] za = new boolean[3];
+    static int idx() { calls++; return 0; }
+
+    static String text = "a";
+    static int stat = 1;
+
+    long lf;
+    double df;
+    String strf = "x";
+    int inf;
+
+    static DiffAssignExpr obj = new DiffAssignExpr();
+    static DiffAssignExpr get() { calls++; return obj; }
+
+    public static void main(String[] args) {
+        System.out.println((ia[idx()] = 5) + " " + calls);
+        System.out.println((la[idx()] = 7L) + " " + calls);
+        System.out.println((da[idx()] = 1.5) + " " + calls);
+        System.out.println((sa[idx()] = "q") + " " + calls);
+        System.out.println((ba[idx()] = 3) + " " + calls);
+        System.out.println((za[idx()] = true) + " " + calls);
+        System.out.println((ia[idx()] += 4) + " " + calls);
+        System.out.println((la[idx()] *= 2) + " " + calls);
+        System.out.println((za[idx()] ^= true) + " " + calls);
+        System.out.println((ia[idx()] <<= 1) + " " + calls);
+        System.out.println((sa[idx()] += "z") + " " + calls);
+
+        System.out.println((stat = 9));
+        System.out.println((stat += 1));
+        System.out.println((text += "b"));
+
+        System.out.println((get().lf = 4L) + " " + calls);
+        System.out.println((get().df = 2.5) + " " + calls);
+        System.out.println((get().strf = "y") + " " + calls);
+        System.out.println((get().inf += 3) + " " + calls);
+        System.out.println((get().strf += "!") + " " + calls);
+
+        int q = 0;
+        System.out.println((q = 8) + " " + (q += 2) + " " + q);
+        System.out.println(ia[0] + " " + la[0] + " " + sa[0] + " " + obj.inf);
+    }
+}
+"#
+);
+
+// `Arrays.asList` is FIXED-SIZE for every argument shape, not only the inline
+// reference-varargs one: `Arrays.asList(1, 2, 3).add(4)` used to succeed here
+// and throw on a real JDK.
+differential_test!(
+    diff_arrays_as_list_is_fixed_size,
+    "DiffAsListFixed",
+    r#"
+import java.util.*;
+
+public class DiffAsListFixed {
+    public static void main(String[] args) {
+        List<Integer> a = Arrays.asList(1, 2, 3);
+        System.out.println(a + " " + a.size() + " " + a.get(1));
+        a.set(0, 9);
+        System.out.println(a);
+        try { a.add(4); } catch (UnsupportedOperationException e) { System.out.println("add UOE"); }
+        try { a.remove(0); } catch (UnsupportedOperationException e) { System.out.println("rm UOE"); }
+        try { a.clear(); } catch (UnsupportedOperationException e) { System.out.println("clr UOE"); }
+        System.out.println(a.contains(9) + " " + a.indexOf(2));
+        for (int x : a) System.out.print(x + " ");
+        System.out.println();
+
+        Integer[] boxed = { 1, 2, 3 };
+        List<Integer> view = Arrays.asList(boxed);
+        try { view.add(4); } catch (UnsupportedOperationException e) { System.out.println("box UOE"); }
+        System.out.println(view);
+
+        String[] strings = { "x", "y" };
+        List<String> sv = Arrays.asList(strings);
+        sv.set(0, "z");
+        System.out.println(strings[0] + " " + sv);
+
+        List<Integer> copy = new ArrayList<>(Arrays.asList(1, 2, 3));
+        copy.add(4);
+        System.out.println(copy);
+        System.out.println(a.equals(Arrays.asList(9, 2, 3)));
+    }
+}
+"#
+);

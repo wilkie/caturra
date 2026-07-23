@@ -3905,6 +3905,37 @@ fn desugar_enum(
         ));
     }
 
+    // `Class getDeclaringClass() { return E.class; }` — the enum TYPE, which
+    // for a constant with a body is not `getClass()`: that is the constant's
+    // anonymous subclass. `Enum.getDeclaringClass` is final, so this is
+    // unconditional (an override is already rejected above).
+    methods.push(MethodDecl {
+        name: String::from("getDeclaringClass"),
+        is_static: false,
+        is_public: true,
+        is_private: false,
+        is_final: false,
+        is_constructor: false,
+        is_abstract: false,
+        type_params: Vec::new(),
+        infer_return: None,
+        return_type: TypeRef::Named(String::from("Class")),
+        params: Vec::new(),
+        body: vec![Stmt::Return {
+            value: Some(Expr::Field {
+                object: Box::new(Expr::Name {
+                    path: vec![name.clone()],
+                    span: zero,
+                }),
+                name: String::from("class"),
+                span: zero,
+            }),
+            span: zero,
+        }],
+        annotations: Vec::new(),
+        span: zero,
+    });
+
     // `int compareTo(E __other) { return __ordinal - __other.__ordinal; }` —
     // Enum implements Comparable by declaration order, which is the ordinal.
     // (`__other.__ordinal` is a private field of the same class, so the access
@@ -4112,9 +4143,23 @@ fn desugar_enum(
 /// become independent top-level classes with their simple name (JVM
 /// `Outer$Inner` mangling is unnecessary — caturra shares one flat
 /// namespace and rejects duplicate simple names).
-fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
+fn flatten_nested(class: ClassDecl, out: &mut Vec<ClassDecl>) {
+    flatten_nested_within(class, "", out);
+}
+
+/// `flatten_nested`, carrying the dotted chain of enclosing class names so a
+/// nested enum can still name itself the way the JDK does.
+fn flatten_nested_within(mut class: ClassDecl, enclosing: &str, out: &mut Vec<ClassDecl>) {
+    if class.is_enum && !enclosing.is_empty() {
+        qualify_enum_constant_message(&mut class, enclosing);
+    }
     let nested = std::mem::take(&mut class.nested);
     let outer = class.name.clone();
+    let inner_enclosing = if enclosing.is_empty() {
+        outer.clone()
+    } else {
+        format!("{enclosing}.{outer}")
+    };
     out.push(class);
     for mut inner in nested {
         // Hoisting loses the fact that it was nested; the file-name rule
@@ -4130,7 +4175,45 @@ fn flatten_nested(mut class: ClassDecl, out: &mut Vec<ClassDecl>) {
         // Only the *static* fallback opens up: the instance one needs a
         // captured `this`, which a nested class has not got.
         inner.enclosing.get_or_insert_with(|| outer.clone());
-        flatten_nested(inner, out);
+        flatten_nested_within(inner, &inner_enclosing, out);
+    }
+}
+
+/// `Enum.valueOf`'s "No enum constant" message names the enum the way
+/// `Class.getCanonicalName()` does — `No enum constant Outer.Level.LOW`, not
+/// `No enum constant Level.LOW`. The desugar (which runs while parsing, before
+/// anything knows what encloses what) writes the simple name; hoisting is where
+/// the enclosing chain becomes known, so the literal is qualified here.
+///
+/// Matched on the exact string the desugar wrote, so a user-written `valueOf`
+/// is left alone.
+fn qualify_enum_constant_message(class: &mut ClassDecl, enclosing: &str) {
+    let written = format!("No enum constant {}.", class.name);
+    let qualified = format!("No enum constant {enclosing}.{}.", class.name);
+    for method in &mut class.methods {
+        for stmt in &mut method.body {
+            replace_string_literal(stmt, &written, &qualified);
+        }
+    }
+}
+
+fn replace_string_literal(stmt: &mut Stmt, from: &str, to: &str) {
+    let Stmt::Throw { value, .. } = stmt else {
+        return;
+    };
+    let Expr::NewObject { args, .. } = value else {
+        return;
+    };
+    for arg in args {
+        if let Expr::Binary { lhs, .. } = arg
+            && let Expr::Literal {
+                value: Literal::Str(text),
+                ..
+            } = lhs.as_mut()
+            && text == from
+        {
+            *text = String::from(to);
+        }
     }
 }
 

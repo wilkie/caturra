@@ -1806,11 +1806,26 @@ impl MethodTable {
                     if skip_inherited && (m.is_static || m.is_private) {
                         continue;
                     }
-                    if m.name == name
-                        && !named
+                    if m.name != name {
+                        continue;
+                    }
+                    let already_declared = named
+                        .iter()
+                        .any(|seen| seen.params == m.params && seen.name == m.name);
+                    // An inherited method whose parameter is the ERASED type
+                    // variable of a generic supertype (`Comparable.compareTo(T)`)
+                    // is OVERRIDDEN by a nearer same-arity declaration
+                    // (`compareTo(Card)`), not overloaded by it — javac sees one
+                    // method, whose parameter is the type ARGUMENT. Offering both
+                    // made every `x.compareTo(anything)` applicable through the
+                    // erased one: `A.X.compareTo(B.Q)` across two enums compiled
+                    // and ran, and `A.X.compareTo("s")` reached the enum body with
+                    // a String and died on "unknown field __ordinal".
+                    let erased_override = m.params.contains(&JType::TypeVar)
+                        && named
                             .iter()
-                            .any(|seen| seen.params == m.params && seen.name == m.name)
-                    {
+                            .any(|seen| seen.name == m.name && seen.params.len() == m.params.len());
+                    if !already_declared && !erased_override {
                         named.push(m);
                     }
                 }
@@ -7123,6 +7138,15 @@ const BOOLEAN_METHODS: &[BuiltinMethod] = &[
 const CLASS_METHODS: &[BuiltinMethod] = &[
     bm("getSimpleName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
+    // `Class` does not override `Object`'s — a class has exactly one `Class`
+    // instance, so both are identity — but they still have to RESOLVE.
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
     bm(
         "isAssignableFrom",
         &[BParam::Class],
@@ -8967,10 +8991,10 @@ impl BodyGen<'_> {
             } => match target {
                 AssignTarget::Var(name) => self.assign(name, *op, value, *span),
                 AssignTarget::Index { array, index } => {
-                    self.assign_element(array, index, *op, value, *span);
+                    self.assign_element(array, index, *op, value, *span, false);
                 }
                 AssignTarget::Field { object, name } => {
-                    self.assign_field_target(object, name, *op, value, *span);
+                    self.assign_field_target(object, name, *op, value, *span, false);
                 }
             },
             Stmt::ForEach {
@@ -9221,13 +9245,37 @@ impl BodyGen<'_> {
                     // Enum switch: the case label is an unqualified
                     // constant name, compared by reference identity
                     // (constants are singletons).
-                    let Expr::Name { path, .. } = value else {
-                        self.error(
+                    // JLS §14.11: the label is the UNQUALIFIED name of a
+                    // constant OF THE SELECTOR'S enum. caturra took whatever
+                    // was written and emitted a `getstatic` for it, so a
+                    // qualified name, a constant of a DIFFERENT enum, or a
+                    // typo all aborted at class-load with "unknown static
+                    // field A.B.P" instead of being the compile error javac
+                    // gives.
+                    let enum_name = self.table.class_name(enum_id).to_owned();
+                    let names_a_constant = |path: &[String]| {
+                        let [name] = path else { return false };
+                        self.table
+                            .field(&enum_name, name)
+                            .is_some_and(|(_, field)| {
+                                field.is_static && field.ty == JType::Object(enum_id)
+                            })
+                    };
+                    let bad_label = |this: &mut Self| {
+                        this.error(
                             value.span(),
-                            "an enum switch case label must be the constant's simple name",
+                            "an enum switch case label must be the unqualified name of an \
+                             enumeration constant",
                         );
+                    };
+                    let Expr::Name { path, .. } = value else {
+                        bad_label(self);
                         continue;
                     };
+                    if !names_a_constant(path) {
+                        bad_label(self);
+                        continue;
+                    }
                     let const_name = path.join(".");
                     if seen_strings.iter().any(|s| s == &const_name) {
                         self.error(value.span(), "duplicate case label");
@@ -10127,14 +10175,22 @@ impl BodyGen<'_> {
                 } else {
                     FieldReceiver::This
                 };
-                self.assign_field(owner, &receiver, &field, op, value, span);
+                self.assign_field(owner, &receiver, &field, op, value, span, false);
                 return;
             }
             // A static field of the enclosing class of this lambda/anonymous
             // class: shared mutable state, so it is written through, not
             // captured by value.
             if let Some((owner, field)) = self.enclosing_static_field(name) {
-                self.assign_field(owner, &FieldReceiver::Static, &field, op, value, span);
+                self.assign_field(
+                    owner,
+                    &FieldReceiver::Static,
+                    &field,
+                    op,
+                    value,
+                    span,
+                    false,
+                );
                 return;
             }
             // An instance field of the enclosing class, written live through
@@ -10148,6 +10204,7 @@ impl BodyGen<'_> {
                     op,
                     value,
                     span,
+                    false,
                 );
                 return;
             }
@@ -10387,6 +10444,7 @@ impl BodyGen<'_> {
         op_kind: Option<BinaryOp>,
         value: &Expr,
         span: SourceSpan,
+        keep: bool,
     ) {
         // `ClassName.field = v` — a static target.
         if let Expr::Name { path, .. } = object
@@ -10412,7 +10470,15 @@ impl BodyGen<'_> {
             // referenced `Sbf.f`), exactly as the READ path resolves it — so a
             // write to an inherited static field finds its slot AND initializes
             // only the declaring class (JLS §12.4.1), not the subclass named.
-            self.assign_field(owner, &FieldReceiver::Static, &field, op_kind, value, span);
+            self.assign_field(
+                owner,
+                &FieldReceiver::Static,
+                &field,
+                op_kind,
+                value,
+                span,
+                keep,
+            );
             return;
         }
 
@@ -10440,7 +10506,15 @@ impl BodyGen<'_> {
             self.expr(object);
             self.code.push_op(op::POP, 0);
             self.code.drop_stack(1);
-            self.assign_field(owner, &FieldReceiver::Static, &field, op_kind, value, span);
+            self.assign_field(
+                owner,
+                &FieldReceiver::Static,
+                &field,
+                op_kind,
+                value,
+                span,
+                keep,
+            );
             return;
         }
         self.assign_field(
@@ -10450,12 +10524,13 @@ impl BodyGen<'_> {
             op_kind,
             value,
             span,
+            keep,
         );
     }
 
     /// Shared emission for plain/compound field assignment once the
     /// field and receiver kind are known.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn assign_field(
         &mut self,
         class_id: ClassId,
@@ -10464,6 +10539,7 @@ impl BodyGen<'_> {
         op_kind: Option<BinaryOp>,
         value: &Expr,
         span: SourceSpan,
+        keep: bool,
     ) {
         if field.is_final && !(self.in_constructor && class_id == self.current_class_id) {
             self.error(
@@ -10498,6 +10574,9 @@ impl BodyGen<'_> {
                 let value_ty = self.expr(value);
                 let value_const = self.const_int(value);
                 self.convert_for_assignment_const(value_ty, field.ty, value.span(), value_const);
+                if keep {
+                    self.dup_stored_value(field.ty, u8::from(!is_static));
+                }
                 if is_static {
                     self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
                     self.code.drop_stack(field.ty.width());
@@ -10532,6 +10611,9 @@ impl BodyGen<'_> {
                     let part_ty = self.expr(value);
                     self.append_part(part_ty, value.span());
                     self.finish_concat();
+                    if keep {
+                        self.dup_stored_value(JType::Str, u8::from(!is_static));
+                    }
                     if is_static {
                         self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
                         self.code.drop_stack(1);
@@ -10565,7 +10647,11 @@ impl BodyGen<'_> {
                         s.code.drop_stack(1);
                     }
                 };
+                let field_ty = field.ty;
                 let store_field = |s: &mut Self| {
+                    if keep {
+                        s.dup_stored_value(field_ty, u8::from(!is_static));
+                    }
                     if is_static {
                         s.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
                         s.code.drop_stack(field.ty.width());
@@ -10689,6 +10775,9 @@ impl BodyGen<'_> {
                 self.narrow_back(promoted, target);
                 if let JType::Boxed(elem) = field.ty {
                     self.emit_box(elem);
+                }
+                if keep {
+                    self.dup_stored_value(field.ty, u8::from(!is_static));
                 }
                 if is_static {
                     self.code.push_op_u16(op::PUTSTATIC, field_ref, 0);
@@ -14059,7 +14148,40 @@ impl BodyGen<'_> {
         self.code.drop_stack(2 + element.width());
     }
 
-    /// `a[i] = v`, `a[i] += v`, `a[i]++` (as `+= 1`).
+    /// `xastore`, keeping the stored value on the stack when the assignment is
+    /// used AS AN EXPRESSION.
+    fn xastore_keeping(&mut self, element: JType, keep: bool) {
+        if keep {
+            self.dup_stored_value(element, 2);
+        }
+        self.xastore(element);
+    }
+
+    /// Duplicate the value about to be stored, underneath the store's other
+    /// operands, so an assignment can be used as an expression. `below` counts
+    /// the operands beneath the value: 2 for an array store (arrayref, index),
+    /// 1 for a `putfield` (objectref), 0 for a `putstatic`.
+    ///
+    /// The alternative — store, then read the target back — RE-EVALUATES the
+    /// array or receiver expression: `int v = (a[next()] = 5);` called `next()`
+    /// twice and left `v` holding whatever was at the SECOND index. JLS
+    /// §15.26.1 evaluates the target once, and the value of an assignment is
+    /// the value assigned.
+    fn dup_stored_value(&mut self, ty: JType, below: u8) {
+        let wide = ty.width() == 2;
+        let opcode = match (wide, below) {
+            (false, 0) => op::DUP,
+            (false, 1) => op::DUP_X1,
+            (false, _) => op::DUP_X2,
+            (true, 0) => op::DUP2,
+            (true, 1) => op::DUP2_X1,
+            (true, _) => op::DUP2_X2,
+        };
+        self.code.push_op(opcode, ty.width());
+    }
+
+    /// `a[i] = v`, `a[i] += v`, `a[i]++` (as `+= 1`). `keep` leaves the stored
+    /// value on the stack, for the assignment-as-an-expression form.
     #[allow(clippy::too_many_lines)] // plain / boolean-compound / shift / arithmetic arms
     fn assign_element(
         &mut self,
@@ -14068,6 +14190,7 @@ impl BodyGen<'_> {
         op_kind: Option<BinaryOp>,
         value: &Expr,
         span: SourceSpan,
+        keep: bool,
     ) {
         let Some(element) = self.array_and_index(array, index) else {
             self.expr(value);
@@ -14080,7 +14203,7 @@ impl BodyGen<'_> {
                 let value_ty = self.expr(value);
                 let value_const = self.const_int(value);
                 self.convert_for_assignment_const(value_ty, element, value.span(), value_const);
-                self.xastore(element);
+                self.xastore_keeping(element, keep);
             }
             Some(op_kind) => {
                 if element == JType::Str {
@@ -14096,7 +14219,7 @@ impl BodyGen<'_> {
                     let part_ty = self.expr(value);
                     self.append_part(part_ty, value.span());
                     self.finish_concat();
-                    self.xastore(element);
+                    self.xastore_keeping(element, keep);
                     return;
                 }
                 let value_ty = self.type_of(value);
@@ -14124,7 +14247,7 @@ impl BodyGen<'_> {
                     };
                     self.code.push_op(opcode, 0);
                     self.code.drop_stack(1);
-                    self.xastore(element);
+                    self.xastore_keeping(element, keep);
                     return;
                 }
                 if matches!(op_kind, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ushr) {
@@ -14172,7 +14295,7 @@ impl BodyGen<'_> {
                     self.code.push_op(opcode, 0);
                     self.code.drop_stack(1);
                     self.narrow_back(shift_ty, element);
-                    self.xastore(element);
+                    self.xastore_keeping(element, keep);
                     return;
                 }
                 if element == JType::Boolean || !element.is_numeric() || !operand.is_numeric() {
@@ -14197,7 +14320,7 @@ impl BodyGen<'_> {
                 self.numeric_conversion(actual, promoted);
                 self.arithmetic_op(op_kind, promoted);
                 self.narrow_back(promoted, element);
-                self.xastore(element);
+                self.xastore_keeping(element, keep);
             }
         }
     }
@@ -16518,21 +16641,28 @@ impl BodyGen<'_> {
                         span: *span,
                     })
                 }
+                // The value of an assignment is the value ASSIGNED
+                // (JLS §15.26), and the target is evaluated ONCE (§15.26.1) —
+                // so the store leaves its value on the stack rather than the
+                // expression reading the target back, which re-ran the array
+                // or receiver expression and its side effects.
                 AssignTarget::Index { array, index } => {
-                    self.assign_element(array, index, *op, value, *span);
-                    self.expr(&Expr::Index {
+                    let element = self.type_of(&Expr::Index {
                         array: array.clone(),
                         index: index.clone(),
                         span: *span,
-                    })
+                    });
+                    self.assign_element(array, index, *op, value, *span, true);
+                    element
                 }
                 AssignTarget::Field { object, name } => {
-                    self.assign_field_target(object, name, *op, value, *span);
-                    self.expr(&Expr::Field {
+                    let ty = self.type_of(&Expr::Field {
                         object: object.clone(),
                         name: name.clone(),
                         span: *span,
-                    })
+                    });
+                    self.assign_field_target(object, name, *op, value, *span, true);
+                    ty
                 }
             },
             Expr::Call {
@@ -18419,6 +18549,36 @@ impl BodyGen<'_> {
         }
     }
 
+    /// JLS §15.21.3: `==` between two references needs a casting conversion
+    /// between their types. An `enum` is implicitly `final` and extends only
+    /// `java.lang.Enum`, so the only references one can be compared with are
+    /// the same enum, `null`, the top `Object`, and an interface (which it may
+    /// implement). Another enum, a `String`, a wrapper — javac calls each of
+    /// those "incomparable types"; caturra compiled them into an identity test
+    /// that was always false, so the comparison read as a legitimate answer.
+    fn enum_incomparable(&self, a: JType, b: JType) -> bool {
+        let is_enum = |t: JType| {
+            matches!(t, JType::Object(id)
+                if self.table.info_by_id(id).is_some_and(|info| info.is_enum))
+        };
+        let comparable_with_enum = |enum_ty: JType, other: JType| match other {
+            JType::Null => true,
+            JType::Object(id) => {
+                other == enum_ty
+                    || id == self.table.object_id
+                    // An interface is left alone: the enum may implement it,
+                    // and refusing one would be the looser-than-javac
+                    // direction only if we were wrong about the hierarchy.
+                    || self
+                        .table
+                        .info_by_id(id)
+                        .is_some_and(|info| info.is_interface)
+            }
+            _ => false,
+        };
+        (is_enum(a) && !comparable_with_enum(a, b)) || (is_enum(b) && !comparable_with_enum(b, a))
+    }
+
     #[allow(clippy::too_many_lines)] // one cohesive arm per operand-type shape
     fn comparison(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
         let (raw_l, raw_r) = (self.type_of(lhs), self.type_of(rhs));
@@ -18486,7 +18646,9 @@ impl BodyGen<'_> {
         // identity (always false). Restricted to the scalar library types,
         // which have no subtype relationships among them — collections are left
         // to the existing paths, where List/Collection etc. do relate.
-        if reference_equality && Self::incomparable_scalars(lt, rt) {
+        if reference_equality
+            && (Self::incomparable_scalars(lt, rt) || self.enum_incomparable(lt, rt))
+        {
             self.expr(lhs);
             self.expr(rhs);
             self.error(
