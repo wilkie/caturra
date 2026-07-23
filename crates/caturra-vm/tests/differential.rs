@@ -14847,3 +14847,323 @@ public class DiffAsListFixed {
 }
 "#
 );
+
+// Comparator combinators: lambda key extractors (which need the element type
+// from the sort/declaration context, since the erased SAM's parameter is
+// Object), thenComparingInt/Long/Double, nullsFirst/Last, comparing(f, cmp),
+// and a null comparator meaning natural ordering.
+differential_test!(
+    diff_comparator_combinators,
+    "DiffCmpCombos",
+    r#"
+import java.util.*;
+
+public class DiffCmpCombos {
+    static class P {
+        String n;
+        int a;
+        long b;
+        double d;
+        P(String n, int a, long b, double d) { this.n = n; this.a = a; this.b = b; this.d = d; }
+        @Override public String toString() { return n; }
+    }
+
+    public static void main(String[] args) {
+        List<P> l = new ArrayList<>(Arrays.asList(
+            new P("b", 2, 5L, 1.0),
+            new P("a", 2, 5L, 1.0),
+            new P("c", 1, 9L, 2.0)));
+
+        // A lambda key extractor whose parameter type comes from the sort.
+        l.sort(Comparator.comparingInt((P p) -> p.a).thenComparing(p -> p.n));
+        System.out.println(l);
+
+        // thenComparingInt/Long/Double, off a method-reference extractor.
+        l.sort(Comparator.comparingInt((P p) -> p.a)
+                .thenComparingLong((P p) -> p.b)
+                .thenComparingDouble((P p) -> p.d));
+        System.out.println(l);
+
+        // comparing(keyExtractor, keyComparator).
+        l.sort(Comparator.comparing((P p) -> p.n, Comparator.comparingInt(String::length)));
+        System.out.println(l);
+
+        // nullsFirst / nullsLast.
+        List<String> s = new ArrayList<>(Arrays.asList("b", null, "a"));
+        s.sort(Comparator.nullsFirst(Comparator.naturalOrder()));
+        System.out.println(s);
+        s.sort(Comparator.nullsLast(Comparator.naturalOrder()));
+        System.out.println(s);
+
+        // A null comparator is natural ordering, not an NPE.
+        List<Integer> n = new ArrayList<>(Arrays.asList(3, 1, 2));
+        n.sort(null);
+        System.out.println(n);
+
+        // A stored factory comparator, dispatched directly.
+        Comparator<String> byLen = Comparator.comparingInt(String::length);
+        System.out.println(byLen.compare("aa", "b"));
+    }
+}
+"#
+);
+
+// Comparator-taking overloads of Arrays.sort and Collections.max/min/
+// binarySearch, and a null comparator meaning natural ordering.
+differential_test!(
+    diff_comparator_static_overloads,
+    "DiffCmpStatics",
+    r#"
+import java.util.*;
+
+public class DiffCmpStatics {
+    static class P {
+        int v;
+        P(int v) { this.v = v; }
+        @Override public String toString() { return "" + v; }
+    }
+
+    public static void main(String[] args) {
+        String[] a = { "ccc", "a", "bb" };
+        Arrays.sort(a, Comparator.comparingInt(String::length));
+        System.out.println(Arrays.toString(a));
+        Arrays.sort(a, Comparator.reverseOrder());
+        System.out.println(Arrays.toString(a));
+        Arrays.sort(a, null);
+        System.out.println(Arrays.toString(a));
+
+        P[] p = { new P(3), new P(1), new P(2) };
+        Arrays.sort(p, Comparator.comparingInt(x -> x.v));
+        System.out.println(Arrays.toString(p));
+        Arrays.sort(p, (x, y) -> y.v - x.v);
+        System.out.println(Arrays.toString(p));
+
+        List<String> l = Arrays.asList("ccc", "a", "bb");
+        Comparator<String> byLen = Comparator.comparingInt(String::length);
+        System.out.println(Collections.max(l, byLen));
+        System.out.println(Collections.min(l, byLen));
+
+        List<String> sorted = new ArrayList<>(Arrays.asList("a", "bb", "ccc"));
+        System.out.println(Collections.binarySearch(sorted, "bb", byLen));
+    }
+}
+"#
+);
+
+// Collections list algorithms: rotate, fill, copy, disjoint (and frequency,
+// which existed).
+differential_test!(
+    diff_collections_list_algorithms,
+    "DiffCollAlgo",
+    r#"
+import java.util.*;
+
+public class DiffCollAlgo {
+    public static void main(String[] args) {
+        List<Integer> l = new ArrayList<>(Arrays.asList(1, 2, 3, 4, 5));
+        Collections.rotate(l, 2);
+        System.out.println(l);
+        Collections.rotate(l, -1);
+        System.out.println(l);
+
+        Collections.fill(l, 9);
+        System.out.println(l);
+
+        List<Integer> dst = new ArrayList<>(Arrays.asList(0, 0, 0, 0, 0));
+        Collections.copy(dst, l);
+        System.out.println(dst);
+
+        System.out.println(Collections.disjoint(l, Arrays.asList(1, 2)));
+        System.out.println(Collections.disjoint(Arrays.asList(1, 2), Arrays.asList(2, 3)));
+        System.out.println(Collections.frequency(l, 9));
+
+        List<String> s = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        Collections.rotate(s, 1);
+        System.out.println(s);
+    }
+}
+"#
+);
+
+// A too-short copy destination is an IndexOutOfBoundsException.
+differential_test!(
+    diff_collections_copy_too_short,
+    "DiffCopyShort",
+    r#"
+import java.util.*;
+
+public class DiffCopyShort {
+    public static void main(String[] args) {
+        List<Integer> src = new ArrayList<>(Arrays.asList(1, 2, 3));
+        List<Integer> dst = new ArrayList<>(Arrays.asList(0));
+        try {
+            Collections.copy(dst, src);
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("IOOBE: " + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// The lambda-taking map methods (JDK 8): merge, compute, computeIfPresent,
+// computeIfAbsent, replaceAll — including the remove-on-null semantics that
+// make merge usable as a counter that can also delete.
+differential_test!(
+    diff_map_lambda_methods,
+    "DiffMapLambdas",
+    r#"
+import java.util.*;
+
+public class DiffMapLambdas {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        System.out.println(m.merge("a", 5, (x, y) -> x + y));
+        System.out.println(m.merge("b", 5, (x, y) -> x + y));
+        System.out.println(m.merge("a", 1, (x, y) -> null));
+        System.out.println(m);
+
+        System.out.println(m.computeIfAbsent("c", k -> 7));
+        System.out.println(m.computeIfAbsent("c", k -> 99));
+        System.out.println(m.computeIfPresent("c", (k, v) -> v * 2));
+        System.out.println(m.computeIfPresent("zz", (k, v) -> 1));
+        System.out.println(m.compute("d", (k, v) -> v == null ? 1 : v + 1));
+        System.out.println(m.compute("d", (k, v) -> v + 10));
+        System.out.println(m);
+
+        m.replaceAll((k, v) -> v + 100);
+        System.out.println(m);
+
+        // The canonical word count.
+        Map<String, Integer> counts = new HashMap<>();
+        for (String w : new String[] { "a", "b", "a", "c", "a" }) {
+            counts.merge(w, 1, (x, y) -> x + y);
+        }
+        System.out.println(counts);
+
+        // TreeMap, keeping order.
+        TreeMap<String, Integer> t = new TreeMap<>();
+        t.merge("k", 3, (a, b) -> a + b);
+        t.merge("k", 4, (a, b) -> a + b);
+        t.merge("j", 1, (a, b) -> a + b);
+        System.out.println(t);
+    }
+}
+"#
+);
+
+// A ListIterator: forward and backward traversal, index queries, and the
+// in-place set / add / remove mutators.
+differential_test!(
+    diff_list_iterator,
+    "DiffListIter",
+    r#"
+import java.util.*;
+
+public class DiffListIter {
+    public static void main(String[] args) {
+        List<Integer> l = new ArrayList<>(Arrays.asList(1, 2, 3, 4));
+        ListIterator<Integer> it = l.listIterator();
+        while (it.hasNext()) {
+            int v = it.next();
+            if (v % 2 == 0) it.set(v * 10);
+        }
+        System.out.println(l);
+        System.out.println(it.nextIndex() + " " + it.previousIndex());
+        StringBuilder sb = new StringBuilder();
+        while (it.hasPrevious()) sb.append(it.previous()).append(" ");
+        System.out.println(sb.toString().trim());
+
+        ListIterator<Integer> add = l.listIterator();
+        add.next();
+        add.add(99);
+        System.out.println(l);
+
+        List<String> s = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        ListIterator<String> si = s.listIterator();
+        si.next();
+        si.next();
+        si.remove();
+        System.out.println(s);
+
+        ListIterator<Integer> empty = new ArrayList<Integer>().listIterator();
+        System.out.println(empty.hasNext() + " " + empty.hasPrevious());
+    }
+}
+"#
+);
+
+// entrySet().contains asks for KEY-AND-VALUE equality, not mere key presence.
+differential_test!(
+    diff_entry_set_contains,
+    "DiffEntryContains",
+    r#"
+import java.util.*;
+
+public class DiffEntryContains {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        for (Map.Entry<String, Integer> e : m.entrySet()) {
+            System.out.println(m.entrySet().contains(e));
+        }
+        System.out.println(m.entrySet().size());
+        System.out.println(m.keySet().contains("a"));
+        System.out.println(m.values().contains(2));
+    }
+}
+"#
+);
+
+// forEach is FAIL-FAST: a consumer that structurally changes the collection is
+// a ConcurrentModificationException, as it is for the JDK — where it used to
+// silently walk a snapshot to the end.
+differential_test!(
+    diff_for_each_fail_fast,
+    "DiffForEachFF",
+    r#"
+import java.util.*;
+
+public class DiffForEachFF {
+    public static void main(String[] args) {
+        List<Integer> l = new ArrayList<>(Arrays.asList(1, 2, 3));
+        try {
+            l.forEach(x -> l.add(x));
+        } catch (ConcurrentModificationException e) {
+            System.out.println("list CME");
+        }
+        System.out.println(l);
+
+        StringBuilder sb = new StringBuilder();
+        List<Integer> ok = new ArrayList<>(Arrays.asList(1, 2, 3));
+        ok.forEach(x -> sb.append(x));
+        System.out.println(sb);
+
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        try {
+            m.forEach((k, v) -> m.put(k + "!", v));
+        } catch (ConcurrentModificationException e) {
+            System.out.println("map CME");
+        }
+
+        Set<Integer> s = new HashSet<>(Arrays.asList(1, 2, 3));
+        try {
+            s.forEach(x -> s.add(x + 10));
+        } catch (ConcurrentModificationException e) {
+            System.out.println("set CME");
+        }
+
+        // Replacing a value in place is not structural — no CME.
+        Map<String, Integer> m3 = new HashMap<>();
+        m3.put("a", 1);
+        m3.put("b", 2);
+        m3.forEach((k, v) -> m3.put(k, v * 10));
+        System.out.println(m3);
+    }
+}
+"#
+);

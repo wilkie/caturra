@@ -551,7 +551,7 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
-        (HeapObject::Iterator { .. }, _) => iterator_method(heap, receiver, method),
+        (HeapObject::Iterator { .. }, _) => iterator_method(heap, receiver, method, args),
         (HeapObject::StringBuilder(_), _) => {
             builder_method(heap, receiver, method, descriptor, args)
         }
@@ -2663,6 +2663,28 @@ fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
 
 /// The element at `index` in that collection's iteration order. For a `keySet()`
 /// view it is the key; for a `values()` view, the value.
+/// The element at `index`, BOXED if it is a primitive — what `Iterator.next`
+/// and `ListIterator.previous` hand back (a `List<Integer>` returns an
+/// `Integer`, matching a set, whose elements are already references).
+fn box_iterated_element(heap: &mut Heap, source: HeapRef, index: usize) -> JValue {
+    match iterated_get(heap, source, index) {
+        primitive @ (JValue::Int(_) | JValue::Long(_) | JValue::Double(_) | JValue::Float(_)) => {
+            let class_name = match primitive {
+                JValue::Long(_) => "java/lang/Long",
+                JValue::Double(_) => "java/lang/Double",
+                JValue::Float(_) => "java/lang/Float",
+                _ => "java/lang/Integer",
+            };
+            let boxed = heap.alloc(HeapObject::Boxed {
+                class_name: std::rc::Rc::from(class_name),
+                value: primitive,
+            });
+            JValue::Ref(Some(boxed))
+        }
+        reference => reference,
+    }
+}
+
 fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
     if let Some(values) = heap.list_values(source) {
         return values.get(index).copied().unwrap_or(JValue::NULL);
@@ -2733,10 +2755,12 @@ fn iterated_remove(heap: &mut Heap, source: HeapRef, index: usize) {
 /// holds. The collection is read live, so a `remove()` (or any other mutation)
 /// shows through on the next call — caturra does not model
 /// `ConcurrentModificationException`.
+#[allow(clippy::too_many_lines)] // one arm per Iterator/ListIterator method
 fn iterator_method(
     heap: &mut Heap,
     receiver: HeapRef,
     method: &str,
+    args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
     let Some(HeapObject::Iterator {
         source,
@@ -2782,30 +2806,70 @@ fn iterator_method(
             // A list stores primitives unboxed; box one so `next()` returns the
             // wrapper for every collection alike (a set's element is already a
             // reference). `next()` is typed `BoxedElem`, which expects this.
-            let element = match iterated_get(heap, source, index) {
-                primitive @ (JValue::Int(_)
-                | JValue::Long(_)
-                | JValue::Double(_)
-                | JValue::Float(_)) => {
-                    let class_name = match primitive {
-                        JValue::Long(_) => "java/lang/Long",
-                        JValue::Double(_) => "java/lang/Double",
-                        JValue::Float(_) => "java/lang/Float",
-                        _ => "java/lang/Integer",
-                    };
-                    let boxed = heap.alloc(HeapObject::Boxed {
-                        class_name: std::rc::Rc::from(class_name),
-                        value: primitive,
-                    });
-                    JValue::Ref(Some(boxed))
-                }
-                reference => reference,
-            };
+            let element = box_iterated_element(heap, source, index);
             if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
                 *last = Some(*index);
                 *index += 1;
             }
             Ok(Some(element))
+        }
+        // ListIterator: the backward cursor and index queries. `nextIndex` is
+        // the cursor; `previousIndex` is one less (-1 at the start).
+        "hasPrevious" => Ok(Some(JValue::Int(i32::from(index != 0)))),
+        "nextIndex" => Ok(Some(JValue::Int(i32::try_from(index).unwrap_or(i32::MAX)))),
+        "previousIndex" => Ok(Some(JValue::Int(
+            i32::try_from(index).unwrap_or(i32::MAX) - 1,
+        ))),
+        "previous" => {
+            check_comodification(heap, source, expected_len)?;
+            if index == 0 {
+                return Err(throw("java.util.NoSuchElementException"));
+            }
+            let target = index - 1;
+            let element = box_iterated_element(heap, source, target);
+            if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
+                *index = target;
+                *last = Some(target);
+            }
+            Ok(Some(element))
+        }
+        // `set(e)` overwrites the element the last `next`/`previous` returned.
+        "set" => {
+            let Some(position) = last else {
+                return Err(throw("java.lang.IllegalStateException"));
+            };
+            check_comodification(heap, source, expected_len)?;
+            let value = args.first().copied().unwrap_or(JValue::NULL);
+            if let Some(values) = heap.list_values_mut(source)
+                && let Some(slot) = values.get_mut(position)
+            {
+                *slot = value;
+            }
+            // `set` does not change the size, so no re-sync is needed.
+            Ok(None)
+        }
+        // `add(e)` inserts before the cursor; the cursor advances past it, and
+        // there is no element to `set`/`remove` afterward.
+        "add" => {
+            check_comodification(heap, source, expected_len)?;
+            let value = args.first().copied().unwrap_or(JValue::NULL);
+            if let Some(values) = heap.list_values_mut(source) {
+                let at = index.min(values.len());
+                values.insert(at, value);
+            }
+            let len = iterated_len(heap, source);
+            if let Some(HeapObject::Iterator {
+                index,
+                last,
+                expected_len,
+                ..
+            }) = heap.get_mut(receiver)
+            {
+                *index += 1;
+                *last = None;
+                *expected_len = len;
+            }
+            Ok(None)
         }
         "remove" => {
             let Some(position) = last else {
@@ -2881,7 +2945,9 @@ fn list_method(
         Ok(Some(value))
     };
     match (method, descriptor, args) {
-        ("iterator", _, []) => {
+        // `iterator()` and `listIterator()` share the cursor object; the extra
+        // ListIterator methods (`previous`/`set`/…) act on the same fields.
+        ("iterator" | "listIterator", _, []) => {
             let expected_len = iterated_len(heap, receiver);
             let iterator = heap.alloc(HeapObject::Iterator {
                 source: receiver,

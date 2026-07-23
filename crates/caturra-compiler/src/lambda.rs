@@ -504,6 +504,12 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             args,
             ..
         } => {
+            // A comparator FACTORY or COMBINATOR: the whole chain shares one
+            // element type, and the generic receiver walk below would throw
+            // away the target type that carries it.
+            if desugar_comparator_chain(receiver, method, args, expected, ctx) {
+                return;
+            }
             if let Some(r) = receiver {
                 desugar_expr(r, None, ctx);
             }
@@ -520,6 +526,54 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             {
                 args[0] = build_bi_consumer_class(&mut args[0], &key, &value, ctx);
                 return;
+            }
+            // The lambda-taking map methods (JDK 8). Like `forEach`, the
+            // lambda's parameter types come from the RECEIVER's type arguments
+            // — and they differ per method: `merge`'s remapper sees two VALUES,
+            // `compute`/`computeIfPresent`/`replaceAll` see a key and a value,
+            // and `computeIfAbsent`'s mapping sees only the key. Each returns a
+            // value, which the erased SAM types as `Object` and `result_type`
+            // checks back against `V`.
+            if matches!(
+                method.as_str(),
+                "merge" | "compute" | "computeIfPresent" | "computeIfAbsent" | "replaceAll"
+            ) && let Some(function) = args.last_mut()
+                && matches!(function, Expr::Lambda { .. })
+                && let Some(r) = receiver.as_deref()
+                && let Some((key, value)) = map_type_args(r, ctx)
+            {
+                let params: Vec<TypeRef> = match method.as_str() {
+                    "merge" => vec![value.clone(), value.clone()],
+                    "computeIfAbsent" => vec![key],
+                    _ => vec![key, value.clone()],
+                };
+                let expected = match function {
+                    Expr::Lambda { params, .. } => params.len(),
+                    _ => 0,
+                };
+                if expected == params.len() {
+                    let object = TypeRef::Named(String::from("Object"));
+                    let interface = if params.len() == 2 {
+                        "__BiFunction"
+                    } else {
+                        "__UnaryOperator"
+                    };
+                    let last = args.len() - 1;
+                    let (leading, tail) = args.split_at_mut(last);
+                    for arg in leading {
+                        desugar_expr(arg, None, ctx);
+                    }
+                    tail[0] = build_erased_lambda(
+                        &mut tail[0],
+                        interface,
+                        "apply",
+                        &object,
+                        &params,
+                        Some(&value),
+                        ctx,
+                    );
+                    return;
+                }
             }
             // `list.forEach(x -> ...)` / `list.removeIf(x -> ...)`: a single
             // lambda whose parameter type is the receiver's element type. The
@@ -590,6 +644,52 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `Arrays.sort(array, cmp)`: the comparator is over the ARRAY's
+            // element type — the same rule as `list.sort`, read from the first
+            // argument rather than the receiver.
+            if method == "sort"
+                && args.len() == 2
+                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
+                        if path.len() == 1 && path[0] == "Arrays")
+                && let Some(elem) = array_elem_type(&args[0], ctx)
+            {
+                desugar_expr(&mut args[0], None, ctx);
+                if matches!(&args[1], Expr::Lambda { params, .. } if params.len() == 2) {
+                    args[1] = build_erased_lambda(
+                        &mut args[1],
+                        "__Comparator",
+                        "compare",
+                        &TypeRef::Int,
+                        &[elem.clone(), elem],
+                        None,
+                        ctx,
+                    );
+                } else {
+                    let target = TypeRef::Generic {
+                        base: String::from("Comparator"),
+                        args: vec![elem],
+                    };
+                    desugar_expr(&mut args[1], Some(&target), ctx);
+                }
+                return;
+            }
+            // `list.sort(Comparator.comparing(p -> ...))`: the receiver's
+            // element type is what the key extractor's parameter is, and only
+            // this call site knows it. Handed down as the `Comparator<E>`
+            // position the argument sits in.
+            if method == "sort"
+                && args.len() == 1
+                && !matches!(&args[0], Expr::Lambda { .. } | Expr::MethodRef { .. })
+                && let Some(r) = receiver.as_deref()
+                && let Some(elem) = list_elem_type(r, ctx)
+            {
+                let target = TypeRef::Generic {
+                    base: String::from("Comparator"),
+                    args: vec![elem],
+                };
+                desugar_expr(&mut args[0], Some(&target), ctx);
+                return;
+            }
             // `list.sort((a, b) -> ...)`: a two-parameter comparator whose
             // parameters are both the receiver's element type, returning int.
             if method == "sort"
@@ -647,32 +747,6 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     Some(&elem),
                     ctx,
                 );
-                return;
-            }
-            // `Comparator.comparing*(keyExtractor)` — the extractor is a
-            // `Function`, erased to `__UnaryOperator`. A method reference
-            // (`Person::getAge`) self-types; a lambda needs the element type,
-            // which a `sort`/declaration context supplies (see `desugar_stmt`
-            // and the `sort` branch above via `comparator_arg_elem`).
-            if matches!(
-                method.as_str(),
-                "comparing" | "comparingInt" | "comparingDouble" | "comparingLong"
-            ) && args.len() == 1
-                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. }) if path.len() == 1 && path[0] == "Comparator")
-            {
-                if !desugar_key_extractor(&mut args[0], ctx) {
-                    let unary = TypeRef::Named(String::from("__UnaryOperator"));
-                    desugar_expr(&mut args[0], Some(&unary), ctx);
-                }
-                return;
-            }
-            // `comparator.thenComparing(keyExtractor)` — a method-reference key
-            // extractor (the receiver is already desugared above). A `Comparator`
-            // argument passes through untouched.
-            if method == "thenComparing"
-                && args.len() == 1
-                && desugar_key_extractor(&mut args[0], ctx)
-            {
                 return;
             }
             // A stream op with a lambda: the parameter type is the stream's
@@ -1158,6 +1232,142 @@ fn comparator_target_elem(target: &TypeRef) -> Option<TypeRef> {
     };
     (matches!(base.as_str(), "Comparator" | "java.util.Comparator") && args.len() == 1)
         .then(|| args[0].clone())
+}
+
+/// The element type for a comparator key extractor: the lambda's OWN declared
+/// parameter wins (`(P p) -> p.a`), otherwise the element of the `Comparator<E>`
+/// position the call sits in (a declaration, or the list being sorted).
+///
+/// A generic factory has no other way to see it — the erased SAM's parameter is
+/// `Object`, so `Comparator.comparingInt(p -> p.a)` reported "cannot find
+/// symbol: field 'a' in class Object" and only METHOD REFERENCES worked.
+fn key_extractor_elem(arg: &Expr, expected: Option<&TypeRef>) -> Option<TypeRef> {
+    if let Expr::Lambda { params, .. } = arg
+        && let [param] = params.as_slice()
+        && let Some(ty) = &param.ty
+    {
+        return Some(ty.clone());
+    }
+    expected.and_then(comparator_target_elem)
+}
+
+/// Desugar a `Comparator.comparing*(f)` factory or a `cmp.thenComparing*(f)`
+/// combinator. Returns whether it took the call.
+///
+/// The chain shares ONE element type: `Comparator.comparingInt(P::getA)
+/// .thenComparing(p -> p.n)` compares two `P`s throughout. So the target type
+/// travels down the receiver as well as into the argument — which is why this
+/// runs before the generic receiver walk, which passes `None`.
+fn desugar_comparator_chain(
+    receiver: &mut Option<Box<Expr>>,
+    method: &str,
+    args: &mut [Expr],
+    expected: Option<&TypeRef>,
+    ctx: &mut Ctx,
+) -> bool {
+    let is_factory = matches!(
+        method,
+        "comparing" | "comparingInt" | "comparingDouble" | "comparingLong"
+    ) && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
+            if path.len() == 1 && path[0] == "Comparator");
+    let is_combinator = matches!(
+        method,
+        "thenComparing" | "thenComparingInt" | "thenComparingLong" | "thenComparingDouble"
+    );
+    // `Comparator.comparing(keyExtractor, keyComparator)`: the extractor is
+    // typed exactly as in the one-argument form; the second argument compares
+    // the KEYS, whose type nothing here knows, so it desugars on its own.
+    if is_factory && method == "comparing" && args.len() == 2 {
+        let (extractor, rest) = args.split_at_mut(1);
+        if !desugar_key_extractor(&mut extractor[0], ctx) {
+            let single = matches!(&extractor[0], Expr::Lambda { params, .. } if params.len() == 1);
+            if let (true, Some(elem)) = (single, key_extractor_elem(&extractor[0], expected)) {
+                let object = TypeRef::Named(String::from("Object"));
+                extractor[0] = build_erased_lambda(
+                    &mut extractor[0],
+                    "__UnaryOperator",
+                    "apply",
+                    &object,
+                    &[elem],
+                    None,
+                    ctx,
+                );
+            } else {
+                let unary = TypeRef::Named(String::from("__UnaryOperator"));
+                desugar_expr(&mut extractor[0], Some(&unary), ctx);
+            }
+        }
+        desugar_expr(&mut rest[0], None, ctx);
+        return true;
+    }
+    if args.len() != 1 || !(is_factory || is_combinator) {
+        return false;
+    }
+    if is_combinator {
+        // The receiver is a comparator over the same element.
+        let Some(r) = receiver.as_deref_mut() else {
+            return false;
+        };
+        desugar_expr(r, expected, ctx);
+    }
+    // A method reference self-types from its qualifier.
+    if desugar_key_extractor(&mut args[0], ctx) {
+        return true;
+    }
+    let params = match &args[0] {
+        Expr::Lambda { params, .. } => params.len(),
+        _ => usize::MAX,
+    };
+    // `thenComparing(anotherComparator)` — including a two-parameter lambda,
+    // whose parameters are both the element.
+    if method == "thenComparing" && params != 1 {
+        let target = expected.and_then(comparator_target_elem).map(|elem| {
+            (
+                TypeRef::Generic {
+                    base: String::from("Comparator"),
+                    args: vec![elem.clone()],
+                },
+                elem,
+            )
+        });
+        match (params, target) {
+            (2, Some((_, elem))) => {
+                args[0] = build_erased_lambda(
+                    &mut args[0],
+                    "__Comparator",
+                    "compare",
+                    &TypeRef::Int,
+                    &[elem.clone(), elem],
+                    None,
+                    ctx,
+                );
+            }
+            (_, target) => desugar_expr(&mut args[0], target.as_ref().map(|(t, _)| t), ctx),
+        }
+        return true;
+    }
+    // A one-parameter key extractor.
+    if params == 1
+        && let Some(elem) = key_extractor_elem(&args[0], expected)
+    {
+        let object = TypeRef::Named(String::from("Object"));
+        args[0] = build_erased_lambda(
+            &mut args[0],
+            "__UnaryOperator",
+            "apply",
+            &object,
+            &[elem],
+            None,
+            ctx,
+        );
+        return true;
+    }
+    // Nothing pinned the element: fall back to the erased `Object` parameter,
+    // which is right for a key extractor that never touches the element's own
+    // members (`Comparator.comparing(s -> s)`).
+    let unary = TypeRef::Named(String::from("__UnaryOperator"));
+    desugar_expr(&mut args[0], Some(&unary), ctx);
+    true
 }
 
 /// Desugar a `Comparator.comparing*`/`thenComparing` **method-reference** key

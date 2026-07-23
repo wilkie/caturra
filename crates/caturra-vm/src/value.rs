@@ -48,6 +48,17 @@ pub enum ComparatorSpec {
     Reversed(HeapRef),
     /// `first.thenComparing(second)` — `first`, then `second` on a tie.
     Then(HeapRef, HeapRef),
+    /// `Comparator.comparing(keyExtractor, keyComparator)` — extract the key,
+    /// then order the KEYS by a comparator of their own rather than naturally.
+    ByKeyWith(HeapRef, HeapRef),
+    /// `Comparator.nullsFirst(inner)` / `nullsLast(inner)` — `null` sorts
+    /// before (or after) everything, two nulls are equal, and anything else is
+    /// left to `inner`. `first` selects which end the nulls go to.
+    ///
+    /// The inner comparator is optional because `nullsFirst(null)` is legal
+    /// and means "all non-null elements compare equal" — not natural ordering,
+    /// which is a distinction the JDK draws and it would be easy to lose.
+    Nulls { first: bool, inner: Option<HeapRef> },
 }
 
 /// A pending intermediate stream operation. The terminal pulls each source

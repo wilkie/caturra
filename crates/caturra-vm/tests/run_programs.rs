@@ -9709,8 +9709,8 @@ fn unsupported_map_members_explain_themselves() {
             "ArrayList.toArray exists in Java, but Object arrays are not supported by caturra",
         ),
         (
-            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().merge(null, null, null); } }",
-            "HashMap.merge exists in Java, but lambdas are not supported by caturra",
+            "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().clone(); } }",
+            "HashMap.clone exists in Java, but clone is not supported by caturra",
         ),
         (
             "import java.util.HashMap; class M { static void r() { new HashMap<String, Integer>().values().toArray(); } }",

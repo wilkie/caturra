@@ -1574,6 +1574,8 @@ impl MethodTable {
                     && !self.has_class(simple)
                 {
                     elem_from_type_arg(&args[0], self).map(JType::TreeSet)
+                } else if simple == "ListIterator" && args.len() == 1 && !self.has_class(simple) {
+                    elem_from_type_arg(&args[0], self).map(JType::ListIterator)
                 } else if simple == "Iterator" && args.len() == 1 && !self.has_class(simple) {
                     // `Iterator<Map.Entry<K, V>>` is an entrySet iterator; anything
                     // else is a plain iterator over its element type.
@@ -3074,6 +3076,10 @@ enum JType {
     /// `hasNext()` a boolean, `remove()` is void. Erased at runtime to a live
     /// cursor over the source collection (see the VM's `HeapObject::Iterator`).
     Iterator(ElemType),
+    /// `java.util.ListIterator<E>` — a bidirectional cursor over a list.
+    /// Adds `hasPrevious`/`previous`/`nextIndex`/`previousIndex`/`set`/`add` to
+    /// the plain `Iterator` surface; the VM uses the same cursor object.
+    ListIterator(ElemType),
     /// `Iterator<Map.Entry<K, V>>` — an `entrySet().iterator()`. Distinct from
     /// `Iterator` because its `next()` returns a two-parameter `MapEntry`, which
     /// an `ElemType` cannot carry.
@@ -3191,6 +3197,7 @@ impl SeqRole {
 }
 
 impl JType {
+    #[allow(clippy::too_many_lines)] // one arm per JType variant
     fn describe(self, table: &MethodTable) -> String {
         match self {
             JType::Object(id) if id == table.object_id => String::from("Object"),
@@ -3218,6 +3225,9 @@ impl JType {
             JType::Collector => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
             JType::Iterator(elem) => format!("Iterator<{}>", elem.base_type().describe(table)),
+            JType::ListIterator(elem) => {
+                format!("ListIterator<{}>", elem.base_type().describe(table))
+            }
             JType::EntryIterator { key, value } => format!(
                 "Iterator<Map.Entry<{}, {}>>",
                 key.base_type().describe(table),
@@ -3392,7 +3402,7 @@ impl JType {
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
-            JType::Iterator(_) | JType::EntryIterator { .. } => {
+            JType::Iterator(_) | JType::ListIterator(_) | JType::EntryIterator { .. } => {
                 String::from("Ljava/util/Iterator;")
             }
             JType::Optional(_) => String::from("Ljava/util/Optional;"),
@@ -3480,6 +3490,10 @@ fn is_collections_method(method: &str) -> bool {
             | "singletonMap"
             | "unmodifiableSet"
             | "unmodifiableMap"
+            | "rotate"
+            | "fill"
+            | "copy"
+            | "disjoint"
     )
 }
 
@@ -4773,6 +4787,9 @@ enum BParam {
     Consumer,
     Predicate,
     UnaryOperator,
+    /// The erased `__BiFunction` of `Map.merge`/`compute`/`computeIfPresent`/
+    /// `replaceAll` — a two-argument lambda returning a value.
+    BiFunction,
     /// `Optional.orElseGet`'s erased `__Supplier` (a zero-argument lambda).
     Supplier,
     /// `list.sort`/`Collections.sort`'s erased `__Comparator`.
@@ -4808,6 +4825,8 @@ enum BRet {
     Stream,
     /// `Iterator<E>` of the receiver's element type (`collection.iterator()`).
     Iterator,
+    /// `ListIterator<E>` of the receiver's element type (`list.listIterator()`).
+    ListIterator,
     /// `Iterator<Map.Entry<K, V>>` (`entrySet().iterator()`).
     EntryIterator,
     /// `Map.Entry<K, V>` of the receiver's key/value (`entryIterator.next()`).
@@ -5293,7 +5312,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("StringBuilder", "codePoints", "streams are not supported by caturra"),
     ("Integer", "decode", "system properties are not supported by caturra"),
     ("Integer", "getInteger", "system properties are not supported by caturra"),
-    ("ArrayList", "listIterator", "iterators are not supported by caturra (use for-each or an index loop)"),
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
     ("ArrayList", "toArray", "Object arrays are not supported by caturra"),
     ("ArrayList", "subList", "list views are not supported by caturra"),
@@ -5306,11 +5324,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Scanner", "findAll", "streams are not supported by caturra"),
     ("Scanner", "nextBigInteger", "BigInteger is not supported by caturra"),
     ("Scanner", "nextBigDecimal", "BigDecimal is not supported by caturra"),
-    ("HashMap", "replaceAll", "lambdas are not supported by caturra"),
-    ("HashMap", "compute", "lambdas are not supported by caturra"),
-    ("HashMap", "computeIfAbsent", "lambdas are not supported by caturra"),
-    ("HashMap", "computeIfPresent", "lambdas are not supported by caturra"),
-    ("HashMap", "merge", "lambdas are not supported by caturra"),
     ("HashMap", "clone", "clone is not supported by caturra"),
     ("HashMap", "of", "varargs are not supported by caturra"),
     ("HashMap", "ofEntries", "varargs are not supported by caturra"),
@@ -5440,6 +5453,12 @@ const PATH_METHODS: &[BuiltinMethod] = &[
 
 const LIST_METHODS: &[BuiltinMethod] = &[
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
+    bm(
+        "listIterator",
+        &[],
+        BRet::ListIterator,
+        "()Ljava/util/ListIterator;",
+    ),
     BuiltinMethod {
         name: "size",
         params: &[],
@@ -6231,6 +6250,21 @@ const ITERATOR_METHODS: &[BuiltinMethod] = &[
     // `Integer`, which unboxes on demand.
     bm("next", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm("remove", &[], BRet::Void, "()V"),
+];
+
+/// `java.util.ListIterator<E>` — the bidirectional cursor. `next`/`previous`
+/// return the boxed element (like `Iterator.next`), so a `List<Integer>` hands
+/// back an `Integer` either way.
+const LIST_ITERATOR_METHODS: &[BuiltinMethod] = &[
+    bm("hasNext", &[], BRet::Boolean, "()Z"),
+    bm("hasPrevious", &[], BRet::Boolean, "()Z"),
+    bm("next", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("previous", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
+    bm("nextIndex", &[], BRet::Int, "()I"),
+    bm("previousIndex", &[], BRet::Int, "()I"),
+    bm("remove", &[], BRet::Void, "()V"),
+    bm("set", &[BParam::Elem], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm("add", &[BParam::Elem], BRet::Void, "(Ljava/lang/Object;)V"),
 ];
 
 const OPTIONAL_METHODS: &[BuiltinMethod] = &[
@@ -7570,6 +7604,39 @@ const MAP_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)V",
     ),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    // The lambda-taking map methods (JDK 8). Each erases its function to the
+    // bundled `__BiFunction`/`__UnaryOperator`; the lambda pass casts the
+    // parameters back to the map's declared key and value types.
+    bm(
+        "merge",
+        &[BParam::Key, BParam::Val, BParam::BiFunction],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "compute",
+        &[BParam::Key, BParam::BiFunction],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "computeIfPresent",
+        &[BParam::Key, BParam::BiFunction],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "computeIfAbsent",
+        &[BParam::Key, BParam::UnaryOperator],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "replaceAll",
+        &[BParam::BiFunction],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     bm(
         "containsKey",
         &[BParam::Key],
@@ -7663,6 +7730,39 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)V",
     ),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    // The lambda-taking map methods (JDK 8). Each erases its function to the
+    // bundled `__BiFunction`/`__UnaryOperator`; the lambda pass casts the
+    // parameters back to the map's declared key and value types.
+    bm(
+        "merge",
+        &[BParam::Key, BParam::Val, BParam::BiFunction],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "compute",
+        &[BParam::Key, BParam::BiFunction],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "computeIfPresent",
+        &[BParam::Key, BParam::BiFunction],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "computeIfAbsent",
+        &[BParam::Key, BParam::UnaryOperator],
+        BRet::Val,
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
+    bm(
+        "replaceAll",
+        &[BParam::BiFunction],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     bm(
         "containsKey",
         &[BParam::Key],
@@ -8028,6 +8128,13 @@ const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
     ),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
+    // `Set.contains(Object)` — an entry matches when its KEY and VALUE both do.
+    bm(
+        "contains",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
@@ -8062,6 +8169,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Reader => Some(("java/io/BufferedReader", READER_METHODS)),
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
+        JType::ListIterator(_) => Some(("java/util/ListIterator", LIST_ITERATOR_METHODS)),
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
@@ -8182,6 +8290,28 @@ const COMPARATOR_STATIC_METHODS: &[BuiltinMethod] = &[
         BRet::Comparator,
         "(Ljava/util/function/ToLongFunction;)Ljava/util/Comparator;",
     ),
+    // `comparing(keyExtractor, keyComparator)` — the keys ordered by their own
+    // comparator rather than naturally.
+    bm(
+        "comparing",
+        &[BParam::UnaryOperator, BParam::Comparator],
+        BRet::Comparator,
+        "(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;",
+    ),
+    // `nullsFirst(cmp)` / `nullsLast(cmp)` — null sorts to one end and the rest
+    // are left to `cmp` (which may itself be null: then they all compare equal).
+    bm(
+        "nullsFirst",
+        &[BParam::Comparator],
+        BRet::Comparator,
+        "(Ljava/util/Comparator;)Ljava/util/Comparator;",
+    ),
+    bm(
+        "nullsLast",
+        &[BParam::Comparator],
+        BRet::Comparator,
+        "(Ljava/util/Comparator;)Ljava/util/Comparator;",
+    ),
 ];
 
 fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
@@ -8283,6 +8413,7 @@ impl TypeArgs {
             | JType::TreeSet(elem)
             | JType::Stream(elem)
             | JType::Iterator(elem)
+            | JType::ListIterator(elem)
             | JType::Optional(elem)
             | JType::Collection(elem)
             | JType::LinkedList { elem, .. } => Self {
@@ -8379,6 +8510,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         // directly, because only the method table knows the target class.
         BParam::Object
         | BParam::BiConsumer
+        | BParam::BiFunction
         | BParam::Consumer
         | BParam::Predicate
         | BParam::UnaryOperator
@@ -8425,10 +8557,19 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
             (arg, table.class_id("__Supplier")),
             (JType::Object(id), Some(target)) if table.is_subtype(id, target)
         ),
-        BParam::Comparator => matches!(
-            (arg, table.class_id("__Comparator")),
+        BParam::BiFunction => matches!(
+            (arg, table.class_id("__BiFunction")),
             (JType::Object(id), Some(target)) if table.is_subtype(id, target)
         ),
+        // `list.sort(null)` is legal and means natural ordering (JDK), so
+        // `null` satisfies a `Comparator` parameter like any other reference.
+        BParam::Comparator => {
+            arg == JType::Null
+                || matches!(
+                    (arg, table.class_id("__Comparator")),
+                    (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+                )
+        }
         BParam::Collector => matches!(arg, JType::Collector | JType::Null),
         // A collection whose elements are assignable to the receiver's — a
         // `List`, `Set` or `Collection` of a widening element type. `null`
@@ -8577,6 +8718,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         ),
         BRet::Stream => Some(args.first.map_or(JType::Error, JType::Stream)),
         BRet::Iterator => Some(args.first.map_or(JType::Error, JType::Iterator)),
+        BRet::ListIterator => Some(args.first.map_or(JType::Error, JType::ListIterator)),
         BRet::EntryIterator => Some(match (args.first, args.second) {
             (Some(key), Some(value)) => JType::EntryIterator { key, value },
             _ => JType::Error,
@@ -12451,8 +12593,11 @@ impl BodyGen<'_> {
             return Some(Some(comparator_ty));
         }
         // thenComparing: a key-extractor Function, or another Comparator.
+        // `thenComparingInt`/`Long`/`Double` differ from `thenComparing` only in
+        // the extractor's declared return type, which erasure removes — the key
+        // is compared by its natural ordering either way.
         let [next] = args else {
-            self.error(span, "thenComparing takes one argument");
+            self.error(span, format!("{method} takes one argument"));
             return None;
         };
         let next_ty = self.type_of(next);
@@ -12894,7 +13039,15 @@ impl BodyGen<'_> {
         // `Comparator` combinators (`reversed`/`thenComparing`) on a comparator
         // value — the bundled `__Comparator` interface has no such methods, so
         // caturra builds a derived comparator itself.
-        if matches!(method, "reversed" | "thenComparing") && self.is_comparator_type(receiver_ty) {
+        if matches!(
+            method,
+            "reversed"
+                | "thenComparing"
+                | "thenComparingInt"
+                | "thenComparingLong"
+                | "thenComparingDouble"
+        ) && self.is_comparator_type(receiver_ty)
+        {
             return self.emit_comparator_combinator(method, args, span);
         }
         let class_id = match receiver_ty {
@@ -12932,6 +13085,7 @@ impl BodyGen<'_> {
             | JType::Collector
             | JType::IntStream
             | JType::Iterator(_)
+            | JType::ListIterator(_)
             | JType::EntryIterator { .. }
             | JType::Optional(_)
             | JType::OptionalInt
@@ -14798,7 +14952,7 @@ impl BodyGen<'_> {
     /// Resolve and emit a static method call. `None` means a
     /// diagnostic was reported; `Some(ret)` is the method's return
     /// type (`None` for void), with the value left on the stack.
-    #[allow(clippy::option_option)] // error / void / value are three distinct outcomes
+    #[allow(clippy::option_option, clippy::too_many_lines)] // error/void/value; one arm per library class
     fn static_call(
         &mut self,
         class: &str,
@@ -14831,6 +14985,31 @@ impl BodyGen<'_> {
         // answers them; the bundled Java cannot.
         if class == "Arrays" && arrays_deep_signature(method).is_some() {
             return self.emit_arrays_deep_call(method, args, span);
+        }
+        // `Arrays.sort(array, comparator)` — answered by the VM, not by a
+        // bundled overload: the bundled `Arrays` would have to name
+        // `__Comparator`, which is only injected when the program mentions a
+        // comparator, so every other program's `Arrays` would stop compiling.
+        // `null` is a legal comparator and means natural ordering.
+        if class == "Arrays" && method == "sort" && args.len() == 2 {
+            let source_ty = self.type_of(&args[0]);
+            let comparator_ty = self.type_of(&args[1]);
+            if let JType::Array { elem, dims } = source_ty
+                && (dims > 1 || elem.base_type().is_reference())
+                && (comparator_ty == JType::Null || self.is_comparator_type(comparator_ty))
+            {
+                self.expr(&args[0]);
+                self.expr(&args[1]);
+                let method_ref = intern_method_ref(
+                    self.pool,
+                    "Arrays",
+                    "sort",
+                    "([Ljava/lang/Object;Ljava/lang/Object;)V",
+                );
+                self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+                self.code.drop_stack(2);
+                return Some(None);
+            }
         }
         // `Arrays.copyOf/copyOfRange/fill/binarySearch` are one VM method each
         // rather than nine bundled overloads: the heap knows the element kind,
@@ -15222,6 +15401,112 @@ impl BodyGen<'_> {
             return Some(Some(JType::List(elem)));
         }
 
+        // `Collections.max(list, cmp)` / `min(list, cmp)` /
+        // `binarySearch(list, key, cmp)` — the ordering comes from the
+        // comparator, so (as with `sort`) the element need not be Comparable.
+        if matches!(method, "max" | "min" | "binarySearch")
+            && args.len() == if method == "binarySearch" { 3 } else { 2 }
+            && let Some(last) = args.last()
+            && {
+                let last_ty = self.type_of(last);
+                self.is_comparator_type(last_ty)
+            }
+        {
+            let JType::List(elem) = self.type_of(&args[0]) else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let element_ty = elem.base_type();
+            let element_descriptor = element_ty.descriptor(self.table);
+            self.expr(&args[0]);
+            let mut width: u16 = 1;
+            let (descriptor, ret) = if method == "binarySearch" {
+                let actual = self.expr(&args[1]);
+                self.convert_for_assignment(actual, element_ty, args[1].span());
+                width += element_ty.width();
+                (
+                    format!("(Ljava/util/ArrayList;{element_descriptor}Ljava/lang/Object;)I"),
+                    JType::Int,
+                )
+            } else {
+                (
+                    format!("(Ljava/util/ArrayList;Ljava/lang/Object;){element_descriptor}"),
+                    element_ty,
+                )
+            };
+            self.expr(args.last().expect("non-empty"));
+            width += 1;
+            let method_ref = intern_method_ref(self.pool, "Collections", method, &descriptor);
+            self.code
+                .push_op_u16(op::INVOKESTATIC, method_ref, ret.width());
+            self.code.drop_stack(width);
+            return Some(Some(ret));
+        }
+        // `Collections.rotate(list, n)` / `fill(list, v)` / `copy(dest, src)` /
+        // `disjoint(a, b)` — the list algorithms, answered by the VM because a
+        // list stores its primitives unboxed.
+        if matches!(method, "rotate" | "fill" | "copy" | "disjoint") && args.len() == 2 {
+            let JType::List(elem) = self.type_of(&args[0]) else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let element_ty = elem.base_type();
+            self.expr(&args[0]);
+            let mut width: u16 = 1;
+            let (descriptor, ret) = match method {
+                "rotate" => {
+                    let actual = self.expr(&args[1]);
+                    self.numeric_conversion(actual, JType::Int);
+                    width += 1;
+                    (String::from("(Ljava/util/ArrayList;I)V"), None)
+                }
+                "fill" => {
+                    let actual = self.expr(&args[1]);
+                    self.convert_for_assignment(actual, element_ty, args[1].span());
+                    width += element_ty.width();
+                    (
+                        format!(
+                            "(Ljava/util/ArrayList;{})V",
+                            element_ty.descriptor(self.table)
+                        ),
+                        None,
+                    )
+                }
+                // `copy` demands two lists of the SAME element; `disjoint` takes
+                // any two collections, and javac accepts unrelated elements
+                // (`disjoint(List<String>, List<Integer>)` is simply true).
+                _ => {
+                    let source = self.type_of(&args[1]);
+                    let compatible = if method == "copy" {
+                        source == JType::List(elem)
+                    } else {
+                        collection_element_type(source).is_some()
+                    };
+                    if !compatible {
+                        self.no_suitable_library_method("Collections", method, args, span);
+                        return None;
+                    }
+                    self.expr(&args[1]);
+                    width += 1;
+                    if method == "copy" {
+                        (
+                            String::from("(Ljava/util/ArrayList;Ljava/util/ArrayList;)V"),
+                            None,
+                        )
+                    } else {
+                        (
+                            String::from("(Ljava/util/ArrayList;Ljava/lang/Object;)Z"),
+                            Some(JType::Boolean),
+                        )
+                    }
+                }
+            };
+            let method_ref = intern_method_ref(self.pool, "Collections", method, &descriptor);
+            self.code
+                .push_op_u16(op::INVOKESTATIC, method_ref, ret.map_or(0, JType::width));
+            self.code.drop_stack(width);
+            return Some(ret);
+        }
         // `Collections.sort(list, comparator)` — the comparator is a
         // desugared `__Comparator`, and the element need not be Comparable.
         if method == "sort" && args.len() == 2 {
@@ -15252,7 +15537,7 @@ impl BodyGen<'_> {
         }
         let want = match method {
             "reverse" | "sort" | "max" | "min" | "unmodifiableList" => 1usize,
-            "frequency" | "binarySearch" => 2,
+            "frequency" | "binarySearch" | "rotate" | "fill" | "copy" | "disjoint" => 2,
             "swap" => 3,
             // `addAll(list, elements...)` is variadic.
             "addAll" => args.len().max(1),
@@ -15903,6 +16188,7 @@ impl BodyGen<'_> {
             | JType::Collector
             | JType::IntStream
             | JType::Iterator(_)
+            | JType::ListIterator(_)
             | JType::EntryIterator { .. }
             | JType::Optional(_)
             | JType::OptionalInt
@@ -16137,8 +16423,14 @@ impl BodyGen<'_> {
             } => {
                 // `Comparator` combinators build another comparator (mirrors the
                 // emission-path intercept in `instance_call`).
-                if matches!(method.as_str(), "reversed" | "thenComparing")
-                    && let Some(recv) = receiver.as_deref()
+                if matches!(
+                    method.as_str(),
+                    "reversed"
+                        | "thenComparing"
+                        | "thenComparingInt"
+                        | "thenComparingLong"
+                        | "thenComparingDouble"
+                ) && let Some(recv) = receiver.as_deref()
                     && let recv_ty = self.type_of(recv)
                     && self.is_comparator_type(recv_ty)
                 {
@@ -16252,6 +16544,7 @@ impl BodyGen<'_> {
                         | JType::Collector
                         | JType::IntStream
                         | JType::Iterator(_)
+                        | JType::ListIterator(_)
                         | JType::EntryIterator { .. }
                         | JType::Optional(_)
                         | JType::OptionalInt
@@ -18856,6 +19149,7 @@ impl BodyGen<'_> {
             | JType::Collector
             | JType::IntStream
             | JType::Iterator(_)
+            | JType::ListIterator(_)
             | JType::EntryIterator { .. }
             | JType::Optional(_)
             | JType::OptionalInt

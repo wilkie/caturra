@@ -3499,17 +3499,22 @@ impl<'run> Interpreter<'run> {
                 }
             }
             // `Collections.max`/`min` keep the first of equal elements, because
-            // they only replace the candidate on a strict improvement.
-            ("max" | "min", [_]) => {
+            // they only replace the candidate on a strict improvement. A second
+            // argument is the comparator.
+            ("max" | "min", [_] | [_, JValue::Ref(Some(_))]) => {
                 let Some((_, items)) = items else {
                     return Ok(true);
+                };
+                let comparator = match args {
+                    [_, JValue::Ref(Some(comparator))] => Some(*comparator),
+                    _ => None,
                 };
                 let (first, rest) = items.split_first().ok_or_else(|| {
                     VmError::UncaughtException(String::from("java.util.NoSuchElementException"))
                 })?;
                 let mut candidate = *first;
                 for item in rest {
-                    let order = self.compare_for_sort(*item, candidate)?;
+                    let order = self.compare_with(*item, candidate, comparator)?;
                     let better = if method_name == "max" {
                         order > 0
                     } else {
@@ -3520,6 +3525,89 @@ impl<'run> Interpreter<'run> {
                     }
                 }
                 frame.stack.push(candidate);
+            }
+            // `Collections.rotate(list, distance)`: move each element `distance`
+            // places forward, wrapping. A negative or oversized distance is
+            // reduced modulo the size, as the JDK's is.
+            ("rotate", [_, JValue::Int(distance)]) => {
+                let Some((reference, items)) = items else {
+                    return Ok(true);
+                };
+                if unmodifiable {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                if !items.is_empty() {
+                    let size = i64::try_from(items.len()).unwrap_or(i64::MAX);
+                    let shift = ((i64::from(*distance) % size) + size) % size;
+                    let split = items.len() - usize::try_from(shift).unwrap_or(0);
+                    let mut rotated = items[split..].to_vec();
+                    rotated.extend_from_slice(&items[..split]);
+                    if let Some(slot) = self.heap.list_values_mut(reference) {
+                        *slot = rotated;
+                    }
+                }
+            }
+            // `Collections.fill(list, value)`: every element becomes `value`.
+            // Fixed-size, so it is legal on an `Arrays.asList` view.
+            ("fill", [_, value]) => {
+                let Some((reference, items)) = items else {
+                    return Ok(true);
+                };
+                if unmodifiable {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                let filled = vec![*value; items.len()];
+                if let Some(slot) = self.heap.list_values_mut(reference) {
+                    *slot = filled;
+                }
+            }
+            // `Collections.copy(dest, src)`: overwrite the first `src.size()`
+            // elements of `dest`. A `dest` too short is an
+            // IndexOutOfBoundsException, with the JDK's exact message.
+            ("copy", [_, JValue::Ref(Some(source))]) => {
+                let Some((reference, mut items)) = items else {
+                    return Ok(true);
+                };
+                if unmodifiable {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                let from = self.list_items(*source);
+                if from.len() > items.len() {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.IndexOutOfBoundsException: Source does not fit in dest",
+                    )));
+                }
+                items[..from.len()].copy_from_slice(&from);
+                if let Some(slot) = self.heap.list_values_mut(reference) {
+                    *slot = items;
+                }
+            }
+            // `Collections.disjoint(a, b)`: whether the two share no element.
+            ("disjoint", [_, JValue::Ref(Some(other))]) => {
+                let Some((_, items)) = items else {
+                    frame.stack.push(JValue::Int(1));
+                    return Ok(true);
+                };
+                let other = self.collection_elements(*other);
+                let mut shared = false;
+                for probe in &other {
+                    for item in &items {
+                        if self.java_equals(*probe, *item)? {
+                            shared = true;
+                            break;
+                        }
+                    }
+                    if shared {
+                        break;
+                    }
+                }
+                frame.stack.push(JValue::Int(i32::from(!shared)));
             }
             // `Collections.frequency` asks the probe, as `Objects.equals` does.
             ("frequency", [_, probe]) => {
@@ -3537,15 +3625,20 @@ impl<'run> Interpreter<'run> {
             }
             // `Collections.binarySearch` over a sorted list, by the elements'
             // own `compareTo`.
-            ("binarySearch", [_, key]) => {
+            ("binarySearch", [_, key] | [_, key, JValue::Ref(Some(_))]) => {
                 let Some((_, items)) = items else {
                     return Ok(true);
+                };
+                // A third argument is the comparator the list is sorted by.
+                let comparator = match args {
+                    [_, _, JValue::Ref(Some(comparator))] => Some(*comparator),
+                    _ => None,
                 };
                 let (mut low, mut high) = (0usize, items.len());
                 let mut found = None;
                 while low < high {
                     let mid = low + (high - low) / 2;
-                    match self.compare_for_sort(items[mid], *key)?.cmp(&0) {
+                    match self.compare_with(items[mid], *key, comparator)?.cmp(&0) {
                         std::cmp::Ordering::Less => low = mid + 1,
                         std::cmp::Ordering::Greater => high = mid,
                         std::cmp::Ordering::Equal => {
@@ -3636,6 +3729,21 @@ impl<'run> Interpreter<'run> {
                 "comparing" | "comparingInt" | "comparingDouble" | "comparingLong",
                 [JValue::Ref(Some(extractor))],
             ) => ComparatorSpec::ByKey(*extractor),
+            // `comparing(keyExtractor, keyComparator)` — the keys are ordered
+            // by a comparator of their own, not naturally.
+            (
+                "comparing",
+                [
+                    JValue::Ref(Some(extractor)),
+                    JValue::Ref(Some(key_comparator)),
+                ],
+            ) => ComparatorSpec::ByKeyWith(*extractor, *key_comparator),
+            // `nullsFirst(inner)` / `nullsLast(inner)`. A null `inner` is legal
+            // and means every non-null pair compares equal.
+            ("nullsFirst" | "nullsLast", [JValue::Ref(inner)]) => ComparatorSpec::Nulls {
+                first: method_name == "nullsFirst",
+                inner: *inner,
+            },
             _ => return Ok(false),
         };
         let comparator = self.heap.alloc(HeapObject::Comparator(spec));
@@ -3759,6 +3867,7 @@ impl<'run> Interpreter<'run> {
         Ok(true)
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per Arrays static method
     fn arrays_static_intrinsic(
         &mut self,
         frame: &mut Frame<'run>,
@@ -3771,6 +3880,22 @@ impl<'run> Interpreter<'run> {
         }
         // `asList` builds a list from the varargs array the compiler packed,
         // keeping the elements as a list stores them: unboxed.
+        // `Arrays.sort(array, comparator)`: a stable sort of a REFERENCE array
+        // in place. `null` means natural ordering, as the JDK defines it.
+        if let ("sort", [JValue::Ref(Some(array)), JValue::Ref(comparator)]) = (method_name, args) {
+            let array = *array;
+            let comparator = *comparator;
+            let Some(items) = self.array_elements(array) else {
+                return Err(VmError::UnknownIntrinsic(String::from(
+                    "Arrays.sort needs an array",
+                )));
+            };
+            let sorted = self.merge_sort_by(items, comparator)?;
+            if let Some(crate::value::HeapObject::RefArray(_, values)) = self.heap.get_mut(array) {
+                *values = sorted;
+            }
+            return Ok(true);
+        }
         if let ("asList", [JValue::Ref(Some(elements))]) = (method_name, args) {
             let elements = *elements;
             // A REFERENCE array backs the list directly: `Arrays.asList` is a
@@ -4771,9 +4896,11 @@ impl<'run> Interpreter<'run> {
                 self.list_replace_all(receiver, *op)?;
                 return Ok(Answered::Void);
             }
-            ("sort", _, [JValue::Ref(Some(comparator))]) => {
+            // `list.sort(cmp)` — and `list.sort(null)`, which the JDK defines
+            // as natural ordering rather than an NPE.
+            ("sort", _, [JValue::Ref(comparator)]) => {
                 let items = self.list_items(receiver);
-                let sorted = self.merge_sort_by(items, Some(*comparator))?;
+                let sorted = self.merge_sort_by(items, *comparator)?;
                 if let Some(slot) = self.heap.list_values_mut(receiver) {
                     *slot = sorted;
                 }
@@ -5211,6 +5338,71 @@ impl<'run> Interpreter<'run> {
                     }
                 }
             }
+            // The JDK-8 lambda methods. Each treats a key mapped to NULL as
+            // absent, and each REMOVES the entry when the function returns null
+            // — the detail that makes `merge` usable as a counter that can also
+            // delete. `merge` never passes null to its remapper: an absent key
+            // stores the given value outright.
+            ("merge", [key, value, JValue::Ref(Some(remap))]) => {
+                let existing = match self.map_find(receiver, *key)? {
+                    Some(at) => self.map_value_at(receiver, at),
+                    None => JValue::NULL,
+                };
+                let merged = if existing == JValue::NULL {
+                    *value
+                } else {
+                    self.call_apply_two(*remap, existing, *value)?
+                };
+                self.map_store_or_remove(receiver, *key, merged)?
+            }
+            ("compute", [key, JValue::Ref(Some(remap))]) => {
+                let existing = match self.map_find(receiver, *key)? {
+                    Some(at) => self.map_value_at(receiver, at),
+                    None => JValue::NULL,
+                };
+                let computed = self.call_apply_two(*remap, *key, existing)?;
+                self.map_store_or_remove(receiver, *key, computed)?
+            }
+            ("computeIfPresent", [key, JValue::Ref(Some(remap))]) => {
+                match self.map_find(receiver, *key)? {
+                    Some(at) if self.map_value_at(receiver, at) != JValue::NULL => {
+                        let existing = self.map_value_at(receiver, at);
+                        let computed = self.call_apply_two(*remap, *key, existing)?;
+                        self.map_store_or_remove(receiver, *key, computed)?
+                    }
+                    _ => JValue::NULL,
+                }
+            }
+            ("computeIfAbsent", [key, JValue::Ref(Some(mapping))]) => {
+                match self.map_find(receiver, *key)? {
+                    Some(at) if self.map_value_at(receiver, at) != JValue::NULL => {
+                        self.map_value_at(receiver, at)
+                    }
+                    // A mapping that returns null leaves the map alone (JDK) —
+                    // it does not store a null.
+                    _ => {
+                        let computed = self.call_apply(*mapping, *key)?;
+                        if computed != JValue::NULL {
+                            self.map_put(receiver, *key, computed)?;
+                        }
+                        computed
+                    }
+                }
+            }
+            ("replaceAll", [JValue::Ref(Some(function))]) => {
+                let entries = self.map_entries(receiver);
+                let expected = entries.len();
+                for (key, value) in entries {
+                    let replaced = self.call_apply_two(*function, key, value)?;
+                    self.map_put(receiver, key, replaced)?;
+                }
+                if self.map_entries(receiver).len() != expected {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.util.ConcurrentModificationException",
+                    )));
+                }
+                return Ok(Answered::Void);
+            }
             ("remove", [key]) => match self.map_find(receiver, *key)? {
                 Some(at) => self.map_remove_at(receiver, at),
                 None => JValue::NULL,
@@ -5507,6 +5699,7 @@ impl<'run> Interpreter<'run> {
 
     fn set_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let elements = self.collection_elements(receiver);
+        let expected = elements.len();
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -5525,6 +5718,13 @@ impl<'run> Interpreter<'run> {
             if let UserDispatch::Call(frame) = dispatched {
                 self.run_nested(frame)?;
             }
+        }
+        // Fail-fast in `HashMap.KeySet.forEach`'s shape: walk it all, compare
+        // once at the end (see `map_for_each`).
+        if self.collection_elements(receiver).len() != expected {
+            return Err(VmError::UncaughtException(String::from(
+                "java.util.ConcurrentModificationException",
+            )));
         }
         Ok(())
     }
@@ -6583,6 +6783,55 @@ impl<'run> Interpreter<'run> {
 
     /// `function.apply(element)`, unboxing a primitive result so it stores like
     /// caturra's other collection elements (as `list.replaceAll` does).
+    /// A two-argument lambda's `apply(a, b)` (the erased `__BiFunction`),
+    /// unboxing a primitive result — backs the map's `merge`/`compute*`.
+    fn call_apply_two(
+        &mut self,
+        function: HeapRef,
+        left: JValue,
+        right: JValue,
+    ) -> Result<JValue, VmError> {
+        let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(function)
+        else {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        };
+        let class_name = class_name.clone();
+        let dispatched = self.user_virtual_dispatch(
+            function,
+            &class_name,
+            "apply",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+            &[left, right],
+        )?;
+        let result = match dispatched {
+            UserDispatch::Call(frame) => self.run_nested(frame)?,
+            UserDispatch::Value(value) => value,
+        };
+        Ok(self.unbox_functional_result(result))
+    }
+
+    /// Store `value` under `key`, or REMOVE the entry when the value is null —
+    /// what `merge`/`compute`/`computeIfPresent` all do with a remapper that
+    /// returns null. Returns the new value (null when removed), which is what
+    /// each of those methods returns.
+    fn map_store_or_remove(
+        &mut self,
+        map: HeapRef,
+        key: JValue,
+        value: JValue,
+    ) -> Result<JValue, VmError> {
+        if value == JValue::NULL {
+            if let Some(at) = self.map_find(map, key)? {
+                self.map_remove_at(map, at);
+            }
+        } else {
+            self.map_put(map, key, value)?;
+        }
+        Ok(value)
+    }
+
     fn call_apply(&mut self, function: HeapRef, element: JValue) -> Result<JValue, VmError> {
         let result = self.call_functional(
             function,
@@ -7053,9 +7302,30 @@ impl<'run> Interpreter<'run> {
                 let found = match kind {
                     MapViewKind::Keys => self.map_find(map, *probe)?.is_some(),
                     MapViewKind::Values => self.map_contains_value(map, *probe)?,
-                    // `entrySet().contains(entry)` would need entry equality;
-                    // the compiler does not offer it.
-                    MapViewKind::Entries => false,
+                    // `entrySet().contains(entry)`: an entry is equal when its
+                    // KEY and VALUE both are (Map.Entry.equals), so this asks
+                    // whether the map holds that exact mapping — not merely
+                    // whether the key is present.
+                    MapViewKind::Entries => match *probe {
+                        JValue::Ref(Some(entry)) => match self.heap.get(entry) {
+                            Some(HeapObject::MapEntry {
+                                map: other_map,
+                                key,
+                            }) => {
+                                let (other_map, key) = (*other_map, *key);
+                                let probe_value = self.map_entry_value(other_map, key)?;
+                                match self.map_find(map, key)? {
+                                    Some(at) => {
+                                        let held = self.map_value_at(map, at);
+                                        self.java_equals(held, probe_value)?
+                                    }
+                                    None => false,
+                                }
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    },
                 };
                 JValue::Int(i32::from(found))
             }
@@ -9133,6 +9403,25 @@ impl<'run> Interpreter<'run> {
                     self.compare_with(a, b, Some(second))
                 }
             }
+            ComparatorSpec::ByKeyWith(extractor, key_comparator) => {
+                let key_a = self.call_apply(extractor, a)?;
+                let key_b = self.call_apply(extractor, b)?;
+                self.compare_with(key_a, key_b, Some(key_comparator))
+            }
+            ComparatorSpec::Nulls { first, inner } => {
+                let (a_null, b_null) = (a == JValue::NULL, b == JValue::NULL);
+                match (a_null, b_null) {
+                    (true, true) => Ok(0),
+                    (true, false) => Ok(if first { -1 } else { 1 }),
+                    (false, true) => Ok(if first { 1 } else { -1 }),
+                    // Neither is null: the inner comparator decides, and a
+                    // MISSING one means equal (JDK), not natural ordering.
+                    (false, false) => match inner {
+                        Some(inner) => self.compare_with(a, b, Some(inner)),
+                        None => Ok(0),
+                    },
+                }
+            }
         }
     }
 
@@ -9141,12 +9430,22 @@ impl<'run> Interpreter<'run> {
     /// so this runs user Java from native code — the machinery `toString` and
     /// `compareTo` already use.
     ///
-    /// The entries are snapshotted first: a lambda that mutates the map would
-    /// otherwise invalidate the positions mid-walk. Java throws
-    /// `ConcurrentModificationException` there; caturra walks the snapshot,
-    /// the same deviation its for-each over a map already has.
+    /// The entries are snapshotted first, so the walk cannot be invalidated
+    /// mid-flight — but a consumer that CHANGES THE SIZE is fail-fast, as the
+    /// JDK's is. `HashMap.forEach` (unlike `ArrayList.forEach`) does NOT
+    /// re-check in the loop: it walks the whole table and compares `modCount`
+    /// once, at the end. So every entry is visited and the exception comes
+    /// after — which is what this does.
+    ///
+    /// The exception matches; the SIZE the map is left at after one does not
+    /// always, because the JDK is walking a live table that a `put` may resize
+    /// under it (a new entry can land in a bucket the walk has yet to reach,
+    /// and be visited too). Reproducing that would mean reproducing `HashMap`'s
+    /// resize mid-iteration; the observable that matters — that the program
+    /// throws rather than quietly finishing — does match.
     fn map_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let entries = self.map_entries(receiver);
+        let expected = entries.len();
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -9166,16 +9465,36 @@ impl<'run> Interpreter<'run> {
                 self.run_nested(frame)?;
             }
         }
+        if self.map_entries(receiver).len() != expected {
+            return Err(VmError::UncaughtException(String::from(
+                "java.util.ConcurrentModificationException",
+            )));
+        }
         Ok(())
     }
 
     /// `list.forEach(consumer)`: call `accept(element)` on each element in
     /// order, running the synthesized lambda class through the nested-call
-    /// machinery. The elements are snapshotted first (a `forEach` that mutates
-    /// the list is a `ConcurrentModificationException` in Java; caturra walks
-    /// the snapshot, its existing deviation).
+    /// machinery. The elements are snapshotted first so the walk cannot be
+    /// invalidated mid-flight.
+    ///
+    /// FAIL-FAST, as the JDK's is — and in its exact shape, which is not the
+    /// obvious one. `ArrayList.forEach` re-checks `modCount` in the LOOP
+    /// CONDITION and then throws AFTER the loop:
+    ///
+    /// ```text
+    /// for (int i = 0; modCount == expectedModCount && i < size; i++) …
+    /// if (modCount != expectedModCount) throw new ConcurrentModificationException();
+    /// ```
+    ///
+    /// so a consumer that appends runs exactly ONCE more than never — one
+    /// element is visited, one element is appended, and then it throws. Walking
+    /// the snapshot to the end (what caturra did) both hid the exception and
+    /// left the list a different size than a real JDK leaves it. Size stands in
+    /// for `modCount`, as everywhere else in caturra's fail-fast.
     fn list_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let items = self.list_items(receiver);
+        let expected = items.len();
         let Some(crate::value::HeapObject::Instance { class_name, .. }) = self.heap.get(consumer)
         else {
             return Err(VmError::UncaughtException(String::from(
@@ -9184,6 +9503,9 @@ impl<'run> Interpreter<'run> {
         };
         let class_name = class_name.clone();
         for element in items {
+            if self.list_items(receiver).len() != expected {
+                break;
+            }
             let dispatched = self.user_virtual_dispatch(
                 consumer,
                 &class_name,
@@ -9194,6 +9516,11 @@ impl<'run> Interpreter<'run> {
             if let UserDispatch::Call(frame) = dispatched {
                 self.run_nested(frame)?;
             }
+        }
+        if self.list_items(receiver).len() != expected {
+            return Err(VmError::UncaughtException(String::from(
+                "java.util.ConcurrentModificationException",
+            )));
         }
         Ok(())
     }

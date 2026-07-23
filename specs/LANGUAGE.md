@@ -231,6 +231,47 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Comparators and collection algorithms** (2026-07-24): the round-5
+  comparator + collections cluster, 21 findings.
+  - **Comparator combinators.** A `comparing`/`comparingInt` key extractor
+    written as a LAMBDA (`Comparator.comparingInt(p -> p.a)`) now types its
+    parameter from the sort/declaration context — the erased SAM's parameter is
+    `Object`, so it used to report "cannot find symbol: field 'a' in class
+    Object" and only method references worked. Added `thenComparingInt`/`Long`/
+    `Double`, `nullsFirst`/`nullsLast`, and the two-argument
+    `comparing(keyExtractor, keyComparator)` (new `ComparatorSpec::ByKeyWith`
+    and `Nulls`).
+  - **Comparator-taking static overloads:** `Arrays.sort(T[], cmp)` (VM-native,
+    so the bundled `Arrays` need not name `__Comparator`), `Collections.max`/
+    `min`/`binarySearch` with a comparator, and `list.sort(null)` /
+    `Arrays.sort(a, null)` meaning natural ordering rather than an NPE.
+  - **Collections list algorithms:** `rotate`, `fill`, `copy` (with the JDK's
+    IndexOutOfBoundsException on a short destination), `disjoint`.
+  - **Map lambda methods (JDK 8):** `merge`, `compute`, `computeIfPresent`,
+    `computeIfAbsent`, `replaceAll` — including the remove-on-null semantics
+    that make `merge` a counter that can also delete. They were refused with an
+    honest "lambdas are not supported"; a new `__BiFunction` erased interface
+    and `BParam::BiFunction` carry the two-argument remappers.
+  - **`ListIterator`** — a bidirectional cursor (`hasPrevious`/`previous`/
+    `nextIndex`/`previousIndex`/`set`/`add` on top of the `Iterator` surface),
+    a new `JType::ListIterator(E)` reusing the VM's existing cursor object. Was
+    refused as "iterators are not supported".
+  - **`entrySet().contains(entry)`** asks for KEY-AND-VALUE equality (it used to
+    answer a flat `false`).
+  - **`forEach` is FAIL-FAST:** a consumer that structurally changes the
+    collection is a ConcurrentModificationException, on lists, maps and sets —
+    it used to walk a snapshot to the end and finish silently. Matches the JDK's
+    two shapes: `ArrayList.forEach` re-checks in the loop (so one element is
+    visited before it throws), `HashMap`/`HashSet` check once at the end.
+  - **Two gaps left open.** A chained comparator combinator whose FIRST
+    extractor is a fully-implicit lambda (`Comparator.comparingInt(p -> p.a)
+    .thenComparing(...)`) is accepted where javac cannot infer `p`'s type
+    through the chain and rejects it — caturra is slightly LOOSER on this
+    inference corner (give the first lambda an explicit `(P p)` type and both
+    accept it). And a collection lambda called directly on a diamond
+    constructor (`new ArrayList<>(...).forEach(x -> ...)`) still cannot resolve
+    the element type from the constructor argument — assign to a variable
+    first. Both are element-inference limits, not new to this change.
 - **A `Class` object is a singleton** (2026-07-23): every `Foo.class` and every
   `getClass()` on a `Foo` now returns the SAME reference, as on a real JVM
   (a new `class_pool` beside the string pool). Minting a fresh `Class` per query
