@@ -658,6 +658,62 @@ impl MethodTable {
                 },
             );
         }
+        // `java.lang.Number` — the abstract supertype of the numeric wrappers.
+        // A `Number` variable holds a boxed `Integer`/`Double`/… and the six
+        // conversion accessors dispatch on the boxed value at runtime, so the
+        // whole type is this signature list; `Boolean` and `Character` are
+        // deliberately absent (they are not `Number`s, as `instanceof` already
+        // knew). This is what makes `<T extends Number>` — the single most
+        // common bounded type parameter — usable, since `T` erases to it.
+        //
+        // Registered only when the program does not declare its own `Number`:
+        // unlike `Comparable`, a class of that name is plausible, and a user
+        // class must shadow the library one, not collide with it.
+        if !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|class| class.name == "Number"))
+        {
+            let id = ClassId(u16::try_from(table.class_names.len()).unwrap_or(u16::MAX));
+            table.class_names.push(String::from("Number"));
+            let accessor = |name: &str, ret: JType| MethodSig {
+                name: String::from(name),
+                params: Vec::new(),
+                ret: Some(ret),
+                is_static: false,
+                is_private: false,
+                is_final: false,
+                is_abstract: true,
+                is_varargs: false,
+                ret_infer: None,
+            };
+            table.classes.insert(
+                String::from("Number"),
+                ClassInfo {
+                    id,
+                    // So `toString`/`equals`/`hashCode` resolve on a `Number`
+                    // the way they do on any other reference.
+                    superclass: Some(object_id),
+                    library_superclass: None,
+                    interfaces: Vec::new(),
+                    enclosing: None,
+                    is_abstract: true,
+                    is_interface: false,
+                    is_enum: false,
+                    is_inner: false,
+                    type_param_count: 0,
+                    supertype_args: Vec::new(),
+                    methods: vec![
+                        accessor("intValue", JType::Int),
+                        accessor("longValue", JType::Long),
+                        accessor("doubleValue", JType::Double),
+                        accessor("floatValue", JType::Float),
+                        accessor("shortValue", JType::Short),
+                        accessor("byteValue", JType::Byte),
+                    ],
+                    fields: Vec::new(),
+                },
+            );
+        }
         for (_, unit) in units {
             for class in &unit.classes {
                 if table.classes.contains_key(&class.name) {
@@ -1126,6 +1182,20 @@ impl MethodTable {
         if sub == sup {
             return true;
         }
+        // An INTERSECTION bound (`<T extends A & B>`) erases to a synthesized
+        // interface extending every bound. No class names it, so the ordinary
+        // upward walk can never reach it — a class satisfies it exactly when it
+        // satisfies each bound, which is the rule Java checks at the call site.
+        if self
+            .class_name(sup)
+            .starts_with(crate::parser::INTERSECTION_PREFIX)
+            && let Some(info) = self.info_by_id(sup)
+        {
+            return info
+                .interfaces
+                .iter()
+                .all(|bound| self.is_subtype(sub, *bound));
+        }
         let mut steps = 0usize;
         let mut stack = vec![sub];
         while let Some(id) = stack.pop() {
@@ -1426,6 +1496,20 @@ impl MethodTable {
                     && let Some(id) = self.class_id(last)
                 {
                     return Some(JType::Object(id));
+                }
+                // A RAW parameterized type (`List l = new ArrayList();`).
+                // JLS §4.8: legal Java — javac only warns, about the unchecked
+                // operations that follow — and its members read and write the
+                // erasure, `Object`. So the raw name resolves as the same type
+                // with `Object` type arguments.
+                if let Some(arity) = raw_generic_arity(simple)
+                    && !self.has_class(simple)
+                {
+                    let args = vec![TypeRef::Named(String::from("Object")); arity];
+                    return self.resolve_type(&TypeRef::Generic {
+                        base: String::from(simple),
+                        args,
+                    });
                 }
                 match simple {
                     "Scanner" => Some(JType::Scanner),
@@ -2280,6 +2364,13 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
 /// an invariant `Object` element — stricter than javac, but never looser.
 fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
     let object = table.object_id;
+    // An erased type-variable argument (`List<T>`): any element, and writable.
+    if variance == '=' {
+        return ElemType::Wildcard {
+            read: object,
+            bound: WildcardBound::TypeVar,
+        };
+    }
     // `?`, `? extends Object`, or a bound with no nameable base: any element.
     if variance == '?' || bound.is_empty() || matches!(bound, "Object" | "java.lang.Object") {
         return ElemType::Wildcard {
@@ -2289,11 +2380,10 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
     }
     let canonical = crate::imports::canonical_library_class(bound).unwrap_or(bound);
     match variance {
-        // `? extends Bound`.
-        '+' if canonical == "Number" => ElemType::Wildcard {
-            read: object,
-            bound: WildcardBound::NumberUpper,
-        },
+        // `? extends Bound` — including `? extends Number`, now that `Number`
+        // is a class like any other (it used to need its own bound kind, and
+        // read out as `Object`, so the loop variable of
+        // `for (Number n : List<? extends Number>)` could not be typed).
         '+' => match table.class_id(canonical) {
             // `get()` yields the bound; `List<Sub>` is accepted.
             Some(id) => ElemType::Wildcard {
@@ -2314,21 +2404,39 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
     }
 }
 
+/// Whether any of a type's element/key/value positions is a wildcard — the
+/// mark of a parameter type that is deliberately variant over its elements.
+fn has_wildcard_element(ty: JType) -> bool {
+    let wildcard = |elem| matches!(elem, ElemType::Wildcard { .. });
+    match ty {
+        JType::List(elem)
+        | JType::Set(elem)
+        | JType::TreeSet(elem)
+        | JType::Collection(elem)
+        | JType::Stack(elem)
+        | JType::LinkedList { elem, .. } => wildcard(elem),
+        JType::Map { key, value } | JType::TreeMap { key, value } => {
+            wildcard(key) || wildcard(value)
+        }
+        _ => false,
+    }
+}
+
+/// Whether an argument element type may stand in for a parameter's element
+/// type: the same element, or one a wildcard parameter's bound accepts.
+/// Element types are otherwise INVARIANT, as Java's are.
+fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
+    if arg == param {
+        return true;
+    }
+    matches!(param, ElemType::Wildcard { bound, .. } if wildcard_accepts(arg, bound, table))
+}
+
 /// Whether an argument collection's element type satisfies a wildcard bound,
 /// so `List<argElem>` may be passed for a `List<? …>` parameter.
 fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) -> bool {
     match bound {
-        WildcardBound::Unbounded => true,
-        // caturra models `Number` only as the numeric wrappers.
-        WildcardBound::NumberUpper => matches!(
-            arg,
-            ElemType::Int
-                | ElemType::Double
-                | ElemType::Long
-                | ElemType::Float
-                | ElemType::Short
-                | ElemType::Byte
-        ),
+        WildcardBound::Unbounded | WildcardBound::TypeVar => true,
         WildcardBound::Upper(class) => elem_widens_to_class(arg, class, table),
         // `? super C`: the argument element is a supertype of `C` (only a user
         // class arg is checkable; a wrapper/String supertype of a class is
@@ -2341,8 +2449,8 @@ fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) ->
 
 /// Whether a collection element type is `class` or a subtype: a user-class
 /// element via the class hierarchy, and — since caturra models no wrapper
-/// hierarchy — a wrapper or `String` element only for the `Comparable` bound
-/// they all implement.
+/// hierarchy — a wrapper or `String` element only for the faces every wrapper
+/// has (`Object`, `Comparable`, and `Number` for the numeric ones).
 fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> bool {
     if class == table.object_id {
         return true;
@@ -2357,9 +2465,50 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
         | ElemType::Short
         | ElemType::Byte
         | ElemType::Char
-        | ElemType::Boolean => table.class_id("Comparable") == Some(class),
+        | ElemType::Boolean => wrapper_face(Some(arg), class, table),
         _ => false,
     }
+}
+
+/// The number of type parameters of a library collection type, for the RAW
+/// form (`List`, `Map`) — which resolves as that type with `Object` type
+/// arguments (JLS §4.8). `None` for anything that is not one of them.
+///
+/// Only sound once a user class of the name has been ruled out, and only for
+/// types whose parameterized form `resolve_type` already models.
+fn raw_generic_arity(simple: &str) -> Option<usize> {
+    match simple {
+        "List" | "ArrayList" | "Set" | "HashSet" | "TreeSet" | "SortedSet" | "NavigableSet"
+        | "Collection" | "LinkedList" | "Queue" | "Deque" | "ArrayDeque" | "PriorityQueue"
+        | "Stack" | "Iterator" | "Optional" => Some(1),
+        "Map" | "HashMap" | "TreeMap" | "SortedMap" | "NavigableMap" => Some(2),
+        _ => None,
+    }
+}
+
+/// Whether a boxed wrapper (or the primitive that boxes into it) satisfies a
+/// parameter/variable of class `class` — the wrapper supertypes caturra models:
+/// the top `Object`, the `Comparable` every wrapper implements, and `Number`
+/// for the six numeric ones (`Boolean` and `Character` are not `Number`s).
+///
+/// `elem` is the wrapper's element; `None` means "a wrapper, unknown which"
+/// (a `String`, say), which reaches only the `Object`/`Comparable` faces.
+fn wrapper_face(elem: Option<ElemType>, class: ClassId, table: &MethodTable) -> bool {
+    if class == table.object_id || table.class_id("Comparable") == Some(class) {
+        return true;
+    }
+    table.class_id("Number") == Some(class)
+        && matches!(
+            elem,
+            Some(
+                ElemType::Int
+                    | ElemType::Double
+                    | ElemType::Long
+                    | ElemType::Float
+                    | ElemType::Short
+                    | ElemType::Byte
+            )
+        )
 }
 
 /// The [`ElemType`] for a base (non-array) type, if it can be an array
@@ -2613,11 +2762,45 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Set(ElemType::Wildcard { bound, .. }),
             ) if wildcard_accepts(a, bound, table)
         )
+        // The same variance for the remaining families, so a generic method's
+        // `Stack<T>` / `Queue<T>` / `TreeSet<T>` / `Map<K, V>` parameter (whose
+        // arguments erase to type-variable wildcards) is applicable to a
+        // concrete one. Without these, `<K, V> void show(Map<K, V> m)` could
+        // not be called at all.
+        || matches!(
+            (from, to),
+            (JType::Stack(a), JType::Stack(b)) | (JType::TreeSet(a), JType::TreeSet(b))
+                if elem_matches(a, b, table)
+        )
+        || matches!(
+            (from, to),
+            (
+                JType::LinkedList { elem: a, role: r1 },
+                JType::LinkedList { elem: b, role: r2 },
+            ) if r1 == r2 && elem_matches(a, b, table)
+        )
+        || matches!(
+            (from, to),
+            (
+                JType::Map { key: k1, value: v1 } | JType::TreeMap { key: k1, value: v1 },
+                JType::Map { key: k2, value: v2 },
+            ) if elem_matches(k1, k2, table) && elem_matches(v1, v2, table)
+        )
+        || matches!(
+            (from, to),
+            (
+                JType::TreeMap { key: k1, value: v1 },
+                JType::TreeMap { key: k2, value: v2 },
+            ) if elem_matches(k1, k2, table) && elem_matches(v1, v2, table)
+        )
         // A parameterized type and its raw class erase alike, so they
         // are mutually assignable (`Box<String> b = new Box<>()`).
         || matches!((from.erased_class(), to.erased_class()), (Some(a), Some(b)) if a == b)
-        // Any reference (including another type var) stores into a T.
-        || (to == JType::TypeVar && from.is_reference())
+        // Any reference (including another type var) stores into a T — and a
+        // primitive boxes on the way (`new Box<Integer>(42)`, JLS §5.3: boxing
+        // then a widening reference conversion). Without the boxing half, a
+        // generic constructor or method could not be handed a literal at all.
+        || (to == JType::TypeVar && (from.is_reference() || boxable_primitive(from).is_some()))
         || (from == JType::TypeVar && to == JType::Object(table.object_id))
         // Autoboxing / unboxing in assignment and method invocation.
         || matches!((from, to), (JType::Boxed(e), t) if e.base_type() == t)
@@ -2658,10 +2841,11 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Object(id),
             ) if id == table.object_id
         )
-        // A `Comparable`-bounded type parameter (`<T extends Comparable<T>>`)
-        // erases to `Comparable`; every primitive wrapper and `String`
-        // implements it, and a primitive autoboxes to its wrapper first, so
-        // they satisfy the bound (user classes go through `is_subtype` above).
+        // A `Comparable`- or `Number`-bounded type parameter erases to that
+        // interface/class; every primitive wrapper and `String` implements
+        // `Comparable`, the numeric wrappers are also `Number`s, and a
+        // primitive autoboxes to its wrapper first, so they satisfy the bound
+        // (user classes go through `is_subtype` above).
         || matches!(
             (from, to),
             (
@@ -2669,8 +2853,18 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     | JType::Int | JType::Long | JType::Double | JType::Float
                     | JType::Short | JType::Byte | JType::Char | JType::Boolean,
                 JType::Object(id),
-            ) if table.class_id("Comparable") == Some(id)
+            ) if wrapper_face(wrapper_elem_of(from), id, table)
         )
+}
+
+/// The wrapper element a type boxes into, for [`wrapper_face`]: a boxed
+/// wrapper's own element, a primitive's, and `None` for a `String` (which has
+/// no numeric face).
+fn wrapper_elem_of(ty: JType) -> Option<ElemType> {
+    match ty {
+        JType::Boxed(elem) => Some(elem),
+        other => boxable_primitive(other),
+    }
 }
 
 /// The element base type of an array (arrays of arrays are expressed
@@ -2726,13 +2920,15 @@ enum ElemType {
 enum WildcardBound {
     /// `?` or `? extends Object`: any reference element is accepted.
     Unbounded,
-    /// `? extends Number`: only the numeric wrappers (Integer, Double, Long,
-    /// Float, Short, Byte) — caturra models `Number` no other way.
-    NumberUpper,
     /// `? extends C`: an element whose type is `C` or a subtype of it.
     Upper(ClassId),
     /// `? super C`: an element `C` itself is assignable to (a supertype of C).
     Lower(ClassId),
+    /// A TYPE VARIABLE argument (`List<T>` in `<T> void dump(List<T>)`), after
+    /// erasure. Like `Unbounded` for applicability — a `List<anything>` may be
+    /// passed — but a real type, not a capture, so the collection may still be
+    /// written to.
+    TypeVar,
 }
 
 impl ElemType {
@@ -4391,6 +4587,16 @@ fn method_descriptor(
                     out.push('L');
                     out.push_str(erased);
                     out.push(';');
+                } else if table.has_class(base) {
+                    // A USER generic class as a parameter/return/field type
+                    // (`String join(Pair<A, B> p)`): erasure drops the type
+                    // arguments, leaving the raw class. Without this arm every
+                    // signature naming a user generic class was rejected —
+                    // `Box<T>` only worked because a single-parameter class is
+                    // resolved through `JType::Generic`, never described here.
+                    out.push('L');
+                    out.push_str(base);
+                    out.push(';');
                 } else {
                     let message = crate::imports::unsupported_class_reason(base)
                         .filter(|_| !table.has_class(base))
@@ -4455,6 +4661,18 @@ fn method_descriptor(
                     out.push('L');
                     out.push_str(&internal);
                     out.push(';');
+                } else if let Some(arity) = raw_generic_arity(simple)
+                    && !table.has_class(simple)
+                {
+                    // A RAW collection type in a signature (`void f(List l)`):
+                    // same descriptor as its parameterized form, which erases
+                    // the type arguments away anyway.
+                    let args = vec![TypeRef::Named(String::from("Object")); arity];
+                    let raw = TypeRef::Generic {
+                        base: String::from(simple),
+                        args,
+                    };
+                    push_type(path, diagnostics, table, out, &raw, span);
                 } else {
                     let message = if name.contains('.') {
                         crate::imports::unknown_qualified_message(name)
@@ -6812,6 +7030,16 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;ILjava/lang/Object;II)V",
     ),
     bm("lineSeparator", &[], BRet::Str, "()Ljava/lang/String;"),
+    // Internal: box a value whose static type is `Object` but whose runtime
+    // representation may be an unboxed primitive — the read of a collection
+    // element the type system only knows as a wildcard or a type variable.
+    // Never reachable from source (`__` names cannot be written).
+    bm(
+        "__box",
+        &[BParam::Object],
+        BRet::Object,
+        "(Ljava/lang/Object;)Ljava/lang/Object;",
+    ),
     // Terminate the program with the given status code (Java's System.exit).
     bm("exit", &[I], BRet::Void, "(I)V"),
     // Internal standard-out capture, used only by the bundled
@@ -12907,10 +13135,7 @@ impl BodyGen<'_> {
         // is refused. Accepting `l.add(1)` on a `List<? extends Number>` let a
         // program compile here and fail on a JDK.
         if let Some(ElemType::Wildcard { bound, .. }) = elem.first
-            && matches!(
-                bound,
-                WildcardBound::Unbounded | WildcardBound::NumberUpper | WildcardBound::Upper(_)
-            )
+            && matches!(bound, WildcardBound::Unbounded | WildcardBound::Upper(_))
             && WRITES_AN_ELEMENT.contains(&method)
         {
             let (class, _) = builtin_instance_table(receiver_ty).expect("collection has a table");
@@ -12989,7 +13214,30 @@ impl BodyGen<'_> {
         self.code
             .push_op_u16(op::INVOKEVIRTUAL, method_ref, ret_width);
         self.code.drop_stack(1 + args_width);
+        // Reading the element of a collection whose element type is only known
+        // as a WILDCARD or a type variable (`List<?>`, or a generic method's
+        // `List<T>`): the static type is `Object`, but the collection stores
+        // its primitives unboxed, so the raw value has to be boxed or the very
+        // next reference use is a VerifyError. Which wrapper is a runtime
+        // question — the wildcard is what hid the answer — so the VM does it.
+        if matches!(chosen.ret, BRet::Elem) && matches!(elem.first, Some(ElemType::Wildcard { .. }))
+        {
+            self.emit_box_any();
+        }
         Some(ret)
+    }
+
+    /// Box whatever `Object`-typed value is on top of the stack, if it is
+    /// really an unboxed primitive (see `System.__box`). A no-op on a value
+    /// that is already a reference.
+    fn emit_box_any(&mut self) {
+        let method_ref = intern_method_ref(
+            self.pool,
+            "java/lang/System",
+            "__box",
+            "(Ljava/lang/Object;)Ljava/lang/Object;",
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
     }
 
     /// Emit the format string + variadic arguments of a
@@ -18987,22 +19235,32 @@ impl BodyGen<'_> {
                 self.emit_box(elem);
                 return;
             }
-            if let JType::Object(id) = to
-                && (id == self.table.object_id || self.table.class_id("Comparable") == Some(id))
+            // A primitive handed to a type variable (`new Box<Integer>(42)`,
+            // `<T> T id(T)` called with `3`): box it, then the wrapper is the
+            // reference `T` erases to.
+            if to == JType::TypeVar
                 && let Some(elem) = boxable_primitive(from)
             {
-                // The wrapper both is the top `Object` and implements
-                // `Comparable`, so it satisfies a `Comparable`-bounded param.
                 self.emit_box(elem);
                 return;
             }
-            // A boxed wrapper already IS an `Object`/`Comparable`, so widening
-            // to one is a no-op that KEEPS the same reference (JLS §5.1.5):
-            // `Object o = anInteger; o == anInteger` must stay true. Unboxing
-            // and re-boxing here would mint a fresh identity.
-            if let JType::Boxed(_) = from
+            if let JType::Object(id) = to
+                && let Some(elem) = boxable_primitive(from)
+                && wrapper_face(Some(elem), id, self.table)
+            {
+                // The wrapper is the top `Object`, implements `Comparable`, and
+                // (when numeric) IS-A `Number`, so it satisfies a bound of any
+                // of the three.
+                self.emit_box(elem);
+                return;
+            }
+            // A boxed wrapper already IS an `Object`/`Comparable`/`Number`, so
+            // widening to one is a no-op that KEEPS the same reference
+            // (JLS §5.1.5): `Object o = anInteger; o == anInteger` must stay
+            // true. Unboxing and re-boxing here would mint a fresh identity.
+            if let JType::Boxed(elem) = from
                 && let JType::Object(id) = to
-                && (id == self.table.object_id || self.table.class_id("Comparable") == Some(id))
+                && wrapper_face(Some(elem), id, self.table)
             {
                 return;
             }
@@ -19059,15 +19317,15 @@ impl BodyGen<'_> {
                 | JType::List(_)
                 | JType::Set(_)
                 | JType::Stack(_)
+                | JType::Map { .. }
                 | JType::Exception(_),
                 _,
-            )
-            | (
-                _,
-                JType::List(ElemType::Wildcard { .. })
-                | JType::Collection(ElemType::Wildcard { .. })
-                | JType::Set(ElemType::Wildcard { .. }),
             ) if widens(from, to, self.table) => {}
+            // The same, for any target whose element/key/value is a wildcard —
+            // including a generic method's erased `Map<K, V>` parameter, whose
+            // BOTH positions are type-variable wildcards. `widens` is the real
+            // check; this arm only says the conversion needs no code.
+            (_, to) if has_wildcard_element(to) && widens(from, to, self.table) => {}
             // Array covariance: `Card[]` assigns to `Comparable[]`.
             (
                 JType::Array {

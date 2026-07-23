@@ -231,6 +231,51 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Generics, the deep round** (2026-07-23): seven round-5 findings, all of them
+  ordinary generic Java that caturra REJECTED.
+  1. **`java.lang.Number` is a type.** It used to answer only `instanceof`
+     ("there is nothing to declare a variable of"), which made `<T extends
+     Number>` — the most common bounded type parameter — unusable, because `T`
+     erases to its bound. It is now a synthetic abstract class with the six
+     conversion accessors (`intValue`/`longValue`/`doubleValue`/`floatValue`/
+     `shortValue`/`byteValue`), the supertype of the six NUMERIC wrappers only:
+     `Number n = true;` and `Number n = "x";` are still javac's errors, verbatim.
+     A user class named `Number` shadows it, as it shadows every library name.
+     `WildcardBound::NumberUpper` is gone with it — `? extends Number` is now an
+     ordinary class bound, which is what lets `for (Number n : List<? extends
+     Number>)` type its loop variable.
+  2. **A generic method may take a PARAMETERIZED parameter** (`<T> void
+     dump(List<T>)`, `<K, V> void show(Map<K, V>)`). The type argument erases to
+     a type-variable wildcard: any element matches, as inference would — and
+     unlike a `? extends` capture it may still be WRITTEN to, because a `T` is a
+     real type. Reading such an element goes through a new `System.__box`, since
+     the collection stores its primitives unboxed and only the VM knows which
+     wrapper the wildcard hid.
+  3. **A primitive boxes into a type variable** (JLS §5.3): `new Box<Integer>(42)`
+     and `id(3)` were "cannot be applied to given types (int)".
+  4. **INTERSECTION bounds** (`<T extends A & B>`) may call both bounds' methods.
+     The JVM erasure is the leftmost bound, which hid `B` entirely; the compiler
+     now works against an interface synthesized per intersection (`__And$A$B`),
+     which a class satisfies exactly when it satisfies every bound. A class
+     implementing only one is still not applicable.
+  5. **An explicit type witness** (`Collections.<String>emptyList()`,
+     `this.<T>id(x)`, JLS §15.12) parses. The arguments erase away, so skipping
+     them is the whole fix; a `<` that is really a comparison is unaffected,
+     since a witness can only sit directly after the `.`.
+  6. **RAW types** (JLS §4.8): `List l = new ArrayList();`, `Map`, `Set`,
+     `Collection`, `Iterator` and the rest resolve as their `Object`-argument
+     form, which is what their members read and write. javac only warns here, and
+     `java.util.HashMap x = null;` used to be refused as "not supported".
+  7. **A user generic class in a signature** (`String join(Pair<A, B> p)`) —
+     the descriptor writer had no arm for one, so every such method was rejected
+     as an "unknown generic type". `Box<T>` only worked because a
+     single-parameter class is described through its tracked form.
+
+  **Gap left open:** a MULTI-parameter generic class still does not track its
+  type arguments — `p.getB()` on a `Pair<String, Integer>` reads out `Object`,
+  so `p.getB() + 1` is a compile error where javac infers `Integer`. Tracking
+  needs one erasure sentinel per position (`JType::TypeVar` is singular by
+  construction), which is its own change.
 - **Inherited static field write** (2026-07-20): `Sub.f = v` on a field
   declared in a superclass resolves to the DECLARING class — it used to abort
   ("malformed class: unknown static field Sub.f") because the write emitted the
@@ -1355,8 +1400,12 @@ x)`) with type-parameter erasure — every type variable is rewritten
   yield `String` directly (the compiler inserts the `checkcast`).
   Multi-parameter generics (`Pair<A, B>`) and generic-method returns
   use raw type arguments — reads there still need a cast. Not yet:
-  autoboxing of primitives into `Object`, and nested type arguments
-  (`Box<Pair<A, B>>`).
+  nested type arguments (`Box<Pair<A, B>>`).
+  **Much widened 2026-07-23** — see "Generics, the deep round" above:
+  bounded type variables can call their bound's methods (including
+  `<T extends Number>` and intersection bounds `<T extends A & B>`), a
+  generic method may take a `List<T>`/`Map<K, V>`, a primitive boxes
+  into a `T`, explicit type witnesses parse, and raw types resolve.
 
 - **Autoboxing** (2026-07-03): the wrapper types `Integer`, `Double`,
   `Long`, `Float`, `Short`, `Byte`, `Character`, and `Boolean` are

@@ -3214,7 +3214,7 @@ public class DiffStaticInit {
 differential_test!(
     diff_math_special_cases,
     "DiffMathSpecial",
-    r#"
+    r"
 public class DiffMathSpecial {
     public static void main(String[] args) {
         System.out.println(Math.IEEEremainder(3.0, Double.POSITIVE_INFINITY));
@@ -3232,7 +3232,7 @@ public class DiffMathSpecial {
         System.out.println(Math.ulp(0.0));
     }
 }
-"#
+"
 );
 
 // A valid interface exercising every member kind — an abstract method, a
@@ -14144,6 +14144,381 @@ public class DiffEnumLegal {
     public static void main(String[] args) {
         System.out.println(C.X + " " + C.Y);
         System.out.println(C.Y.doubled());
+    }
+}
+"#
+);
+
+// `java.lang.Number` is a type, not just an `instanceof` question: the abstract
+// supertype of the six numeric wrappers, with the conversion accessors. This is
+// what makes `<T extends Number>` — the most common bounded type parameter —
+// usable at all, since `T` erases to its bound.
+differential_test!(
+    diff_number_type,
+    "DiffNumber",
+    r#"
+import java.util.*;
+
+public class DiffNumber {
+    static double twice(Number n) { return n.doubleValue() * 2; }
+
+    static <T extends Number> String parts(T n) {
+        return n.intValue() + "/" + n.longValue() + "/" + n.doubleValue()
+            + "/" + n.floatValue() + "/" + n.shortValue() + "/" + n.byteValue();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(twice(21));
+        System.out.println(twice(1.5));
+        System.out.println(twice(7L));
+        System.out.println(parts(7));
+        System.out.println(parts(2.75));
+
+        Number n = 5;
+        System.out.println(n + " " + n.intValue() + " " + n.hashCode());
+        System.out.println(n.toString() + " " + n.getClass().getName());
+        System.out.println(n.equals(Integer.valueOf(5)));
+
+        Object o = n;
+        System.out.println(o instanceof Number);
+        System.out.println("x" instanceof Comparable);
+
+        List<Number> ns = new ArrayList<>();
+        ns.add(1);
+        ns.add(2.5);
+        ns.add(3L);
+        double sum = 0;
+        for (Number x : ns) sum += x.doubleValue();
+        System.out.println(sum + " " + ns);
+
+        Number[] arr = { 1, 2.5 };
+        System.out.println(arr[0].intValue() + " " + arr[1].doubleValue());
+    }
+}
+"#
+);
+
+// `Number` is not `Boolean`'s or `Character`'s supertype, and nothing unboxes
+// out of it implicitly — javac rejects all three.
+differential_reject!(
+    reject_boolean_as_a_number,
+    "RejBoolNumber",
+    r"
+public class RejBoolNumber {
+    public static void main(String[] args) {
+        Number n = true;
+        System.out.println(n);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_number_unboxed_to_int,
+    "RejNumberUnbox",
+    r"
+public class RejNumberUnbox {
+    public static void main(String[] args) {
+        Number n = 5;
+        int i = n;
+        System.out.println(i);
+    }
+}
+"
+);
+
+// `? extends Number` reads out as a `Number`, so the loop variable can be one.
+differential_test!(
+    diff_wildcard_number_bound,
+    "DiffWildNumber",
+    r"
+import java.util.*;
+
+public class DiffWildNumber {
+    static double sum(List<? extends Number> ns) {
+        double total = 0;
+        for (Number n : ns) total += n.doubleValue();
+        return total;
+    }
+
+    public static void main(String[] args) {
+        List<Integer> ints = new ArrayList<>(Arrays.asList(1, 2, 3));
+        List<Double> ds = new ArrayList<>(Arrays.asList(1.5, 2.5));
+        System.out.println(sum(ints));
+        System.out.println(sum(ds));
+        List<? extends Number> nums = ints;
+        System.out.println(nums.get(0).doubleValue());
+    }
+}
+"
+);
+
+// A `? extends` bound is still checked: a list of Strings is not a list of
+// Numbers, however the elements are spelled.
+differential_reject!(
+    reject_string_list_for_a_number_wildcard,
+    "RejStrNumWild",
+    r#"
+import java.util.*;
+
+public class RejStrNumWild {
+    static double sum(List<? extends Number> ns) { return ns.size(); }
+    public static void main(String[] args) {
+        System.out.println(sum(new ArrayList<String>(Arrays.asList("a"))));
+    }
+}
+"#
+);
+
+// A generic method with a PARAMETERIZED parameter (`List<T>`, `Map<K, V>`).
+// The type argument erases to a type-variable wildcard: any element matches
+// (as inference would), and — unlike a `? extends` capture — it may still be
+// written to.
+differential_test!(
+    diff_generic_collection_params,
+    "DiffGenericColl",
+    r#"
+import java.util.*;
+
+public class DiffGenericColl {
+    static <T> void dump(List<T> items) { for (T t : items) System.out.println(t); }
+    static <T> void addTwice(List<T> items, T x) { items.add(x); items.add(x); }
+    static <T> T first(ArrayList<T> items) { return items.get(0); }
+    static <K, V> void show(Map<K, V> m) { System.out.println(m); }
+    static <T> int total(Collection<T> c) { return c.size(); }
+    static <T> List<T> copy(List<T> src) { return new ArrayList<>(src); }
+
+    public static void main(String[] args) {
+        List<String> s = new ArrayList<>(Arrays.asList("a", "b"));
+        dump(s);
+        addTwice(s, "z");
+        System.out.println(s);
+
+        ArrayList<Integer> n = new ArrayList<>();
+        n.add(9);
+        // The list stores its ints unboxed; reading through `T` must box.
+        System.out.println(first(n));
+        System.out.println(first(n) + " " + first(n).equals(9));
+
+        Map<String, Integer> m = new HashMap<>();
+        m.put("k", 1);
+        show(m);
+        System.out.println(total(s) + " " + copy(s));
+
+        Set<Double> d = new HashSet<>();
+        d.add(1.5);
+        System.out.println(total(d));
+
+        Deque<Integer> q = new ArrayDeque<>();
+        q.add(4);
+        System.out.println(total(q));
+    }
+}
+"#
+);
+
+// A generic constructor / method handed a PRIMITIVE: JLS 5.3 boxes it, then the
+// wrapper is the reference `T` erases to.
+differential_test!(
+    diff_generic_boxing,
+    "DiffGenericBox",
+    r#"
+public class DiffGenericBox {
+    static class Box<T> {
+        private T value;
+        Box(T value) { this.value = value; }
+        T get() { return value; }
+        void set(T v) { value = v; }
+        @Override public String toString() { return "Box(" + value + ")"; }
+    }
+
+    static <T> T id(T x) { return x; }
+
+    public static void main(String[] args) {
+        Box<Integer> b = new Box<>(42);
+        System.out.println(b.get() + " " + b);
+        b.set(7);
+        System.out.println(b);
+        Box<String> s = new Box<>("hi");
+        System.out.println(s.get().length());
+        System.out.println(id(3) + " " + id(2.5) + " " + id('c') + " " + id(true));
+    }
+}
+"#
+);
+
+// An INTERSECTION bound: `<T extends A & B>` may call BOTH bounds' methods.
+// The JVM erasure is the leftmost bound, so the compiler works against a
+// synthesized interface extending every bound instead.
+differential_test!(
+    diff_intersection_bound,
+    "DiffIntersect",
+    r#"
+import java.util.*;
+
+public class DiffIntersect {
+    interface Named { String name(); }
+    interface Aged { int age(); }
+
+    static class P implements Named, Aged {
+        private final String n;
+        private final int a;
+        P(String n, int a) { this.n = n; this.a = a; }
+        public String name() { return n; }
+        public int age() { return a; }
+    }
+
+    static class C implements Comparable<C>, Named {
+        int v;
+        C(int v) { this.v = v; }
+        public int compareTo(C o) { return Integer.compare(v, o.v); }
+        public String name() { return "C" + v; }
+    }
+
+    static <T extends Named & Aged> String show(T t) { return t.name() + " " + t.age(); }
+
+    static <T extends Comparable<T> & Named> String pick(T a, T b) {
+        return (a.compareTo(b) >= 0 ? a : b).name();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(show(new P("p", 7)));
+        System.out.println(pick(new C(1), new C(9)));
+        List<P> ps = new ArrayList<>();
+        ps.add(new P("a", 1));
+        for (P p : ps) System.out.println(show(p));
+    }
+}
+"#
+);
+
+// A class satisfying only ONE of the bounds is not applicable.
+differential_reject!(
+    reject_partial_intersection_bound,
+    "RejIntersect",
+    r#"
+public class RejIntersect {
+    interface Named { String name(); }
+    interface Aged { int age(); }
+    static class OnlyNamed implements Named { public String name() { return "x"; } }
+    static <T extends Named & Aged> String show(T t) { return t.name(); }
+    public static void main(String[] args) {
+        System.out.println(show(new OnlyNamed()));
+    }
+}
+"#
+);
+
+// An explicit type witness on a generic call (JLS 15.12). The arguments erase
+// away, so the parse just has to accept them — and a `<` that is really a
+// comparison must keep working.
+differential_test!(
+    diff_explicit_type_witness,
+    "DiffWitness",
+    r#"
+import java.util.*;
+
+public class DiffWitness {
+    static <T> T id(T x) { return x; }
+    <T> T self(T x) { return x; }
+
+    public static void main(String[] args) {
+        System.out.println(DiffWitness.<String>id("hello"));
+        System.out.println(new DiffWitness().<Integer>self(3));
+        List<String> e = Collections.<String>emptyList();
+        System.out.println(e);
+        int a = 1;
+        int b = 2;
+        System.out.println(a < b);
+        Map<String, List<Integer>> m = new HashMap<>();
+        System.out.println(m);
+    }
+}
+"#
+);
+
+// RAW types (JLS 4.8): legal Java — javac only warns — and every member reads
+// and writes the erasure, `Object`.
+differential_test!(
+    diff_raw_types,
+    "DiffRaw",
+    r#"
+import java.util.*;
+
+public class DiffRaw {
+    static int count(List l) { return l.size(); }
+
+    public static void main(String[] args) {
+        List l = new ArrayList();
+        l.add("x");
+        l.add("y");
+        System.out.println(l.size() + " " + l + " " + count(l));
+        Object o = l.get(0);
+        System.out.println(o);
+
+        Map m = new HashMap();
+        m.put("a", 1);
+        System.out.println(m + " " + m.get("a"));
+
+        Set s = new HashSet();
+        s.add("q");
+        System.out.println(s);
+
+        for (Object x : l) System.out.println(x);
+
+        Collection c = l;
+        System.out.println(c.size());
+
+        Iterator it = l.iterator();
+        while (it.hasNext()) System.out.println(it.next());
+
+        java.util.HashMap qualified = new java.util.HashMap();
+        System.out.println(qualified);
+    }
+}
+"#
+);
+
+// A raw collection reads out as `Object`, not its erstwhile element type.
+differential_reject!(
+    reject_raw_element_without_a_cast,
+    "RejRawElem",
+    r#"
+import java.util.*;
+
+public class RejRawElem {
+    public static void main(String[] args) {
+        List l = new ArrayList();
+        l.add("x");
+        String s = l.get(0);
+        System.out.println(s);
+    }
+}
+"#
+);
+
+// A USER generic class as a parameter/return type: erasure drops the type
+// arguments, leaving the raw class in the descriptor.
+differential_test!(
+    diff_user_generic_signature,
+    "DiffUserGeneric",
+    r#"
+public class DiffUserGeneric {
+    static class Pair<A, B> {
+        A a;
+        B b;
+        Pair(A a, B b) { this.a = a; this.b = b; }
+        A getA() { return a; }
+        B getB() { return b; }
+    }
+
+    static <A, B> String join(Pair<A, B> p) { return p.getA() + "/" + p.getB(); }
+
+    static Pair<String, Integer> make() { return new Pair<>("x", 5); }
+
+    public static void main(String[] args) {
+        System.out.println(join(make()));
+        System.out.println(join(new Pair<>(1, true)));
     }
 }
 "#

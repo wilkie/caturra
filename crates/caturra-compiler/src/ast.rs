@@ -152,12 +152,15 @@ pub struct Annotation {
     pub str_arg: Option<String>,
 }
 
-/// A declared type parameter: `T`, or `T extends Bound` (`& Other` bounds are
-/// parsed but only the first is kept — erasure uses the leftmost bound).
+/// A declared type parameter: `T`, `T extends Bound`, or an INTERSECTION bound
+/// `T extends A & B`. `bound` is the leftmost (what the JVM erasure is);
+/// `extra_bounds` holds the rest, which still have to be visible — `t.b()` on a
+/// `<T extends A & B>` is legal Java, and erasing to `A` alone hid it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeParam {
     pub name: String,
     pub bound: Option<TypeRef>,
+    pub extra_bounds: Vec<TypeRef>,
 }
 
 /// Reserved prefix that turns a wildcard type argument (`? extends Number`)
@@ -167,8 +170,10 @@ pub struct TypeParam {
 const WILDCARD_PREFIX: &str = "\u{0}Wildcard\u{0}";
 
 /// Encode a wildcard type argument as a reserved type name. `variance` is
-/// `'?'` (unbounded), `'+'` (`extends`) or `'-'` (`super`); `bound` is the
-/// bound's simple name (empty when unbounded).
+/// `'?'` (unbounded), `'+'` (`extends`), `'-'` (`super`), or `'='` — the
+/// erasure of a TYPE VARIABLE argument (`List<T>` in a generic method), which
+/// accepts any element like `?` but, unlike `?`, may still be written to;
+/// `bound` is the bound's simple name (empty when unbounded).
 #[must_use]
 pub fn wildcard_type_name(variance: char, bound: &str) -> String {
     format!("{WILDCARD_PREFIX}{variance}{bound}")

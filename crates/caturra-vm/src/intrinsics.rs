@@ -3247,6 +3247,26 @@ pub(crate) fn boxed_to_string(class_name: &str, value: JValue) -> String {
     }
 }
 
+/// `System.__box`: box a value that is really an unboxed primitive, and pass a
+/// reference through unchanged. See the compiler's `emit_box_any`.
+fn box_any(heap: &mut Heap, value: Option<JValue>) -> JValue {
+    let primitive = match value {
+        None => return JValue::Ref(None),
+        Some(reference @ JValue::Ref(_)) => return reference,
+        Some(primitive) => primitive,
+    };
+    let class_name = match primitive {
+        JValue::Long(_) => "java/lang/Long",
+        JValue::Double(_) => "java/lang/Double",
+        JValue::Float(_) => "java/lang/Float",
+        _ => "java/lang/Integer",
+    };
+    JValue::Ref(Some(heap.alloc(HeapObject::Boxed {
+        class_name: std::rc::Rc::from(class_name),
+        value: primitive,
+    })))
+}
+
 /// Instance methods on a boxed wrapper: the unboxing accessors
 /// (`intValue`, ...) and the Object methods (`toString`, `equals`,
 /// `hashCode`, `compareTo`).
@@ -3601,6 +3621,14 @@ pub fn invoke_static(
                 };
                 Err(VmError::SystemExit(code))
             }
+            // Internal: box whatever is on the stack. A collection whose
+            // static element type is a wildcard or a type variable reads out as
+            // `Object`, but the collection stores its primitives UNBOXED — so
+            // the read has to be boxed before anything treats it as a
+            // reference. The compiler cannot emit a `valueOf` here because it
+            // does not know which primitive (that is exactly what the wildcard
+            // hid); the VM does, because it has the value.
+            "__box" => Ok(Some(box_any(heap, args.first().copied()))),
             // Standard-out capture for org.code.validation's SystemOutTestRunner.
             "__captureStart" => {
                 console.begin_capture();

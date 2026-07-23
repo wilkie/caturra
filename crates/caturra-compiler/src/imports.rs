@@ -107,6 +107,7 @@ const JAVA_LANG: &[&str] = &[
     "Byte",
     "Boolean",
     "Character",
+    "Number",
     "StringBuilder",
     "Exception",
     "RuntimeException",
@@ -143,17 +144,12 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "Writer",
         ],
     ),
-    // `x instanceof Number` DOES work (the VM knows an Integer is a Number and a
-    // Boolean is not) — but there is no Number type to declare a variable of, so
-    // say that rather than "unknown type 'Number'", which would suggest a typo.
-    //
     // `Thread` and friends are real Java that caturra will not be growing: a
     // program here runs on one thread, in one WASM instance. Saying "unknown type
     // 'Thread'" about a class every Java programmer knows reads as our bug.
     (
         "java.lang",
         &[
-            "Number",
             "Thread",
             "Runnable",
             "ThreadLocal",

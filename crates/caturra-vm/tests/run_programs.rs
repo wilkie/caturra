@@ -6427,9 +6427,13 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { foo.bar.Baz x = null; } }",
             "package foo.bar does not exist",
         ),
+        // `java.util.HashMap` is NOT here: raw types are legal Java (JLS §4.8)
+        // and javac accepts `java.util.HashMap x = null;` with only a warning.
+        // A qualified name for a class caturra genuinely does not model still
+        // gives its honest reason.
         (
-            "class M { static void f() { java.util.HashMap x = null; } }",
-            "java.util.HashMap is not supported by caturra",
+            "class M { static void f() { java.util.Vector x = null; } }",
+            "java.util.Vector is not supported by caturra",
         ),
     ];
     for (source, expected) in cases {
@@ -7026,8 +7030,12 @@ fn boxed_values_keep_their_identity_through_an_object_list() {
          Integer=true String=false Double=false\n\
          Boolean=true Character=true\n\
          unboxed again: 6\n\
-         class java.lang.String cannot be cast to class java.lang.Integer\n\
-         class java.lang.Integer cannot be cast to class java.lang.Double\n"
+         class java.lang.String cannot be cast to class java.lang.Integer \
+         (java.lang.String and java.lang.Integer are in module java.base of \
+         loader 'bootstrap')\n\
+         class java.lang.Integer cannot be cast to class java.lang.Double \
+         (java.lang.Integer and java.lang.Double are in module java.base of \
+         loader 'bootstrap')\n"
     );
 }
 

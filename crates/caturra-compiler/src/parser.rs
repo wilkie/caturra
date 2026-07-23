@@ -571,6 +571,7 @@ impl Parser<'_> {
                     if let Ok(class) = self.class_decl() {
                         let first = classes.len();
                         flatten_nested(class, &mut classes);
+                        let mut synthesized = Vec::new();
                         for class in &mut classes[first..] {
                             for (message, span) in check_erasure_clashes(class) {
                                 self.error_at(span, message);
@@ -584,8 +585,10 @@ impl Parser<'_> {
                                     ),
                                 );
                             }
-                            erase_type_vars(class);
+                            erase_type_vars(class, &mut synthesized);
                         }
+                        // Interfaces synthesized for intersection bounds.
+                        classes.extend(synthesized);
                     } else {
                         self.recover_to_statement_boundary();
                         // A stray `}` from a broken class body would stall
@@ -597,13 +600,15 @@ impl Parser<'_> {
         }
         // Hoist synthesized anonymous classes to the top level.
         let anon = std::mem::take(&mut self.anon_classes);
+        let mut synthesized = Vec::new();
         for class in anon {
             let first = classes.len();
             flatten_nested(class, &mut classes);
             for class in &mut classes[first..] {
-                erase_type_vars(class);
+                erase_type_vars(class, &mut synthesized);
             }
         }
+        classes.extend(synthesized);
         CompilationUnit { imports, classes }
     }
 
@@ -1408,14 +1413,19 @@ impl Parser<'_> {
             loop {
                 let (name, _) = self.expect_ident("for the type parameter")?;
                 let mut bound = None;
+                let mut extra_bounds = Vec::new();
                 if self.eat_keyword(Keyword::Extends) {
                     bound = Some(self.type_ref()?);
-                    // `& Other` intersection bounds — parsed and discarded.
+                    // `& Other` intersection bounds (JLS §4.4).
                     while self.eat_symbol("&") {
-                        self.type_ref()?;
+                        extra_bounds.push(self.type_ref()?);
                     }
                 }
-                params.push(TypeParam { name, bound });
+                params.push(TypeParam {
+                    name,
+                    bound,
+                    extra_bounds,
+                });
                 if !self.eat_symbol(",") {
                     break;
                 }
@@ -3127,6 +3137,13 @@ impl Parser<'_> {
                     span.end = end;
                     continue;
                 }
+                // An explicit type witness on a generic method call
+                // (`Collections.<String>emptyList()`, `this.<T>id(x)`,
+                // JLS §15.12): the arguments erase away, so skipping them is
+                // exactly what the call needs. A `<` HERE — directly after the
+                // `.` — can only be a witness; `a.b < c` puts the `<` after
+                // the name, not before it.
+                self.skip_type_args();
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
                     let args = self.arguments()?;
@@ -4254,8 +4271,9 @@ fn erased_type_key(ty: &TypeRef) -> String {
     }
 }
 
-fn erase_type_vars(class: &mut ClassDecl) {
+fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
     use std::collections::HashMap;
+    let span = class.span;
     // A class with exactly one UNBOUNDED type parameter tracks it: that
     // parameter erases to the `TypeVar` sentinel (enabling cast-free reads).
     // Every other type parameter erases to its bound — `T extends Comparable`
@@ -4269,12 +4287,14 @@ fn erase_type_vars(class: &mut ClassDecl) {
         .type_params
         .iter()
         .filter(|tp| Some(&tp.name) != tracked.as_ref())
-        .map(|tp| (tp.name.clone(), erasure_target(tp)))
+        .map(|tp| (tp.name.clone(), erasure_target(tp, span, synthesized)))
         .collect();
-    let scope = |method: &MethodDecl| -> (HashMap<String, TypeRef>, Option<String>) {
+    let scope = |method: &MethodDecl,
+                 synthesized: &mut Vec<ClassDecl>|
+     -> (HashMap<String, TypeRef>, Option<String>) {
         let mut to_object = class_erasures.clone();
         for tp in &method.type_params {
-            to_object.insert(tp.name.clone(), erasure_target(tp));
+            to_object.insert(tp.name.clone(), erasure_target(tp, span, synthesized));
         }
         // A method type parameter shadowing the class one drops tracking.
         let tracked = tracked
@@ -4289,7 +4309,7 @@ fn erase_type_vars(class: &mut ClassDecl) {
         }
     }
     for method in &mut class.methods {
-        let (to_object, tracked) = scope(method);
+        let (to_object, tracked) = scope(method, synthesized);
         // Record the return-type inference plan BEFORE erasing the types away:
         // if the return is a bare type variable that also names one or more
         // parameter types, the call site can recover the type argument as the
@@ -4350,13 +4370,58 @@ fn wildcard_bound_name(ty: &TypeRef) -> String {
 /// The erasure target of a type parameter: its bound's raw base type
 /// (`T extends Comparable<T>` → `Comparable`), or `Object` when unbounded
 /// or bounded by something without a nameable base (JLS §4.6).
-fn erasure_target(tp: &TypeParam) -> TypeRef {
-    match &tp.bound {
-        Some(TypeRef::Named(name)) => TypeRef::Named(name.clone()),
-        Some(TypeRef::Generic { base, .. }) => TypeRef::Named(base.clone()),
-        _ => TypeRef::Named(String::from("Object")),
+///
+/// An INTERSECTION bound (`T extends A & B`) erases to a synthesized interface
+/// that extends every bound, appended to `synthesized`. The JVM erasure is the
+/// leftmost bound, but using it here would lose `B`'s methods — `t.b()` is
+/// legal on a `<T extends A & B>` and reported "cannot find symbol" — so the
+/// compiler works against the intersection instead, which inherits both.
+fn erasure_target(tp: &TypeParam, span: SourceSpan, synthesized: &mut Vec<ClassDecl>) -> TypeRef {
+    let base_name = |ty: &TypeRef| match ty {
+        TypeRef::Named(name) => Some(name.clone()),
+        TypeRef::Generic { base, .. } => Some(base.clone()),
+        _ => None,
+    };
+    let Some(leftmost) = tp.bound.as_ref().and_then(&base_name) else {
+        return TypeRef::Named(String::from("Object"));
+    };
+    if tp.extra_bounds.is_empty() {
+        return TypeRef::Named(leftmost);
     }
+    let mut bounds = vec![leftmost];
+    bounds.extend(tp.extra_bounds.iter().filter_map(&base_name));
+    let name = format!("{INTERSECTION_PREFIX}{}", bounds.join("$"));
+    if !synthesized.iter().any(|class| class.name == name) {
+        synthesized.push(ClassDecl {
+            name: name.clone(),
+            enclosing: None,
+            superclass: None,
+            interfaces: bounds,
+            supertype_args: Vec::new(),
+            is_abstract: true,
+            is_interface: true,
+            is_enum: false,
+            is_anonymous: false,
+            is_local: false,
+            is_inner: false,
+            is_nested: false,
+            is_public: false,
+            type_params: Vec::new(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+            init_blocks: Vec::new(),
+            nested: Vec::new(),
+            span,
+        });
+    }
+    TypeRef::Named(name)
 }
+
+/// Name prefix of the interface synthesized for an intersection bound
+/// (`<T extends Named & Aged>` → `__And$Named$Aged`). A class assigns to one
+/// when it implements every bound — the rule that makes the synthesis sound,
+/// since no class ever names it.
+pub(crate) const INTERSECTION_PREFIX: &str = "__And$";
 
 /// The reserved type name that [`resolve_type`] maps to
 /// [`JType::TypeVar`]; it cannot collide with a source identifier.
@@ -4384,12 +4449,36 @@ fn erase_in_type(
                 *ty = target.clone();
             } else {
                 for arg in args {
-                    erase_in_type(arg, to_object, tracked);
+                    erase_in_type_arg(arg, to_object, tracked);
                 }
             }
         }
         _ => {}
     }
+}
+
+/// Erase a type in TYPE-ARGUMENT position (`List<T>`, `Map<String, T>`).
+///
+/// A bare type variable here does NOT erase to its bound: `void dump(List<T>)`
+/// is applicable to a `List<String>`, which a `List<Object>` parameter is not,
+/// so erasing the argument to `Object` (or `Comparable`, or `Number`) made
+/// every generic method taking a collection unreachable. Instead it becomes a
+/// type-variable wildcard — accepts any element, and unlike `? extends` it may
+/// still be written to, because a `T` is a real type, not a capture.
+///
+/// Anything else erases normally, so `List<List<T>>` still works inside.
+fn erase_in_type_arg(
+    ty: &mut TypeRef,
+    to_object: &std::collections::HashMap<String, TypeRef>,
+    tracked: Option<&str>,
+) {
+    if let TypeRef::Named(name) = ty
+        && (to_object.contains_key(name) || Some(name.as_str()) == tracked)
+    {
+        *ty = TypeRef::Named(crate::ast::wildcard_type_name('=', ""));
+        return;
+    }
+    erase_in_type(ty, to_object, tracked);
 }
 
 fn erase_in_stmt(
