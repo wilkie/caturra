@@ -15912,3 +15912,95 @@ public class DiffCheckedFiles {
 }
 "#
 );
+
+// JLS 15.25 round 6: the conditional operator JOINS every pair of types —
+// boolean|Boolean is boolean (the crash: the Boolean branch failed to unbox),
+// a char branch pairs with a constant EXPRESSION int, and unrelated
+// references (or a primitive against a reference) join at Object.
+differential_test!(
+    diff_conditional_join,
+    "DiffCondJoin",
+    r#"
+public class DiffCondJoin {
+    public static void main(String[] a) {
+        boolean t = a.length == 0;
+
+        Boolean B = Boolean.FALSE;
+        boolean r = t ? B : true;
+        System.out.println(r);
+        boolean r2 = !t ? B : true;
+        System.out.println(r2);
+        System.out.println(t ? B : true);
+        Object ob = t ? B : true;
+        System.out.println(ob.getClass().getSimpleName());
+
+        char c = t ? 'a' : 'b' + 1;
+        System.out.println(c);
+        final int fits = 66;
+        char c2 = t ? fits : 'z';
+        System.out.println(c2);
+        int i = t ? 'a' : 1;
+        System.out.println(i);
+
+        Object o = t ? "s" : new StringBuilder("sb");
+        System.out.println(o instanceof String);
+        System.out.println("x" + (t ? 1 : 2.0));
+
+        int n = 5;
+        String msg = "count: " + (t ? n : "none");
+        System.out.println(msg);
+        System.out.println("count: " + (!t ? n : "none"));
+
+        Boolean bb = Boolean.FALSE;
+        Integer ii = 7;
+        Object join = t ? bb : ii;
+        System.out.println(join);
+
+        Object o1 = t ? "s" : 1;
+        System.out.println(o1 + " " + (o1 instanceof String));
+        Object o2 = !t ? "s" : 1;
+        System.out.println(o2.getClass().getSimpleName());
+        Object o3 = t ? true : 'x';
+        System.out.println(o3.getClass().getSimpleName());
+
+        Integer boxedInt = 7;
+        Long boxedLong = 8L;
+        Object promoted = t ? boxedInt : boxedLong;
+        System.out.println(promoted + " " + promoted.getClass().getSimpleName());
+
+        Object nest = t ? (t ? "a" : 1) : 2.5;
+        System.out.println(nest);
+    }
+}
+"#
+);
+
+// The rejections javac still makes: the Object join does not silently narrow
+// back into a specific type.
+differential_reject!(
+    reject_conditional_join_into_string,
+    "RejCondString",
+    r#"
+public class RejCondString {
+    public static void main(String[] a) {
+        boolean t = a.length == 0;
+        String s = t ? "s" : 1;
+        System.out.println(s);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_conditional_join_into_int,
+    "RejCondInt",
+    r#"
+public class RejCondInt {
+    public static void main(String[] a) {
+        boolean t = a.length == 0;
+        int i = t ? 1 : "x";
+        System.out.println(i);
+    }
+}
+"#
+);

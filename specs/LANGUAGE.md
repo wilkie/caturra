@@ -231,6 +231,24 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **The conditional operator joins every pair of types** (2026-07-30, JLS
+  §15.25) — round 6's only crashes, plus four rejects. One `conditional_join`
+  is now shared by `type_of` and the emitter (so the two can never disagree):
+  - **boolean|Boolean is boolean, in either order** — the one non-numeric
+    primitive pairing in the JLS table. `t ? aBoolean : true` used to
+    VerifyError: `widens` picked the type but the branch coercion never
+    unboxed the Boolean branch.
+  - **A char/byte/short branch pairs with a fitting constant EXPRESSION int**
+    (`t ? 'a' : 'b' + 1` is char), folded via `const_int` — only literals
+    worked before.
+  - **Unrelated pairs join at Object**, the erased least upper bound: String
+    vs StringBuilder, Boolean vs Integer, int vs String ("count: " + (t ? n :
+    "none")), even boolean vs char — each branch boxes or passes through as a
+    reference. javac never type-rejects a conditional once primitives box,
+    and now neither does caturra; the join still refuses to narrow silently
+    (`String s = t ? "s" : 1` stays an error, as on javac).
+  - Wrapper pairs promote numerically as javac does: `t ? anInteger : aLong`
+    is `long` (unbox, promote), so the joined Object is a `Long`.
 - **CHECKED EXCEPTIONS ARE ENFORCED** (2026-07-30, JLS §11.2) — round 6's
   headline: five audit rounds never probed it, and caturra enforced nothing.
   A new `thrown.rs` pass (beside `flow.rs`) performs both javac rejections:

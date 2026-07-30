@@ -3741,8 +3741,8 @@ fn int_fits(value: i64, narrow: JType) -> bool {
 fn conditional_numeric_type(
     then_ty: JType,
     els_ty: JType,
-    then: &Expr,
-    els: &Expr,
+    then_const: Option<i64>,
+    els_const: Option<i64>,
 ) -> Option<JType> {
     let p_then = unbox_numeric(then_ty);
     let p_els = unbox_numeric(els_ty);
@@ -3758,15 +3758,18 @@ fn conditional_numeric_type(
     ) {
         return Some(JType::Short);
     }
-    // A narrower branch paired with a fitting constant `int` (only when the
-    // int side is a *primitive* int literal, not a boxed Integer).
-    for (narrow, wide, wide_ty, wide_expr) in
-        [(p_then, p_els, els_ty, els), (p_els, p_then, then_ty, then)]
-    {
+    // A narrower branch paired with a fitting CONSTANT int — a full constant
+    // expression (`'b' + 1`, a final local), not only a literal, folded by the
+    // caller via `const_int` (only when the int side is a *primitive* int, not
+    // a boxed Integer).
+    for (narrow, wide, wide_ty, wide_const) in [
+        (p_then, p_els, els_ty, els_const),
+        (p_els, p_then, then_ty, then_const),
+    ] {
         if matches!(narrow, JType::Char | JType::Byte | JType::Short)
             && wide == JType::Int
             && wide_ty == JType::Int
-            && let Some(value) = constant_int_value(wide_expr)
+            && let Some(value) = wide_const
             && int_fits(value, narrow)
         {
             return Some(narrow);
@@ -17201,34 +17204,7 @@ impl BodyGen<'_> {
             // Mirrors `ternary`'s target computation (JLS 15.25) — kept in
             // step so a ternary nested in another expression types the same
             // whether or not it is being emitted.
-            Expr::Ternary { then, els, .. } => {
-                let then_ty = self.type_of(then);
-                let els_ty = self.type_of(els);
-                let boxed_of = |primitive: JType| boxable_primitive(primitive).map(JType::Boxed);
-                if then_ty == els_ty {
-                    then_ty
-                } else if let Some(ty) = conditional_numeric_type(then_ty, els_ty, then, els) {
-                    ty
-                } else if then_ty == JType::Null
-                    && let Some(ty) = boxed_of(els_ty)
-                {
-                    ty
-                } else if els_ty == JType::Null
-                    && let Some(ty) = boxed_of(then_ty)
-                {
-                    ty
-                } else if then_ty == JType::Null {
-                    els_ty
-                } else if els_ty == JType::Null {
-                    then_ty
-                } else if widens(then_ty, els_ty, self.table) {
-                    els_ty
-                } else if widens(els_ty, then_ty, self.table) {
-                    then_ty
-                } else {
-                    JType::Error
-                }
-            }
+            Expr::Ternary { then, els, .. } => self.conditional_join(then, els),
             Expr::IncDec { target, .. } => match self.type_of(target) {
                 ty if ty.is_numeric() => ty,
                 _ => JType::Error,
@@ -18682,49 +18658,69 @@ impl BodyGen<'_> {
         }
     }
 
-    /// `cond ? then : else` — branches around the two value paths.
-    #[allow(clippy::too_many_lines)] // one join-typing ladder
-    fn ternary(&mut self, cond: &Expr, then: &Expr, els: &Expr, span: SourceSpan) -> JType {
+    /// The type of `cond ? then : els` (JLS §15.25), shared by `type_of` and
+    /// the emitter so the two can never disagree. Never a type-mismatch
+    /// error: once primitives box, EVERY pair of types joins — at worst at
+    /// `Object`, the erased least upper bound — which is why javac accepts
+    /// `t ? "s" : 1` and `t ? aBoolean : anInteger`.
+    fn conditional_join(&mut self, then: &Expr, els: &Expr) -> JType {
         let then_ty = self.type_of(then);
         let els_ty = self.type_of(els);
-        let table = self.table;
-        // JLS 15.25: the `null` branch boxes a primitive counterpart, so
-        // `cond ? 1 : null` is `Integer` (not an error). A boolean/char boxes
-        // to Boolean/Character.
+        if then_ty == JType::Error || els_ty == JType::Error {
+            return JType::Error;
+        }
+        if then_ty == els_ty {
+            return then_ty;
+        }
+        // boolean|Boolean is boolean, in EITHER order — the one non-numeric
+        // primitive pairing in the JLS table. (Left to `widens`, the boxed
+        // order picked Boolean and the branch coercion missed the unbox.)
+        if matches!(
+            (then_ty, els_ty),
+            (JType::Boolean, JType::Boxed(ElemType::Boolean))
+                | (JType::Boxed(ElemType::Boolean), JType::Boolean)
+        ) {
+            return JType::Boolean;
+        }
+        let then_const = self.const_int(then);
+        let els_const = self.const_int(els);
+        if let Some(ty) = conditional_numeric_type(then_ty, els_ty, then_const, els_const) {
+            return ty;
+        }
+        // The `null` branch boxes a primitive counterpart, so `cond ? 1 :
+        // null` is `Integer`; against a reference it adopts the reference.
         let boxed_of = |primitive: JType| boxable_primitive(primitive).map(JType::Boxed);
-        let target = if then_ty == JType::Error || els_ty == JType::Error {
-            JType::Error
-        } else if then_ty == els_ty {
-            then_ty
-        } else if let Some(ty) = conditional_numeric_type(then_ty, els_ty, then, els) {
-            ty
-        } else if then_ty == JType::Null
+        if then_ty == JType::Null
             && let Some(ty) = boxed_of(els_ty)
         {
-            ty
-        } else if els_ty == JType::Null
+            return ty;
+        }
+        if els_ty == JType::Null
             && let Some(ty) = boxed_of(then_ty)
         {
-            ty
-        } else if then_ty == JType::Null && els_ty.is_reference() {
-            els_ty
-        } else if els_ty == JType::Null && then_ty.is_reference() {
-            then_ty
-        } else if widens(then_ty, els_ty, table) {
-            els_ty
-        } else if widens(els_ty, then_ty, table) {
-            then_ty
-        } else {
-            self.error(
-                span,
-                format!(
-                    "incompatible types in conditional: {} and {}",
-                    then_ty.describe(self.table),
-                    els_ty.describe(self.table)
-                ),
-            );
-            JType::Error
-        };
+            return ty;
+        }
+        if then_ty == JType::Null && els_ty.is_reference() {
+            return els_ty;
+        }
+        if els_ty == JType::Null && then_ty.is_reference() {
+            return then_ty;
+        }
+        if widens(then_ty, els_ty, self.table) {
+            return els_ty;
+        }
+        if widens(els_ty, then_ty, self.table) {
+            return then_ty;
+        }
+        // Unrelated pairs — String vs StringBuilder, Boolean vs Integer, int
+        // vs String, even boolean vs char — join at Object: each branch boxes
+        // or passes through as a reference.
+        JType::Object(self.table.object_id)
+    }
+
+    /// `cond ? then : else` — branches around the two value paths.
+    fn ternary(&mut self, cond: &Expr, then: &Expr, els: &Expr, span: SourceSpan) -> JType {
+        let target = self.conditional_join(then, els);
 
         let cond_ty = self.expr(cond);
         let cond_ty = self.unbox_wrapper(cond_ty);
@@ -18737,13 +18733,26 @@ impl BodyGen<'_> {
                 ),
             );
         }
-        // Coerce a branch's value to the conditional's type: widen a numeric,
-        // or box a primitive when the type is a wrapper (`cond ? 1 : null`).
-        // A `null` branch under a wrapper target needs nothing.
-        let coerce = |emitter: &mut Self, actual: JType| match target {
-            JType::Boxed(elem) if actual == elem.base_type() => emitter.emit_box(elem),
-            t if t.is_numeric() => emitter.numeric_conversion(actual, t),
-            _ => {}
+        // Coerce a branch's value to the conditional's type: widen or unbox a
+        // numeric (numeric_conversion sees through a wrapper), UNBOX a Boolean
+        // under the boolean|Boolean rule (missing, this was a VerifyError),
+        // and assignment-convert under a reference target — which boxes a
+        // primitive into the Object join and passes references through.
+        let coerce = |emitter: &mut Self, actual: JType| {
+            if actual == target || actual == JType::Error || target == JType::Error {
+                return;
+            }
+            match target {
+                JType::Boxed(elem) if actual == elem.base_type() => emitter.emit_box(elem),
+                JType::Boolean => {
+                    if let JType::Boxed(elem) = actual {
+                        emitter.emit_unbox(elem);
+                    }
+                }
+                t if t.is_numeric() => emitter.numeric_conversion(actual, t),
+                t if t.is_reference() => emitter.convert_for_assignment(actual, t, span),
+                _ => {}
+            }
         };
         let else_label = self.code.new_label();
         let end = self.code.new_label();
