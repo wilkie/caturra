@@ -16636,3 +16636,161 @@ public class DiffSimpleEntry {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-6 interface defaults: most-specific default resolution, lambdas
+// inside default methods, JLS §9.8 Object-method exclusions, and ambiguous
+// inherited constants.
+
+// JLS §9.4.1: the MOST SPECIFIC default wins, regardless of where the
+// interfaces sit in the implements list (caturra used to answer with
+// whichever interface the traversal reached first).
+differential_test!(
+    diff_interface_default_most_specific,
+    "DiffIfaceDefault",
+    r#"
+interface Top { default String greet() { return "top"; } }
+interface Left extends Top { default String greet() { return "left"; } }
+interface Right extends Top { }
+interface Deep extends Left { default String greet() { return "deep"; } }
+class ViaLeftRight implements Left, Right { }
+class ViaRightLeft implements Right, Left { }
+class ViaDeep implements Right, Deep { }
+public class DiffIfaceDefault {
+    public static void main(String[] a) {
+        Top t = new ViaLeftRight();
+        System.out.println(t.greet());
+        System.out.println(new ViaRightLeft().greet());
+        System.out.println(new ViaDeep().greet());
+    }
+}
+"#
+);
+
+// A lambda body is lexically scoped (JLS §15.27.2): a bare `apply(y)` inside
+// `y -> apply(y) * 2` means the ENCLOSING instance's method, never the SAM
+// the lambda defines — the decorator idiom used to be infinite recursion.
+differential_test!(
+    diff_lambda_in_default_method,
+    "DiffLambdaDefault",
+    r"
+interface Fn {
+    int apply(int x);
+    default int applyTwice(int x) { return apply(apply(x)); }
+    default Fn doubled() { return y -> apply(y) * 2; }
+    default Fn plus(int k) { return y -> apply(y) + k; }
+    default Fn explicit() { return y -> this.apply(y) * 3; }
+}
+public class DiffLambdaDefault {
+    int bump(int x) { return x + 10; }
+    Fn wrap() { return y -> bump(y); }
+    public static void main(String[] a) {
+        Fn inc = x -> x + 1;
+        System.out.println(inc.applyTwice(5));
+        System.out.println(inc.doubled().apply(5));
+        System.out.println(inc.plus(5).plus(100).apply(1));
+        System.out.println(inc.explicit().apply(4));
+        System.out.println(new DiffLambdaDefault().wrap().apply(1));
+    }
+}
+"
+);
+
+// JLS §9.8: abstract redeclarations of public Object methods (toString,
+// equals(Object), hashCode) do not count toward the single abstract method —
+// java.util.Comparator itself redeclares equals this way.
+differential_test!(
+    diff_functional_interface_object_methods,
+    "DiffFuncObjMethods",
+    r#"
+interface Named {
+    String describe();
+    String toString();
+    boolean equals(Object o);
+    int hashCode();
+}
+public class DiffFuncObjMethods {
+    public static void main(String[] a) {
+        Named n = () -> "lambda-ok";
+        System.out.println(n.describe());
+    }
+}
+"#
+);
+
+// ...but an interface with TWO real abstract methods is still not functional,
+// however many Object-method redeclarations it also carries.
+differential_reject!(
+    reject_two_abstract_not_functional,
+    "RejTwoAbstract",
+    r#"
+interface TwoPlus {
+    String a();
+    String b();
+    String toString();
+}
+public class RejTwoAbstract {
+    public static void main(String[] x) {
+        TwoPlus t = () -> "nope";
+        System.out.println(t.a());
+    }
+}
+"#
+);
+
+// JLS §6.5.6.1: a simple name resolving to constants declared in two distinct
+// supertypes is ambiguous — javac rejects the reference, it does not pick one.
+differential_reject!(
+    reject_ambiguous_inherited_constant,
+    "RejAmbigConst",
+    r"
+interface CA { int K = 1; }
+interface CB { int K = 2; }
+public class RejAmbigConst implements CA, CB {
+    public static void main(String[] a) {
+        System.out.println(K);
+    }
+}
+"
+);
+
+// The same rule across a superclass/interface pair.
+differential_reject!(
+    reject_ambiguous_super_interface_field,
+    "RejAmbigSuperIface",
+    r"
+class Sup { static int K = 7; }
+interface Iface { int K = 2; }
+public class RejAmbigSuperIface extends Sup implements Iface {
+    public static void main(String[] a) {
+        System.out.println(K);
+    }
+}
+"
+);
+
+// NOT ambiguous: one declaration reached along two diamond paths, a class's
+// own declaration hiding what it inherits, and qualified access.
+differential_test!(
+    diff_interface_constant_unambiguous,
+    "DiffConstOk",
+    r#"
+interface CA { int K = 1; }
+interface CB extends CA { }
+class Fine implements CA, CB {
+    int get() { return K; }
+}
+interface CC { int K = 9; }
+class Hides implements CA, CC {
+    static final int K = 42;
+    int get() { return K; }
+}
+public class DiffConstOk {
+    public static void main(String[] a) {
+        System.out.println(new Fine().get());
+        System.out.println(new Hides().get());
+        System.out.println(CA.K + " " + CC.K);
+    }
+}
+"#
+);

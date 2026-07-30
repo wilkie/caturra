@@ -12220,6 +12220,42 @@ fn collect_interfaces<'run>(
     result
 }
 
+/// The internal name a class file declares for itself.
+fn class_file_name(class: &ClassFile) -> Option<&str> {
+    class.constant_pool.get_class_name(class.this_class)
+}
+
+/// Whether interface `sub` (transitively) extends the interface named
+/// `sup_name` — the specificity order for default-method resolution.
+fn interface_extends(
+    classes: &HashMap<String, ClassFile>,
+    sub: &ClassFile,
+    sup_name: Option<&str>,
+) -> bool {
+    let Some(sup_name) = sup_name else {
+        return false;
+    };
+    let mut queue: Vec<&ClassFile> = vec![sub];
+    let mut steps = 0usize;
+    while let Some(iface) = queue.pop() {
+        steps += 1;
+        if steps > classes.len() * 2 + 2 {
+            break;
+        }
+        for index in &iface.interfaces {
+            if let Some(name) = iface.constant_pool.get_class_name(*index) {
+                if name == sup_name {
+                    return true;
+                }
+                if let Some(parent) = classes.get(name) {
+                    queue.push(parent);
+                }
+            }
+        }
+    }
+    false
+}
+
 fn array_get<T>(values: &[T], index: i32) -> Result<&T, VmError> {
     usize::try_from(index)
         .ok()
@@ -12536,12 +12572,15 @@ fn resolve_virtual<'run>(
             .get_class_name(candidate.super_class)
             .and_then(|super_name| classes.get(super_name));
     }
-    // No override on the superclass chain: fall back to an
-    // inherited interface default method (JLS §9.4). Search the
-    // implemented interfaces breadth-first, including
-    // super-interfaces.
+    // No override on the superclass chain: fall back to an inherited
+    // interface default method. JLS §9.4.1: the MOST SPECIFIC default wins
+    // — a sub-interface's redeclaration overrides the one it inherits, no
+    // matter where the interfaces sit in the implements list. (Two
+    // UNRELATED interfaces defaulting the same signature is a compile-time
+    // error, already rejected; any leftover tie here picks the first found.)
     if found.is_none() {
         let mut queue: Vec<&'run ClassFile> = collect_interfaces(classes, instance_class);
+        let mut candidates: Vec<(&'run ClassFile, &'run MethodInfo)> = Vec::new();
         let mut seen = 0usize;
         while let Some(iface) = queue.pop() {
             seen += 1;
@@ -12557,8 +12596,14 @@ fn resolve_virtual<'run>(
                     && iface.constant_pool.get_utf8(m.name_index) == Some(method_name)
                     && iface.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
             }) {
-                found = Some((iface, method));
-                break;
+                // The same interface can be reached along two paths of the
+                // diamond — one candidacy each.
+                if !candidates
+                    .iter()
+                    .any(|(c, _)| class_file_name(c) == class_file_name(iface))
+                {
+                    candidates.push((iface, method));
+                }
             }
             // Enqueue super-interfaces of this interface.
             for index in &iface.interfaces {
@@ -12569,6 +12614,16 @@ fn resolve_virtual<'run>(
                 }
             }
         }
+        // Drop any candidate that a MORE SPECIFIC candidate overrides.
+        found = candidates
+            .iter()
+            .find(|(iface, _)| {
+                let name = class_file_name(iface);
+                !candidates.iter().any(|(other, _)| {
+                    class_file_name(other) != name && interface_extends(classes, other, name)
+                })
+            })
+            .copied();
     }
     // Erasure bridge: a call through a generic interface uses the
     // erased descriptor (`compareTo(Object)`), but the class holds

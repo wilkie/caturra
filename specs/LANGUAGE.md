@@ -231,6 +231,40 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Interface defaults, resolved right** (2026-07-30) — four round-6 findings:
+  - **The most specific default wins** (JLS §9.4.1): a sub-interface's
+    redeclaration overrides the default it inherits, no matter where the
+    interfaces sit in the implements list. The VM's interface fallback used
+    to answer with whichever interface its traversal reached first, so
+    `class P implements Left, Right` (Left overriding Top's default, Right
+    inheriting it) silently flipped answers with the implements order. Now
+    every providing interface becomes a candidate and any candidate that a
+    more specific candidate's interface extends is dropped. (Two UNRELATED
+    interfaces defaulting the same signature is a compile error, already
+    enforced.)
+  - **A lambda body is lexically scoped** (JLS §15.27.2): a bare `apply(y)`
+    inside `y -> apply(y) * 2`, written in the interface's own default
+    method, means the ENCLOSING instance's method — never the SAM the
+    lambda is defining. codegen resolved the name against the synthesized
+    `Lambda$` class first, which turned the standard decorator/combinator
+    idiom into a StackOverflowError. Bare calls in a lambda class now skip
+    self-resolution and ride the captured-outer chain, exactly as bare
+    field reads already did (the capture pass was already right).
+  - **Abstract redeclarations of public Object methods don't count** toward
+    the single abstract method (JLS §9.8): an interface declaring
+    `describe()` plus abstract `toString()`/`equals(Object)`/`hashCode()`
+    is functional (`java.util.Comparator` redeclares `equals` this way);
+    caturra counted them and refused the lambda. An interface with two REAL
+    abstract methods still rejects.
+  - **An ambiguously inherited constant is a compile error** (JLS
+    §6.5.6.1): `implements CA, CB` with a constant `K` in each made a bare
+    `K` silently resolve to whichever the field walk hit last; now the
+    reference errors with javac's wording ("reference to K is ambiguous:
+    both variable K in CA and variable K in CB match"), including across a
+    superclass/interface pair. Not ambiguous, as in Java: one declaration
+    reached along two diamond paths, a declaration in the class itself
+    (which hides everything it would inherit), a private field in a
+    supertype (not inherited), and qualified access (`CA.K`).
 - **The Map API tail** (2026-07-30) — seven round-6 findings:
   - **The compute family inserts at the bucket HEAD**: a NEW key from
     `computeIfAbsent`/`compute`/`merge` links at the front of its bucket

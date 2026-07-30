@@ -2003,6 +2003,51 @@ impl MethodTable {
         None
     }
 
+    /// The DISTINCT declarations of a field named `name` visible from `id`,
+    /// under hiding (JLS §8.3): a type's own declaration hides everything it
+    /// would inherit, and one declaration reached along two paths of a
+    /// diamond counts once. Two or more distinct declarations make a
+    /// reference to the simple name ambiguous (JLS §6.5.6.1). A private
+    /// field in a SUPERTYPE is not inherited, so it neither counts nor hides.
+    fn field_declarations(
+        &self,
+        id: ClassId,
+        start: ClassId,
+        name: &str,
+        steps: &mut usize,
+    ) -> Vec<ClassId> {
+        *steps += 1;
+        if *steps > self.class_names.len() * 4 + 4 {
+            return Vec::new();
+        }
+        let Some(info) = self.info_by_id(id) else {
+            return Vec::new();
+        };
+        if info
+            .fields
+            .iter()
+            .any(|f| f.name == name && (!f.is_private || id == start))
+        {
+            return vec![id];
+        }
+        let mut out: Vec<ClassId> = Vec::new();
+        if let Some(parent) = info.superclass {
+            for owner in self.field_declarations(parent, start, name, steps) {
+                if !out.contains(&owner) {
+                    out.push(owner);
+                }
+            }
+        }
+        for iface in &info.interfaces {
+            for owner in self.field_declarations(*iface, start, name, steps) {
+                if !out.contains(&owner) {
+                    out.push(owner);
+                }
+            }
+        }
+        out
+    }
+
     /// The class that DECLARES the static method `sig` reachable from `class`,
     /// walking the superclass chain (a static method is inherited from a
     /// superCLASS, not an interface — JLS §8.4.8). Falls back to `class`.
@@ -10858,6 +10903,9 @@ impl BodyGen<'_> {
             // Implicit field of the current class.
             if let Some((owner, field)) = self.table.field(self.current_class, name) {
                 let field = field.clone();
+                if self.ambiguous_field_reference(self.current_class_id, name, span) {
+                    return;
+                }
                 if !field.is_static && self.in_static {
                     self.error(
                         span,
@@ -11937,12 +11985,46 @@ impl BodyGen<'_> {
         }
     }
 
+    /// JLS §6.5.6.1: a name that resolves to fields declared in TWO distinct
+    /// supertypes (`implements CA, CB`, both with a constant `K`) is
+    /// ambiguous — javac rejects the REFERENCE, it does not pick one.
+    /// Reports the error and answers whether it fired.
+    fn ambiguous_field_reference(
+        &mut self,
+        class_id: ClassId,
+        name: &str,
+        span: SourceSpan,
+    ) -> bool {
+        let mut steps = 0usize;
+        let owners = self
+            .table
+            .field_declarations(class_id, class_id, name, &mut steps);
+        let [a, b, ..] = owners.as_slice() else {
+            return false;
+        };
+        let (a, b) = (
+            self.table.class_name(*a).to_owned(),
+            self.table.class_name(*b).to_owned(),
+        );
+        self.error(
+            span,
+            format!(
+                "reference to {name} is ambiguous: both variable {name} in {a} \
+                 and variable {name} in {b} match"
+            ),
+        );
+        true
+    }
+
     fn resolve_field(
         &mut self,
         class_id: ClassId,
         name: &str,
         span: SourceSpan,
     ) -> Option<(ClassId, FieldSig)> {
+        if self.ambiguous_field_reference(class_id, name, span) {
+            return None;
+        }
         let class_name = self.table.class_name(class_id).to_owned();
         let Some((owner, field)) = self.table.field(&class_name, name) else {
             // `describe`, not the raw name: the top type is stored under its
@@ -15552,7 +15634,18 @@ impl BodyGen<'_> {
         // Peek resolution to decide static vs instance dispatch.
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         let table = self.table;
-        let own = table.resolve(self.current_class, method, &arg_types);
+        // A lambda body is lexically scoped (JLS §15.27.2): a bare
+        // `apply(y)` inside `y -> apply(y) * 2` means the ENCLOSING
+        // instance's method, never the SAM the lambda is defining — the
+        // synthesized class's own copy must not capture the name, which
+        // turned every such combinator into infinite recursion. Skipping
+        // self-resolution sends the call down the captured-outer chain
+        // below, exactly as a bare field read already resolves.
+        let own = if self.current_class.starts_with("Lambda$") {
+            Resolution::UnknownName
+        } else {
+            table.resolve(self.current_class, method, &arg_types)
+        };
         let is_instance = matches!(&own, Resolution::Found(sig) if !sig.is_static);
         // A bare inherited-throwable method inside a user exception class
         // (`getMessage()` in a `toString()` override): the receiver path
@@ -18616,6 +18709,9 @@ impl BodyGen<'_> {
             // Implicit field of the current class.
             if let Some((owner, field)) = self.table.field(self.current_class, name) {
                 let field = field.clone();
+                if self.ambiguous_field_reference(self.current_class_id, name, span) {
+                    return JType::Error;
+                }
                 if field.is_static {
                     return self.emit_getfield(owner, &field);
                 }

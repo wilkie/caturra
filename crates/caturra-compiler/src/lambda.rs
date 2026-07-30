@@ -145,6 +145,21 @@ impl Ctx<'_> {
     }
 }
 
+/// An abstract interface method whose signature matches a PUBLIC method of
+/// `java.lang.Object` — `toString()`, `hashCode()`, `equals(Object)`. Any
+/// implementation inherits these from Object, so JLS §9.8 excludes them when
+/// deciding whether an interface is functional.
+fn is_object_method_redeclaration(m: &MethodDecl) -> bool {
+    match (m.name.as_str(), m.params.as_slice()) {
+        ("toString" | "hashCode", []) => true,
+        ("equals", [p]) => matches!(
+            &p.ty,
+            TypeRef::Named(n) if n == "Object" || n == "java.lang.Object"
+        ),
+        _ => false,
+    }
+}
+
 /// The functional interfaces in the program: interface name -> its SAM.
 fn functional_interfaces(units: &[(String, CompilationUnit)]) -> HashMap<String, Sam> {
     let mut out = HashMap::new();
@@ -157,6 +172,10 @@ fn functional_interfaces(units: &[(String, CompilationUnit)]) -> HashMap<String,
                 .methods
                 .iter()
                 .filter(|m| m.is_abstract && !m.is_static)
+                // JLS §9.8: an abstract redeclaration of a public Object
+                // method (Comparator redeclares equals this way) does not
+                // count toward the single abstract method.
+                .filter(|m| !is_object_method_redeclaration(m))
                 .collect();
             if abstract_methods.len() == 1 {
                 let m = abstract_methods[0];
