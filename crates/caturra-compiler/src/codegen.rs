@@ -13893,18 +13893,22 @@ impl BodyGen<'_> {
         let mut width: u16 = 1;
         for arg in rest {
             let ty = self.expr(arg);
-            // A boxed primitive unboxes to its primitive and is formatted by
-            // the natural conversion — `%b` of a Boolean is its value, `%d` of
-            // an Integer its number, `%s` its decimal — matching Java, which
-            // inspects the wrapped value. Without this a boxed arg was a
-            // "cannot format Boolean/Integer" compile error.
-            let ty = if let JType::Boxed(elem) = ty {
-                self.emit_unbox(elem);
-                elem.base_type()
-            } else {
-                ty
-            };
-            // Objects format via toString, like Java's %s.
+            // A boxed primitive passes through AS THE REFERENCE: the
+            // formatter unwraps it, so `%d` of an Integer formats the number —
+            // and a NULL Boolean reaches `%b` as null (printing "false"),
+            // where unboxing at the call site was an NPE.
+            if let JType::Boxed(elem) = ty {
+                tags.push('L');
+                tags.push_str(wrapper_internal(elem));
+                tags.push(';');
+                width += 1;
+                continue;
+            }
+            // Objects format via toString, like Java's %s — but a NULL
+            // argument must SURVIVE to the formatter (each conversion has its
+            // own null rendering: `%b` says "false", `%d` says "null"), so
+            // the coercion is guarded: null skips it and rides through as the
+            // null reference.
             let ty = match ty {
                 JType::Object(_)
                 | JType::List(_)
@@ -13916,7 +13920,17 @@ impl BodyGen<'_> {
                 | JType::MapEntry { .. }
                 | JType::File
                 | JType::StringBuilder
-                | JType::Exception(_) => self.coerce_to_string_for_output(ty),
+                | JType::Exception(_) => {
+                    let null_case = self.code.new_label();
+                    let done = self.code.new_label();
+                    self.code.push_op(op::DUP, 1);
+                    self.code.branch(op::IFNULL, null_case, 1);
+                    let _ = self.coerce_to_string_for_output(ty);
+                    self.code.branch(op::GOTO, done, 0);
+                    self.code.bind(null_case);
+                    self.code.bind(done);
+                    JType::Str
+                }
                 other => other,
             };
             match ty {

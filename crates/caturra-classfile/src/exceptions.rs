@@ -155,6 +155,10 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/util/IllegalFormatException",
     ),
     (
+        "java/util/IllegalFormatCodePointException",
+        "java/util/IllegalFormatException",
+    ),
+    (
         "java/util/FormatFlagsConversionMismatchException",
         "java/util/IllegalFormatException",
     ),

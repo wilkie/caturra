@@ -231,6 +231,24 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **`String.format` nulls, boxes, and flag corners** (2026-07-30) — the
+  round-6 format cluster, 8 findings.
+  - **Null arguments render per conversion**, as the JDK's Formatter does:
+    `%b` says "false", `%h` says "null" (`%H` "NULL"), and every other
+    conversion the width/precision-treated string "null" — `%d`/`%x`/`%c` of
+    null used to throw. The compiler's argument coercion is now null-guarded,
+    so a null Object rides through to the formatter instead of being
+    pre-stringified into the four-character `"null"` (which `%b` then called
+    true).
+  - **Boxed wrappers pass through as references** and the formatter unwraps
+    them — so `%d` of an Integer still formats the number, and a NULL
+    `Boolean` reaches `%b` as null (it used to NPE at the call-site unbox).
+  - **`%c` of an impossible codepoint** (negative, or past U+10FFFF) throws
+    `IllegalFormatCodePointException` with the JDK's hex message ("Code point
+    = 0x110000") — a NEW exception class, registered and importable, where a
+    replacement character was silently printed.
+  - **`%,g` groups** its fixed-notation integer part; **zero-padding is
+    ignored for NaN/Infinity** (spaces, as the JDK pads them).
 - **The conditional operator joins every pair of types** (2026-07-30, JLS
   §15.25) — round 6's only crashes, plus four rejects. One `conditional_join`
   is now shared by `type_of` and the emitter (so the two can never disagree):

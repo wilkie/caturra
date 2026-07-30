@@ -387,6 +387,30 @@ fn group_digits(digits: &str) -> String {
     out
 }
 
+/// Resolve a reference argument that points at a BOXED wrapper into the
+/// corresponding primitive argument, so every conversion arm sees the value.
+/// A plain string (or anything else) passes through.
+fn unwrap_boxed(heap: &Heap, arg: FormatArg) -> FormatArg {
+    let FormatArg::Str(Some(reference)) = arg else {
+        return arg;
+    };
+    let Some(HeapObject::Boxed { class_name, value }) = heap.get(reference) else {
+        return arg;
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    match (class_name.as_ref(), value) {
+        ("java/lang/Integer", JValue::Int(v)) => FormatArg::Int(*v),
+        ("java/lang/Short", JValue::Int(v)) => FormatArg::Short(*v as i16),
+        ("java/lang/Byte", JValue::Int(v)) => FormatArg::Byte(*v as i8),
+        ("java/lang/Character", JValue::Int(v)) => FormatArg::Char(u16::try_from(*v).unwrap_or(0)),
+        ("java/lang/Boolean", JValue::Int(v)) => FormatArg::Boolean(*v != 0),
+        ("java/lang/Long", JValue::Long(v)) => FormatArg::Long(*v),
+        ("java/lang/Float", JValue::Float(v)) => FormatArg::Float(*v),
+        ("java/lang/Double", JValue::Double(v)) => FormatArg::Double(*v),
+        _ => arg,
+    }
+}
+
 fn conversion_mismatch(conversion: char, arg: FormatArg) -> VmError {
     throw(
         "java.util.IllegalFormatConversionException",
@@ -397,6 +421,25 @@ fn conversion_mismatch(conversion: char, arg: FormatArg) -> VmError {
 #[allow(clippy::too_many_lines)] // one arm per conversion
 fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
     let conversion = spec.conversion;
+    // A BOXED wrapper argument formats as its value: the compiler passes the
+    // reference through (so a null Boolean can reach `%b` as null, not as an
+    // NPE at the call site), and the unwrap happens here.
+    let arg = unwrap_boxed(heap, arg);
+    // The JDK's null rule: for every conversion except %b (false) and %h
+    // ("null" — its arm handles it), a null argument renders as the STRING
+    // "null", width- and precision-treated like %s, uppercased by an
+    // uppercase conversion. This is what lets `%d` and `%x` of null print
+    // `null` instead of throwing.
+    if matches!(arg, FormatArg::Str(None)) && !matches!(conversion, 'b' | 'B' | 'h' | 'H') {
+        let mut text = String::from("null");
+        if let Some(precision) = spec.precision {
+            text = text.chars().take(precision).collect();
+        }
+        if conversion.is_ascii_uppercase() {
+            text = text.to_uppercase();
+        }
+        return Ok(pad(spec, &text));
+    }
     match conversion.to_ascii_lowercase() {
         's' => {
             let mut text = match arg {
@@ -439,7 +482,10 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
         }
         'h' => {
             let hash = match arg {
-                FormatArg::Str(None) => return Ok(pad(spec, "null")),
+                FormatArg::Str(None) => {
+                    let text = if conversion == 'H' { "NULL" } else { "null" };
+                    return Ok(pad(spec, text));
+                }
                 FormatArg::Str(Some(reference)) => match heap.get(reference) {
                     Some(HeapObject::JavaString(units)) => {
                         let mut hash: i32 = 0;
@@ -481,23 +527,27 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
             Ok(pad(spec, &text))
         }
         'c' => {
+            let bad_code_point = |v: i32| {
+                throw(
+                    "java.util.IllegalFormatCodePointException",
+                    &format!("Code point = {:#x}", v.cast_unsigned()),
+                )
+            };
             let unit = match arg {
                 FormatArg::Char(u) => u32::from(u),
                 FormatArg::Byte(v) => u32::from(v.cast_unsigned()),
-                FormatArg::Short(v) => u32::try_from(v).map_err(|_| {
-                    throw(
-                        "java.util.IllegalFormatException",
-                        &format!("Code point = {v}"),
-                    )
-                })?,
-                FormatArg::Int(v) => u32::try_from(v).map_err(|_| {
-                    throw(
-                        "java.util.IllegalFormatException",
-                        &format!("Code point = {v}"),
-                    )
-                })?,
+                FormatArg::Short(v) => {
+                    u32::try_from(v).map_err(|_| bad_code_point(i32::from(v)))?
+                }
+                FormatArg::Int(v) => u32::try_from(v).map_err(|_| bad_code_point(v))?,
                 other => return Err(conversion_mismatch(conversion, other)),
             };
+            // JLS: a value past U+10FFFF is not a code point at all — the
+            // JDK throws rather than substituting (a lone surrogate is a
+            // VALID code point and renders as the replacement char here).
+            if unit > 0x10_FFFF {
+                return Err(bad_code_point(unit.cast_signed()));
+            }
             let mut text = char::from_u32(unit).unwrap_or('\u{FFFD}').to_string();
             if conversion == 'C' {
                 text = text.to_uppercase();
@@ -610,7 +660,13 @@ fn render(heap: &Heap, spec: &Spec, arg: FormatArg) -> Result<String, VmError> {
 /// Width handling for floats: the body already contains its sign, so
 /// zero-padding must go after it.
 fn pad_sign_aware(spec: &Spec, _negative: bool, body: &str) -> String {
-    if spec.zero_pad && !spec.left_justify {
+    // The JDK ignores zero-padding for non-finite values: `%010f` of
+    // Infinity is `  Infinity`, not `00Infinity`.
+    let non_finite = {
+        let core = body.to_ascii_uppercase();
+        core.ends_with("NAN") || core.contains("INFINITY")
+    };
+    if spec.zero_pad && !spec.left_justify && !non_finite {
         let width = spec.width.unwrap_or(0);
         let len = body.chars().count();
         if len < width {
@@ -701,7 +757,20 @@ fn format_float(spec: &Spec, value: f64) -> String {
                 Some(p) => p,
                 None => 6,
             };
-            general_digits(value.abs(), precision)
+            let mut text = general_digits(value.abs(), precision);
+            // `%,g` groups the integer part when the result is in fixed
+            // notation (a scientific result has nothing to group).
+            if spec.grouping && !text.contains(['e', 'E']) {
+                let (int_part, frac_part) = text
+                    .split_once('.')
+                    .map_or((text.as_str(), None), |(i, f)| (i, Some(f)));
+                let grouped = group_digits(int_part);
+                text = match frac_part {
+                    Some(frac) => format!("{grouped}.{frac}"),
+                    None => grouped,
+                };
+            }
+            text
         }
     };
 

@@ -16004,3 +16004,66 @@ public class RejCondInt {
 }
 "#
 );
+
+// String.format round 6: NULL arguments render per conversion (%b says
+// "false", %h says "null", everything else the width/precision-treated string
+// "null"); boxed wrappers pass through as references so a null Boolean can
+// reach %b; %c of an impossible codepoint throws
+// IllegalFormatCodePointException; %,g groups; zero-pad ignores non-finite.
+differential_test!(
+    diff_format_nulls_and_boxes,
+    "DiffFmtNulls",
+    r#"
+public class DiffFmtNulls {
+    public static void main(String[] args) {
+        System.out.println(String.format("[%b]", (Object) null));
+        System.out.println(String.format("[%B]", (Object) null));
+        System.out.println(String.format("[%5b]", (Object) null));
+        System.out.println(String.format("[%h]", (Object) null));
+        System.out.println(String.format("[%H]", (Object) null));
+        System.out.println(String.format("[%d]", (Object) null));
+        System.out.println(String.format("[%x]", (Object) null));
+        System.out.println(String.format("[%X]", (Object) null));
+        System.out.println(String.format("[%c]", (Object) null));
+        System.out.println(String.format("[%5s]", (Object) null));
+        System.out.println(String.format("[%.2s]", (Object) null));
+
+        Boolean bn = null;
+        System.out.println(String.format("[%b]", bn));
+        Integer ni = null;
+        System.out.println(String.format("[%d] [%s] [%h]", ni, ni, ni));
+
+        Integer i = 42;
+        Long l = 7L;
+        Double d = 2.5;
+        Boolean b = true;
+        Character c = 'x';
+        System.out.println(String.format("%d %d %.1f %b %c", i, l, d, b, c));
+        System.out.println(String.format("%s %s %s %s %s", i, l, d, b, c));
+        System.out.println(String.format("%x %h %h", i, b, i));
+
+        Object o = "text";
+        System.out.println(String.format("[%b] [%s]", o, o));
+        StringBuilder nsb = null;
+        System.out.println(String.format("[%s] [%b]", nsb, nsb));
+
+        try {
+            String.format("%c", 0x110000);
+        } catch (java.util.IllegalFormatCodePointException e) {
+            System.out.println("caught: " + e.getMessage());
+        }
+        try {
+            String.format("%c", -5);
+        } catch (java.util.IllegalFormatCodePointException e) {
+            System.out.println("caught: " + e.getMessage());
+        }
+
+        System.out.println(String.format("[%,g]", 12345.678));
+        System.out.println(String.format("[%08f]", Double.NaN));
+        System.out.println(String.format("[%010f]", Double.POSITIVE_INFINITY));
+        System.out.println(String.format("[%010f]", Double.NEGATIVE_INFINITY));
+        System.out.println(String.format("[%010.2f]", -3.5));
+    }
+}
+"#
+);

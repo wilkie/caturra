@@ -53,6 +53,7 @@ const JAVA_UTIL: &[&str] = &[
     "UnknownFormatConversionException",
     "MissingFormatArgumentException",
     "IllegalFormatConversionException",
+    "IllegalFormatCodePointException",
 ];
 const JAVA_IO: &[&str] = &[
     "File",
