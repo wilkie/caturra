@@ -444,6 +444,9 @@ pub enum BinaryOp {
 /// A unary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
+    /// `+x` — numerically a no-op, but performs unary numeric promotion
+    /// (JLS §15.15.3): `+aChar` is an int.
+    Plus,
     /// `-x`
     Neg,
     /// `!x`

@@ -38,6 +38,7 @@ const JAVA_UTIL: &[&str] = &[
     "Collection",
     "Comparator",
     "Iterator",
+    "ListIterator",
     "Optional",
     "OptionalInt",
     "OptionalDouble",
@@ -151,6 +152,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.lang",
         &[
+            "StrictMath",
             "Thread",
             "Runnable",
             "ThreadLocal",
@@ -197,6 +199,7 @@ const REQUIRES_IMPORT: &[&str] = &[
     "Collection",
     "Comparator",
     "Iterator",
+    "ListIterator",
     "Function",
     "BiFunction",
     "UnaryOperator",

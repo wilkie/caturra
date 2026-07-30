@@ -7279,6 +7279,20 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     },
     bm("isAlphabetic", &[C], BRet::Boolean, "(I)Z"),
     bm("isWhitespace", &[C], BRet::Boolean, "(C)Z"),
+    // The INT-codepoint overloads (`isDigit(int)` and family — for
+    // `isAlphabetic(int)` the int form is the JDK's ONLY signature). The VM
+    // arms match the value, not the descriptor, so the same intrinsics serve.
+    bm("isDigit", &[I], BRet::Boolean, "(I)Z"),
+    bm("isAlphabetic", &[I], BRet::Boolean, "(I)Z"),
+    bm("isLetter", &[I], BRet::Boolean, "(I)Z"),
+    bm("isLetterOrDigit", &[I], BRet::Boolean, "(I)Z"),
+    bm("isWhitespace", &[I], BRet::Boolean, "(I)Z"),
+    bm("isUpperCase", &[I], BRet::Boolean, "(I)Z"),
+    bm("isLowerCase", &[I], BRet::Boolean, "(I)Z"),
+    bm("toUpperCase", &[I], BRet::Int, "(I)I"),
+    bm("toLowerCase", &[I], BRet::Int, "(I)I"),
+    bm("getNumericValue", &[I], BRet::Int, "(I)I"),
+    bm("digit", &[I, I], BRet::Int, "(II)I"),
     bm("isSpaceChar", &[C], BRet::Boolean, "(C)Z"),
     bm("isJavaIdentifierStart", &[C], BRet::Boolean, "(C)Z"),
     bm("isJavaIdentifierPart", &[C], BRet::Boolean, "(C)Z"),
@@ -8764,6 +8778,8 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
         ("Byte", "BYTES") => Some(Int(1)),
         ("Integer" | "Float", "SIZE") => Some(Int(32)),
         ("Integer" | "Float", "BYTES") => Some(Int(4)),
+        ("Character", "SIZE") => Some(Int(16)),
+        ("Character", "BYTES") => Some(Int(2)),
         ("Math", "PI") => Some(Double(std::f64::consts::PI)),
         ("Math", "E") => Some(Double(std::f64::consts::E)),
         ("Double", "MAX_VALUE") => Some(Double(f64::MAX)),
@@ -9665,7 +9681,7 @@ impl BodyGen<'_> {
                     (None, Some(_)) => {} // already reported above
                 }
             }
-            Stmt::Labeled { label, body, .. } => self.labeled_statement(label, body),
+            Stmt::Labeled { label, body, span } => self.labeled_statement(label, body, *span),
             Stmt::Return { value, span } => self.return_statement(value.as_ref(), *span),
             Stmt::SuperCall { span, .. } | Stmt::ThisCall { span, .. } => {
                 self.error(
@@ -9699,7 +9715,17 @@ impl BodyGen<'_> {
     /// on any other statement gets a synthetic break target so
     /// `break label` can jump past it (`continue label` there is a
     /// compile error, reported at the continue site).
-    fn labeled_statement(&mut self, label: &str, body: &Stmt) {
+    fn labeled_statement(&mut self, label: &str, body: &Stmt, span: SourceSpan) {
+        // JLS §14.7: a label may not repeat while an enclosing statement
+        // already carries it — `lab:` inside `lab:` compiled here and bound
+        // `break lab` to the INNER loop, silently changing control flow.
+        if self
+            .loop_stack
+            .iter()
+            .any(|frame| frame.label.as_deref() == Some(label))
+        {
+            self.error(span, format!("label {label} already in use"));
+        }
         let attaches_directly = matches!(
             body,
             Stmt::While { .. }
@@ -10577,6 +10603,7 @@ impl BodyGen<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // declaration + var-inference + declarator loop
     fn local_decl(
         &mut self,
         ty: &TypeRef,
@@ -10607,7 +10634,29 @@ impl BodyGen<'_> {
                 );
                 return;
             }
-            let inferred = self.type_of(init);
+            let mut inferred = self.type_of(init);
+            // `var l = new ArrayList<>()` (or raw): the diamond usually adopts
+            // its element from the declaration context, but `var` IS the
+            // context — javac infers the `Object` form (`ArrayList<Object>`),
+            // and so does this, through the same raw-type resolution.
+            if inferred == JType::Null
+                && let Expr::NewObject {
+                    class, type_args, ..
+                } = init
+                && type_args.is_empty()
+            {
+                let simple = crate::imports::canonical_library_class(class).unwrap_or(class);
+                if let Some(arity) = raw_generic_arity(simple) {
+                    let object_args = vec![TypeRef::Named(String::from("Object")); arity];
+                    inferred = self
+                        .table
+                        .resolve_type(&TypeRef::Generic {
+                            base: class.clone(),
+                            args: object_args,
+                        })
+                        .unwrap_or(JType::Null);
+                }
+            }
             if matches!(inferred, JType::Null | JType::Error) {
                 self.error(
                     init.span(),
@@ -14913,7 +14962,12 @@ impl BodyGen<'_> {
                     self.xastore_keeping(element, keep);
                     return;
                 }
-                if element == JType::Boolean || !element.is_numeric() || !operand.is_numeric() {
+                // A WRAPPER element (`Integer[] arr; arr[0] += 2`) unboxes on
+                // load and re-boxes on store — a fresh box, so the slot's
+                // identity changes while its neighbours' are untouched,
+                // exactly as JLS §15.26.2 evaluates it.
+                let elem_view = numeric_view(element);
+                if element == JType::Boolean || !elem_view.is_numeric() || !operand.is_numeric() {
                     if value_ty != JType::Error {
                         self.error(
                             span,
@@ -14927,14 +14981,20 @@ impl BodyGen<'_> {
                     }
                     return;
                 }
-                let promoted = promote(element, operand);
+                let promoted = promote(elem_view, operand);
                 self.code.push_op(op::DUP2, 2);
                 self.xaload(element);
-                self.numeric_conversion(element, promoted);
+                if let JType::Boxed(elem) = element {
+                    self.emit_unbox(elem);
+                }
+                self.numeric_conversion(elem_view, promoted);
                 let actual = self.expr(value);
                 self.numeric_conversion(actual, promoted);
                 self.arithmetic_op(op_kind, promoted);
-                self.narrow_back(promoted, element);
+                self.narrow_back(promoted, elem_view);
+                if let JType::Boxed(elem) = element {
+                    self.emit_box(elem);
+                }
                 self.xastore_keeping(element, keep);
             }
         }
@@ -15290,7 +15350,13 @@ impl BodyGen<'_> {
                         // only the STATIC fallback was consulted here.
                         Some(CallTarget::Instance(expr))
                     } else {
-                        self.error(*receiver_span, format!("cannot find symbol: '{single}'"));
+                        // A REAL Java class caturra deliberately does not
+                        // model (Thread, StrictMath, ...) gets its honest
+                        // reason instead of a "cannot find symbol" that reads
+                        // as a typo.
+                        let message = crate::imports::unsupported_class_reason(single)
+                            .unwrap_or_else(|| format!("cannot find symbol: '{single}'"));
+                        self.error(*receiver_span, message);
                         None
                     }
                 }
@@ -17340,7 +17406,7 @@ impl BodyGen<'_> {
                 _ => JType::Int,
             },
             Expr::Unary {
-                op: UnaryOp::Neg,
+                op: UnaryOp::Neg | UnaryOp::Plus,
                 operand,
                 ..
             } => match self.type_of(operand) {
@@ -17348,6 +17414,11 @@ impl BodyGen<'_> {
                 JType::Long => JType::Long,
                 JType::Float => JType::Float,
                 t if t.is_numeric() => JType::Int,
+                JType::Boxed(elem) => match elem.base_type() {
+                    t @ (JType::Double | JType::Long | JType::Float) => t,
+                    t if t.is_numeric() => JType::Int,
+                    _ => JType::Error,
+                },
                 _ => JType::Error,
             },
             Expr::Cast { ty, .. } => self.table.resolve_type(ty).unwrap_or(JType::Error),
@@ -18444,8 +18515,33 @@ impl BodyGen<'_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per unary operator
     fn unary(&mut self, op: UnaryOp, operand: &Expr, span: SourceSpan) -> JType {
         match op {
+            // `+x`: no opcode, but unary numeric promotion (JLS §15.15.3) —
+            // a char/byte/short operand becomes an int, which is what makes
+            // `char r = +c` javac's lossy-conversion error and `println(+c)`
+            // print 65 (a char on the stack already IS an int; only the
+            // static type changes).
+            UnaryOp::Plus => {
+                let ty = self.expr(operand);
+                let ty = self.unbox_wrapper(ty);
+                match ty {
+                    JType::Double | JType::Long | JType::Float | JType::Int => ty,
+                    JType::Char | JType::Short | JType::Byte => JType::Int,
+                    JType::Error => JType::Error,
+                    other => {
+                        self.error(
+                            span,
+                            format!(
+                                "bad operand type {} for unary operator '+'",
+                                other.describe(self.table)
+                            ),
+                        );
+                        JType::Error
+                    }
+                }
+            }
             UnaryOp::Neg => {
                 let ty = self.expr(operand);
                 let ty = self.unbox_wrapper(ty);
@@ -19106,7 +19202,17 @@ impl BodyGen<'_> {
                     self.error(span, "++/-- on a non-array element");
                     return JType::Error;
                 };
-                if !elem_ty.is_numeric() {
+                // A WRAPPER element (`Integer[]`): unbox after the load,
+                // re-box before the store — a fresh box each time, as
+                // JLS §15.14.2 evaluates it. The kept value (old for postfix,
+                // new for prefix) is the primitive; assignment re-boxes it if
+                // the surrounding expression needs the wrapper.
+                let boxed = match elem_ty {
+                    JType::Boxed(elem) => Some(elem),
+                    _ => None,
+                };
+                let view = numeric_view(elem_ty);
+                if !view.is_numeric() {
                     self.error(span, "++/-- needs a numeric element");
                     return JType::Error;
                 }
@@ -19121,29 +19227,36 @@ impl BodyGen<'_> {
                     JType::Short => (op::SALOAD, op::SASTORE),
                     JType::Byte => (op::BALOAD, op::BASTORE),
                     JType::Char => (op::CALOAD, op::CASTORE),
+                    JType::Boxed(_) => (op::AALOAD, op::AASTORE),
                     _ => (op::IALOAD, op::IASTORE),
                 };
-                self.code.push_op(load, elem_ty.width());
+                self.code.push_op(load, view.width());
                 self.code.drop_stack(2);
+                if let Some(elem) = boxed {
+                    self.emit_unbox(elem);
+                }
                 if !prefix {
                     // Old value tucked under [arr, i, old].
-                    if elem_ty.width() == 2 {
+                    if view.width() == 2 {
                         self.code.push_op(op::DUP2_X2, 2);
                     } else {
                         self.code.push_op(op::DUP_X2, 1);
                     }
                 }
-                one_op(self, elem_ty);
+                one_op(self, view);
                 if prefix {
-                    if elem_ty.width() == 2 {
+                    if view.width() == 2 {
                         self.code.push_op(op::DUP2_X2, 2);
                     } else {
                         self.code.push_op(op::DUP_X2, 1);
                     }
+                }
+                if let Some(elem) = boxed {
+                    self.emit_box(elem);
                 }
                 self.code.push_op(store, 0);
-                self.code.drop_stack(2 + elem_ty.width());
-                elem_ty
+                self.code.drop_stack(2 + view.width());
+                view
             }
             _ => {
                 // Field targets (this.count++, obj.n--): reuse the
@@ -19836,6 +19949,11 @@ impl BodyGen<'_> {
                 operand,
                 ..
             } => Some(self.const_int(operand)?.wrapping_neg()),
+            Expr::Unary {
+                op: UnaryOp::Plus,
+                operand,
+                ..
+            } => self.const_int(operand),
             Expr::Unary {
                 op: UnaryOp::BitNot,
                 operand,

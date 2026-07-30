@@ -499,6 +499,12 @@ impl Parser<'_> {
                 unreachable!()
             };
             Ok((name, token.span))
+        } else if matches!(self.peek(), Some(TokenKind::Keyword(Keyword::Var))) {
+            // `var` is contextual (JLS §3.9): a legal variable, method,
+            // field or parameter name — only the declaration head treats it
+            // as type inference.
+            let token = self.advance().expect("peeked");
+            Ok((String::from("var"), token.span))
         } else {
             self.error_here(format!("expected a name {context}"));
             Err(Abort)
@@ -2239,9 +2245,19 @@ impl Parser<'_> {
             // Consumes the `;` itself.
             Some(Box::new(self.local_declaration()?))
         } else {
-            let stmt = self.simple_statement()?;
+            // A comma-separated statement-expression LIST (JLS §14.14.1):
+            // `for (i = 0, j = 3; ...)`. More than one wraps in a block —
+            // scope-neutral, since an expression list declares nothing.
+            let mut stmts = vec![self.simple_statement()?];
+            while self.eat_symbol(",") {
+                stmts.push(self.simple_statement()?);
+            }
             self.expect_symbol(";", "after the for-loop initializer")?;
-            Some(Box::new(stmt))
+            Some(Box::new(if stmts.len() == 1 {
+                stmts.remove(0)
+            } else {
+                Stmt::Block(stmts)
+            }))
         };
 
         let cond = if self.at_symbol(";") {
@@ -2367,9 +2383,13 @@ impl Parser<'_> {
                     | Keyword::Float
                     | Keyword::Byte
                     | Keyword::Short
-                    | Keyword::Var
             ))
-        ) || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
+        ) || (matches!(self.peek(), Some(TokenKind::Keyword(Keyword::Var)))
+            // `var` is CONTEXTUAL (JLS §3.9): `var x = ...` declares, but a
+            // variable or method NAMED var is legal, so `var = 7;` and
+            // `var()` must parse as expressions.
+            && matches!(self.peek_at(1), Some(TokenKind::Identifier(_))))
+            || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
             && matches!(self.peek_at(1), Some(TokenKind::Identifier(_))))
             || (matches!(self.peek(), Some(TokenKind::Identifier(_)))
                 && matches!(self.peek_at(1), Some(TokenKind::Symbol("[")))
@@ -2961,8 +2981,19 @@ impl Parser<'_> {
             });
         }
         if self.eat_symbol("+") {
-            // Unary plus is a no-op.
-            return self.unary();
+            // Unary plus is numerically a no-op but STILL PROMOTES
+            // (JLS §15.15.3): `+aChar` has type int, so `char r = +c` is a
+            // lossy-conversion error and `println(+c)` prints the number.
+            let operand = self.unary()?;
+            let span = SourceSpan {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Ok(Expr::Unary {
+                op: UnaryOp::Plus,
+                operand: Box::new(operand),
+                span,
+            });
         }
         if self.at_symbol("++") || self.at_symbol("--") {
             self.error_here("++/-- inside an expression is not yet supported by caturra");
@@ -3580,7 +3611,9 @@ impl Parser<'_> {
                     span,
                 })
             }
-            Some(TokenKind::Identifier(_)) => {
+            Some(TokenKind::Identifier(_) | TokenKind::Keyword(Keyword::Var)) => {
+                // `var` here is a NAME (a variable or method called var) —
+                // the declaration head never reaches primary_expression.
                 let (name, name_span) = self.expect_ident("to start the expression")?;
                 Ok(Expr::Name {
                     path: vec![name],

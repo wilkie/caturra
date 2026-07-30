@@ -231,6 +231,32 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **The round-6 mechanical batch** (2026-07-30) — fifteen findings, seven
+  small fixes:
+  - **Unary plus promotes** (JLS §15.15.3): `+aChar` is an int, so `char r =
+    +c` is javac's lossy-conversion error, `println(+c)` prints 65, and
+    `f(+c)` picks `f(int)` over `f(char)`. A new `UnaryOp::Plus` — the parser
+    used to drop the `+` entirely.
+  - **`var` is contextual** (JLS §3.9): a variable, method, field or
+    parameter may be NAMED `var` (`int var = 7; var = var + 1; var()`), and a
+    declaration is recognized only when `var` is followed by a name. And
+    **`var l = new ArrayList<>()` infers the `Object` form** through the
+    raw-type resolution — the diamond usually adopts its element from the
+    declaration context, but `var` IS the context.
+  - **A duplicate nested label rejects** (JLS §14.7, accepts-invalid): `lab:`
+    inside `lab:` compiled and silently bound `break lab` to the INNER loop.
+  - **A comma-separated statement-expression list in a for INITIALIZER
+    parses** (`for (i = 0, j = 3; ...)`, JLS §14.14.1) — the update list
+    already did.
+  - **Compound assignment and `++`/`--` on a wrapper-array element** work
+    (`Integer[] arr; arr[0] += 2; arr[0]++`): unbox on load, re-box on store,
+    a fresh box per write with neighbours' identity untouched.
+  - **The Character int-codepoint overloads** (`isDigit(int)` family,
+    `isAlphabetic(int)` — the JDK's only signature — `toUpperCase(int)`,
+    `getNumericValue(int)`, `digit(int,int)`) and `Character.SIZE`/`BYTES`.
+  - **`ListIterator` is importable**; **`StrictMath`** (and any unmodeled
+    static receiver, e.g. `Thread`) now refuses with its honest reason
+    instead of "cannot find symbol".
 - **Override validation in full** (2026-07-30, JLS §8.4.8.3 / §9.6.4.4) —
   round 6's remaining accepts-invalid trio, one seam:
   - An override may not **weaken access** below the overridden method's level

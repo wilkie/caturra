@@ -16202,3 +16202,126 @@ public class DiffOvLegal {
 }
 "#
 );
+
+// The round-6 mechanical batch, part 1: unary plus PROMOTES (JLS 15.15.3),
+// duplicate nested labels reject, comma-list for-initializers parse, and a
+// variable or method may be NAMED var (JLS 3.9).
+differential_test!(
+    diff_mechanical_batch_language,
+    "DiffMechLang",
+    r#"
+public class DiffMechLang {
+    static void f(char x) { System.out.println("char " + x); }
+    static void f(int x) { System.out.println("int " + x); }
+    static int var() { return 40; }
+
+    public static void main(String[] args) {
+        char c = 'A';
+        System.out.println(+c);
+        System.out.println("" + +c);
+        f(c);
+        f(+c);
+
+        int i, j;
+        for (i = 0, j = 3; i < j; i++) {
+            System.out.println(i + " " + j);
+        }
+        System.out.println("i=" + i);
+
+        int var = 1;
+        var = var + 1;
+        System.out.println(var);
+        var v = 5;
+        for (var k = 0; k < 2; k++) v += k;
+        System.out.println(v);
+        System.out.println(var());
+
+        lab: for (int a = 0; a < 1; a++) { break lab; }
+        lab: for (int a = 0; a < 1; a++) { continue lab; }
+        System.out.println("sequential-labels-ok");
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unary_plus_char_narrowing,
+    "RejPlusChar",
+    r"
+public class RejPlusChar {
+    public static void main(String[] args) {
+        char c = 'A';
+        char r = +c;
+        System.out.println(r);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_duplicate_nested_label,
+    "RejDupLabel",
+    r#"
+public class RejDupLabel {
+    public static void main(String[] args) {
+        lab:
+        for (int i = 0; i < 2; i++) {
+            lab:
+            for (int j = 0; j < 2; j++) {
+                break lab;
+            }
+        }
+        System.out.println("no");
+    }
+}
+"#
+);
+
+// Part 2: the Character int-codepoint overloads and SIZE/BYTES, var with a
+// bare diamond, wrapper-array compound assignment and ++, and ListIterator
+// as an imported type name.
+differential_test!(
+    diff_mechanical_batch_library,
+    "DiffMechLib",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.ListIterator;
+
+public class DiffMechLib {
+    public static void main(String[] args) {
+        int cp = 'A';
+        System.out.println(Character.isDigit(cp) + " " + Character.isLetter(cp)
+            + " " + Character.isLetterOrDigit(cp) + " " + Character.isWhitespace(cp));
+        System.out.println(Character.isUpperCase(cp) + " " + Character.isLowerCase(cp)
+            + " " + Character.isAlphabetic(cp));
+        System.out.println(Character.toUpperCase(97) + " " + Character.toLowerCase(90));
+        System.out.println(Character.getNumericValue(97) + " " + Character.digit(97, 16));
+        System.out.println(Character.SIZE + " " + Character.BYTES);
+
+        var l = new ArrayList<>();
+        l.add("x");
+        Object o = l.get(0);
+        System.out.println(o);
+
+        Integer[] arr = { 1000, 2000 };
+        Integer a = arr[0];
+        Integer b = arr[1];
+        arr[0] += 2;
+        System.out.println(arr[0] + " " + (arr[0] == a) + " " + (arr[1] == b));
+        arr[0]++;
+        System.out.println(arr[0]);
+        int old = arr[1]--;
+        System.out.println(old + " " + arr[1]);
+
+        List<Integer> list = new ArrayList<>(Arrays.asList(1000, 2000));
+        Integer keep = list.get(1);
+        ListIterator<Integer> it = list.listIterator();
+        it.next();
+        it.set(3000);
+        System.out.println(list + " " + (list.get(1) == keep));
+    }
+}
+"#
+);
