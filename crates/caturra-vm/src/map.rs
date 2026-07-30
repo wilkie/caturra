@@ -37,6 +37,13 @@ struct Entry {
     key: JValue,
     hash: i32,
     value: JValue,
+    /// Position within the entry's bucket chain. `put` appends at the chain's
+    /// TAIL (ascending), but the compute family (`computeIfAbsent`/`compute`/
+    /// `merge`) links its new node at the chain's HEAD (descending, below
+    /// every tail sequence). Two keys in the same final bucket were in the
+    /// same bucket at every smaller table size (the mask only grows), so one
+    /// sequence per entry reproduces the chain order across resizes.
+    seq: i64,
 }
 
 /// A `java.util.HashMap` with the JDK's iteration order.
@@ -57,6 +64,10 @@ pub struct JavaHashMap {
     /// structural change. A cell, because reads (`toString`) hold the map
     /// immutably.
     order: OnceCell<Vec<usize>>,
+    /// The next tail-append sequence (ascending from 0).
+    tail_seq: i64,
+    /// The last head-insert sequence handed out (descending from 0).
+    head_seq: i64,
 }
 
 impl JavaHashMap {
@@ -121,8 +132,24 @@ impl JavaHashMap {
         std::mem::replace(&mut self.entries[at].value, value)
     }
 
-    /// Append a mapping whose key is known to be absent.
+    /// Append a mapping whose key is known to be absent, at the TAIL of its
+    /// bucket chain — where `putVal` links a new node.
     pub fn insert_new(&mut self, hash: i32, key: JValue, value: JValue) {
+        self.tail_seq += 1;
+        let seq = self.tail_seq;
+        self.insert_with_seq(hash, key, value, seq);
+    }
+
+    /// Insert a mapping whose key is known to be absent at the HEAD of its
+    /// bucket chain — where the compute family (`computeIfAbsent`, `compute`,
+    /// `merge`) links its new node (`tab[i] = newNode(hash, key, v, first)`).
+    pub fn insert_new_at_head(&mut self, hash: i32, key: JValue, value: JValue) {
+        self.head_seq -= 1;
+        let seq = self.head_seq;
+        self.insert_with_seq(hash, key, value, seq);
+    }
+
+    fn insert_with_seq(&mut self, hash: i32, key: JValue, value: JValue, seq: i64) {
         if self.table_len == 0 {
             self.table_len = if self.threshold == 0 {
                 DEFAULT_CAPACITY
@@ -132,7 +159,12 @@ impl JavaHashMap {
             self.threshold = self.table_len * 3 / 4;
         }
         self.index.entry(hash).or_default().push(self.entries.len());
-        self.entries.push(Entry { key, hash, value });
+        self.entries.push(Entry {
+            key,
+            hash,
+            value,
+            seq,
+        });
 
         // `treeifyBin`: a bin this long in a table this small makes Java grow
         // the table rather than grow a tree. That reshuffles every bucket, so
@@ -198,9 +230,13 @@ impl JavaHashMap {
         self.order.get_or_init(|| {
             let mask = self.table_len.saturating_sub(1);
             let mut order: Vec<usize> = (0..self.entries.len()).collect();
-            // A stable sort by bucket keeps each bucket's chain in
-            // insertion order, which is where Java leaves it.
-            order.sort_by_key(|at| spread(self.entries[*at].hash) as usize & mask);
+            // Sorting by (bucket, chain sequence) reproduces each bucket's
+            // chain: tail-appends in insertion order, head-inserts (compute
+            // family) before all of them, newest first.
+            order.sort_by_key(|at| {
+                let entry = &self.entries[*at];
+                (spread(entry.hash) as usize & mask, entry.seq)
+            });
             order
         })
     }

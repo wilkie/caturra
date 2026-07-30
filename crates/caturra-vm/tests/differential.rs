@@ -16416,3 +16416,223 @@ public class DiffPatMeta {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-6 map API tail: merge/compute* call shapes, the compute family's
+// bucket-HEAD insertion position, entrySet() as a declared type, and
+// AbstractMap.SimpleEntry.
+
+// The compute family links a NEW key at the head of its bucket chain
+// (`tab[i] = newNode(hash, key, v, first)`), unlike `put`'s tail append —
+// observable in iteration order whenever keys share a bucket ("a" and "q"
+// both land in bucket 1 of a default table).
+differential_test!(
+    diff_map_compute_insert_position,
+    "DiffMapComputePos",
+    r#"
+import java.util.HashMap;
+import java.util.Map;
+public class DiffMapComputePos {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        m.computeIfAbsent("q", k -> 42);
+        System.out.println(m);
+        Map<String, Integer> n = new HashMap<>();
+        n.put("a", 1);
+        n.merge("q", 9, (x, y) -> x + y);
+        n.compute("A", (k, v) -> 5);
+        System.out.println(n);
+        Map<String, Integer> o = new HashMap<>();
+        o.put("a", 1);
+        o.put("q", 2);
+        o.computeIfAbsent("A", k -> 3);
+        o.put("Q", 4);
+        System.out.println(o);
+        // Across a resize: same-bucket chains keep their head/tail order.
+        Map<Integer, Integer> r = new HashMap<>();
+        for (int i = 0; i < 8; i++) r.put(i * 16, i);
+        r.computeIfAbsent(160, k -> 99);
+        r.merge(320, 7, (x, y) -> x + y);
+        for (int i = 8; i < 14; i++) r.put(i * 16, i);
+        r.compute(480, (k, v) -> 42);
+        System.out.println(r);
+    }
+}
+"#
+);
+
+// The map lambda methods work WITHOUT any java.util.function import, with
+// method references, and on a TreeMap (sorted position, not bucket position).
+differential_test!(
+    diff_map_lambda_shapes,
+    "DiffMapLambdaShapes",
+    r#"
+import java.util.HashMap;
+import java.util.Map;
+import java.util.TreeMap;
+public class DiffMapLambdaShapes {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.merge("a", 1, (x, y) -> x + y);
+        m.merge("a", 2, (x, y) -> x + y);
+        m.merge("z", 5, Integer::sum);
+        m.computeIfAbsent("hello", String::length);
+        System.out.println(m);
+        Map<String, Integer> t = new TreeMap<>();
+        t.put("m", 1);
+        t.merge("a", 5, (a, b) -> a + b);
+        t.computeIfAbsent("z", k -> 9);
+        t.compute("m", (k, v) -> v + 1);
+        System.out.println(t);
+        // merge's remapper returning null removes; putIfAbsent still appends
+        // at the bucket TAIL.
+        Map<String, Integer> q = new HashMap<>();
+        q.put("a", 1);
+        q.put("q", 2);
+        q.merge("a", 1, (x, y) -> null);
+        q.putIfAbsent("A", 3);
+        System.out.println(q);
+    }
+}
+"#
+);
+
+// A pre-built remapper variable is checked against the map's V at the call
+// site: merge wants (V, V) -> V, and this BiFunction sees the KEY.
+differential_reject!(
+    reject_merge_mistyped_bifunction,
+    "RejMergeBiFn",
+    r#"
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.BiFunction;
+public class RejMergeBiFn {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        BiFunction<String, Integer, Integer> g = (s, i) -> s.length() + i;
+        m.merge("a", 10, g);
+        System.out.println(m);
+    }
+}
+"#
+);
+
+// ...while correctly-typed remapper variables (BiFunction and BinaryOperator)
+// still pass, and a mistyped computeIfAbsent mapping is also caught.
+differential_test!(
+    diff_map_function_variables,
+    "DiffMapFnVars",
+    r#"
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.BiFunction;
+import java.util.function.BinaryOperator;
+public class DiffMapFnVars {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        BiFunction<Integer, Integer, Integer> ok = (x, y) -> x + y;
+        m.merge("a", 10, ok);
+        BinaryOperator<Integer> op = (x, y) -> x * y;
+        m.merge("a", 2, op);
+        System.out.println(m);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_compute_if_absent_mistyped_function,
+    "RejCiaFn",
+    r#"
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
+public class RejCiaFn {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        Function<Integer, Integer> f = x -> x + 1;
+        m.computeIfAbsent("a", f);
+        System.out.println(m);
+    }
+}
+"#
+);
+
+// `entrySet()` assigns to its own declared type; the view's clear/remove
+// write through to the map; add on the VIEW throws; a HashSet declared as
+// `Set<Map.Entry<K, V>>` is a real, mutable set of standalone entries.
+differential_test!(
+    diff_entry_set_declared_type,
+    "DiffEntrySetDecl",
+    r#"
+import java.util.AbstractMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+public class DiffEntrySetDecl {
+    static int total(Set<Map.Entry<String, Integer>> entries) {
+        int sum = 0;
+        for (Map.Entry<String, Integer> e : entries) sum += e.getValue();
+        return sum;
+    }
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        Set<Map.Entry<String, Integer>> es = m.entrySet();
+        System.out.println(es.size() + " " + total(es));
+        System.out.println(es.remove(new AbstractMap.SimpleEntry<>("a", 9)));
+        System.out.println(es.remove(new AbstractMap.SimpleEntry<>("a", 1)));
+        System.out.println(m);
+        System.out.println(es.contains(new AbstractMap.SimpleEntry<>("b", 2)));
+        try {
+            es.add(new AbstractMap.SimpleEntry<>("c", 3));
+        } catch (UnsupportedOperationException e) {
+            System.out.println("UOE");
+        }
+        m.entrySet().clear();
+        System.out.println(m.isEmpty() + " " + es.isEmpty());
+        Map<String, Integer> t = new TreeMap<>();
+        t.put("k", 1);
+        t.entrySet().clear();
+        System.out.println(t);
+        Set<Map.Entry<String, Integer>> own = new HashSet<>();
+        own.add(new AbstractMap.SimpleEntry<>("x", 5));
+        System.out.println(own + " " + own.size());
+    }
+}
+"#
+);
+
+// AbstractMap.SimpleEntry is a standalone Map.Entry: getKey/getValue/
+// setValue/toString/equals all behave, including against a live map entry.
+differential_test!(
+    diff_simple_entry,
+    "DiffSimpleEntry",
+    r#"
+import java.util.AbstractMap;
+import java.util.HashMap;
+import java.util.Map;
+public class DiffSimpleEntry {
+    public static void main(String[] args) {
+        Map.Entry<String, Integer> e = new AbstractMap.SimpleEntry<>("x", 5);
+        System.out.println(e.getKey() + " " + e.getValue());
+        e.setValue(9);
+        System.out.println(e);
+        System.out.println(e.getValue());
+        Map<String, Integer> p = new HashMap<>();
+        p.put("x", 9);
+        for (Map.Entry<String, Integer> live : p.entrySet()) {
+            System.out.println(live.equals(e) + " " + e.equals(live));
+            System.out.println(live.hashCode() == e.hashCode());
+        }
+        System.out.println(e.equals("x"));
+    }
+}
+"#
+);

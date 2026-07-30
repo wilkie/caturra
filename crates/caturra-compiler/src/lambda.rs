@@ -25,7 +25,15 @@ struct Sam {
 }
 
 /// Rewrite every target-typed lambda into an anonymous class.
-pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
+///
+/// The returned diagnostics are the few call-shape errors only this pass can
+/// see: generic type arguments are erased before codegen, so a pre-built
+/// function variable whose declared arguments don't fit the call is checked
+/// here, where the declaration is still visible.
+pub fn desugar_lambdas(
+    units: &mut [(String, CompilationUnit)],
+) -> Vec<crate::diagnostics::Diagnostic> {
+    let mut diags = Vec::new();
     let sams = functional_interfaces(units);
     // Signatures for single-candidate method-argument target typing.
     let methods = method_signatures(units);
@@ -40,7 +48,7 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
     // lambda in a non-first file would get the first file's SourceFile and
     // its breakpoints/stack traces would point at the wrong file.
     let mut counter = 0usize;
-    for (_, unit) in units.iter_mut() {
+    for (path, unit) in units.iter_mut() {
         let mut new_classes: Vec<ClassDecl> = Vec::new();
         for class in &mut unit.classes {
             let return_types: Vec<Option<TypeRef>> = class
@@ -75,6 +83,8 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                     new_classes: &mut new_classes,
                     counter: &mut counter,
                     scope: vec![fields.clone(), params],
+                    path,
+                    diags: &mut diags,
                 };
                 for stmt in &mut method.body {
                     desugar_stmt(stmt, &mut ctx);
@@ -92,6 +102,8 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
                         new_classes: &mut new_classes,
                         counter: &mut counter,
                         scope: vec![HashMap::new()],
+                        path,
+                        diags: &mut diags,
                     };
                     desugar_expr(init, Some(&field.ty), &mut ctx);
                 }
@@ -101,6 +113,7 @@ pub fn desugar_lambdas(units: &mut [(String, CompilationUnit)]) {
         // this unit's synthesized lambda classes can be appended to it.
         unit.classes.append(&mut new_classes);
     }
+    diags
 }
 
 struct Ctx<'a> {
@@ -119,6 +132,11 @@ struct Ctx<'a> {
     counter: &'a mut usize,
     /// Local-variable types, for assignment-target typing.
     scope: Vec<HashMap<String, TypeRef>>,
+    /// The unit's source path, for diagnostics.
+    path: &'a str,
+    /// Call-shape errors only this pass can see (declared generic arguments
+    /// are erased before codegen).
+    diags: &'a mut Vec<crate::diagnostics::Diagnostic>,
 }
 
 impl Ctx<'_> {
@@ -537,42 +555,65 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if matches!(
                 method.as_str(),
                 "merge" | "compute" | "computeIfPresent" | "computeIfAbsent" | "replaceAll"
-            ) && let Some(function) = args.last_mut()
-                && matches!(function, Expr::Lambda { .. })
-                && let Some(r) = receiver.as_deref()
+            ) && let Some(r) = receiver.as_deref()
                 && let Some((key, value)) = map_type_args(r, ctx)
+                && !args.is_empty()
             {
                 let params: Vec<TypeRef> = match method.as_str() {
                     "merge" => vec![value.clone(), value.clone()],
-                    "computeIfAbsent" => vec![key],
-                    _ => vec![key, value.clone()],
+                    "computeIfAbsent" => vec![key.clone()],
+                    _ => vec![key.clone(), value.clone()],
                 };
-                let expected = match function {
-                    Expr::Lambda { params, .. } => params.len(),
-                    _ => 0,
-                };
-                if expected == params.len() {
-                    let object = TypeRef::Named(String::from("Object"));
-                    let interface = if params.len() == 2 {
-                        "__BiFunction"
-                    } else {
-                        "__UnaryOperator"
-                    };
-                    let last = args.len() - 1;
-                    let (leading, tail) = args.split_at_mut(last);
-                    for arg in leading {
-                        desugar_expr(arg, None, ctx);
+                // A pre-built function VARIABLE: its type arguments erase
+                // before codegen, so `merge` taking `(V, V)` would silently
+                // accept a `BiFunction<K, V, V>` and CCE at run time. Check
+                // the declaration here, where it is still visible.
+                if let Some(Expr::Name { path, span }) = args.last()
+                    && path.len() == 1
+                    && let Some(declared) = ctx.lookup(&path[0])
+                {
+                    check_map_function_variable(&declared, &params, &value, *span, ctx);
+                }
+                if let Some(function) = args.last_mut()
+                    && matches!(function, Expr::Lambda { .. } | Expr::MethodRef { .. })
+                {
+                    // `m.merge(k, v, Integer::sum)` — the reference first
+                    // becomes the equivalent lambda, then erases like one.
+                    if matches!(function, Expr::MethodRef { .. }) {
+                        let synth = Sam {
+                            method: String::from("apply"),
+                            params: params.clone(),
+                            ret: value.clone(),
+                        };
+                        *function = method_ref_to_lambda(function, &synth, ctx);
                     }
-                    tail[0] = build_erased_lambda(
-                        &mut tail[0],
-                        interface,
-                        "apply",
-                        &object,
-                        &params,
-                        Some(&value),
-                        ctx,
-                    );
-                    return;
+                    let expected = match function {
+                        Expr::Lambda { params, .. } => params.len(),
+                        _ => 0,
+                    };
+                    if expected == params.len() {
+                        let object = TypeRef::Named(String::from("Object"));
+                        let interface = if params.len() == 2 {
+                            "__BiFunction"
+                        } else {
+                            "__UnaryOperator"
+                        };
+                        let last = args.len() - 1;
+                        let (leading, tail) = args.split_at_mut(last);
+                        for arg in leading {
+                            desugar_expr(arg, None, ctx);
+                        }
+                        tail[0] = build_erased_lambda(
+                            &mut tail[0],
+                            interface,
+                            "apply",
+                            &object,
+                            &params,
+                            Some(&value),
+                            ctx,
+                        );
+                        return;
+                    }
                 }
             }
             // `list.forEach(x -> ...)` / `list.removeIf(x -> ...)`: a single
@@ -1073,6 +1114,103 @@ fn interface_name(ty: &TypeRef) -> Option<&str> {
     match ty {
         TypeRef::Named(name) | TypeRef::Generic { base: name, .. } => Some(name.as_str()),
         _ => None,
+    }
+}
+
+/// `m.merge(k, v, g)` with `g` a declared function variable: javac checks the
+/// variable's type arguments against the map's — `merge` wants
+/// `BiFunction<? super V, ? super V, ? extends V>` — but they erase before
+/// codegen, so the mismatch would otherwise compile and CCE at run time.
+/// Only a PROVABLE mismatch is rejected: both sides concrete library types,
+/// which are final, so the wildcards collapse to equality (an `Object` input
+/// stays accepted — it satisfies any `? super`).
+fn check_map_function_variable(
+    declared: &TypeRef,
+    inputs: &[TypeRef],
+    result: &TypeRef,
+    span: crate::diagnostics::SourceSpan,
+    ctx: &mut Ctx,
+) {
+    let TypeRef::Generic { base, args } = declared else {
+        return;
+    };
+    let simple = base.rsplit('.').next().unwrap_or(base);
+    let (declared_inputs, declared_result): (Vec<&TypeRef>, &TypeRef) =
+        match (simple, args.as_slice()) {
+            ("BiFunction", [a, b, c]) => (vec![a, b], c),
+            ("BinaryOperator", [t]) => (vec![t, t], t),
+            ("Function", [a, b]) => (vec![a], b),
+            ("UnaryOperator", [t]) => (vec![t], t),
+            _ => return,
+        };
+    if declared_inputs.len() != inputs.len() {
+        return;
+    }
+    let input_wrong = inputs.iter().zip(&declared_inputs).any(
+        |(need, have)| matches!((concrete(need), concrete(have)), (Some(n), Some(h)) if n != h),
+    );
+    let result_wrong =
+        matches!((concrete(result), concrete(declared_result)), (Some(n), Some(h)) if n != h);
+    if !(input_wrong || result_wrong) {
+        return;
+    }
+    let iface = if inputs.len() == 2 {
+        "BiFunction"
+    } else {
+        "Function"
+    };
+    let supers: Vec<String> = inputs
+        .iter()
+        .map(|t| format!("? super {}", render_type(t)))
+        .collect();
+    let required = format!(
+        "{iface}<{},? extends {}>",
+        supers.join(","),
+        render_type(result)
+    );
+    ctx.diags.push(crate::diagnostics::Diagnostic::error(
+        ctx.path,
+        format!(
+            "incompatible types: {} cannot be converted to {required}",
+            render_type(declared)
+        ),
+        span,
+    ));
+}
+
+/// A concrete FINAL library type, for which `? super`/`? extends` collapse
+/// to equality — the only footing on which a mismatch is provable.
+fn concrete(t: &TypeRef) -> Option<&str> {
+    match t {
+        TypeRef::Named(n)
+            if matches!(
+                n.as_str(),
+                "String"
+                    | "Integer"
+                    | "Double"
+                    | "Boolean"
+                    | "Character"
+                    | "Long"
+                    | "Short"
+                    | "Byte"
+                    | "Float"
+            ) =>
+        {
+            Some(n.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// A source-level rendering of a type reference, for diagnostics.
+fn render_type(t: &TypeRef) -> String {
+    match t {
+        TypeRef::Named(n) => n.clone(),
+        TypeRef::Generic { base, args } => {
+            let rendered: Vec<String> = args.iter().map(render_type).collect();
+            format!("{base}<{}>", rendered.join(","))
+        }
+        _ => String::from("Object"),
     }
 }
 

@@ -1800,7 +1800,22 @@ impl MethodTable {
                     let value = elem_from_type_arg(&args[1], self)?;
                     Some(JType::TreeMap { key, value })
                 } else if simple == "Set" && args.len() == 1 && !self.has_class(simple) {
-                    elem_from_type_arg(&args[0], self).map(JType::Set)
+                    // `Set<Map.Entry<K, V>>` is what `entrySet()` returns —
+                    // resolve it AS that view type, so the assignment is exact;
+                    // any other argument is a plain element set.
+                    if let TypeRef::Generic {
+                        base,
+                        args: entry_args,
+                    } = &args[0]
+                        && matches!(base.as_str(), "Map.Entry" | "Entry" | "java.util.Map.Entry")
+                        && entry_args.len() == 2
+                    {
+                        let key = elem_from_type_arg(&entry_args[0], self)?;
+                        let value = elem_from_type_arg(&entry_args[1], self)?;
+                        Some(JType::EntrySet { key, value })
+                    } else {
+                        elem_from_type_arg(&args[0], self).map(JType::Set)
+                    }
                 } else if matches!(simple, "TreeSet" | "SortedSet" | "NavigableSet")
                     && args.len() == 1
                     && !self.has_class(simple)
@@ -8573,6 +8588,24 @@ const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
+    // Writes through to the map, like `keySet().clear()`.
+    bm("clear", &[], BRet::Void, "()V"),
+    // `Set<Map.Entry<K, V>>` also names a REAL set of entries (a `HashSet`
+    // assigned to it), so the mutating Set surface must compile; on an actual
+    // `entrySet()` view the VM throws UnsupportedOperationException for `add`
+    // and writes `remove` through to the map, as the JDK's view does.
+    bm(
+        "add",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "remove",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
@@ -8587,6 +8620,12 @@ const ENTRY_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
     bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
@@ -12005,6 +12044,15 @@ impl BodyGen<'_> {
 
     /// The static type of a `new` expression (pure).
     fn type_of_new_object(&mut self, class: &str, type_args: &[TypeRef]) -> JType {
+        // Matches `new_simple_entry`. A diamond types as `Null` (assignable
+        // to any `Map.Entry`), like the other diamond constructors here.
+        if matches!(
+            class,
+            "AbstractMap.SimpleEntry" | "java.util.AbstractMap.SimpleEntry"
+        ) && !self.table.has_class("AbstractMap")
+        {
+            return self.simple_entry_type(type_args);
+        }
         let simple = crate::imports::canonical_library_class(class).unwrap_or(class);
         let class = if class.contains('.') { simple } else { class };
         if let Some(id) = self.table.class_id(class) {
@@ -12238,6 +12286,16 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> JType {
+        // `new AbstractMap.SimpleEntry<>(k, v)` — the JDK's standalone
+        // `Map.Entry`. Resolved before the dotted-name walk, which would
+        // otherwise read `AbstractMap` as a package.
+        if matches!(
+            class_name,
+            "AbstractMap.SimpleEntry" | "java.util.AbstractMap.SimpleEntry"
+        ) && !self.table.has_class("AbstractMap")
+        {
+            return self.new_simple_entry(type_args, args, span);
+        }
         // `new java.util.Scanner(...)`: resolve the qualified name (and
         // reject unknown ones with javac's wording).
         let class_name = if class_name.contains('.') {
@@ -12843,6 +12901,87 @@ impl BodyGen<'_> {
 
     /// `new HashMap<K, V>()`, `new HashMap<>(initialCapacity)`, or the copy
     /// constructor `new HashMap<>(otherMap)`.
+    /// The static type of `new AbstractMap.SimpleEntry<…>` from its type
+    /// arguments alone — `Null` (assignable to any `Map.Entry`) for a
+    /// diamond, like the other diamond constructors in `type_of_new_object`.
+    fn simple_entry_type(&mut self, type_args: &[TypeRef]) -> JType {
+        if let [key, value] = type_args
+            && let (Some(key), Some(value)) = (
+                elem_from_type_arg(key, self.table),
+                elem_from_type_arg(value, self.table),
+            )
+        {
+            return JType::MapEntry { key, value };
+        }
+        JType::Null
+    }
+
+    /// `new AbstractMap.SimpleEntry<>(key, value)` — a standalone
+    /// `Map.Entry`, modelled as an entry view over a hidden one-mapping map
+    /// (so `getKey`/`getValue`/`setValue`/`toString` all flow through the
+    /// existing entry machinery).
+    fn new_simple_entry(
+        &mut self,
+        type_args: &[TypeRef],
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> JType {
+        let declared = match type_args {
+            [] => None,
+            [key, value] => {
+                if let (Some(key), Some(value)) = (
+                    elem_from_type_arg(key, self.table),
+                    elem_from_type_arg(value, self.table),
+                ) {
+                    Some((key, value))
+                } else {
+                    self.error(
+                        span,
+                        "AbstractMap.SimpleEntry key and value types must be Integer, \
+                         Double, Boolean, Character, String, or a class",
+                    );
+                    return JType::Error;
+                }
+            }
+            _ => {
+                self.error(span, "AbstractMap.SimpleEntry takes two type arguments");
+                return JType::Error;
+            }
+        };
+        if args.len() != 2 {
+            self.error(
+                span,
+                "AbstractMap.SimpleEntry takes a key and a value argument",
+            );
+            return JType::Error;
+        }
+        let key_ty = self.expr(&args[0]);
+        if let Some(elem) = boxable_primitive(key_ty) {
+            self.emit_box(elem);
+        }
+        let value_ty = self.expr(&args[1]);
+        if let Some(elem) = boxable_primitive(value_ty) {
+            self.emit_box(elem);
+        }
+        let method_ref = intern_method_ref(
+            self.pool,
+            "java/lang/System",
+            "__simpleEntry",
+            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        );
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+        self.code.drop_stack(2);
+        self.code.grow_stack(1);
+        let (key, value) = declared.unwrap_or_else(|| {
+            let object = ElemType::Object(self.table.object_id);
+            (
+                collection_elem_of(key_ty).unwrap_or(object),
+                collection_elem_of(value_ty).unwrap_or(object),
+            )
+        });
+        JType::MapEntry { key, value }
+    }
+
     fn new_hash_map(&mut self, type_args: &[TypeRef], args: &[Expr], span: SourceSpan) -> JType {
         if args.len() > 1 {
             self.error(span, "HashMap takes at most one constructor argument");

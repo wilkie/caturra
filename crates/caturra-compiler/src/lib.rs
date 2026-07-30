@@ -500,6 +500,10 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             || s.text.contains(".removeIf(")
             || s.text.contains(".replaceAll(")
             || s.text.contains(".sort(")
+            // The JDK-8 map lambda methods desugar to the bundled
+            // `__BiFunction`/`__UnaryOperator`.
+            || s.text.contains(".merge(")
+            || s.text.contains(".compute")
             // `optional.ifPresent(x -> ...)` / `filter(x -> ...)` desugar to the
             // bundled `__Consumer`/`__Predicate` too.
             || s.text.contains(".ifPresent(")
@@ -584,7 +588,9 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
 
     bridges::add_bridge_methods(&mut units);
     inner::bind_inner_classes(&mut units);
-    lambda::desugar_lambdas(&mut units);
+    compilation
+        .diagnostics
+        .extend(lambda::desugar_lambdas(&mut units));
     compilation
         .diagnostics
         .extend(capture::resolve_captures(&mut units));

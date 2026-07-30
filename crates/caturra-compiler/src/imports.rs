@@ -17,6 +17,7 @@ use crate::diagnostics::{Diagnostic, SourceSpan};
 /// Importable library classes, per package.
 const JAVA_UTIL: &[&str] = &[
     "Scanner",
+    "AbstractMap",
     "ArrayList",
     "List",
     "HashMap",

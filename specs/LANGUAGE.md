@@ -231,6 +231,44 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **The Map API tail** (2026-07-30) — seven round-6 findings:
+  - **The compute family inserts at the bucket HEAD**: a NEW key from
+    `computeIfAbsent`/`compute`/`merge` links at the front of its bucket
+    chain (`tab[i] = newNode(hash, key, v, first)` in the JDK), unlike
+    `put`'s tail append — observable in iteration order whenever keys share
+    a bucket (`put("a",1); computeIfAbsent("q",…)` prints `{q=…, a=1}`).
+    The map model gained a per-entry chain sequence (tail-appends ascending,
+    head-inserts descending), which survives resizes because two keys in the
+    same final bucket were in the same bucket at every smaller table size.
+  - **A mistyped remapper VARIABLE is rejected at the call site**: `merge`
+    wants `BiFunction<? super V, ? super V, ? extends V>`, but the declared
+    type arguments erase before codegen, so `m.merge(k, v, g)` with a
+    `BiFunction<K, V, V>` compiled and CCE'd at run time. The lambda pass —
+    the last place the declaration is visible — now checks it (and
+    `computeIfAbsent`'s `Function`), rejecting only PROVABLE mismatches
+    (both sides concrete final library types), with javac's exact message.
+    This gave the lambda pass its first diagnostics channel.
+  - **Method references reach the map lambda methods**: `m.merge(k, v,
+    Integer::sum)` and `m.computeIfAbsent(s, String::length)` desugar like
+    the equivalent lambdas (they were refused with "only allowed where a
+    functional-interface type is expected").
+  - **No import needed**: the map lambda methods work without any
+    `java.util.function` import — the bundled function library's injection
+    triggers now include `.merge(`/`.compute`.
+  - **`entrySet()` assigns to its own type**: `Set<Map.Entry<K, V>>` now
+    RESOLVES as the entry-set view type (it resolved as `Set<Object>` and
+    the assignment was refused). Since that spelling also names a real
+    `HashSet` of entries, the view's method table gained the mutating Set
+    surface: `add` (UnsupportedOperationException on an actual view, a real
+    add on a `HashSet`), `remove(entry)` (removes the mapping when key AND
+    value match, like `contains`), and `clear` (writes through, like
+    `keySet().clear()`).
+  - **`AbstractMap.SimpleEntry`** is a standalone `Map.Entry` — modelled as
+    an entry view over a hidden one-mapping map, so `getKey`/`getValue`/
+    `setValue`/`toString`/`hashCode` flow through the existing entry
+    machinery (it was refused with the wrong diagnosis "package AbstractMap
+    does not exist"). `Map.Entry.equals` arrived with it: key-and-value
+    equality against any other entry, live or standalone.
 - **The String API tail** (2026-07-30) — eight round-6 findings:
   - **`strip()`/`stripLeading`/`stripTrailing`/`isBlank` use JAVA's
     whitespace** (`Character.isWhitespace`), not Unicode's: the two differ on
@@ -1121,8 +1159,9 @@ null` is the way to test for absence, and unboxing an absent value
     other target type in caturra is instantiated from its receiver — and
     the VM walks the entries in the map's own iteration order. A receiver
     with no declaration to read (`getMap().forEach(...)`) is refused, as
-    is `merge`/`compute*`/`replaceAll` and `Map.of`; all report honest
-    reasons. `keySet`/`values`/`entrySet` and the core methods are
+    is `Map.of`; both report honest reasons. `merge`/`compute*`/
+    `replaceAll` work — with method references, no-import injection, and
+    the compute family's bucket-HEAD insertion position (2026-07-30). `keySet`/`values`/`entrySet` and the core methods are
     pinned against a real JDK by `diff_hash_map_iteration_order`,
     `_core_methods`, `_null_and_unboxing` and `_views`.
   - `HashSet<E>` / `Set<E>` (2026-07-10), **with the JDK's own iteration

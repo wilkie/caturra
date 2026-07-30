@@ -5417,7 +5417,7 @@ impl<'run> Interpreter<'run> {
                     _ => {
                         let computed = self.call_apply(*mapping, *key)?;
                         if computed != JValue::NULL {
-                            self.map_put(receiver, *key, computed)?;
+                            self.map_put_compute(receiver, *key, computed)?;
                         }
                         computed
                     }
@@ -6861,9 +6861,39 @@ impl<'run> Interpreter<'run> {
                 self.map_remove_at(map, at);
             }
         } else {
-            self.map_put(map, key, value)?;
+            self.map_put_compute(map, key, value)?;
         }
         Ok(value)
+    }
+
+    /// `put` for the compute family (`computeIfAbsent`/`compute`/`merge`):
+    /// identical to [`Self::map_put`], except that a NEW key is linked at the
+    /// HEAD of its bucket chain, as the JDK's compute paths do
+    /// (`tab[i] = newNode(hash, key, v, first)`), so it iterates before older
+    /// same-bucket entries. An existing key is updated in place either way.
+    fn map_put_compute(
+        &mut self,
+        map: HeapRef,
+        key: JValue,
+        value: JValue,
+    ) -> Result<JValue, VmError> {
+        use crate::value::HeapObject;
+        if matches!(self.heap.get(map), Some(HeapObject::TreeMap { .. })) {
+            return self.tree_map_put(map, key, value);
+        }
+        let hash = self.java_hash_code(key)?;
+        if let Some(at) = self.map_find_hashed(map, hash, key)?
+            && let Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) =
+                self.heap.get_mut(map)
+        {
+            return Ok(entries.set_value_at(at, value));
+        }
+        if let Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) =
+            self.heap.get_mut(map)
+        {
+            entries.insert_new_at_head(hash, key, value);
+        }
+        Ok(JValue::NULL)
     }
 
     fn call_apply(&mut self, function: HeapRef, element: JValue) -> Result<JValue, VmError> {
@@ -7424,11 +7454,34 @@ impl<'run> Interpreter<'run> {
                         }
                         removed
                     }
-                    MapViewKind::Entries => {
-                        return Err(VmError::UnknownIntrinsic(format!(
-                            "Map view.{method_name}{descriptor}"
-                        )));
-                    }
+                    // `entrySet().remove(entry)` drops the mapping when BOTH
+                    // key and value match (Map.Entry.equals), as `contains`
+                    // above decides membership.
+                    MapViewKind::Entries => match *element {
+                        JValue::Ref(Some(entry)) => match self.heap.get(entry) {
+                            Some(HeapObject::MapEntry {
+                                map: other_map,
+                                key,
+                            }) => {
+                                let (other_map, key) = (*other_map, *key);
+                                let probe_value = self.map_entry_value(other_map, key)?;
+                                match self.map_find(map, key)? {
+                                    Some(at) => {
+                                        let held = self.map_value_at(map, at);
+                                        if self.java_equals(held, probe_value)? {
+                                            self.map_remove_at(map, at);
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    None => false,
+                                }
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    },
                 };
                 JValue::Int(i32::from(removed))
             }
@@ -7537,6 +7590,27 @@ impl<'run> Interpreter<'run> {
             ("hashCode", []) => {
                 let value = self.map_entry_value(map, key)?;
                 JValue::Int(self.java_hash_code(key)? ^ self.java_hash_code(value)?)
+            }
+            // `Map.Entry.equals`: another Map.Entry whose key AND value are
+            // both equal — never merely the same object.
+            ("equals", [other]) => {
+                let equal = match other {
+                    JValue::Ref(Some(other)) => match self.heap.get(*other) {
+                        Some(crate::value::HeapObject::MapEntry {
+                            map: other_map,
+                            key: other_key,
+                        }) => {
+                            let (other_map, other_key) = (*other_map, *other_key);
+                            let value = self.map_entry_value(map, key)?;
+                            let other_value = self.map_entry_value(other_map, other_key)?;
+                            self.java_equals(key, other_key)?
+                                && self.java_equals(value, other_value)?
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                JValue::Int(i32::from(equal))
             }
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
@@ -7768,6 +7842,25 @@ impl<'run> Interpreter<'run> {
                 _ => 0,
             };
             frame.stack.push(JValue::Int(hash));
+            return Ok(None);
+        }
+        // `new AbstractMap.SimpleEntry<>(k, v)` (compiler-lowered): a
+        // standalone `Map.Entry`, backed by a hidden one-mapping map so the
+        // entry-view methods all work on it. Answered here, not in the
+        // heap-only intrinsics, because hashing the key may run user code.
+        if class_name == "java/lang/System" && method_name == "__simpleEntry" {
+            let (key, value) = match args {
+                [key, value] => (*key, *value),
+                _ => (JValue::NULL, JValue::NULL),
+            };
+            let map = self.heap.alloc(crate::value::HeapObject::HashMap(
+                crate::map::JavaHashMap::new(),
+            ));
+            self.map_put(map, key, value)?;
+            let entry = self
+                .heap
+                .alloc(crate::value::HeapObject::MapEntry { map, key });
+            frame.stack.push(JValue::Ref(Some(entry)));
             return Ok(None);
         }
         // `String.valueOf(Object)` — the object's own toString or "null",
