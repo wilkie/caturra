@@ -1698,9 +1698,12 @@ impl MethodTable {
                     JType::Method => ElemType::Method,
                     JType::Constructor => ElemType::Constructor,
                     JType::Class => ElemType::Class,
-                    // A wrapper array (`Integer[]`) stores its primitives
-                    // directly, like the corresponding primitive array.
-                    JType::Boxed(elem) => elem,
+                    // A wrapper array (`Integer[]`) is a REFERENCE array of
+                    // boxed elements, distinct from the primitive `int[]`.
+                    JType::Boxed(elem) => match Prim::of(elem) {
+                        Some(prim) => ElemType::Wrapper(prim),
+                        None => return None,
+                    },
                     _ => return None,
                 };
                 Some(JType::Array { elem, dims })
@@ -2163,6 +2166,18 @@ fn boxable_primitive(ty: JType) -> Option<ElemType> {
     })
 }
 
+/// The element type a VALUE contributes to a COLLECTION: like
+/// [`elem_type_of`], but a primitive becomes its `Wrapper` — collections
+/// store references (boxed at rest), unlike arrays, where `new int[]{1}` is
+/// genuinely primitive storage.
+fn collection_elem_of(ty: JType) -> Option<ElemType> {
+    let elem = elem_type_of(ty)?;
+    Some(match Prim::of(elem) {
+        Some(prim) => ElemType::Wrapper(prim),
+        None => elem,
+    })
+}
+
 /// The boxed primitive kind for a wrapper class simple name, if any.
 fn wrapper_elem(name: &str) -> Option<ElemType> {
     Some(match name {
@@ -2190,6 +2205,8 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::Byte => "java/lang/Byte",
         ElemType::Char => "java/lang/Character",
         ElemType::Boolean => "java/lang/Boolean",
+        // A wrapper element defers to its own primitive.
+        ElemType::Wrapper(prim) => wrapper_internal(prim.elem()),
         ElemType::Str
         | ElemType::Object(_)
         | ElemType::Field
@@ -2273,6 +2290,7 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
 
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
+        ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
         ElemType::Int => String::from("Integer"),
         ElemType::Double => String::from("Double"),
         ElemType::Long => String::from("Long"),
@@ -2344,10 +2362,18 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 return Some(ElemType::Object(id));
             }
             match crate::imports::canonical_library_class(name).unwrap_or(name.as_str()) {
-                "Integer" => Some(ElemType::Int),
-                "Double" => Some(ElemType::Double),
-                "Boolean" => Some(ElemType::Boolean),
-                "Character" => Some(ElemType::Char),
+                // A wrapper type argument is a BOXED element — `List<Integer>`
+                // stores references to `Integer` objects, exactly as maps and
+                // sets already do, so an element read through `Object` keeps
+                // its identity instead of minting a fresh box per read.
+                "Integer" => Some(ElemType::Wrapper(Prim::Int)),
+                "Double" => Some(ElemType::Wrapper(Prim::Double)),
+                "Long" => Some(ElemType::Wrapper(Prim::Long)),
+                "Float" => Some(ElemType::Wrapper(Prim::Float)),
+                "Short" => Some(ElemType::Wrapper(Prim::Short)),
+                "Byte" => Some(ElemType::Wrapper(Prim::Byte)),
+                "Boolean" => Some(ElemType::Wrapper(Prim::Boolean)),
+                "Character" => Some(ElemType::Wrapper(Prim::Char)),
                 "String" => Some(ElemType::Str),
                 "Object" => Some(ElemType::Object(table.object_id)),
                 other => table.class_id(other).map(ElemType::Object),
@@ -2493,6 +2519,8 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
         | ElemType::Byte
         | ElemType::Char
         | ElemType::Boolean => wrapper_face(Some(arg), class, table),
+        // A boxed element has exactly its wrapper's faces.
+        ElemType::Wrapper(prim) => wrapper_face(Some(prim.elem()), class, table),
         _ => false,
     }
 }
@@ -2553,8 +2581,8 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Str => Some(ElemType::Str),
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
-        // A wrapper array element stores its primitive (`Integer[]` -> `int[]`).
-        JType::Boxed(elem) => Some(elem),
+        // A wrapper array element is a boxed REFERENCE (`Integer[]`).
+        JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
         _ => None,
     }
 }
@@ -2849,6 +2877,16 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Array { elem: ElemType::Object(sup), dims: d2 },
             ) if d1 == d2 && sup == table.object_id
         )
+        // A wrapper array (`Integer[]`) is covariant into every face the
+        // wrapper itself has: `Object[]`, `Comparable[]`, and — numeric only —
+        // `Number[]` (JLS §4.10.3).
+        || matches!(
+            (from, to),
+            (
+                JType::Array { elem: ElemType::Wrapper(prim), dims: d1 },
+                JType::Array { elem: ElemType::Object(sup), dims: d2 },
+            ) if d1 == d2 && wrapper_face(Some(prim.elem()), sup, table)
+        )
         // A multi-dimensional array is an `Object[]` of its rows, whatever
         // the leaf element type: `int[][]` is an `Object[]`, `int[]` is not.
         || matches!(
@@ -2944,6 +2982,58 @@ enum ElemType {
         inner: u32,
         read: ClassId,
     },
+    /// A boxed-wrapper element: `Integer[]` is a REFERENCE array of `Integer`
+    /// objects, not an `int[]` — its slots default to null, and two reads of
+    /// one slot are the SAME reference. Conflating the two (the old model)
+    /// zero-filled where Java null-fills and minted a fresh identity per read
+    /// through the `Object` boundary, so `arr[0] == arr[1]` answered wrongly
+    /// in both directions.
+    Wrapper(Prim),
+}
+
+/// The primitive a [`ElemType::Wrapper`] element boxes. A dedicated enum
+/// (rather than nesting `ElemType`) keeps `ElemType` `Copy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Prim {
+    Int,
+    Double,
+    Long,
+    Float,
+    Short,
+    Byte,
+    Boolean,
+    Char,
+}
+
+impl Prim {
+    /// The primitive as an element type (`int` for `Integer`).
+    fn elem(self) -> ElemType {
+        match self {
+            Prim::Int => ElemType::Int,
+            Prim::Double => ElemType::Double,
+            Prim::Long => ElemType::Long,
+            Prim::Float => ElemType::Float,
+            Prim::Short => ElemType::Short,
+            Prim::Byte => ElemType::Byte,
+            Prim::Boolean => ElemType::Boolean,
+            Prim::Char => ElemType::Char,
+        }
+    }
+
+    /// The wrapper kind of a primitive element type, if it is one.
+    fn of(elem: ElemType) -> Option<Prim> {
+        match elem {
+            ElemType::Int => Some(Prim::Int),
+            ElemType::Double => Some(Prim::Double),
+            ElemType::Long => Some(Prim::Long),
+            ElemType::Float => Some(Prim::Float),
+            ElemType::Short => Some(Prim::Short),
+            ElemType::Byte => Some(Prim::Byte),
+            ElemType::Boolean => Some(Prim::Boolean),
+            ElemType::Char => Some(Prim::Char),
+            _ => None,
+        }
+    }
 }
 
 /// The bound of a wildcard type argument, as far as caturra can verify it for
@@ -2988,6 +3078,7 @@ impl ElemType {
             ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. } => {
                 format!("L{};", table.class_name(read))
             }
+            ElemType::Wrapper(prim) => format!("L{};", wrapper_internal(prim.elem())),
         }
     }
 
@@ -3011,6 +3102,8 @@ impl ElemType {
             // class; the nesting-aware `elem_value_type` recovers the true
             // inner type where it matters (`get`/`add`/for-each).
             ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. } => JType::Object(read),
+            // A wrapper element reads as the WRAPPER — a reference.
+            ElemType::Wrapper(prim) => JType::Boxed(prim.elem()),
         }
     }
 }
@@ -4518,22 +4611,6 @@ fn boxed_method_return(method: &str) -> Option<JType> {
     })
 }
 
-/// The primitive descriptor char for a wrapper class name (`Integer` → `I`),
-/// for wrapper arrays which store their primitives directly.
-fn wrapper_primitive_char(name: &str) -> Option<char> {
-    match crate::imports::canonical_library_class(name).unwrap_or(name) {
-        "Integer" => Some('I'),
-        "Double" => Some('D'),
-        "Long" => Some('J'),
-        "Float" => Some('F'),
-        "Short" => Some('S'),
-        "Byte" => Some('B'),
-        "Character" => Some('C'),
-        "Boolean" => Some('Z'),
-        _ => None,
-    }
-}
-
 #[allow(clippy::too_many_lines)] // one descriptor builder with a type-mapping matrix
 fn method_descriptor(
     path: &str,
@@ -4571,16 +4648,9 @@ fn method_descriptor(
             TypeRef::Char => out.push('C'),
             TypeRef::Array(inner) => {
                 out.push('[');
-                // A wrapper array (`Integer[]`) stores its primitives directly,
-                // like the corresponding primitive array (matches resolve_type).
-                if let TypeRef::Named(name) = inner.as_ref()
-                    && !table.has_class(name)
-                    && let Some(prim) = wrapper_primitive_char(name)
-                {
-                    out.push(prim);
-                } else {
-                    push_type(path, diagnostics, table, out, inner, span);
-                }
+                // A wrapper array (`Integer[]`) is a reference array: its
+                // descriptor names the wrapper class, distinct from `[I`.
+                push_type(path, diagnostics, table, out, inner, span);
             }
             TypeRef::Generic { base, .. } => {
                 let mut simple =
@@ -8547,6 +8617,7 @@ fn boxed_if_primitive(elem: Option<ElemType>) -> JType {
             | ElemType::Boolean
             | ElemType::Char),
         ) => JType::Boxed(primitive),
+        // A wrapper element already IS the boxed type (its base type).
         Some(reference) => reference.base_type(),
         None => JType::Error,
     }
@@ -8821,7 +8892,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         }),
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
         BRet::IntStream => Some(JType::IntStream),
-        BRet::StreamInteger => Some(JType::Stream(ElemType::Int)),
+        BRet::StreamInteger => Some(JType::Stream(ElemType::Wrapper(Prim::Int))),
         BRet::IntArray => Some(JType::Array {
             elem: ElemType::Int,
             dims: 1,
@@ -13111,6 +13182,9 @@ impl BodyGen<'_> {
             "charValue" => Some((JType::Char, String::from("()C"))),
             "booleanValue" => Some((JType::Boolean, String::from("()Z"))),
             "toString" => Some((JType::Str, String::from("()Ljava/lang/String;"))),
+            // Inherited from Object; the VM answers it for a Boxed receiver
+            // (and interning makes `a.getClass() == b.getClass()` hold).
+            "getClass" => Some((JType::Class, String::from("()Ljava/lang/Class;"))),
             _ => None,
         };
         if let Some((ret, descriptor)) = plan {
@@ -15291,7 +15365,7 @@ impl BodyGen<'_> {
             return None;
         };
         let value_ty = self.expr(value);
-        let Some(elem) = elem_type_of(value_ty) else {
+        let Some(elem) = collection_elem_of(value_ty) else {
             self.error(
                 value.span(),
                 format!(
@@ -15302,6 +15376,9 @@ impl BodyGen<'_> {
             self.code.discard();
             return None;
         };
+        // Boxed at rest: a primitive is boxed on the way in, so `get()` hands
+        // back the SAME reference every time.
+        self.convert_for_assignment(value_ty, elem.base_type(), value.span());
         let descriptor = format!(
             "({})Ljava/util/Optional;",
             elem.base_type().descriptor(self.table)
@@ -15384,7 +15461,7 @@ impl BodyGen<'_> {
                 return None;
             };
             let value_ty = self.expr(value);
-            let Some(elem) = elem_type_of(value_ty) else {
+            let Some(elem) = collection_elem_of(value_ty) else {
                 self.error(
                     value.span(),
                     format!(
@@ -15395,6 +15472,7 @@ impl BodyGen<'_> {
                 self.code.discard();
                 return None;
             };
+            self.convert_for_assignment(value_ty, elem.base_type(), value.span());
             let descriptor = format!(
                 "({})Ljava/util/ArrayList;",
                 elem.base_type().descriptor(self.table)
@@ -15428,7 +15506,7 @@ impl BodyGen<'_> {
                 return None;
             };
             let value_ty = self.expr(value);
-            let Some(elem) = elem_type_of(value_ty) else {
+            let Some(elem) = collection_elem_of(value_ty) else {
                 self.error(
                     value.span(),
                     format!(
@@ -15439,13 +15517,14 @@ impl BodyGen<'_> {
                 self.code.discard();
                 return None;
             };
+            self.convert_for_assignment(value_ty, elem.base_type(), value.span());
             let descriptor = format!(
                 "({})Ljava/util/Set;",
                 elem.base_type().descriptor(self.table)
             );
             let method_ref = intern_method_ref(self.pool, "Collections", "singleton", &descriptor);
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
-            self.code.drop_stack(value_ty.width());
+            self.code.drop_stack(elem.base_type().width());
             return Some(Some(JType::Set(elem)));
         }
         // `singletonMap(k, v)` — an immutable one-entry `Map`.
@@ -15455,7 +15534,7 @@ impl BodyGen<'_> {
                 return None;
             };
             let key_ty = self.expr(key_arg);
-            let Some(key) = elem_type_of(key_ty) else {
+            let Some(key) = collection_elem_of(key_ty) else {
                 self.error(
                     key_arg.span(),
                     "Collections.singletonMap key has no element type",
@@ -15463,8 +15542,9 @@ impl BodyGen<'_> {
                 self.code.discard();
                 return None;
             };
+            self.convert_for_assignment(key_ty, key.base_type(), key_arg.span());
             let value_ty = self.expr(value_arg);
-            let Some(value) = elem_type_of(value_ty) else {
+            let Some(value) = collection_elem_of(value_ty) else {
                 self.error(
                     value_arg.span(),
                     "Collections.singletonMap value has no element type",
@@ -15472,6 +15552,7 @@ impl BodyGen<'_> {
                 self.code.discard();
                 return None;
             };
+            self.convert_for_assignment(value_ty, value.base_type(), value_arg.span());
             let descriptor = format!(
                 "({}{})Ljava/util/Map;",
                 key.base_type().descriptor(self.table),
@@ -15528,7 +15609,7 @@ impl BodyGen<'_> {
             let count_ty = self.expr(count);
             self.numeric_conversion(count_ty, JType::Int);
             let value_ty = self.expr(value);
-            let Some(elem) = elem_type_of(value_ty) else {
+            let Some(elem) = collection_elem_of(value_ty) else {
                 self.error(
                     value.span(),
                     format!(
@@ -15539,6 +15620,7 @@ impl BodyGen<'_> {
                 self.code.discard();
                 return None;
             };
+            self.convert_for_assignment(value_ty, elem.base_type(), value.span());
             let descriptor = format!(
                 "(I{})Ljava/util/ArrayList;",
                 elem.base_type().descriptor(self.table)
@@ -16006,15 +16088,16 @@ impl BodyGen<'_> {
     #[allow(clippy::option_option, clippy::unnecessary_wraps)] // call-dispatch return shape
     fn emit_arrays_as_list(&mut self, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
         let object_elem = ElemType::Object(self.table.object_id);
-        // Pack into an array of the ELEMENT type, not `Object[]`: a list holds
-        // its primitives unboxed, so `Arrays.asList(1, 2)` must not box them.
+        // Pack into an array of the ELEMENT type. A primitive argument boxes
+        // into its wrapper (`Arrays.asList(1, 2)` is a `List<Integer>` of
+        // boxed references — collections store boxed at rest).
         let elem = if let [single] = args {
             if let JType::Array { elem, dims: 1 } = self.type_of(single) {
                 // The lone array argument *is* the varargs array.
                 self.expr(single);
                 elem
             } else {
-                let scalar = elem_type_of(self.type_of(single)).unwrap_or(object_elem);
+                let scalar = collection_elem_of(self.type_of(single)).unwrap_or(object_elem);
                 self.emit_array_literal(
                     args,
                     JType::Array {
@@ -16028,7 +16111,7 @@ impl BodyGen<'_> {
         } else {
             let scalar = args
                 .first()
-                .and_then(|a| elem_type_of(self.type_of(a)))
+                .and_then(|a| collection_elem_of(self.type_of(a)))
                 .unwrap_or(object_elem);
             self.emit_array_literal(
                 args,
@@ -16503,7 +16586,7 @@ impl BodyGen<'_> {
                 match builtin_static_constant(&path[0], &path[1]) {
                     Some(BuiltinConstant::Double(_)) => JType::Double,
                     Some(BuiltinConstant::Char(_)) => JType::Char,
-                    Some(BuiltinConstant::Bool(_)) => JType::Boolean,
+                    Some(BuiltinConstant::Bool(_)) => JType::Boxed(ElemType::Boolean),
                     Some(BuiltinConstant::Long(_)) => JType::Long,
                     Some(BuiltinConstant::Float(_)) => JType::Float,
                     _ => JType::Int,
@@ -16801,11 +16884,11 @@ impl BodyGen<'_> {
                         "emptyList" | "emptySet" | "emptyMap" => return JType::Null,
                         "nCopies" => {
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
-                            return elem_type_of(value).map_or(JType::Error, JType::List);
+                            return collection_elem_of(value).map_or(JType::Error, JType::List);
                         }
                         "singletonList" => {
                             let value = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return elem_type_of(value).map_or(JType::Error, JType::List);
+                            return collection_elem_of(value).map_or(JType::Error, JType::List);
                         }
                         "reverseOrder" => {
                             return self
@@ -16815,12 +16898,12 @@ impl BodyGen<'_> {
                         }
                         "singleton" => {
                             let value = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return elem_type_of(value).map_or(JType::Error, JType::Set);
+                            return collection_elem_of(value).map_or(JType::Error, JType::Set);
                         }
                         "singletonMap" => {
                             let key = args.first().map_or(JType::Error, |a| self.type_of(a));
                             let value = args.get(1).map_or(JType::Error, |a| self.type_of(a));
-                            return match (elem_type_of(key), elem_type_of(value)) {
+                            return match (collection_elem_of(key), collection_elem_of(value)) {
                                 (Some(key), Some(value)) => JType::Map { key, value },
                                 _ => JType::Error,
                             };
@@ -16835,7 +16918,7 @@ impl BodyGen<'_> {
                     match method.as_str() {
                         "of" | "ofNullable" => {
                             let arg = args.first().map_or(JType::Error, |a| self.type_of(a));
-                            return elem_type_of(arg).map_or(JType::Error, JType::Optional);
+                            return collection_elem_of(arg).map_or(JType::Error, JType::Optional);
                         }
                         // An empty Optional adopts its context, typing like `null`.
                         "empty" => return JType::Null,
@@ -16867,11 +16950,11 @@ impl BodyGen<'_> {
                             let elem = match args.as_slice() {
                                 [single] => match self.type_of(single) {
                                     JType::Array { elem, dims: 1 } => elem,
-                                    other => elem_type_of(other).unwrap_or(object_elem),
+                                    other => collection_elem_of(other).unwrap_or(object_elem),
                                 },
                                 _ => args
                                     .first()
-                                    .and_then(|a| elem_type_of(self.type_of(a)))
+                                    .and_then(|a| collection_elem_of(self.type_of(a)))
                                     .unwrap_or(object_elem),
                             };
                             return JType::List(elem);
@@ -17692,6 +17775,13 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            // `new Integer[n]` — a reference array, null-filled (Java's
+            // default for references; the old int[] model zero-filled it).
+            ElemType::Wrapper(prim) => {
+                let class = intern_class(self.pool, wrapper_internal(prim.elem()));
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             prim => {
                 let atype = match prim {
                     ElemType::Int => op::T_INT,
@@ -17709,7 +17799,8 @@ impl BodyGen<'_> {
                     | ElemType::Constructor
                     | ElemType::Class
                     | ElemType::Wildcard { .. }
-                    | ElemType::Nested { .. } => unreachable!(),
+                    | ElemType::Nested { .. }
+                    | ElemType::Wrapper(_) => unreachable!(),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
                 self.code.bytes.push(atype);
@@ -17953,8 +18044,14 @@ impl BodyGen<'_> {
                     return JType::Char;
                 }
                 BuiltinConstant::Bool(value) => {
+                    // `Boolean.TRUE`/`FALSE` are the CACHED Boolean objects,
+                    // not primitives: `Boolean.TRUE == Boolean.TRUE` is true
+                    // (one singleton), `new Boolean(true) == Boolean.TRUE` is
+                    // false (a fresh object). Emitting a bare `true` erased
+                    // the identity — the reference came back true for BOTH.
                     self.push_int(i32::from(value));
-                    return JType::Boolean;
+                    self.emit_box(ElemType::Boolean);
+                    return JType::Boxed(ElemType::Boolean);
                 }
                 BuiltinConstant::Long(value) => {
                     let index = self.pool.intern(Constant::Long(value));
@@ -18963,6 +19060,8 @@ impl BodyGen<'_> {
 
     fn logical(&mut self, op: BinaryOp, lhs: &Expr, rhs: &Expr, span: SourceSpan) -> JType {
         let lt = self.expr(lhs);
+        // A `Boolean` operand auto-unboxes (JLS §5.1.8) — `Boolean.TRUE && x`.
+        let lt = self.unbox_wrapper(lt);
         if lt != JType::Boolean && lt != JType::Error {
             self.error(
                 span,
@@ -18982,6 +19081,7 @@ impl BodyGen<'_> {
         };
         self.code.branch(jump, short, 1);
         let rt = self.expr(rhs);
+        let rt = self.unbox_wrapper(rt);
         if rt != JType::Boolean && rt != JType::Error {
             self.error(
                 span,
@@ -19701,7 +19801,8 @@ impl BodyGen<'_> {
             | ElemType::Constructor
             | ElemType::Class
             | ElemType::Wildcard { .. }
-            | ElemType::Nested { .. } => "intValue",
+            | ElemType::Nested { .. }
+            | ElemType::Wrapper(_) => "intValue",
             ElemType::Double => "doubleValue",
             ElemType::Long => "longValue",
             ElemType::Float => "floatValue",
@@ -20075,6 +20176,17 @@ impl BodyGen<'_> {
                     dims: d2,
                 },
             ) if d1 == d2 && sup == self.table.object_id => {}
+            // A wrapper array into any face the wrapper has (see `widens`).
+            (
+                JType::Array {
+                    elem: ElemType::Wrapper(prim),
+                    dims: d1,
+                },
+                JType::Array {
+                    elem: ElemType::Object(sup),
+                    dims: d2,
+                },
+            ) if d1 == d2 && wrapper_face(Some(prim.elem()), sup, self.table) => {}
             // A multi-dimensional array is an `Object[]` of its rows.
             (
                 JType::Array { dims: d1, .. },

@@ -9552,14 +9552,14 @@ const REJECT_WORDING: &[(&str, &str, &str, &str, Wording)] = &[
         "WordAddAll",
         "import java.util.*;\npublic class WordAddAll { static void r() { ArrayList<Integer> l = new ArrayList<Integer>(); int[] v = {1}; Collections.addAll(l, v); } }",
         "method addAll in class Collections cannot be applied to given types;",
-        "incompatible types: int[] cannot be converted to int",
+        "incompatible types: int[] cannot be converted to Integer",
         Wording::Differs("as above: caturra names the argument"),
     ),
     (
         "WordListSearch",
         "import java.util.*;\npublic class WordListSearch { static int r() { ArrayList<Integer> l = new ArrayList<Integer>(); return Collections.binarySearch(l, \"x\"); } }",
         "no suitable method found for binarySearch(ArrayList<Integer>,String)",
-        "incompatible types: String cannot be converted to int",
+        "incompatible types: String cannot be converted to Integer",
         Wording::Differs("as above: caturra names the argument"),
     ),
     (
@@ -9756,10 +9756,26 @@ stricter_than_javac!(
     "import java.util.*;\npublic class StrictContainsAllOther { static boolean r() { return new ArrayList<Integer>().containsAll(new ArrayList<String>()); } }"
 );
 
-stricter_than_javac!(
-    strict_collections_add_all_takes_no_array,
-    "StrictAddAllBoxedArr",
-    "import java.util.*;\npublic class StrictAddAllBoxedArr { static void r() { Collections.addAll(new ArrayList<Integer>(), new Integer[] {1}); } }"
+// `Collections.addAll(list, integerArray)` — a wrapper array IS the varargs
+// `T[]` (it is a reference array now), so this is legal Java that WORKS, where
+// caturra used to refuse it as a documented strictness. The strictness fell
+// out when `Integer[]` stopped being an `int[]`.
+differential_test!(
+    diff_collections_add_all_wrapper_array,
+    "DiffAddAllBoxedArr",
+    r"
+import java.util.*;
+
+public class DiffAddAllBoxedArr {
+    public static void main(String[] args) {
+        List<Integer> l = new ArrayList<>();
+        Collections.addAll(l, new Integer[] { 1, 2, 3 });
+        System.out.println(l);
+        Collections.addAll(l, 4, 5);
+        System.out.println(l);
+    }
+}
+"
 );
 
 // `Collections.sort`/`max`/`min`/`binarySearch` over a non-`Comparable`
@@ -15471,6 +15487,248 @@ public class DiffGrandEnclosing {
         d.bump();
         System.out.println(a.outerField + " " + m.midField);
         System.out.println(d.total());
+    }
+}
+"#
+);
+
+// BOXED AT REST — the representation change. A wrapper array is a REFERENCE
+// array (null defaults, slot identity), and the list family stores boxed
+// references like maps and sets always did, so an element read through the
+// Object boundary keeps its identity instead of minting a fresh box per read.
+differential_test!(
+    diff_boxed_at_rest_identity,
+    "DiffBoxedRest",
+    r#"
+import java.util.*;
+
+public class DiffBoxedRest {
+    public static void main(String[] args) {
+        // Arrays: outside the valueOf cache, two 200s are two boxes.
+        Integer[] arr = { 200, 200 };
+        System.out.println(arr[0] == arr[1]);
+        // Inside the cache they are one box.
+        Integer[] cached = { 100, 100 };
+        System.out.println(cached[0] == cached[1]);
+        // The same box stored twice reads back as the same box.
+        Integer x = 200;
+        Integer[] same = { x, x };
+        Object a = same[0];
+        Object b = same[1];
+        System.out.println(a == b);
+
+        // A fresh wrapper array is NULL-filled, not zero-filled.
+        Integer[] fresh = new Integer[3];
+        System.out.println(fresh[0]);
+        fresh[1] = 7;
+        System.out.println(fresh[1] + " " + fresh[0]);
+
+        // Lists: same identity story through get().
+        List<Integer> l = new ArrayList<>(Arrays.asList(200, 200));
+        System.out.println(l.get(0) == l.get(1));
+        l.add(x);
+        l.add(x);
+        Object c = l.get(2);
+        Object d = l.get(3);
+        System.out.println(c == d);
+        List<Object> lo = new ArrayList<>();
+        lo.add(200);
+        lo.add(200);
+        System.out.println(lo.get(0) == lo.get(1));
+
+        // The element's class is visible through the read.
+        System.out.println(l.get(0).getClass().getSimpleName());
+        Object o = l.get(0);
+        System.out.println(o instanceof Integer);
+        System.out.println(o instanceof Comparable);
+
+        // Arithmetic, search and sort still see the values.
+        System.out.println(l.get(0) + l.get(1));
+        System.out.println(l.contains(200) + " " + l.indexOf(200));
+        Collections.sort(l);
+        System.out.println(l);
+        int sum = 0;
+        for (int v : l) sum += v;
+        System.out.println(sum);
+    }
+}
+"#
+);
+
+// The wrapper-array library surface: covariance into Object[]/Number[]/
+// Comparable[], Arrays.* over a reference array, the asList view writing
+// through to the caller's array, and setAll boxing into the slots.
+differential_test!(
+    diff_wrapper_array_surface,
+    "DiffWrapArraySurface",
+    r#"
+import java.util.*;
+
+public class DiffWrapArraySurface {
+    static int spread(Object... xs) { return xs.length; }
+
+    public static void main(String[] args) {
+        Integer[] arr = { 3, 1, 2 };
+        System.out.println(Arrays.toString(arr));
+        Arrays.sort(arr);
+        System.out.println(Arrays.toString(arr));
+
+        Object[] o = arr;
+        Number[] n = arr;
+        Comparable[] c = arr;
+        System.out.println(o.length + " " + n[0].intValue() + " " + c.length);
+        System.out.println(spread((Object[]) arr));
+
+        List<Integer> view = Arrays.asList(arr);
+        view.set(0, 9);
+        System.out.println(arr[0] + " " + view);
+
+        System.out.println(Arrays.equals(arr, new Integer[] { 9, 2, 3 }));
+        System.out.println(Arrays.toString(Arrays.copyOf(arr, 2)));
+        System.out.println(Arrays.binarySearch(new Integer[] { 1, 2, 3 }, 2));
+        Arrays.fill(arr, 5);
+        System.out.println(Arrays.toString(arr));
+
+        Integer[] boxed = new Integer[3];
+        Arrays.setAll(boxed, i -> i + 10);
+        System.out.println(Arrays.toString(boxed));
+
+        Double[] d = { 1.5, 2.5 };
+        Boolean[] bo = { true, false };
+        Character[] ch = { 'a', 'b' };
+        Long[] lo = { 5L, 6L };
+        System.out.println(Arrays.toString(d) + Arrays.toString(bo)
+            + Arrays.toString(ch) + Arrays.toString(lo));
+
+        // For-each over a wrapper array unboxes per element.
+        int sum = 0;
+        for (int v : new Integer[] { 1, 2, 3 }) sum += v;
+        System.out.println(sum);
+    }
+}
+"#
+);
+
+// Unboxing a NULL wrapper-array slot throws NPE, as the JDK does — the old
+// int[] model had no null to throw on.
+differential_test!(
+    diff_wrapper_array_null_unbox,
+    "DiffWrapNullUnbox",
+    r#"
+public class DiffWrapNullUnbox {
+    public static void main(String[] args) {
+        Integer[] arr = new Integer[2];
+        arr[0] = 1;
+        try {
+            int total = 0;
+            for (int v : arr) total += v;
+            System.out.println(total);
+        } catch (NullPointerException e) {
+            System.out.println("NPE");
+        }
+    }
+}
+"#
+);
+
+// f(int...) and f(Integer...) are DISTINCT signatures now (they used to erase
+// alike and be rejected as duplicates); a mixed call is ambiguous exactly as
+// javac says.
+differential_test!(
+    diff_varargs_int_vs_integer,
+    "DiffVarargsIntInteger",
+    r#"
+public class DiffVarargsIntInteger {
+    static String f(int... xs) { return "int[" + xs.length + "]"; }
+    static String f(Integer... xs) { return "Integer[" + xs.length + "]"; }
+
+    public static void main(String[] args) {
+        Integer[] arr = { 1, 2, 3 };
+        System.out.println(f(arr));
+        int[] prim = { 1 };
+        System.out.println(f(prim));
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_ambiguous_int_integer_varargs,
+    "RejVarargsAmbig",
+    r#"
+public class RejVarargsAmbig {
+    static String f(int... xs) { return "int"; }
+    static String f(Integer... xs) { return "Integer"; }
+    public static void main(String[] args) {
+        System.out.println(f(1, 2));
+    }
+}
+"#
+);
+
+// Boolean.TRUE and Boolean.FALSE are the cached singletons; new Boolean(x)
+// is always a fresh object (JLS 15.9.4).
+differential_test!(
+    diff_boolean_constants_identity,
+    "DiffBoolConst",
+    r#"
+public class DiffBoolConst {
+    @SuppressWarnings("deprecation")
+    public static void main(String[] args) {
+        System.out.println(new Boolean(true) == Boolean.TRUE);
+        System.out.println(Boolean.TRUE == Boolean.TRUE);
+        Boolean b = true;
+        System.out.println(b == Boolean.TRUE);
+        boolean prim = Boolean.TRUE;
+        System.out.println(prim);
+        if (Boolean.TRUE) System.out.println("branch");
+        System.out.println(Boolean.FALSE + " " + !Boolean.FALSE);
+        System.out.println(Boolean.TRUE.equals(new Boolean(true)));
+        System.out.println(Boolean.valueOf(true) == Boolean.TRUE);
+        Object o = Boolean.TRUE;
+        System.out.println(o == Boolean.TRUE);
+        System.out.println(Boolean.TRUE && prim);
+    }
+}
+"#
+);
+
+// Boxed-at-rest construction boundaries: singleton/nCopies/Optional/asList
+// hold boxed references, so identity is preserved through every read.
+differential_test!(
+    diff_boxed_at_rest_boundaries,
+    "DiffBoxedBoundaries",
+    r#"
+import java.util.*;
+
+public class DiffBoxedBoundaries {
+    public static void main(String[] args) {
+        Integer x = 500;
+        List<Integer> single = Collections.singletonList(x);
+        Object a = single.get(0);
+        System.out.println(a == x);
+
+        List<Integer> copies = Collections.nCopies(3, x);
+        System.out.println((Object) copies.get(0) == (Object) copies.get(2));
+
+        Optional<Integer> opt = Optional.of(x);
+        Object got = opt.get();
+        System.out.println(got == x);
+
+        List<Integer> inline = Arrays.asList(600, 600);
+        System.out.println(inline.get(0) == inline.get(1));
+
+        Map<String, Integer> m = new HashMap<>();
+        m.put("k", x);
+        System.out.println(m.get("k") == x);
+
+        Set<Integer> s = new HashSet<>();
+        s.add(x);
+        for (Integer v : s) System.out.println(v == x);
+
+        Deque<Integer> d = new ArrayDeque<>();
+        d.push(x);
+        System.out.println(d.peek() == x);
     }
 }
 "#

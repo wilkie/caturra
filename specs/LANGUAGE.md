@@ -231,6 +231,44 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **BOXED AT REST** (2026-07-30) — the representation change, closing the last
+  audit-round findings. Wrapper values now live BOXED in every container, so an
+  element read through the `Object` boundary keeps its identity instead of
+  minting a fresh box per read.
+  - **`Integer[]` is a reference array**, distinct from `int[]` at last: a new
+    `ElemType::Wrapper(Prim)` element. Slots default to NULL (the old `int[]`
+    model zero-filled), reads are typed `Integer`, unboxing a null slot throws
+    NPE, and `arr[0] == arr[1]` answers correctly in both directions (two 200s
+    are two boxes; the same box twice is one). Covariant into `Object[]`,
+    `Comparable[]`, and — numeric only — `Number[]`. `Arrays.sort/toString/
+    equals/fill/copyOf/binarySearch/setAll` all work on the reference array
+    (`setAll` boxes its generator results in), and **`Arrays.asList(arr)` is a
+    write-through view of the caller's array** now that there is a shared
+    reference array to back it.
+  - **`f(int...)` and `f(Integer...)` are distinct signatures** (`[I` vs
+    `[Ljava/lang/Integer;`) — the pair used to be rejected as duplicates. A
+    mixed call (`f(1, 2)`) is ambiguous exactly as javac says; an array
+    argument picks its own overload. An `Integer[]` also spreads into an
+    `Object...`.
+  - **The list family stores boxed references** — `ArrayList`, `LinkedList`,
+    `Stack`, `ArrayDeque`, plus `Optional` and the `singletonList`/`singleton`/
+    `singletonMap`/`nCopies`/`asList` construction boundaries — the convention
+    maps and sets always used. A wrapper TYPE ARGUMENT is now
+    `ElemType::Wrapper` (and `List<Long>`/`Float`/`Short`/`Byte` resolve,
+    which they never did), `add` boxes at the boundary through the `valueOf`
+    cache (so `l.add(5); l.add(5)` shares the cached box, exactly as the JDK's
+    autoboxing does), and `get` returns the STORED reference. `IntStream`
+    stays primitive; `boxed()` produces a `Stream<Integer>` of references.
+  - **`Boolean.TRUE`/`FALSE` are the cached singletons**, not bare primitives:
+    `Boolean.TRUE == Boolean.TRUE` is true, `new Boolean(true) == Boolean.TRUE`
+    is false (JLS §15.9.4), and a `Boolean` operand of `&&`/`||` auto-unboxes.
+  - **One documented strictness fell out:** `Collections.addAll(list,
+    integerArray)` is legal Java that now WORKS (the wrapper array IS the
+    varargs `T[]`); it was refused while `Integer[]` meant `int[]`. Reject
+    wordings naming a list's element say `Integer` where they said `int`.
+  - Verified: the whole 2,600-level grading corpus is byte-identical under the
+    new representation, and identity now round-trips through every container
+    (list/set/map/deque/Optional/array) in the pinned differential tests.
 - **Round-5 tail: object methods, numeric corners, nested classes**
   (2026-07-30): the last fourteen round-5 findings outside the boxed-at-rest
   representation change.

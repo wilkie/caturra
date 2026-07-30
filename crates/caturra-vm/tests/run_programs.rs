@@ -10661,15 +10661,15 @@ fn collections_search_and_view_reject_like_javac() {
     for (source, want) in [
         (
             "ArrayList<Integer> l = new ArrayList<Integer>(); Collections.addAll(l, \"x\");",
-            "incompatible types: String cannot be converted to int",
+            "incompatible types: String cannot be converted to Integer",
         ),
         (
             "ArrayList<Integer> l = new ArrayList<Integer>(); int[] a = {1}; Collections.addAll(l, a);",
-            "incompatible types: int[] cannot be converted to int",
+            "incompatible types: int[] cannot be converted to Integer",
         ),
         (
             "ArrayList<Integer> l = new ArrayList<Integer>(); int i = Collections.binarySearch(l, \"x\");",
-            "incompatible types: String cannot be converted to int",
+            "incompatible types: String cannot be converted to Integer",
         ),
         (
             "Collections.unmodifiableList(5);",

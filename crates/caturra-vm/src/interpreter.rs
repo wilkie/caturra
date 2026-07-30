@@ -3934,6 +3934,15 @@ impl<'run> Interpreter<'run> {
                 let items = self.array_elements(elements).ok_or_else(|| {
                     VmError::UnknownIntrinsic(String::from("Arrays.asList needs an array"))
                 })?;
+                // Collections store boxed at rest: primitives copied out of a
+                // genuine primitive array box on the way in.
+                let items: Vec<JValue> = items
+                    .into_iter()
+                    .map(|item| match item {
+                        JValue::Ref(_) => item,
+                        primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                    })
+                    .collect();
                 self.heap.alloc(crate::value::HeapObject::RefArray(
                     String::from("[Ljava/lang/Object;"),
                     items,
@@ -3979,7 +3988,18 @@ impl<'run> Interpreter<'run> {
                             _ => 0.0,
                         };
                     }
-                    Some(HeapObject::RefArray(_, v)) => v[i] = value,
+                    Some(HeapObject::RefArray(_, _)) => {
+                        // A reference array stores REFERENCES: a primitive
+                        // generator result (an `Integer[]` filled by `i -> i`)
+                        // boxes on the way in, like every boxed-at-rest store.
+                        let stored = match value {
+                            JValue::Ref(_) => value,
+                            primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                        };
+                        if let Some(HeapObject::RefArray(_, v)) = self.heap.get_mut(array) {
+                            v[i] = stored;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -11501,6 +11521,16 @@ fn source_type_of(descriptor: &str) -> String {
         "Z" => return String::from("boolean"),
         "C" => return String::from("char"),
         "Ljava/lang/String;" => return String::from("String"),
+        // The wrapper classes, by their simple names (collection type
+        // arguments are these descriptors now that elements are boxed at rest).
+        "Ljava/lang/Integer;" => return String::from("Integer"),
+        "Ljava/lang/Double;" => return String::from("Double"),
+        "Ljava/lang/Long;" => return String::from("Long"),
+        "Ljava/lang/Float;" => return String::from("Float"),
+        "Ljava/lang/Short;" => return String::from("Short"),
+        "Ljava/lang/Byte;" => return String::from("Byte"),
+        "Ljava/lang/Boolean;" => return String::from("Boolean"),
+        "Ljava/lang/Character;" => return String::from("Character"),
         "Ljava/util/Scanner;" => return String::from("java.util.Scanner"),
         "Ljava/io/File;" => return String::from("java.io.File"),
         "Ljava/io/PrintWriter;" => return String::from("java.io.PrintWriter"),
@@ -11518,10 +11548,14 @@ fn source_type_of(descriptor: &str) -> String {
         .and_then(|s| s.strip_suffix(">;"))
     {
         let elem = match elem {
-            "I" => "Integer",
-            "D" => "Double",
-            "Z" => "Boolean",
-            "C" => "Character",
+            "I" | "Ljava/lang/Integer;" => "Integer",
+            "D" | "Ljava/lang/Double;" => "Double",
+            "Z" | "Ljava/lang/Boolean;" => "Boolean",
+            "C" | "Ljava/lang/Character;" => "Character",
+            "Ljava/lang/Long;" => "Long",
+            "Ljava/lang/Float;" => "Float",
+            "Ljava/lang/Short;" => "Short",
+            "Ljava/lang/Byte;" => "Byte",
             _ => {
                 return match source_type_of(elem).as_str() {
                     "" => String::new(),
