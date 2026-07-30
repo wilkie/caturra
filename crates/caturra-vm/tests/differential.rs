@@ -16067,3 +16067,138 @@ public class DiffFmtNulls {
 }
 "#
 );
+
+// JLS 8.4.8.3 round 6: an override may not weaken access nor broaden checked
+// exceptions, and @Override must override or implement something.
+differential_reject!(
+    reject_override_weakens_access,
+    "RejOvWeaker",
+    r#"
+public class RejOvWeaker {
+    static class A { public String m() { return "A"; } }
+    static class B extends A { protected String m() { return "B"; } }
+    public static void main(String[] args) {
+        System.out.println(new B().m());
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_override_private_over_package,
+    "RejOvPrivate",
+    r#"
+public class RejOvPrivate {
+    static class A { void m() {} }
+    static class B extends A { private void m() {} }
+    public static void main(String[] args) {
+        new B();
+        System.out.println("no");
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_override_broadens_throws,
+    "RejOvThrows",
+    r#"
+import java.io.IOException;
+
+public class RejOvThrows {
+    static class A { void m() throws IOException {} }
+    static class B extends A { void m() throws Exception {} }
+    public static void main(String[] args) {
+        System.out.println("no");
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_override_annotation_without_override,
+    "RejOvAnno",
+    r#"
+public class RejOvAnno {
+    static class A { void m(int x) {} }
+    static class B extends A { @Override void m(long x) {} }
+    public static void main(String[] args) {
+        System.out.println("no");
+    }
+}
+"#
+);
+
+// The legal side, which must all KEEP compiling: @Override on interface
+// implementations through the erasure bridge (Comparable/Comparator), on a
+// generic superclass override, on Object methods, in anonymous classes and
+// enums; access STRENGTHENING; throws NARROWING and unchecked additions; and
+// a bare inherited-throwable call (getMessage in a toString override).
+differential_test!(
+    diff_override_legal_shapes,
+    "DiffOvLegal",
+    r#"
+import java.util.*;
+import java.io.*;
+
+public class DiffOvLegal {
+    static class Card implements Comparable<Card> {
+        int v;
+        Card(int v) { this.v = v; }
+        @Override public int compareTo(Card o) { return Integer.compare(v, o.v); }
+        @Override public String toString() { return "C" + v; }
+        @Override public boolean equals(Object o) { return o instanceof Card && ((Card) o).v == v; }
+        @Override public int hashCode() { return v; }
+    }
+
+    static class ByV implements Comparator<Card> {
+        @Override public int compare(Card a, Card b) { return a.v - b.v; }
+    }
+
+    static class Box<T> { void set(T t) { System.out.println("Box"); } }
+    static class SBox extends Box<String> {
+        @Override void set(String s) { System.out.println("SBox " + s); }
+    }
+
+    static class AppException extends Exception {
+        AppException(String m) { super(m); }
+        @Override public String toString() { return "App:" + getMessage(); }
+    }
+
+    static class Base {
+        protected String greet() throws IOException { return "base"; }
+    }
+    static class Strengthened extends Base {
+        @Override public String greet() throws FileNotFoundException, RuntimeException {
+            return "strong";
+        }
+    }
+
+    enum E {
+        A, B;
+        @Override public String toString() { return "e-" + name(); }
+    }
+
+    interface Greeter { String hello(); }
+
+    public static void main(String[] args) throws Exception {
+        List<Card> l = new ArrayList<>(Arrays.asList(new Card(3), new Card(1)));
+        Collections.sort(l);
+        System.out.println(l);
+        l.sort(new ByV());
+        System.out.println(l);
+        new SBox().set("x");
+        Box<String> b = new SBox();
+        b.set("via-super");
+        System.out.println(new AppException("boom"));
+        System.out.println(new Strengthened().greet());
+        Greeter g = new Greeter() {
+            @Override public String hello() { return "anon"; }
+        };
+        System.out.println(g.hello());
+        System.out.println(E.A);
+        System.out.println(new Card(1).equals(new Card(1)));
+    }
+}
+"#
+);

@@ -231,6 +231,32 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Override validation in full** (2026-07-30, JLS §8.4.8.3 / §9.6.4.4) —
+  round 6's remaining accepts-invalid trio, one seam:
+  - An override may not **weaken access** below the overridden method's level
+    (public > protected > package > private; only the private case was
+    caught). `MethodDecl` now records `protected`, and a side table carries
+    each user method's level; javac's detail is appended ("attempting to
+    assign weaker access privileges; was public").
+  - An override may not **broaden checked exceptions**: each checked
+    exception it declares must be covered by one the overridden method
+    declares (unchecked additions stay free) — reusing the §11.2 pass's
+    exception identity ("overridden method does not throw Exception").
+  - **`@Override` must override or implement something** — it was retained
+    for the JUnit runner and never validated. The match is
+    erasure-TOLERANT: an ancestor parameter that is `Object` or an erased
+    type variable accepts any declared parameter, so `compare(Card, Card)`
+    implementing the erased `Comparator` (and `set(String)` overriding a
+    generic `set(T)`) are overrides, exactly as the erasure bridge
+    dispatches them; classes under an unmodeled library superclass are
+    exempt. The whole corpus — thousands of `@Override`s on interface
+    implementations, JUnit tests and Swing subclasses — compiles unchanged.
+  - Bonus adjacent fix: a BARE inherited-throwable call inside a user
+    exception (`getMessage()` in a `toString()` override) resolves — the
+    receiver path had the exception-table fallback, the implicit-`this` path
+    did not. And the round-6 "wrong-method blame" finding resolved as the
+    documented covariant-return strictness being reported first in a
+    two-error program: the sibling's genuine error is also flagged.
 - **`String.format` nulls, boxes, and flag corners** (2026-07-30) — the
   round-6 format cluster, 8 findings.
   - **Null arguments render per conversion**, as the JDK's Formatter does:

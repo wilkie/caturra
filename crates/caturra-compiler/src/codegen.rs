@@ -182,6 +182,7 @@ fn emit_class(
             body: Vec::new(),
             annotations: Vec::new(),
             throws: Vec::new(),
+            is_protected: false,
             span: decl.span,
         };
         let compiled = emit_method(
@@ -471,6 +472,11 @@ pub(crate) struct MethodTable {
     /// so the many synthetic-signature literals stay untouched; empty clauses
     /// are not recorded.
     throws_clauses: std::collections::HashMap<(String, String, usize), Vec<String>>,
+    /// Declared ACCESS levels by the same key (3 public, 2 protected,
+    /// 1 package-private, 0 private), for the JLS §8.4.8.3 weaker-access
+    /// check. Absent means public — which is what every synthetic and library
+    /// signature is.
+    method_access: std::collections::HashMap<(String, String, usize), u8>,
 }
 
 /// The arena backing `ElemType::Nested` (see [`MethodTable::nested`]).
@@ -526,6 +532,7 @@ impl MethodTable {
             static_imports,
             nested: std::cell::RefCell::default(),
             throws_clauses: std::collections::HashMap::new(),
+            method_access: std::collections::HashMap::new(),
         };
         // The synthetic top type: `Object`. It carries the universal
         // methods; user classes are registered as its subtypes.
@@ -797,16 +804,22 @@ impl MethodTable {
                 }
 
                 for method in &class.methods {
+                    let key_name = if method.is_constructor {
+                        String::from("<init>")
+                    } else {
+                        method.name.clone()
+                    };
                     if !method.throws.is_empty() {
-                        let key_name = if method.is_constructor {
-                            String::from("<init>")
-                        } else {
-                            method.name.clone()
-                        };
                         table.throws_clauses.insert(
-                            (class.name.clone(), key_name, method.params.len()),
+                            (class.name.clone(), key_name.clone(), method.params.len()),
                             method.throws.clone(),
                         );
+                    }
+                    let level = access_level(method);
+                    if level < 3 {
+                        table
+                            .method_access
+                            .insert((class.name.clone(), key_name, method.params.len()), level);
                     }
                     let sig = MethodSig {
                         name: if method.is_constructor {
@@ -1085,20 +1098,66 @@ impl MethodTable {
                             // override a package-private or public one. Both
                             // compiled here and then dispatched to the
                             // subclass, which is what a JDK refuses outright.
-                            let weakens_access = method.is_private && !sup_sig.is_private;
+                            // JLS §8.4.8.3 in full: an override may not
+                            // REDUCE visibility below the overridden method's
+                            // level (public > protected > package > private) —
+                            // it used to catch only the private case.
+                            let parent_name = self.class_name(id).to_owned();
+                            let sup_level = self
+                                .method_access
+                                .get(&(parent_name.clone(), method.name.clone(), params.len()))
+                                .copied()
+                                .unwrap_or(3);
+                            let weakens_access = access_level(method) < sup_level;
+                            // JLS §8.4.8.3: an override may not BROADEN checked
+                            // exceptions — each checked exception it declares
+                            // must be covered by one the overridden method
+                            // declares (unchecked additions are free).
+                            let broadened: Option<String> = {
+                                let parent_throws = self
+                                    .throws_clauses
+                                    .get(&(parent_name.clone(), method.name.clone(), params.len()))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                let parent_excs: Vec<crate::thrown::Exc> = parent_throws
+                                    .iter()
+                                    .filter_map(|n| crate::thrown::resolve_exc(n, self))
+                                    .collect();
+                                method
+                                    .throws
+                                    .iter()
+                                    .filter_map(|n| {
+                                        crate::thrown::resolve_exc(n, self).map(|e| (n, e))
+                                    })
+                                    .find(|(_, e)| {
+                                        crate::thrown::exc_is_checked(e, self)
+                                            && !parent_excs
+                                                .iter()
+                                                .any(|d| crate::thrown::exc_covers(d, e, self))
+                                    })
+                                    .map(|(n, _)| n.rsplit('.').next().unwrap_or(n).to_owned())
+                            };
                             if !compatible_return
                                 || sup_sig.is_static != method.is_static
                                 || sup_sig.is_final
                                 || weakens_access
+                                || broadened.is_some()
                             {
+                                let detail = if weakens_access {
+                                    format!(
+                                        ": attempting to assign weaker access privileges; was {}",
+                                        ACCESS_NAMES[usize::from(sup_level)]
+                                    )
+                                } else if let Some(exc) = &broadened {
+                                    format!(": overridden method does not throw {exc}")
+                                } else {
+                                    String::new()
+                                };
                                 diagnostics.push(Diagnostic::error(
                                     path,
                                     format!(
-                                        "{}() in {} cannot override {}() in {}",
-                                        method.name,
-                                        class.name,
-                                        method.name,
-                                        self.class_name(id)
+                                        "{}() in {} cannot override {}() in {}{detail}",
+                                        method.name, class.name, method.name, parent_name,
                                     ),
                                     method.span,
                                 ));
@@ -1106,6 +1165,59 @@ impl MethodTable {
                             break;
                         }
                         ancestor = parent.superclass;
+                    }
+                }
+
+                // `@Override` must override or implement SOMETHING (JLS
+                // §9.6.4.4) — it was retained for the JUnit runner and never
+                // validated. The match is erasure-TOLERANT: an ancestor
+                // parameter that is `Object` or an erased type variable
+                // accepts any declared parameter, so `compare(Card, Card)`
+                // implementing the erased `__Comparator.compare(Object,
+                // Object)` (or a generic superclass's `set(T)`) is an
+                // override, exactly as the VM's erasure bridge dispatches it.
+                // A class under an unmodeled LIBRARY superclass is exempt —
+                // its inherited surface is not in the table to match against.
+                let library_parented = {
+                    let mut current = Some(info.id);
+                    let mut exempt = false;
+                    let mut steps = 0usize;
+                    while let Some(cid) = current {
+                        steps += 1;
+                        if steps > self.class_names.len() + 2 {
+                            break;
+                        }
+                        let Some(ci) = self.info_by_id(cid) else {
+                            break;
+                        };
+                        if ci.library_superclass.is_some() {
+                            exempt = true;
+                            break;
+                        }
+                        current = ci.superclass;
+                    }
+                    exempt
+                };
+                for method in &class.methods {
+                    if library_parented
+                        || method.is_constructor
+                        || !method.annotations.iter().any(|a| a.name == "Override")
+                    {
+                        continue;
+                    }
+                    let params: Vec<JType> = method
+                        .params
+                        .iter()
+                        .map(|p| self.resolve_type(&p.ty).unwrap_or(JType::Unsupported))
+                        .collect();
+                    if !self.overrides_something(info.id, &method.name, &params) {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            String::from(
+                                "method does not override or implement a method from a supertype",
+                            ),
+                            method.span,
+                        ));
                     }
                 }
 
@@ -1204,6 +1316,48 @@ impl MethodTable {
             .get(id as usize)
             .copied()
             .unwrap_or(JType::Error)
+    }
+
+    /// Whether some supertype (superclass chain, transitive interfaces, or
+    /// the synthetic Object root) declares an instance method this signature
+    /// overrides — with erasure-tolerant parameters (an ancestor `Object` or
+    /// type-variable parameter accepts anything, as the erasure bridge does).
+    fn overrides_something(&self, class: ClassId, name: &str, params: &[JType]) -> bool {
+        let compatible = |sup_params: &[JType]| {
+            sup_params.len() == params.len()
+                && sup_params.iter().zip(params).all(|(sup, sub)| {
+                    sup == sub
+                        || *sup == JType::TypeVar
+                        || matches!(sup, JType::Object(id) if *id == self.object_id)
+                })
+        };
+        let mut stack: Vec<ClassId> = Vec::new();
+        if let Some(info) = self.info_by_id(class) {
+            stack.extend(info.superclass);
+            stack.extend(info.interfaces.iter().copied());
+        }
+        // Every class ultimately answers Object's methods.
+        stack.push(self.object_id);
+        let mut steps = 0usize;
+        while let Some(id) = stack.pop() {
+            steps += 1;
+            if steps > self.class_names.len() * 4 {
+                break;
+            }
+            let Some(info) = self.info_by_id(id) else {
+                continue;
+            };
+            if info
+                .methods
+                .iter()
+                .any(|m| m.name == name && !m.is_static && !m.is_private && compatible(&m.params))
+            {
+                return true;
+            }
+            stack.extend(info.superclass);
+            stack.extend(info.interfaces.iter().copied());
+        }
+        false
     }
 
     /// Whether this user class descends from a library throwable — i.e. it
@@ -2993,6 +3147,20 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             ) if wrapper_face(wrapper_elem_of(from), id, table)
         )
 }
+
+/// The declared access level of a method: 3 public, 2 protected, 1
+/// package-private, 0 private (JLS §8.4.8.3 orders them exactly so).
+fn access_level(method: &MethodDecl) -> u8 {
+    if method.is_public {
+        3
+    } else if method.is_protected {
+        2
+    } else {
+        u8::from(!method.is_private)
+    }
+}
+
+const ACCESS_NAMES: [&str; 4] = ["private", "package", "protected", "public"];
 
 /// The `__caturraOuter` hops from a nested class out to an enclosing
 /// instance: each entry is (the class holding the field, the field itself).
@@ -15149,13 +15317,37 @@ impl BodyGen<'_> {
 
     /// A bare call `method(args)`: static → invokestatic; instance →
     /// through the implicit `this`.
-    #[allow(clippy::option_option)]
+    #[allow(clippy::option_option, clippy::too_many_lines)]
     fn own_call(&mut self, method: &str, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
         // Peek resolution to decide static vs instance dispatch.
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         let table = self.table;
         let own = table.resolve(self.current_class, method, &arg_types);
         let is_instance = matches!(&own, Resolution::Found(sig) if !sig.is_static);
+        // A bare inherited-throwable method inside a user exception class
+        // (`getMessage()` in a `toString()` override): the receiver path
+        // already falls back to the exception method table for a throwable
+        // receiver, and the implicit-`this` call needs the same fallback.
+        if !matches!(own, Resolution::Found(_))
+            && !self.in_static
+            && self.table.is_throwable(self.current_class_id)
+            && pick_builtin(
+                EXCEPTION_METHODS,
+                method,
+                &arg_types,
+                TypeArgs::default(),
+                self.table,
+            )
+            .is_some()
+        {
+            self.code.push_op(op::ALOAD_0, 1);
+            return self.emit_virtual_call_on_stacked_receiver(
+                self.current_class_id,
+                method,
+                args,
+                span,
+            );
+        }
         // Unqualified call to a `import static X.*` member (JUnit
         // `assertTrue(...)` → `Assertions.assertTrue(...)`).
         if !matches!(own, Resolution::Found(_)) {

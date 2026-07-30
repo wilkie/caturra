@@ -33,7 +33,7 @@ use std::collections::HashMap;
 /// An exception type as this pass tracks it: a library throwable by internal
 /// name, or a user class (whose checked-ness comes from its library ancestor).
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Exc {
+pub(crate) enum Exc {
     Lib(&'static str),
     User(String),
 }
@@ -167,13 +167,13 @@ impl Ctx<'_> {
         let escaped: Vec<Exc> = set
             .list
             .iter()
-            .filter(|e| is_checked(e, self.table))
+            .filter(|e| exc_is_checked(e, self.table))
             .filter(|e| {
                 !handlers
                     .iter()
-                    .any(|frame| frame.iter().any(|c| covers(c, e, self.table)))
+                    .any(|frame| frame.iter().any(|c| exc_covers(c, e, self.table)))
             })
-            .filter(|e| !self.declared.iter().any(|d| covers(d, e, self.table)))
+            .filter(|e| !self.declared.iter().any(|d| exc_covers(d, e, self.table)))
             .cloned()
             .collect();
         for e in escaped {
@@ -355,16 +355,15 @@ fn thrown_of_try(
             let Some(e) = resolve_typeref(t, ctx.table) else {
                 continue;
             };
-            if !is_checked(&e, ctx.table)
+            if !exc_is_checked(&e, ctx.table)
                 || matches!(e, Exc::Lib("java/lang/Exception" | "java/lang/Throwable"))
             {
                 continue;
             }
             let reachable = body_thrown.unknown
-                || body_thrown
-                    .list
-                    .iter()
-                    .any(|thrown| covers(&e, thrown, ctx.table) || covers(thrown, &e, ctx.table));
+                || body_thrown.list.iter().any(|thrown| {
+                    exc_covers(&e, thrown, ctx.table) || exc_covers(thrown, &e, ctx.table)
+                });
             if !reachable {
                 ctx.error(
                     clause.span,
@@ -389,7 +388,7 @@ fn thrown_of_try(
                 .types
                 .iter()
                 .filter_map(|t| resolve_typeref(t, ctx.table))
-                .any(|c| covers(&c, thrown, ctx.table))
+                .any(|c| exc_covers(&c, thrown, ctx.table))
         });
         if !caught {
             out.push(thrown.clone());
@@ -410,7 +409,7 @@ fn thrown_of_try(
                             .types
                             .iter()
                             .filter_map(|t| resolve_typeref(t, ctx.table))
-                            .any(|c| covers(&c, thrown, ctx.table))
+                            .any(|c| exc_covers(&c, thrown, ctx.table))
                     })
                     .cloned()
                     .collect(),
@@ -840,7 +839,7 @@ fn resolve_typeref(ty: &TypeRef, table: &MethodTable) -> Option<Exc> {
 }
 
 /// Resolve an exception NAME (simple or dotted) to a tracked type.
-fn resolve_exc(name: &str, table: &MethodTable) -> Option<Exc> {
+pub(crate) fn resolve_exc(name: &str, table: &MethodTable) -> Option<Exc> {
     let simple = name.rsplit('.').next().unwrap_or(name);
     // A user class shadows a library name.
     if table.has_class(simple) && table.is_user_throwable(simple) {
@@ -853,7 +852,7 @@ fn resolve_exc(name: &str, table: &MethodTable) -> Option<Exc> {
 }
 
 /// Checked = a throwable NOT under `RuntimeException` or `Error` (JLS §11.1.1).
-fn is_checked(e: &Exc, table: &MethodTable) -> bool {
+pub(crate) fn exc_is_checked(e: &Exc, table: &MethodTable) -> bool {
     let internal = match e {
         Exc::Lib(internal) => internal,
         Exc::User(name) => match table.user_throwable_ancestor(name) {
@@ -866,7 +865,7 @@ fn is_checked(e: &Exc, table: &MethodTable) -> bool {
 }
 
 /// Whether `thrown` is `catch_t` or a subclass of it.
-fn covers(catch_t: &Exc, thrown: &Exc, table: &MethodTable) -> bool {
+pub(crate) fn exc_covers(catch_t: &Exc, thrown: &Exc, table: &MethodTable) -> bool {
     match (catch_t, thrown) {
         (Exc::Lib(c), Exc::Lib(t)) => exc::is_exception_subclass(t, c),
         // A user exception is caught by a library catch when its library

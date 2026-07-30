@@ -119,6 +119,9 @@ pub struct MethodDecl {
     pub is_static: bool,
     pub is_public: bool,
     pub is_private: bool,
+    /// Declared `protected` — an override may not weaken access below the
+    /// overridden method's level (JLS §8.4.8.3).
+    pub is_protected: bool,
     /// Declared `final` — an override of one is a compile-time error
     /// (JLS §8.4.3.3).
     pub is_final: bool,

@@ -1807,6 +1807,7 @@ fn build_erased_lambda(
             body: method_body,
             annotations: Vec::new(),
             throws: Vec::new(),
+            is_protected: false,
             span,
         }],
         init_blocks: Vec::new(),
@@ -1884,6 +1885,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         body: method_body,
         annotations: Vec::new(),
         throws: Vec::new(),
+        is_protected: false,
         span,
     };
 

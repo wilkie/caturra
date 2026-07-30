@@ -1192,6 +1192,7 @@ impl Parser<'_> {
                 is_static: false,
                 is_public: modifiers.is_public,
                 is_private: modifiers.is_private,
+                is_protected: modifiers.is_protected,
                 is_final: modifiers.is_final,
                 is_constructor: true,
                 is_abstract: false,
@@ -1275,6 +1276,7 @@ impl Parser<'_> {
             is_static: modifiers.is_static,
             is_public: modifiers.is_public,
             is_private: modifiers.is_private,
+            is_protected: modifiers.is_protected,
             is_final: modifiers.is_final,
             is_constructor: false,
             is_abstract,
@@ -3879,6 +3881,7 @@ fn desugar_enum(
             body: store_stmts(),
             annotations: Vec::new(),
             throws: Vec::new(),
+            is_protected: false,
             span: zero,
         });
     }
@@ -3942,6 +3945,7 @@ fn desugar_enum(
         }],
         annotations: Vec::new(),
         throws: Vec::new(),
+        is_protected: false,
         span: zero,
     });
 
@@ -3982,6 +3986,7 @@ fn desugar_enum(
         }],
         annotations: Vec::new(),
         throws: Vec::new(),
+        is_protected: false,
         span: zero,
     });
 
@@ -4012,6 +4017,7 @@ fn desugar_enum(
             }],
             annotations: Vec::new(),
             throws: Vec::new(),
+            is_protected: false,
             span: zero,
         });
     }
@@ -4114,6 +4120,7 @@ fn desugar_enum(
             body: vec![null_check, for_each, throw],
             annotations: Vec::new(),
             throws: Vec::new(),
+            is_protected: false,
             span: zero,
         });
     }
@@ -5061,6 +5068,7 @@ fn simple_return_method(
         }],
         annotations: Vec::new(),
         throws: Vec::new(),
+        is_protected: false,
         span,
     }
 }
