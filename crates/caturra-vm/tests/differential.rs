@@ -15167,3 +15167,311 @@ public class DiffForEachFF {
 }
 "#
 );
+
+// The round-5 object-methods batch: String.valueOf(String/Object),
+// Objects.hash as an expression, Objects.requireNonNullElse,
+// collection equals(Object) across element types.
+differential_test!(
+    diff_object_method_gaps,
+    "DiffObjMethods",
+    r#"
+import java.util.*;
+
+public class DiffObjMethods {
+    static class P {
+        @Override public String toString() { return "P!"; }
+    }
+
+    public static void main(String[] args) {
+        String s = "hi";
+        System.out.println(String.valueOf(s));
+        String nul = null;
+        System.out.println(String.valueOf(nul));
+        System.out.println(String.valueOf(new P()));
+
+        System.out.println(Objects.hash("a", 1) == Objects.hash("a", 1));
+        int h = Objects.hash();
+        System.out.println(h);
+
+        System.out.println(Objects.requireNonNullElse(nul, "fallback"));
+        System.out.println(Objects.requireNonNullElse("real", "fallback"));
+        Integer n = null;
+        System.out.println(Objects.requireNonNullElse(n, 5));
+
+        List<Integer> a = new ArrayList<>(Arrays.asList(1, 2));
+        List<String> b = new ArrayList<>(Arrays.asList("1", "2"));
+        System.out.println(a.equals(b));
+        System.out.println(new ArrayList<Integer>().equals(new ArrayList<String>()));
+        Map<String, Integer> m = new HashMap<>();
+        System.out.println(m.equals(new HashMap<Integer, String>()));
+        System.out.println(a.equals("x"));
+    }
+}
+"#
+);
+
+// System.identityHashCode: only the identity PROPERTIES are portable (a real
+// JVM hands out address bits), so the assertions are all relational.
+differential_test!(
+    diff_identity_hash_code,
+    "DiffIdentityHash",
+    r#"
+public class DiffIdentityHash {
+    public static void main(String[] args) {
+        Object a = new Object();
+        Object b = new Object();
+        System.out.println(System.identityHashCode(a) == System.identityHashCode(a));
+        System.out.println(System.identityHashCode(a) == System.identityHashCode(b));
+        System.out.println(System.identityHashCode(null));
+        String s = "x";
+        System.out.println(System.identityHashCode(s) == System.identityHashCode(s));
+    }
+}
+"#
+);
+
+// CharSequence: the read-only text interface String and StringBuilder share.
+differential_test!(
+    diff_char_sequence,
+    "DiffCharSeq",
+    r#"
+public class DiffCharSeq {
+    static String describe(CharSequence cs) {
+        return cs.length() + ":" + cs.charAt(0) + ":" + cs.toString() + ":" + cs.subSequence(1, 3);
+    }
+
+    public static void main(String[] args) {
+        System.out.println(describe("hello"));
+        System.out.println(describe(new StringBuilder("world")));
+        CharSequence a = "text";
+        CharSequence b = new StringBuilder("built");
+        System.out.println(a + " " + b);
+        Object o = a;
+        System.out.println(o instanceof CharSequence);
+        CharSequence n = null;
+        System.out.println(n == null);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_char_sequence_back_to_string,
+    "RejCharSeqNarrow",
+    r#"
+public class RejCharSeqNarrow {
+    public static void main(String[] args) {
+        CharSequence c = "x";
+        String s = c;
+        System.out.println(s);
+    }
+}
+"#
+);
+
+// Math's LONG *Exact overloads throw "long overflow" (the int ones say
+// "integer overflow"); Byte/Short zero-extend through toUnsignedInt/Long.
+differential_test!(
+    diff_long_exact_and_unsigned_widening,
+    "DiffLongExact",
+    r#"
+public class DiffLongExact {
+    public static void main(String[] args) {
+        System.out.println(Math.addExact(2_000_000_000L, 2_000_000_000L));
+        System.out.println(Math.multiplyExact(3_000_000_000L, 2L));
+        System.out.println(Math.subtractExact(1L, 2L));
+        try {
+            Math.addExact(Long.MAX_VALUE, 1L);
+        } catch (ArithmeticException e) {
+            System.out.println(e.getMessage());
+        }
+        System.out.println(Math.negateExact(5L));
+        System.out.println(Math.incrementExact(5L) + " " + Math.decrementExact(5L));
+        System.out.println(Math.toIntExact(42L));
+        try {
+            Math.toIntExact(Long.MAX_VALUE);
+        } catch (ArithmeticException e) {
+            System.out.println(e.getMessage());
+        }
+
+        byte b = -1;
+        System.out.println(Byte.toUnsignedInt(b));
+        System.out.println(Byte.toUnsignedLong(b));
+        short s = -1;
+        System.out.println(Short.toUnsignedInt(s));
+        System.out.println(Short.toUnsignedLong(s));
+        byte alt = 100;
+        System.out.println(Byte.toUnsignedInt(alt));
+    }
+}
+"#
+);
+
+// JLS 15.28: a conditional whose three parts are constants is itself a
+// constant, so it narrows into byte/short/char (JLS 5.2).
+differential_test!(
+    diff_constant_conditional_narrowing,
+    "DiffConstTernary",
+    r"
+public class DiffConstTernary {
+    public static void main(String[] args) {
+        final boolean flag = true;
+        byte b = flag ? 1 : 2;
+        System.out.println(b);
+        final int x = 5;
+        char c = x > 3 ? 'a' : 'b';
+        System.out.println(c);
+        short s = true ? 100 : 200;
+        System.out.println(s);
+        final boolean no = false;
+        byte pick = no ? 3 : 4;
+        System.out.println(pick);
+        byte logic = (flag && !no) ? 7 : 8;
+        System.out.println(logic);
+    }
+}
+"
+);
+
+// A NON-constant condition stays a plain int conditional and must not narrow.
+differential_reject!(
+    reject_nonconstant_conditional_narrowing,
+    "RejVarTernary",
+    r"
+public class RejVarTernary {
+    public static void main(String[] args) {
+        boolean f = args.length > 0;
+        byte b = f ? 1 : 2;
+        System.out.println(b);
+    }
+}
+"
+);
+
+// `(Integer) null` is a legal reference cast; unboxing the result throws.
+differential_test!(
+    diff_null_cast_to_wrapper,
+    "DiffNullCast",
+    r#"
+public class DiffNullCast {
+    public static void main(String[] args) {
+        Integer n = (Integer) null;
+        System.out.println(n);
+        Double d = (Double) null;
+        System.out.println(d);
+        try {
+            int x = (Integer) null;
+            System.out.println(x);
+        } catch (NullPointerException e) {
+            System.out.println("NPE");
+        }
+    }
+}
+"#
+);
+
+// JLS 3.10.1: 9223372036854775808L is legal ONLY as the operand of unary
+// minus, where the pair spells Long.MIN_VALUE.
+differential_test!(
+    diff_long_min_literal,
+    "DiffLongMin",
+    r"
+public class DiffLongMin {
+    public static void main(String[] args) {
+        long min = -9223372036854775808L;
+        System.out.println(min);
+        System.out.println(Long.MIN_VALUE == min);
+        System.out.println(-(-9223372036854775808L));
+        long paren = (-9223372036854775808L);
+        System.out.println(paren);
+        int imin = -2147483648;
+        System.out.println(imin);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_long_max_plus_one_literal,
+    "RejLongOverflow",
+    r"
+public class RejLongOverflow {
+    public static void main(String[] args) {
+        long x = 9223372036854775808L;
+        System.out.println(x);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_long_min_as_subtraction,
+    "RejLongMinBinary",
+    r"
+public class RejLongMinBinary {
+    public static void main(String[] args) {
+        long x = 1 - 9223372036854775808L;
+        System.out.println(x);
+    }
+}
+"
+);
+
+// An anonymous class may extend Object itself.
+differential_test!(
+    diff_anonymous_object,
+    "DiffAnonObject",
+    r#"
+public class DiffAnonObject {
+    public static void main(String[] args) {
+        Object o = new Object() {
+            @Override public String toString() { return "anon"; }
+        };
+        System.out.println(o);
+        Object plain = new Object() {};
+        System.out.println(plain.equals(plain));
+        System.out.println(plain.equals(o));
+    }
+}
+"#
+);
+
+// JLS 6.5.6.1: a doubly-nested inner class reaches fields and methods TWO
+// enclosing levels up, through the chain of enclosing instances; the nearest
+// enclosing class declaring the name wins.
+differential_test!(
+    diff_grand_enclosing_capture,
+    "DiffGrandEnclosing",
+    r#"
+public class DiffGrandEnclosing {
+    int outerField = 10;
+    int shadowed = 1;
+    String tag() { return "outer"; }
+
+    class Mid {
+        int midField = 20;
+        int shadowed = 2;
+        String tag2() { return "mid"; }
+
+        class Deep {
+            int total() { return outerField + midField; }
+            int nearest() { return shadowed; }
+            String both() { return tag() + "/" + tag2() + "/" + outerField; }
+            void bump() { outerField += 5; midField += 7; }
+        }
+    }
+
+    public static void main(String[] args) {
+        DiffGrandEnclosing a = new DiffGrandEnclosing();
+        DiffGrandEnclosing.Mid m = a.new Mid();
+        DiffGrandEnclosing.Mid.Deep d = m.new Deep();
+        System.out.println(d.total());
+        System.out.println(d.nearest());
+        System.out.println(d.both());
+        d.bump();
+        System.out.println(a.outerField + " " + m.midField);
+        System.out.println(d.total());
+    }
+}
+"#
+);

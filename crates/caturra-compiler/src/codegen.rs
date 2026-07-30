@@ -855,6 +855,15 @@ impl MethodTable {
                     // a library interface reported "cannot find symbol: class
                     // Comparator" about a class that was imported two lines up.
                     let name = comparator_alias(name);
+                    // `new Object() { ... }` — the synthetic top type is
+                    // registered under its internal name, which no source
+                    // spelling reaches. Extending Object is what every class
+                    // does anyway, so the anonymous form must resolve too.
+                    let name = if matches!(name, "Object" | "java.lang.Object") {
+                        "java/lang/Object"
+                    } else {
+                        name
+                    };
                     let id = table.class_id(name);
                     if id.is_none() {
                         // `extends Exception` and friends: a library
@@ -1514,6 +1523,7 @@ impl MethodTable {
                 match simple {
                     "Scanner" => Some(JType::Scanner),
                     "StringBuilder" => Some(JType::StringBuilder),
+                    "CharSequence" => Some(JType::CharSequence),
                     "File" => Some(JType::File),
                     "PrintWriter" => Some(JType::Writer),
                     "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => {
@@ -2858,6 +2868,10 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Object(id),
             ) if id == table.object_id
         )
+        // `String` and `StringBuilder` both implement `CharSequence`
+        // (JLS §4.10.2), the read-only text face a method takes when it wants
+        // either.
+        || matches!((from, to), (JType::Str | JType::StringBuilder, JType::CharSequence))
         // A `Comparable`- or `Number`-bounded type parameter erases to that
         // interface/class; every primitive wrapper and `String` implements
         // `Comparable`, the numeric wrappers are also `Number`s, and a
@@ -2873,6 +2887,10 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             ) if wrapper_face(wrapper_elem_of(from), id, table)
         )
 }
+
+/// The `__caturraOuter` hops from a nested class out to an enclosing
+/// instance: each entry is (the class holding the field, the field itself).
+type OuterChain = Vec<(ClassId, FieldSig)>;
 
 /// The wrapper element a type boxes into, for [`wrapper_face`]: a boxed
 /// wrapper's own element, a primitive's, and `None` for a `String` (which has
@@ -3072,6 +3090,10 @@ enum JType {
     /// models it as a `Stream` of unboxed ints). Adds numeric terminals
     /// (`sum`/`toArray`) the object `Stream` lacks.
     IntStream,
+    /// `java.lang.CharSequence` — the read-only text interface `String` and
+    /// `StringBuilder` both implement. A variable of the type holds either;
+    /// the VM dispatches `length`/`charAt` on the actual heap object.
+    CharSequence,
     /// `java.util.Iterator<E>` over a collection — `next()` returns `E`,
     /// `hasNext()` a boolean, `remove()` is void. Erased at runtime to a live
     /// cursor over the source collection (see the VM's `HeapObject::Iterator`).
@@ -3279,6 +3301,7 @@ impl JType {
             JType::Byte => String::from("byte"),
             JType::Scanner => String::from("Scanner"),
             JType::StringBuilder => String::from("StringBuilder"),
+            JType::CharSequence => String::from("CharSequence"),
             JType::Class => String::from("Class"),
             JType::Field => String::from("Field"),
             JType::Method => String::from("Method"),
@@ -3324,6 +3347,7 @@ impl JType {
                 | JType::Null
                 | JType::Array { .. }
                 | JType::Object(_)
+                | JType::CharSequence
                 | JType::Scanner
                 | JType::File
                 | JType::Writer
@@ -3400,6 +3424,7 @@ impl JType {
             JType::Set(_) | JType::EntrySet { .. } => String::from("Ljava/util/Set;"),
             JType::TreeSet(_) => String::from("Ljava/util/TreeSet;"),
             JType::Stream(_) => String::from("Ljava/util/stream/Stream;"),
+            JType::CharSequence => String::from("Ljava/lang/CharSequence;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
             JType::Iterator(_) | JType::ListIterator(_) | JType::EntryIterator { .. } => {
@@ -4640,6 +4665,8 @@ fn method_descriptor(
                     out.push_str("Ljava/lang/String;");
                 } else if simple == "StringBuilder" && !table.has_class(simple) {
                     out.push_str("Ljava/lang/StringBuilder;");
+                } else if simple == "CharSequence" && !table.has_class(simple) {
+                    out.push_str("Ljava/lang/CharSequence;");
                 } else if simple == "Scanner" && !table.has_class(simple) {
                     out.push_str("Ljava/util/Scanner;");
                 } else if simple == "File" && !table.has_class(simple) {
@@ -5290,6 +5317,24 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Str,
         descriptor: "([C)Ljava/lang/String;",
     },
+    // `valueOf(String)` — the identity overload javac resolves for a String
+    // argument (`valueOf(Object)` would box the receiver's text the same way,
+    // but the call must RESOLVE); null renders as "null".
+    BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::Str],
+        ret: BRet::Str,
+        descriptor: "(Ljava/lang/String;)Ljava/lang/String;",
+    },
+    // `valueOf(Object)`: the object's own toString, or "null" — exactly what
+    // concatenation does (JLS §5.1.11), answered at the interpreter level so a
+    // user toString runs.
+    BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::Object],
+        ret: BRet::Str,
+        descriptor: "(Ljava/lang/Object;)Ljava/lang/String;",
+    },
     BuiltinMethod {
         name: "copyValueOf",
         params: &[BParam::CharArray],
@@ -5585,9 +5630,13 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(ILjava/util/Collection;)Z",
     ),
+    // `equals(Object)`, as Java declares it: a list of a DIFFERENT element
+    // type is a legal argument (usually false, but `[]` equals `[]` across
+    // element types). It used to demand the receiver's own list type, which
+    // rejected `listOfInt.equals(listOfString)` that javac accepts.
     bm(
         "equals",
-        &[BParam::SelfList],
+        &[BParam::Object],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -5719,9 +5768,13 @@ const STACK_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/util/Collection;)Z",
     ),
+    // `equals(Object)`, as Java declares it: a list of a DIFFERENT element
+    // type is a legal argument (usually false, but `[]` equals `[]` across
+    // element types). It used to demand the receiver's own list type, which
+    // rejected `listOfInt.equals(listOfString)` that javac accepts.
     bm(
         "equals",
-        &[BParam::SelfList],
+        &[BParam::Object],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -6242,6 +6295,21 @@ const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
     bm("remove", &[], BRet::Void, "()V"),
 ];
 
+/// `java.lang.CharSequence` — the read-only face shared by `String` and
+/// `StringBuilder`. The VM dispatches on the actual heap object, so these
+/// resolve against whichever the reference holds.
+const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
+    bm("length", &[], BRet::Int, "()I"),
+    bm("charAt", &[I], BRet::Char, "(I)C"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm(
+        "subSequence",
+        &[I, I],
+        BRet::Str,
+        "(II)Ljava/lang/CharSequence;",
+    ),
+];
+
 const ITERATOR_METHODS: &[BuiltinMethod] = &[
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     // `BoxedElem`, not `Elem`: a list stores its elements unboxed and a set stores
@@ -6715,6 +6783,14 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("negateExact", &[I], BRet::Int, "(I)I"),
     bm("incrementExact", &[I], BRet::Int, "(I)I"),
     bm("decrementExact", &[I], BRet::Int, "(I)I"),
+    // The long overloads, which throw "long overflow" (the int ones say
+    // "integer overflow" — the JDK's messages differ).
+    bm("addExact", &[L, L], BRet::Long, "(JJ)J"),
+    bm("subtractExact", &[L, L], BRet::Long, "(JJ)J"),
+    bm("multiplyExact", &[L, L], BRet::Long, "(JJ)J"),
+    bm("negateExact", &[L], BRet::Long, "(J)J"),
+    bm("incrementExact", &[L], BRet::Long, "(J)J"),
+    bm("decrementExact", &[L], BRet::Long, "(J)J"),
     bm("abs", &[L], BRet::Long, "(J)J"),
     bm("abs", &[F], BRet::Float, "(F)F"),
     bm("max", &[F, F], BRet::Float, "(FF)F"),
@@ -6919,6 +6995,8 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
 
 const SHORT_METHODS: &[BuiltinMethod] = &[
     bm("parseShort", &[S], BRet::Short, "(Ljava/lang/String;)S"),
+    bm("toUnsignedInt", &[BParam::Short], BRet::Int, "(S)I"),
+    bm("toUnsignedLong", &[BParam::Short], BRet::Long, "(S)J"),
     bm(
         "toString",
         &[BParam::Short],
@@ -6954,6 +7032,8 @@ const SHORT_METHODS: &[BuiltinMethod] = &[
 
 const BYTE_METHODS: &[BuiltinMethod] = &[
     bm("parseByte", &[S], BRet::Byte, "(Ljava/lang/String;)B"),
+    bm("toUnsignedInt", &[BParam::Byte], BRet::Int, "(B)I"),
+    bm("toUnsignedLong", &[BParam::Byte], BRet::Long, "(B)J"),
     bm(
         "toString",
         &[BParam::Byte],
@@ -7079,6 +7159,15 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;ILjava/lang/Object;II)V",
     ),
     bm("lineSeparator", &[], BRet::Str, "()Ljava/lang/String;"),
+    // Identity hash: stable per object for a run (the heap reference), 0 for
+    // null. The VALUE differs from any real JVM's (which hands out address
+    // bits) — only the identity properties are portable, and they hold.
+    bm(
+        "identityHashCode",
+        &[BParam::Object],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
     // Internal: box a value whose static type is `Object` but whose runtime
     // representation may be an unboxed primitive — the read of a collection
     // element the type system only knows as a wildcard or a type variable.
@@ -7704,9 +7793,10 @@ const MAP_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/util/Map;)V",
     ),
+    // `equals(Object)` — see the list note: any argument is legal.
     bm(
         "equals",
-        &[BParam::SelfMap],
+        &[BParam::Object],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -7824,9 +7914,10 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/util/Map;)V",
     ),
+    // `equals(Object)` — see the list note: any argument is legal.
     bm(
         "equals",
-        &[BParam::SelfMap],
+        &[BParam::Object],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -8170,6 +8261,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Path => Some(("java/nio/file/Path", PATH_METHODS)),
         JType::List(_) => Some(("java/util/ArrayList", LIST_METHODS)),
         JType::ListIterator(_) => Some(("java/util/ListIterator", LIST_ITERATOR_METHODS)),
+        JType::CharSequence => Some(("java/lang/CharSequence", CHAR_SEQUENCE_METHODS)),
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
@@ -9005,25 +9097,66 @@ impl BodyGen<'_> {
     /// itself inside a lambda (whose `this` already means the enclosing), or
     /// `this.__caturraOuter` inside an inner class (whose `this` is its own).
     fn enclosing_receiver(&self, span: SourceSpan) -> Expr {
-        if self.lambda_enclosing().is_some() {
-            Expr::This { span }
-        } else {
-            Expr::Field {
-                object: Box::new(Expr::This { span }),
-                name: String::from(crate::capture::OUTER_FIELD),
-                span,
-            }
-        }
+        self.enclosing_receiver_depth(1, span)
     }
 
-    /// An INSTANCE field of the enclosing class, reached through the captured
-    /// `__caturraOuter`. Reads/writes are live on the real enclosing object,
-    /// which is what a lambda accessing `this.f` does.
-    fn enclosing_instance_field(&self, name: &str) -> Option<(FieldSig, ClassId, FieldSig)> {
-        let (outer, enclosing) = self.captured_outer()?;
-        let enc_name = self.table.class_name(enclosing).to_owned();
-        let (field_owner_id, field) = self.table.field(&enc_name, name)?;
-        (!field.is_static).then(|| (outer, field_owner_id, field.clone()))
+    /// The enclosing instance `depth` hops out, as an expression:
+    /// `this.__caturraOuter.…` with one field per hop. Inside a lambda the
+    /// FIRST hop is what `this` already denotes, so it is dropped.
+    fn enclosing_receiver_depth(&self, depth: usize, span: SourceSpan) -> Expr {
+        let hops = if self.lambda_enclosing().is_some() {
+            depth.saturating_sub(1)
+        } else {
+            depth
+        };
+        let mut receiver = Expr::This { span };
+        for _ in 0..hops {
+            receiver = Expr::Field {
+                object: Box::new(receiver),
+                name: String::from(crate::capture::OUTER_FIELD),
+                span,
+            };
+        }
+        receiver
+    }
+
+    /// An INSTANCE field of an enclosing class, reached through the captured
+    /// `__caturraOuter` — or through a CHAIN of them (JLS §6.5.6.1): a
+    /// doubly-nested inner class reads its grand-enclosing class's field via
+    /// `this.__caturraOuter.__caturraOuter.f`. The chain of `(owner, field)`
+    /// hops comes back with the found field; the NEAREST enclosing class
+    /// declaring the name wins, which is Java's shadowing rule.
+    fn enclosing_instance_field(&self, name: &str) -> Option<(OuterChain, ClassId, FieldSig)> {
+        let mut chain: OuterChain = Vec::new();
+        let mut current = self.current_class_id;
+        for _ in 0..=self.table.class_names.len() {
+            let owner = self.table.class_name(current).to_owned();
+            let (_, outer) = self.table.field(&owner, crate::capture::OUTER_FIELD)?;
+            let outer = outer.clone();
+            let JType::Object(enclosing) = outer.ty else {
+                return None;
+            };
+            chain.push((current, outer));
+            let enc_name = self.table.class_name(enclosing).to_owned();
+            if let Some((field_owner_id, field)) = self.table.field(&enc_name, name)
+                && !field.is_static
+            {
+                let field = field.clone();
+                return Some((chain, field_owner_id, field));
+            }
+            current = enclosing;
+        }
+        None
+    }
+
+    /// Push the captured enclosing instance onto the stack — `this`, then one
+    /// `getfield __caturraOuter` per hop of the chain. The caller then reads
+    /// or writes a field of the instance left on top.
+    fn push_captured_outer_chain(&mut self, chain: &[(ClassId, FieldSig)]) {
+        self.code.push_op(op::ALOAD_0, 1);
+        for (owner, outer) in chain {
+            self.emit_getfield(*owner, outer);
+        }
     }
 
     /// Push the captured enclosing instance (`this.__caturraOuter`) onto the
@@ -10337,8 +10470,8 @@ impl BodyGen<'_> {
             }
             // An instance field of the enclosing class, written live through
             // the captured `__caturraOuter` (which `this` now denotes).
-            if let Some((_, field_owner, field)) = self.enclosing_instance_field(name) {
-                let outer = self.enclosing_receiver(span);
+            if let Some((chain, field_owner, field)) = self.enclosing_instance_field(name) {
+                let outer = self.enclosing_receiver_depth(chain.len(), span);
                 self.assign_field(
                     field_owner,
                     &FieldReceiver::Object(&outer),
@@ -13068,6 +13201,7 @@ impl BodyGen<'_> {
             JType::TypeVar => self.table.object_id,
             JType::Error => return None,
             JType::Str
+            | JType::CharSequence
             | JType::StringBuilder
             | JType::Scanner
             | JType::File
@@ -14928,22 +15062,36 @@ impl BodyGen<'_> {
             );
         }
         // A bare call to an enclosing instance method, from inside a lambda or
-        // inner class: `helper()` is `__caturraOuter.helper()`.
-        if !matches!(own, Resolution::Found(_))
-            && !self.in_constructor
-            && let Some((outer, enclosing)) = self.captured_outer()
-        {
-            let enc_name = self.table.class_name(enclosing).to_owned();
-            let found_instance = matches!(
-                self.table.resolve(&enc_name, method, &arg_types),
-                Resolution::Found(sig) if !sig.is_static
-            );
-            if found_instance {
-                // `this.__caturraOuter` — the enclosing instance, whether `this`
-                // is a lambda (whose own `this` already denotes the enclosing)
-                // or an inner class (whose `this` is its own object).
-                self.push_captured_outer(&outer);
-                return self.emit_virtual_call_on_stacked_receiver(enclosing, method, args, span);
+        // inner class — walking the WHOLE `__caturraOuter` chain, so a
+        // doubly-nested class calls its grand-enclosing class's method too
+        // (JLS §6.5.7.1: the innermost enclosing class with the method wins).
+        if !matches!(own, Resolution::Found(_)) && !self.in_constructor {
+            let mut chain: OuterChain = Vec::new();
+            let mut current = self.current_class_id;
+            for _ in 0..=self.table.class_names.len() {
+                let owner = self.table.class_name(current).to_owned();
+                let Some((_, outer)) = self.table.field(&owner, crate::capture::OUTER_FIELD) else {
+                    break;
+                };
+                let outer = outer.clone();
+                let JType::Object(enclosing) = outer.ty else {
+                    break;
+                };
+                chain.push((current, outer));
+                let enc_name = self.table.class_name(enclosing).to_owned();
+                let found_instance = matches!(
+                    self.table.resolve(&enc_name, method, &arg_types),
+                    Resolution::Found(sig) if !sig.is_static
+                );
+                if found_instance {
+                    // `this.__caturraOuter…` — the enclosing instance, whether
+                    // `this` is a lambda (whose own `this` already denotes the
+                    // enclosing) or an inner class (whose `this` is its own).
+                    self.push_captured_outer_chain(&chain);
+                    return self
+                        .emit_virtual_call_on_stacked_receiver(enclosing, method, args, span);
+                }
+                current = enclosing;
             }
         }
         self.static_call(self.current_class, method, args, span)
@@ -15716,7 +15864,7 @@ impl BodyGen<'_> {
     /// `java.util.Objects`: the null-safe static helpers, each backed by a VM
     /// intrinsic that dispatches a user `equals`/`hashCode`/`toString` where
     /// the JDK does.
-    #[allow(clippy::option_option)] // call-dispatch return shape
+    #[allow(clippy::option_option, clippy::too_many_lines)] // call-dispatch shape; one arm per helper
     fn emit_objects_call(
         &mut self,
         method: &str,
@@ -15788,6 +15936,26 @@ impl BodyGen<'_> {
                     1,
                 );
                 Some(Some(self.narrow_object_return(arg_ty)))
+            }
+            ("requireNonNullElse", [a, fallback]) => {
+                // Both arguments are pushed boxed; the result is the JOIN of
+                // the two static types, narrowed like requireNonNull's.
+                let arg_ty = self.type_of(a);
+                let fallback_ty = self.type_of(fallback);
+                self.emit_object_arg(a);
+                self.emit_object_arg(fallback);
+                self.invoke_objects(
+                    "requireNonNullElse",
+                    "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+                    2,
+                    1,
+                );
+                let joined = if arg_ty == JType::Null {
+                    fallback_ty
+                } else {
+                    arg_ty
+                };
+                Some(Some(self.narrow_object_return(joined)))
             }
             ("requireNonNull", [a, message]) => {
                 let arg_ty = self.type_of(a);
@@ -16178,6 +16346,7 @@ impl BodyGen<'_> {
             } => Some(String::from("([C)V")),
             JType::Generic { .. }
             | JType::StringBuilder
+            | JType::CharSequence
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Map { .. }
@@ -16439,6 +16608,34 @@ impl BodyGen<'_> {
                         .class_id("__Comparator")
                         .map_or(JType::Error, JType::Object);
                 }
+                // `java.util.Objects` is a special-cased emitter (not in the
+                // static table), so its returns are mirrored here — without
+                // this, `Objects.hash(a, b) == x` was "bad operand types".
+                if let Some(Expr::Name { path, .. }) = receiver.as_deref()
+                    && path.len() == 1
+                    && path[0] == "Objects"
+                    && self.lookup("Objects").is_none()
+                    && !self.table.has_class("Objects")
+                {
+                    return match method.as_str() {
+                        "equals" | "isNull" | "nonNull" | "deepEquals" => JType::Boolean,
+                        "hashCode" | "hash" => JType::Int,
+                        "toString" => JType::Str,
+                        "requireNonNull" => args.first().map_or(JType::Error, |a| self.type_of(a)),
+                        "requireNonNullElse" => match args.as_slice() {
+                            [a, fallback] => {
+                                let first = self.type_of(a);
+                                if first == JType::Null {
+                                    self.type_of(fallback)
+                                } else {
+                                    first
+                                }
+                            }
+                            _ => JType::Error,
+                        },
+                        _ => JType::Error,
+                    };
+                }
                 // Mirror emission-path resolution, silently.
                 let class = match receiver.as_deref() {
                     None => self.current_class.to_owned(),
@@ -16527,6 +16724,7 @@ impl BodyGen<'_> {
                             return boxed_method_return(method).unwrap_or(JType::Error);
                         }
                         receiver_ty @ (JType::Str
+                        | JType::CharSequence
                         | JType::StringBuilder
                         | JType::Scanner
                         | JType::File
@@ -17859,8 +18057,8 @@ impl BodyGen<'_> {
             }
             // An instance field of the enclosing class, through the captured
             // `__caturraOuter`. Live on the real enclosing object.
-            if let Some((outer, field_owner, field)) = self.enclosing_instance_field(name) {
-                self.push_captured_outer(&outer);
+            if let Some((chain, field_owner, field)) = self.enclosing_instance_field(name) {
+                self.push_captured_outer_chain(&chain);
                 return self.emit_getfield(field_owner, &field);
             }
         }
@@ -18264,7 +18462,10 @@ impl BodyGen<'_> {
             // `(String[]) obj`, `(int[][]) obj`. A runtime `checkcast` to the
             // array's class descriptor (`[I`, `[Ljava/lang/String;`, `[[I`),
             // which is the array's own name in the constant pool.
-            (JType::Null, JType::Array { .. }) => target,
+            // `(Integer) null`, `(int[]) null` — a reference cast of null to
+            // any wrapper or array type (JLS §5.5). No code: null is every
+            // reference type; an unboxing USE later throws NPE at runtime.
+            (JType::Null, JType::Array { .. } | JType::Boxed(_)) => target,
             (src, JType::Array { .. }) if src.is_reference() => {
                 let descriptor = target.descriptor(self.table);
                 let class_index = intern_class(self.pool, &descriptor);
@@ -19139,6 +19340,7 @@ impl BodyGen<'_> {
         let descriptor = match ty {
             JType::Generic { .. }
             | JType::StringBuilder
+            | JType::CharSequence
             | JType::TypeVar
             | JType::Boxed(_)
             | JType::Map { .. }
@@ -19279,6 +19481,69 @@ impl BodyGen<'_> {
             Expr::Name { .. } => match self.const_eval(expr)? {
                 Literal::Int(v) => Some(v),
                 Literal::Char(c) => Some(i64::from(u32::from(c))),
+                _ => None,
+            },
+            // JLS §15.29: a conditional whose three parts are all constants is
+            // itself a constant — `flag ? 1 : 2` with a `final boolean flag`
+            // narrows into a byte. Only the TAKEN branch's value matters, but
+            // the untaken one must still be constant for the whole to be.
+            Expr::Ternary {
+                cond, then, els, ..
+            } => {
+                let taken = self.const_bool(cond)?;
+                let (then, els) = (self.const_int(then)?, self.const_int(els)?);
+                Some(if taken { then } else { els })
+            }
+            _ => None,
+        }
+    }
+
+    /// The constant boolean value of an expression (JLS §15.29), or `None`
+    /// when it is not one: `true`/`false` literals, constant `final`
+    /// variables, `!`, comparisons of constant ints, and `&&`/`||`/`&`/`|`/`^`
+    /// over constant booleans. Conservative — a shape not handled simply makes
+    /// the surrounding expression non-constant, which is the stricter
+    /// direction.
+    fn const_bool(&mut self, expr: &Expr) -> Option<bool> {
+        match expr {
+            Expr::Literal {
+                value: Literal::Bool(b),
+                ..
+            } => Some(*b),
+            Expr::Name { .. } => match self.const_eval(expr)? {
+                Literal::Bool(b) => Some(b),
+                _ => None,
+            },
+            Expr::Unary {
+                op: UnaryOp::Not,
+                operand,
+                ..
+            } => Some(!self.const_bool(operand)?),
+            Expr::Binary { op, lhs, rhs, .. } => match op {
+                BinaryOp::And | BinaryOp::BitAnd => {
+                    Some(self.const_bool(lhs)? && self.const_bool(rhs)?)
+                }
+                BinaryOp::Or | BinaryOp::BitOr => {
+                    Some(self.const_bool(lhs)? || self.const_bool(rhs)?)
+                }
+                BinaryOp::BitXor => Some(self.const_bool(lhs)? != self.const_bool(rhs)?),
+                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                    let (l, r) = (self.const_int(lhs)?, self.const_int(rhs)?);
+                    Some(match op {
+                        BinaryOp::Lt => l < r,
+                        BinaryOp::Le => l <= r,
+                        BinaryOp::Gt => l > r,
+                        _ => l >= r,
+                    })
+                }
+                BinaryOp::Eq | BinaryOp::Ne => {
+                    // Constant equality over ints or over booleans.
+                    let same = match (self.const_int(lhs), self.const_int(rhs)) {
+                        (Some(l), Some(r)) => l == r,
+                        _ => self.const_bool(lhs)? == self.const_bool(rhs)?,
+                    };
+                    Some(if *op == BinaryOp::Eq { same } else { !same })
+                }
                 _ => None,
             },
             _ => None,
@@ -19748,6 +20013,11 @@ impl BodyGen<'_> {
             // reference and implements Comparable (a boxed wrapper is boxed
             // above; a primitive is boxed by the autoboxing rule).
             (JType::Str, JType::Object(id)) if self.table.class_id("Comparable") == Some(id) => {}
+            // `String`/`StringBuilder` widening to `CharSequence` needs no
+            // code (a widening reference conversion) — the same two-gate split
+            // as every other widening (`widens` allows it; this matrix must
+            // agree or the assignment is rejected anyway).
+            (JType::Str | JType::StringBuilder, JType::CharSequence) => {}
             // A parameterized type and its raw class erase alike.
             (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
             // A USER exception subclass (typed `Object(id)`) widening to its
@@ -19875,11 +20145,13 @@ impl BodyGen<'_> {
                     "incompatible types: possible lossy conversion from double to long",
                 );
             }
+            // javac's exact sentence — these two used to append friendly
+            // "add a cast" advice, which reads as our wording, not javac's.
             (JType::Double, JType::Int | JType::Char) => {
                 self.error(
                     span,
                     format!(
-                        "possible lossy conversion from double to {}; add an explicit cast",
+                        "incompatible types: possible lossy conversion from double to {}",
                         to.describe(self.table)
                     ),
                 );
@@ -19887,7 +20159,7 @@ impl BodyGen<'_> {
             (JType::Int, JType::Char) => {
                 self.error(
                     span,
-                    "possible lossy conversion from int to char; add a cast",
+                    "incompatible types: possible lossy conversion from int to char",
                 );
             }
             (from, to) => {

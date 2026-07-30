@@ -225,6 +225,37 @@ impl Lexer<'_> {
             .push(Diagnostic::error(self.path, message, span));
     }
 
+    /// Whether the last token is a `-` that must be UNARY: nothing before it,
+    /// or something that cannot end an expression (`(`, `,`, `=`, an operator,
+    /// `return`, …). A literal, identifier, or closing bracket before the `-`
+    /// makes it binary subtraction instead.
+    fn trailing_unary_minus(&self) -> bool {
+        let [.., before, minus] = self.tokens.as_slice() else {
+            // A lone leading `-` (the whole file starts with it) is unary too.
+            return matches!(
+                self.tokens.as_slice(),
+                [Token {
+                    kind: TokenKind::Symbol("-"),
+                    ..
+                }]
+            );
+        };
+        if minus.kind != TokenKind::Symbol("-") {
+            return false;
+        }
+        !matches!(
+            before.kind,
+            TokenKind::Identifier(_)
+                | TokenKind::IntLiteral(_)
+                | TokenKind::LongLiteral(_)
+                | TokenKind::FloatLiteral(_)
+                | TokenKind::DoubleLiteral(_)
+                | TokenKind::CharLiteral(_)
+                | TokenKind::StringLiteral(_)
+                | TokenKind::Symbol(")" | "]")
+        )
+    }
+
     fn push(&mut self, kind: TokenKind, start: SourcePosition) {
         let span = SourceSpan {
             start,
@@ -420,6 +451,22 @@ impl Lexer<'_> {
         if force_long {
             match digits.parse::<i64>() {
                 Ok(value) => self.push(TokenKind::LongLiteral(value), start),
+                // JLS §3.10.1: `9223372036854775808L` — one past `Long.MAX_VALUE`
+                // — is legal in EXACTLY one place: as the operand of unary
+                // minus, where the pair spells `Long.MIN_VALUE`. The minus is
+                // unary when what precedes it cannot end an expression, which
+                // is the same test every lexer uses to split the two minuses.
+                // The `-` token is folded away and the literal becomes MIN.
+                Err(_) if digits == "9223372036854775808" && self.trailing_unary_minus() => {
+                    let minus = self.tokens.pop().expect("checked by trailing_unary_minus");
+                    self.tokens.push(Token {
+                        kind: TokenKind::LongLiteral(i64::MIN),
+                        span: SourceSpan {
+                            start: minus.span.start,
+                            end: self.position(),
+                        },
+                    });
+                }
                 Err(_) => self.error(format!("integer literal '{digits}' is out of range"), start),
             }
         } else if is_double {

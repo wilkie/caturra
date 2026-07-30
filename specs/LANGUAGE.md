@@ -231,6 +231,49 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Round-5 tail: object methods, numeric corners, nested classes**
+  (2026-07-30): the last fourteen round-5 findings outside the boxed-at-rest
+  representation change.
+  - **Library statics:** `String.valueOf(String)` and `valueOf(Object)` (the
+    latter interpreter-answered so a user `toString` runs);
+    `System.identityHashCode` (stable per object — the heap reference — 0 for
+    null; only the identity PROPERTIES match a real JVM, whose values are
+    address bits); `Objects.requireNonNullElse` (NPE message `defaultObj` when
+    both are null); the LONG `Math.*Exact` overloads (`addExact(long,long)` &
+    co., throwing the JDK's "long overflow" where the int ones say "integer
+    overflow"); `Byte`/`Short.toUnsignedInt`/`toUnsignedLong` (zero-extension);
+    and a `type_of` mirror for the `Objects` emitter, so `Objects.hash(...)` is
+    usable in expression position (`== x` used to be "bad operand types").
+  - **`java.lang.CharSequence` is a type** (`JType::CharSequence`): `String`
+    and `StringBuilder` widen to it (JLS §4.10.2), a `CharSequence` parameter
+    accepts either, and `length`/`charAt`/`toString`/`subSequence` dispatch on
+    the actual heap object. `CharSequence -> String` still needs the cast, as
+    on javac.
+  - **`Collection.equals` takes `Object`**, as Java declares it: a list of a
+    DIFFERENT element type is a legal argument (usually false, but `[]` equals
+    `[]` across element types). It used to demand the receiver's own list type.
+  - **A conditional of constants is a constant** (JLS §15.28): `byte b = flag ?
+    1 : 2;` with a `final boolean flag` narrows (JLS §5.2). A new `const_bool`
+    folds constant boolean conditions (literals, constant variables, `!`,
+    comparisons of constant ints, `&&`/`||`/`&`/`|`/`^`); a non-constant
+    condition still rejects exactly as javac does.
+  - **`(Integer) null`** is a legal reference cast (unboxing the result throws
+    NPE at runtime); it was "cannot cast null to Integer".
+  - **`-9223372036854775808L` parses** (JLS §3.10.1): one-past-`Long.MAX_VALUE`
+    is legal exactly as the operand of unary minus, where the pair spells
+    `Long.MIN_VALUE` — the lexer folds the two tokens using the standard
+    unary-vs-binary minus test. Without the minus, and as `1 - 9223…L`, it is
+    still the error javac gives.
+  - **Lossy-conversion wording matches javac:** "incompatible types: possible
+    lossy conversion from int to char" (and double→int/char), dropping
+    caturra's friendly "; add a cast" suffix, which read as our wording.
+  - **`new Object() { ... }`** — an anonymous class may extend the synthetic
+    top type (it was "cannot find symbol: class Object").
+  - **Grand-enclosing capture** (JLS §6.5.6.1): a doubly-nested inner class
+    reads, writes, and calls members TWO (or more) enclosing levels up, through
+    a CHAIN of `__caturraOuter` hops — `enclosing_instance_field` and the bare-
+    call fallback both walk the chain now, and the nearest enclosing class
+    declaring the name wins (Java's shadowing rule).
 - **Comparators and collection algorithms** (2026-07-24): the round-5
   comparator + collections cluster, 21 findings.
   - **Comparator combinators.** A `comparing`/`comparingInt` key extractor

@@ -4008,6 +4008,10 @@ fn overflow() -> VmError {
     throw("java.lang.ArithmeticException: integer overflow")
 }
 
+fn long_overflow() -> VmError {
+    throw("java.lang.ArithmeticException: long overflow")
+}
+
 /// `Math.round(double)` — half-up toward positive infinity, computed on the
 /// bit pattern exactly as JDK 11 does. The naive `(a + 0.5).floor()` rounds
 /// `0.49999999999999994` UP, because adding `0.5` to it in `double` overflows
@@ -4300,6 +4304,26 @@ fn math_static(
         ("negateExact", [JValue::Int(v)]) => v.checked_neg().map_or_else(|| Err(overflow()), i),
         ("incrementExact", [JValue::Int(v)]) => v.checked_add(1).map_or_else(|| Err(overflow()), i),
         ("decrementExact", [JValue::Int(v)]) => v.checked_sub(1).map_or_else(|| Err(overflow()), i),
+        // The long overloads throw "long overflow" (the JDK's message differs
+        // from the int ones' "integer overflow").
+        ("addExact", [JValue::Long(a), JValue::Long(b)]) => a
+            .checked_add(*b)
+            .map_or_else(|| Err(long_overflow()), |v| Ok(Some(JValue::Long(v)))),
+        ("subtractExact", [JValue::Long(a), JValue::Long(b)]) => a
+            .checked_sub(*b)
+            .map_or_else(|| Err(long_overflow()), |v| Ok(Some(JValue::Long(v)))),
+        ("multiplyExact", [JValue::Long(a), JValue::Long(b)]) => a
+            .checked_mul(*b)
+            .map_or_else(|| Err(long_overflow()), |v| Ok(Some(JValue::Long(v)))),
+        ("negateExact", [JValue::Long(v)]) => v
+            .checked_neg()
+            .map_or_else(|| Err(long_overflow()), |v| Ok(Some(JValue::Long(v)))),
+        ("incrementExact", [JValue::Long(v)]) => v
+            .checked_add(1)
+            .map_or_else(|| Err(long_overflow()), |v| Ok(Some(JValue::Long(v)))),
+        ("decrementExact", [JValue::Long(v)]) => v
+            .checked_sub(1)
+            .map_or_else(|| Err(long_overflow()), |v| Ok(Some(JValue::Long(v)))),
         _ => Err(VmError::UnknownIntrinsic(format!("Math.{method}"))),
     }
 }
@@ -5103,6 +5127,16 @@ fn small_int_static(
         // the -1/0/1 sign that `Integer.compare` gives — the values are small
         // enough that the subtraction cannot overflow.
         ("compare", [JValue::Int(a), JValue::Int(b)]) => Ok(Some(JValue::Int(a - b))),
+        // Zero-extend the low byte/short: `Byte.toUnsignedInt((byte) -1)` is
+        // 255, `Short.toUnsignedInt((short) -1)` is 65535.
+        ("toUnsignedInt", [JValue::Int(v)]) => {
+            let mask = if class == "Short" { 0xFFFF } else { 0xFF };
+            Ok(Some(JValue::Int(v & mask)))
+        }
+        ("toUnsignedLong", [JValue::Int(v)]) => {
+            let mask = if class == "Short" { 0xFFFF } else { 0xFF };
+            Ok(Some(JValue::Long(i64::from(v & mask))))
+        }
         ("reverseBytes", [JValue::Int(v)]) => {
             #[allow(clippy::cast_possible_truncation)]
             let value = *v as i16;

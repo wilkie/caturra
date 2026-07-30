@@ -3847,6 +3847,20 @@ impl<'run> Interpreter<'run> {
                 }
                 *o
             }
+            // `requireNonNullElse(obj, defaultObj)`: the first non-null; both
+            // null is an NPE naming the PARAMETER (the JDK's requireNonNull
+            // message for its own second argument).
+            ("requireNonNullElse", [o, fallback]) => {
+                if *o != JValue::NULL {
+                    *o
+                } else if *fallback != JValue::NULL {
+                    *fallback
+                } else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException: defaultObj",
+                    )));
+                }
+            }
             ("requireNonNull", [o, message]) => {
                 if *o == JValue::NULL {
                     let text = match message {
@@ -7721,6 +7735,30 @@ impl<'run> Interpreter<'run> {
                 _ => String::new(),
             };
             let reference = self.intern_class(name);
+            frame.stack.push(JValue::Ref(Some(reference)));
+            return Ok(None);
+        }
+        // `System.identityHashCode(x)`: stable per OBJECT — the heap
+        // reference — never consulting a user hashCode; 0 for null (JDK). The
+        // VALUE differs from a real JVM's, which hands out address bits; only
+        // the identity properties are portable, and they hold.
+        if class_name == "java/lang/System" && method_name == "identityHashCode" {
+            let hash = match args.first() {
+                Some(JValue::Ref(Some(reference))) => i32::try_from(*reference).unwrap_or(i32::MAX),
+                _ => 0,
+            };
+            frame.stack.push(JValue::Int(hash));
+            return Ok(None);
+        }
+        // `String.valueOf(Object)` — the object's own toString or "null",
+        // answered here (not in the heap-only intrinsics) so user Java runs.
+        if class_name == "java/lang/String"
+            && method_name == "valueOf"
+            && descriptor == "(Ljava/lang/Object;)Ljava/lang/String;"
+            && let Some(value) = args.first().copied()
+        {
+            let text = self.string_value_of(value, 0)?;
+            let reference = self.heap.alloc_string(&text);
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
         }
