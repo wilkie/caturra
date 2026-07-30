@@ -1447,6 +1447,13 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if method == "stream" && args.is_empty() {
         return list_elem_type(prev, ctx);
     }
+    // `"text".lines()` — a Stream<String>; `chars()` — an IntStream.
+    if method == "lines" && args.is_empty() {
+        return Some(TypeRef::Named(String::from("String")));
+    }
+    if method == "chars" && args.is_empty() {
+        return Some(TypeRef::Int);
+    }
     // `IntStream.range(a, b)` / `rangeClosed(a, b)` — a source of `int`s.
     if matches!(method.as_str(), "range" | "rangeClosed")
         && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "IntStream")

@@ -7909,9 +7909,10 @@ fn try_catch_compile_errors_match_javac() {
             "class M { static void f() { try { int x = 1; } } }",
             "'try' needs at least one 'catch' clause or a 'finally' block",
         ),
+        // `"abc".lines()` is no longer here: it WORKS now (a real Stream).
         (
-            r#"class M { static void f() { "abc".lines(); } }"#,
-            "String.lines exists in Java, but streams are not supported by caturra",
+            "class M { static void f() { new StringBuilder().chars(); } }",
+            "StringBuilder.chars exists in Java, but streams are not supported by caturra",
         ),
         (
             "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.nextBigInteger(); } }",

@@ -5171,6 +5171,8 @@ enum BRet {
     StreamErased,
     /// `IntStream` (`mapToInt`, and the `IntStream` intermediate ops).
     IntStream,
+    /// `Stream<String>` — `String.lines()`.
+    StreamString,
     /// `Stream<Integer>` — `IntStream.boxed()`.
     StreamInteger,
     /// `int[]` — `IntStream.toArray()`.
@@ -5448,6 +5450,18 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         descriptor: "(Ljava/lang/String;)Ljava/lang/String;",
     },
     BuiltinMethod {
+        name: "lines",
+        params: &[],
+        ret: BRet::StreamString,
+        descriptor: "()Ljava/util/stream/Stream;",
+    },
+    BuiltinMethod {
+        name: "chars",
+        params: &[],
+        ret: BRet::IntStream,
+        descriptor: "()Ljava/util/stream/IntStream;",
+    },
+    BuiltinMethod {
         name: "compareToIgnoreCase",
         params: &[BParam::Str],
         ret: BRet::Int,
@@ -5645,6 +5659,18 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
         descriptor: "(Ljava/lang/Object;)Ljava/lang/String;",
     },
     BuiltinMethod {
+        name: "valueOf",
+        params: &[BParam::CharArray, BParam::Int, BParam::Int],
+        ret: BRet::Str,
+        descriptor: "([CII)Ljava/lang/String;",
+    },
+    BuiltinMethod {
+        name: "copyValueOf",
+        params: &[BParam::CharArray, BParam::Int, BParam::Int],
+        ret: BRet::Str,
+        descriptor: "([CII)Ljava/lang/String;",
+    },
+    BuiltinMethod {
         name: "copyValueOf",
         params: &[BParam::CharArray],
         ret: BRet::Str,
@@ -5658,9 +5684,7 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 #[rustfmt::skip]
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "getBytes", "byte arrays are not supported by caturra"),
-    ("String", "chars", "streams are not supported by caturra"),
     ("String", "codePoints", "streams are not supported by caturra"),
-    ("String", "lines", "streams are not supported by caturra"),
     ("StringBuilder", "capacity", "caturra does not model a builder's capacity, only its contents"),
     ("StringBuilder", "chars", "streams are not supported by caturra"),
     ("StringBuilder", "codePoints", "streams are not supported by caturra"),
@@ -9148,6 +9172,7 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
         BRet::IntStream => Some(JType::IntStream),
         BRet::StreamInteger => Some(JType::Stream(ElemType::Wrapper(Prim::Int))),
+        BRet::StreamString => Some(JType::Stream(ElemType::Str)),
         BRet::IntArray => Some(JType::Array {
             elem: ElemType::Int,
             dims: 1,

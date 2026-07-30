@@ -231,6 +231,29 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **The String API tail** (2026-07-30) — eight round-6 findings:
+  - **`strip()`/`stripLeading`/`stripTrailing`/`isBlank` use JAVA's
+    whitespace** (`Character.isWhitespace`), not Unicode's: the two differ on
+    U+001C–1F (Java: whitespace) and the non-breaking spaces (Java: not).
+    Rust's `char::is_whitespace` had silently substituted the Unicode set, so
+    the string methods disagreed with caturra's own classifier.
+  - **`equalsIgnoreCase(null)` is `false`** (as the Javadoc says), not an NPE.
+  - **`replaceAll`'s out-of-range group reference** (`"$5"` against a
+    groupless pattern) throws `Matcher.group`'s IndexOutOfBoundsException
+    ("No group 5") — the JDK reads the first digit unconditionally and only
+    extends while the number stays a valid group; `$x` remains
+    IllegalArgumentException.
+  - **`concat("")` returns `this`** — `a.concat("") == a` is observably true
+    on a JDK (while `a + ""` mints a new string).
+  - **`String.valueOf(char[], int, int)`** and the `copyValueOf` subrange
+    (with StringIndexOutOfBounds checks).
+  - **`lines()` and `chars()` are real streams** — a `Stream<String>` split
+    on `\n`/`\r\n`/`\r` (no trailing empty line) and an `IntStream` of the
+    UTF-16 units; both had refused with the FALSE reason "streams are not
+    supported". The lambda pass knows them as stream heads, so
+    `lines().forEach(...)` and `chars().map(...).sum()` desugar.
+  - **The dangling-metacharacter message names the character** ("Dangling
+    meta character '+' near index 0"), as the JDK's does.
 - **The round-6 mechanical batch** (2026-07-30) — fifteen findings, seven
   small fixes:
   - **Unary plus promotes** (JLS §15.15.3): `+aChar` is an int, so `char r =

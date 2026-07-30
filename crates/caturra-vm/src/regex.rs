@@ -269,7 +269,14 @@ impl Parser<'_> {
         };
         // A quantifier must follow something quantifiable.
         if matches!(atom, Node::Start | Node::End | Node::WordBoundary(_)) {
-            return Err(self.error("Dangling meta character", start));
+            // The JDK names the offending character: "Dangling meta
+            // character '+' near index 0".
+            let meta = self
+                .units
+                .get(self.at.saturating_sub(1))
+                .and_then(|u| char::from_u32(u32::from(*u)))
+                .unwrap_or('?');
+            return Err(self.error(&format!("Dangling meta character '{meta}'"), start));
         }
         let kind = if self.eat(u16::from(b'?')) {
             RepeatKind::Reluctant
@@ -350,7 +357,8 @@ impl Parser<'_> {
             u if u == u16::from(b'\\') => self.parse_escape(start),
             u if u == u16::from(b')') => Err(self.error("Unmatched closing ')'", start)),
             u if u == u16::from(b'*') || u == u16::from(b'+') || u == u16::from(b'?') => {
-                Err(self.error("Dangling meta character", start))
+                let meta = char::from_u32(u32::from(u)).unwrap_or('?');
+                Err(self.error(&format!("Dangling meta character '{meta}'"), start))
             }
             other => Ok(Node::Literal(other)),
         }

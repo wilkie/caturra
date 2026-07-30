@@ -829,6 +829,11 @@ fn string_method(
             Ok(Some(JValue::Int(i32::from(result))))
         }
         ("equalsIgnoreCase", [other]) => {
+            // Like `equals`, a null argument answers false (the Javadoc says
+            // so explicitly) — it must not NPE.
+            if matches!(other, JValue::Ref(None)) {
+                return Ok(Some(JValue::Int(0)));
+            }
             let other = arg_units(other)?;
             let a = String::from_utf16_lossy(&units).to_lowercase();
             let b = String::from_utf16_lossy(&other).to_lowercase();
@@ -898,17 +903,63 @@ fn string_method(
             let reference = heap.alloc_string(&text);
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // `lines()` — a Stream of the lines, split on \n, \r\n or \r, with
+        // no trailing empty line for a trailing terminator (the JDK's rule).
+        ("lines", []) => {
+            let text = String::from_utf16_lossy(&units);
+            let mut line_refs: Vec<JValue> = Vec::new();
+            let mut current = String::new();
+            let mut chars = text.chars().peekable();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\n' => {
+                        line_refs.push(JValue::Ref(Some(heap.alloc_string(&current))));
+                        current.clear();
+                    }
+                    '\r' => {
+                        if chars.peek() == Some(&'\n') {
+                            chars.next();
+                        }
+                        line_refs.push(JValue::Ref(Some(heap.alloc_string(&current))));
+                        current.clear();
+                    }
+                    other => current.push(other),
+                }
+            }
+            if !current.is_empty() {
+                line_refs.push(JValue::Ref(Some(heap.alloc_string(&current))));
+            }
+            let stream = heap.alloc(HeapObject::Stream {
+                source: line_refs,
+                ops: Vec::new(),
+            });
+            Ok(Some(JValue::Ref(Some(stream))))
+        }
+        // `chars()` — an IntStream of the UTF-16 code units, in order.
+        ("chars", []) => {
+            let source: Vec<JValue> = units.iter().map(|u| JValue::Int(i32::from(*u))).collect();
+            let stream = heap.alloc(HeapObject::Stream {
+                source,
+                ops: Vec::new(),
+            });
+            Ok(Some(JValue::Ref(Some(stream))))
+        }
         ("trim", []) => {
             let text = String::from_utf16_lossy(&units);
             let reference = heap.alloc_string(text.trim_matches(|c| c <= ' '));
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("strip" | "stripLeading" | "stripTrailing", []) => {
+            // JAVA's whitespace (`Character.isWhitespace`), not Unicode's:
+            // the two differ on U+001C..1F (Java: yes) and the non-breaking
+            // spaces (Java: no). Rust's `char::is_whitespace` silently used
+            // the Unicode set, so `strip()` disagreed with caturra's own
+            // `Character.isWhitespace`.
             let text = String::from_utf16_lossy(&units);
             let stripped = match method {
-                "strip" => text.trim_matches(char::is_whitespace),
-                "stripLeading" => text.trim_start_matches(char::is_whitespace),
-                _ => text.trim_end_matches(char::is_whitespace),
+                "strip" => text.trim_matches(java_is_whitespace),
+                "stripLeading" => text.trim_start_matches(java_is_whitespace),
+                _ => text.trim_end_matches(java_is_whitespace),
             };
             let reference = heap.alloc_string(stripped);
             Ok(Some(JValue::Ref(Some(reference))))
@@ -916,7 +967,7 @@ fn string_method(
         ("isBlank", []) => {
             let blank = String::from_utf16_lossy(&units)
                 .chars()
-                .all(char::is_whitespace);
+                .all(java_is_whitespace);
             Ok(Some(JValue::Int(i32::from(blank))))
         }
         ("repeat", [JValue::Int(count)]) => {
@@ -934,8 +985,15 @@ fn string_method(
             Ok(Some(JValue::Ref(Some(reference))))
         }
         ("concat", [other]) => {
+            let other = arg_units(other)?;
+            // The Javadoc guarantees `this` is returned when the argument is
+            // empty — `a.concat("") == a` is observably true on a JDK (while
+            // `a + ""` mints a new string).
+            if other.is_empty() {
+                return Ok(Some(JValue::Ref(Some(receiver))));
+            }
             let mut joined = units.clone();
-            joined.extend(arg_units(other)?);
+            joined.extend(other);
             let reference = heap.alloc(HeapObject::JavaString(joined));
             Ok(Some(JValue::Ref(Some(reference))))
         }
@@ -1810,8 +1868,13 @@ fn expand_replacement(
             if !(0x30..=0x39).contains(&digit) {
                 break;
             }
+            // The FIRST digit is consumed unconditionally (the JDK's rule);
+            // further digits extend the number only while it stays a valid
+            // group. `$5` against a groupless pattern is therefore group 5 —
+            // and an out-of-range group is `Matcher.group`'s
+            // IndexOutOfBoundsException, not an illegal reference.
             let extended = group.unwrap_or(0) * 10 + usize::from(digit - 0x30);
-            if extended > regex.group_count() {
+            if group.is_some() && extended > regex.group_count() {
                 break;
             }
             group = Some(extended);
@@ -1822,6 +1885,11 @@ fn expand_replacement(
                 "java.lang.IllegalArgumentException: Illegal group reference",
             )));
         };
+        if group > regex.group_count() {
+            return Err(throw(format!(
+                "java.lang.IndexOutOfBoundsException: No group {group}"
+            )));
+        }
         if let Some(Some((from, to))) = one.groups.get(group).copied() {
             out.extend_from_slice(&input[from..to]);
         }
@@ -5258,6 +5326,38 @@ fn string_static(
         return string_join(heap, descriptor, args);
     }
     match (method, args) {
+        // `valueOf(char[], offset, count)` — the subrange overload.
+        (
+            "valueOf" | "copyValueOf",
+            [
+                JValue::Ref(Some(reference)),
+                JValue::Int(offset),
+                JValue::Int(count),
+            ],
+        ) => {
+            let Some(HeapObject::IntArray(_, values)) = heap.get(*reference) else {
+                return Err(VmError::UnknownIntrinsic(String::from(
+                    "String.valueOf(char[], int, int) needs a char array",
+                )));
+            };
+            let (offset_u, count_u) = (
+                usize::try_from(*offset).unwrap_or(usize::MAX),
+                usize::try_from(*count).unwrap_or(usize::MAX),
+            );
+            let end = offset_u.saturating_add(count_u);
+            if *offset < 0 || *count < 0 || end > values.len() {
+                return Err(throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: offset {offset}, count {count}, length {}",
+                    values.len()
+                )));
+            }
+            let text: String = values[offset_u..end]
+                .iter()
+                .map(|v| char::from_u32(u32::try_from(*v).unwrap_or(0)).unwrap_or('\u{FFFD}'))
+                .collect();
+            let reference = heap.alloc_string(&text);
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("valueOf" | "copyValueOf", [value]) => {
             // The descriptor disambiguates int/char/boolean, which all
             // arrive as JValue::Int.

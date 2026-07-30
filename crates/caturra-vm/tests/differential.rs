@@ -16325,3 +16325,94 @@ public class DiffMechLib {
 }
 "#
 );
+
+// The round-6 string-API tail: Java's OWN whitespace set for strip/isBlank
+// (U+001C-1F are whitespace, NBSP is not), equalsIgnoreCase(null) is false,
+// replaceAll's out-of-range group reference is Matcher.group's
+// IndexOutOfBoundsException, concat("") returns THIS, the valueOf subrange
+// overload, and lines()/chars() as real streams.
+differential_test!(
+    diff_string_api_tail,
+    "DiffStrTail",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class DiffStrTail {
+    public static void main(String[] args) {
+        String ctl = "abc";
+        System.out.println(ctl.strip().length());
+        System.out.println(ctl.trim().length());
+        System.out.println("".isBlank());
+        System.out.println(Character.isWhitespace(''));
+        System.out.println("a".stripTrailing().length());
+        System.out.println(" x ".strip());
+
+        System.out.println("abc".equalsIgnoreCase(null));
+        System.out.println("abc".equalsIgnoreCase("ABC"));
+
+        try {
+            "abc".replaceAll("b", "$5");
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("caught: " + e.getMessage());
+        }
+        try {
+            "ab".replaceAll("a", "$x");
+        } catch (IllegalArgumentException e) {
+            System.out.println("illegal: " + e.getMessage());
+        }
+        System.out.println("a1b2".replaceAll("(\\d)", "[$1]"));
+
+        String a = "abc";
+        System.out.println(a.concat("") == a);
+        System.out.println((a + "") == a);
+        System.out.println(a.concat("d"));
+
+        char[] cs = { 'h', 'i', '!' };
+        System.out.println(String.valueOf(cs, 1, 2));
+        System.out.println(String.copyValueOf(cs, 0, 2));
+        try {
+            String.valueOf(cs, 0, 5);
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("bounds");
+        }
+
+        "a\nb\nc".lines().forEach(System.out::println);
+        System.out.println("a\nb\r\nc\rd".lines().count());
+        System.out.println("a\nb\n".lines().count());
+        System.out.println("".lines().count());
+        System.out.println("\n".lines().count());
+        List<String> kept = "x\ny\nz".lines()
+            .filter(s -> !s.equals("y"))
+            .collect(Collectors.toList());
+        System.out.println(kept);
+
+        System.out.println("abc".chars().sum());
+        System.out.println("abc".chars().map(c -> c + 1).sum());
+        System.out.println("Ab".chars().filter(c -> c < 97).count());
+    }
+}
+"#
+);
+
+// The dangling-metacharacter message names the character, as the JDK's does.
+differential_test!(
+    diff_pattern_syntax_metachar,
+    "DiffPatMeta",
+    r#"
+public class DiffPatMeta {
+    public static void main(String[] args) {
+        try {
+            "a+b".split("+");
+        } catch (java.util.regex.PatternSyntaxException e) {
+            System.out.println(e.getMessage());
+        }
+        try {
+            "a*b".split("*");
+        } catch (java.util.regex.PatternSyntaxException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+}
+"#
+);
