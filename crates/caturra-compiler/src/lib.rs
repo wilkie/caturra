@@ -18,6 +18,7 @@ mod lambda;
 pub mod lexer;
 mod mock;
 pub mod parser;
+mod thrown;
 
 use std::collections::HashMap;
 use std::fmt::Write as _;

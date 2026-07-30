@@ -306,6 +306,7 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers
         params,
         body,
         annotations: Vec::new(),
+        throws: Vec::new(),
         span: zero,
     });
 }
@@ -378,6 +379,7 @@ fn augment_local_ctors(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
             params: cap_params,
             body: stores(),
             annotations: Vec::new(),
+            throws: Vec::new(),
             span: zero,
         });
         return;

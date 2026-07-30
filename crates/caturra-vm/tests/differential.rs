@@ -15733,3 +15733,182 @@ public class DiffBoxedBoundaries {
 }
 "#
 );
+
+// JLS 11.2: checked exceptions must be caught or declared. Five audit rounds
+// never probed this; caturra enforced nothing.
+differential_reject!(
+    reject_unreported_throw,
+    "RejUnrepThrow",
+    r#"
+import java.io.IOException;
+
+public class RejUnrepThrow {
+    public static void main(String[] a) {
+        if (a.length > 100) throw new IOException("checked");
+        System.out.println("after");
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unreported_call,
+    "RejUnrepCall",
+    r#"
+import java.io.IOException;
+
+public class RejUnrepCall {
+    static void risky() throws IOException {
+        throw new IOException("io");
+    }
+    public static void main(String[] a) {
+        risky();
+        System.out.println("after");
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unreported_user_exception,
+    "RejUnrepUser",
+    r#"
+public class RejUnrepUser {
+    static class AppException extends Exception {
+        AppException(String m) { super(m); }
+    }
+    public static void main(String[] a) {
+        if (a.length > 100) throw new AppException("app");
+        System.out.println("after");
+    }
+}
+"#
+);
+
+// JLS 11.2.3: a catch of a checked exception the try body cannot throw.
+differential_reject!(
+    reject_catch_never_thrown,
+    "RejNeverThrown",
+    r#"
+import java.io.IOException;
+
+public class RejNeverThrown {
+    public static void main(String[] a) {
+        try {
+            System.out.println("hi");
+        } catch (IOException e) {
+            System.out.println("io");
+        }
+    }
+}
+"#
+);
+
+// Unreported checked exceptions escaping a ctor and a static initializer.
+differential_reject!(
+    reject_unreported_in_constructor,
+    "RejUnrepCtor",
+    r#"
+import java.io.IOException;
+
+public class RejUnrepCtor {
+    RejUnrepCtor(int n) {
+        if (n > 100) throw new IOException("ctor");
+    }
+    public static void main(String[] a) {
+        System.out.println(new RejUnrepCtor(1));
+    }
+}
+"#
+);
+
+// The legal side, all of which must KEEP compiling: caught, declared,
+// sub/super coverage, precise rethrow, multi-catch, wrap-in-unchecked,
+// catch(Exception)/catch(RuntimeException) of anything, user exceptions,
+// and the file-I/O shapes students write.
+differential_test!(
+    diff_checked_exceptions_legal_shapes,
+    "DiffCheckedLegal",
+    r#"
+import java.io.*;
+
+public class DiffCheckedLegal {
+    static class AppException extends Exception {
+        AppException(String m) { super(m); }
+    }
+
+    static void risky() throws IOException { throw new IOException("io"); }
+    static void declared() throws IOException { risky(); }
+    static void appFails() throws AppException { throw new AppException("app"); }
+
+    static void preciseRethrow() throws IOException {
+        try { risky(); } catch (Exception e) { throw e; }
+    }
+
+    static void multi(boolean io) throws ClassNotFoundException {
+        try {
+            if (io) throw new IOException("a");
+            throw new ClassNotFoundException("b");
+        } catch (IOException e) {
+            System.out.println("multi-io: " + e.getMessage());
+        }
+    }
+
+    public static void main(String[] a) throws Exception {
+        try { risky(); } catch (IOException e) { System.out.println("c: " + e.getMessage()); }
+        try { risky(); } catch (Exception e) { System.out.println("s: " + e.getMessage()); }
+        try { throw new FileNotFoundException("fnf"); }
+        catch (IOException e) { System.out.println("sub: " + e.getMessage()); }
+        try { risky(); }
+        catch (FileNotFoundException e) { System.out.println("fnf2"); }
+        catch (IOException e) { System.out.println("io2"); }
+        try { appFails(); } catch (AppException e) { System.out.println("app: " + e.getMessage()); }
+        try {
+            try { risky(); } catch (IOException e) { throw new RuntimeException(e); }
+        } catch (RuntimeException e) {
+            System.out.println("wrapped: " + e.getCause().getMessage());
+        }
+        try { preciseRethrow(); } catch (IOException e) { System.out.println("pr"); }
+        multi(true);
+        try { multi(false); } catch (ClassNotFoundException e) { System.out.println("cnf"); }
+        try { declared(); } catch (IOException e) { System.out.println("decl: " + e.getMessage()); }
+    }
+}
+"#
+);
+
+// try-with-resources over readers: close() throws IOException, and the
+// resource construction throws FileNotFoundException — catching IOException
+// covers both, exactly the shape student file code takes.
+differential_test!(
+    diff_checked_exceptions_file_shapes,
+    "DiffCheckedFiles",
+    r#"
+import java.io.*;
+import java.util.*;
+
+public class DiffCheckedFiles {
+    public static void main(String[] a) {
+        File f = new File("missing.txt");
+        try (Scanner sc = new Scanner(f)) {
+            while (sc.hasNextLine()) System.out.println(sc.nextLine());
+        } catch (FileNotFoundException e) {
+            System.out.println("no file");
+        }
+        try (BufferedReader r = new BufferedReader(new FileReader("missing.txt"))) {
+            System.out.println(r.readLine());
+        } catch (IOException e) {
+            System.out.println("io");
+        }
+        try {
+            PrintWriter w = new PrintWriter("out.txt");
+            w.println("hello");
+            w.close();
+            System.out.println("wrote");
+        } catch (FileNotFoundException e) {
+            System.out.println("pw");
+        }
+    }
+}
+"#
+);

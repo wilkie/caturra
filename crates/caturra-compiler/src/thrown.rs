@@ -1,0 +1,881 @@
+//! Checked-exception enforcement (JLS §11.2).
+//!
+//! Two *rejection* analyses javac performs that caturra did not, found by
+//! audit round 6:
+//!
+//!  - **Unreported exception.** A `throw` of a checked exception, or a call
+//!    to a method/constructor that declares one, must sit inside a `try`
+//!    whose `catch` covers it or inside a method that declares it —
+//!    "unreported exception X; must be caught or declared to be thrown".
+//!  - **Never thrown.** A `catch` of a checked exception the try body cannot
+//!    throw is dead — "exception X is never thrown in body of corresponding
+//!    try statement" (Exception and Throwable are exempt, JLS §11.2.3).
+//!
+//! **Conservative by construction**, like `flow.rs`: caturra's modeled
+//! library is a closed world, so the checked throwers in it can be enumerated
+//! exactly — but a call this pass cannot resolve (a chained receiver, an
+//! overload it cannot pick) contributes an *unknown* marker instead of a
+//! guess. Unknown suppresses BOTH checks around it: no "unreported" error is
+//! raised for it, and any enclosing catch is assumed reachable. A missed
+//! error is the status quo; a spurious one rejects a valid program.
+//!
+//! Bundled library units (paths in angle brackets) and synthesized
+//! anonymous/local classes are exempt: the bundled Java is trusted, and a
+//! lambda's checked-exception contract lives on its functional interface,
+//! which caturra erases.
+
+use crate::ast::{CatchClause, ClassDecl, Expr, MethodDecl, Stmt, TypeRef};
+use crate::codegen::MethodTable;
+use crate::diagnostics::{Diagnostic, SourceSpan};
+use caturra_classfile::exceptions as exc;
+use std::collections::HashMap;
+
+/// An exception type as this pass tracks it: a library throwable by internal
+/// name, or a user class (whose checked-ness comes from its library ancestor).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Exc {
+    Lib(&'static str),
+    User(String),
+}
+
+impl Exc {
+    /// The name to print — the simple name, as javac prints an imported type.
+    fn display(&self) -> String {
+        match self {
+            Exc::Lib(internal) => internal.rsplit('/').next().unwrap_or(internal).to_owned(),
+            Exc::User(name) => name.clone(),
+        }
+    }
+}
+
+/// What a construct can throw, as far as this pass can see. `unknown` is the
+/// safety valve: set whenever something unresolvable might throw.
+#[derive(Debug, Default, Clone)]
+struct ThrownSet {
+    list: Vec<Exc>,
+    unknown: bool,
+}
+
+impl ThrownSet {
+    fn push(&mut self, e: Exc) {
+        if !self.list.contains(&e) {
+            self.list.push(e);
+        }
+    }
+    fn absorb(&mut self, other: ThrownSet) {
+        for e in other.list {
+            self.push(e);
+        }
+        self.unknown |= other.unknown;
+    }
+}
+
+/// What a name in scope can mean to a `throw` statement.
+#[derive(Debug, Clone)]
+enum Binding {
+    /// A local/parameter with this declared type.
+    Declared(TypeRef),
+    /// A catch parameter under JLS §11.2.2 precise rethrow: `throw e` throws
+    /// only these (the try-body exceptions its clause can catch). `None` when
+    /// the body's throw set was unknown — then `throw e` is unknown too.
+    Precise(Option<Vec<Exc>>),
+}
+
+pub(crate) fn check(
+    class: &ClassDecl,
+    path: &str,
+    table: &MethodTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Bundled units are trusted; synthesized lambda/anonymous/local classes
+    // carry their contract on an erased functional interface.
+    if path.starts_with('<') || class.is_anonymous || class.is_local {
+        return;
+    }
+    for method in &class.methods {
+        if method.is_abstract {
+            continue;
+        }
+        check_method(class, method, path, table, diagnostics);
+    }
+    for block in &class.init_blocks {
+        // A static initializer can declare nothing, so every checked
+        // exception in one is unreported (JLS §11.2.3). Instance initializers
+        // may throw what every constructor declares — rarer than this pass
+        // wants to model, so they are left unchecked (the safe direction).
+        if block.is_static {
+            let mut ctx = Ctx {
+                class,
+                path,
+                table,
+                diagnostics,
+                declared: Vec::new(),
+                locals: HashMap::new(),
+            };
+            thrown_of_block(&block.body, &mut Vec::new(), &mut ctx);
+        }
+    }
+}
+
+fn check_method(
+    class: &ClassDecl,
+    method: &MethodDecl,
+    path: &str,
+    table: &MethodTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let declared: Vec<Exc> = method
+        .throws
+        .iter()
+        .filter_map(|name| resolve_exc(name, table))
+        .collect();
+    let mut locals = HashMap::new();
+    for param in &method.params {
+        locals.insert(param.name.clone(), Binding::Declared(param.ty.clone()));
+    }
+    let mut ctx = Ctx {
+        class,
+        path,
+        table,
+        diagnostics,
+        declared,
+        locals,
+    };
+    thrown_of_block(&method.body, &mut Vec::new(), &mut ctx);
+}
+
+struct Ctx<'a> {
+    class: &'a ClassDecl,
+    path: &'a str,
+    table: &'a MethodTable,
+    diagnostics: &'a mut Vec<Diagnostic>,
+    declared: Vec<Exc>,
+    /// Declared types of names in scope (parameters, locals, catch params).
+    /// Flat, last-write-wins: good enough for typing `throw e` and receivers.
+    locals: HashMap<String, Binding>,
+}
+
+impl Ctx<'_> {
+    fn error(&mut self, span: SourceSpan, message: String) {
+        self.diagnostics
+            .push(Diagnostic::error(self.path, message, span));
+    }
+
+    /// Report every checked exception in `set` that no enclosing catch frame
+    /// covers and the method does not declare.
+    fn report_escapes(&mut self, set: &ThrownSet, handlers: &[Vec<Exc>], span: SourceSpan) {
+        let escaped: Vec<Exc> = set
+            .list
+            .iter()
+            .filter(|e| is_checked(e, self.table))
+            .filter(|e| {
+                !handlers
+                    .iter()
+                    .any(|frame| frame.iter().any(|c| covers(c, e, self.table)))
+            })
+            .filter(|e| !self.declared.iter().any(|d| covers(d, e, self.table)))
+            .cloned()
+            .collect();
+        for e in escaped {
+            self.error(
+                span,
+                format!(
+                    "unreported exception {}; must be caught or declared to be thrown",
+                    e.display()
+                ),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The walk
+// ---------------------------------------------------------------------------
+
+fn thrown_of_block(body: &[Stmt], handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> ThrownSet {
+    let mut out = ThrownSet::default();
+    for stmt in body {
+        out.absorb(thrown_of_stmt(stmt, handlers, ctx));
+    }
+    out
+}
+
+#[allow(clippy::too_many_lines)] // one arm per statement kind
+fn thrown_of_stmt(stmt: &Stmt, handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> ThrownSet {
+    match stmt {
+        Stmt::Block(body) => thrown_of_block(body, handlers, ctx),
+        Stmt::LocalDecl {
+            ty, declarators, ..
+        } => {
+            let mut out = ThrownSet::default();
+            for d in declarators {
+                ctx.locals
+                    .insert(d.name.clone(), Binding::Declared(ty.clone()));
+                if let Some(init) = &d.init {
+                    out.absorb(thrown_of_expr(init, handlers, ctx));
+                }
+            }
+            out
+        }
+        Stmt::Expr(e) | Stmt::Throw { value: e, .. } => {
+            let mut out = thrown_of_expr(e, handlers, ctx);
+            if let Stmt::Throw { value, span } = stmt {
+                let mut thrown = throw_types(value, ctx);
+                // Report at the throw, then propagate.
+                ctx.report_escapes(&thrown, handlers, *span);
+                out.absorb(std::mem::take(&mut thrown));
+            }
+            out
+        }
+        Stmt::Assign {
+            target: _, value, ..
+        } => thrown_of_expr(value, handlers, ctx),
+        Stmt::If {
+            cond, then, els, ..
+        } => {
+            let mut out = thrown_of_expr(cond, handlers, ctx);
+            out.absorb(thrown_of_stmt(then, handlers, ctx));
+            if let Some(els) = els {
+                out.absorb(thrown_of_stmt(els, handlers, ctx));
+            }
+            out
+        }
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
+            let mut out = thrown_of_expr(cond, handlers, ctx);
+            out.absorb(thrown_of_stmt(body, handlers, ctx));
+            out
+        }
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } => {
+            let mut out = ThrownSet::default();
+            if let Some(s) = init {
+                out.absorb(thrown_of_stmt(s, handlers, ctx));
+            }
+            if let Some(cond) = cond {
+                out.absorb(thrown_of_expr(cond, handlers, ctx));
+            }
+            for s in update {
+                out.absorb(thrown_of_stmt(s, handlers, ctx));
+            }
+            out.absorb(thrown_of_stmt(body, handlers, ctx));
+            out
+        }
+        Stmt::ForEach {
+            ty,
+            name,
+            iterable,
+            body,
+            ..
+        } => {
+            let mut out = thrown_of_expr(iterable, handlers, ctx);
+            ctx.locals
+                .insert(name.clone(), Binding::Declared(ty.clone()));
+            out.absorb(thrown_of_stmt(body, handlers, ctx));
+            out
+        }
+        Stmt::Labeled { body, .. } => thrown_of_stmt(body, handlers, ctx),
+        Stmt::Return { value, .. } => value
+            .as_ref()
+            .map_or_else(ThrownSet::default, |v| thrown_of_expr(v, handlers, ctx)),
+        Stmt::SuperCall { args, span, .. } | Stmt::ThisCall { args, span, .. } => {
+            let mut out = ThrownSet::default();
+            for a in args {
+                out.absorb(thrown_of_expr(a, handlers, ctx));
+            }
+            // The chained constructor's own throws: superclass or this class.
+            if let Stmt::SuperCall { .. } = stmt {
+                if let Some(sup) = &ctx.class.superclass {
+                    let sup = sup.clone();
+                    out.absorb(callee_throws_named(
+                        &sup,
+                        "<init>",
+                        args.len(),
+                        *span,
+                        handlers,
+                        ctx,
+                    ));
+                }
+            } else {
+                let own = ctx.class.name.clone();
+                out.absorb(callee_throws_named(
+                    &own,
+                    "<init>",
+                    args.len(),
+                    *span,
+                    handlers,
+                    ctx,
+                ));
+            }
+            out
+        }
+        Stmt::Switch { selector, arms, .. } => {
+            let mut out = thrown_of_expr(selector, handlers, ctx);
+            for arm in arms {
+                out.absorb(thrown_of_block(&arm.body, handlers, ctx));
+            }
+            out
+        }
+        Stmt::Break { .. } | Stmt::Continue { .. } => ThrownSet::default(),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => thrown_of_try(body, catches, finally_body.as_deref(), handlers, ctx),
+    }
+}
+
+fn thrown_of_try(
+    body: &[Stmt],
+    catches: &[CatchClause],
+    finally_body: Option<&[Stmt]>,
+    handlers: &mut Vec<Vec<Exc>>,
+    ctx: &mut Ctx,
+) -> ThrownSet {
+    // The body runs under this try's own catch frame.
+    let frame: Vec<Exc> = catches
+        .iter()
+        .flat_map(|c| c.types.iter())
+        .filter_map(|t| resolve_typeref(t, ctx.table))
+        .collect();
+    handlers.push(frame);
+    let body_thrown = thrown_of_block(body, handlers, ctx);
+    handlers.pop();
+
+    // JLS §11.2.3: a catch of a checked exception the body cannot throw is an
+    // error — unless the type is Exception or Throwable, or something in the
+    // body was beyond this analysis (`unknown`).
+    for clause in catches {
+        for t in &clause.types {
+            let Some(e) = resolve_typeref(t, ctx.table) else {
+                continue;
+            };
+            if !is_checked(&e, ctx.table)
+                || matches!(e, Exc::Lib("java/lang/Exception" | "java/lang/Throwable"))
+            {
+                continue;
+            }
+            let reachable = body_thrown.unknown
+                || body_thrown
+                    .list
+                    .iter()
+                    .any(|thrown| covers(&e, thrown, ctx.table) || covers(thrown, &e, ctx.table));
+            if !reachable {
+                ctx.error(
+                    clause.span,
+                    format!(
+                        "exception {} is never thrown in body of corresponding try statement",
+                        e.display()
+                    ),
+                );
+            }
+        }
+    }
+
+    // What escapes the whole statement: the body's exceptions its catches do
+    // not cover, plus whatever the catch bodies and finally throw.
+    let mut out = ThrownSet {
+        unknown: body_thrown.unknown,
+        ..ThrownSet::default()
+    };
+    for thrown in &body_thrown.list {
+        let caught = catches.iter().any(|clause| {
+            clause
+                .types
+                .iter()
+                .filter_map(|t| resolve_typeref(t, ctx.table))
+                .any(|c| covers(&c, thrown, ctx.table))
+        });
+        if !caught {
+            out.push(thrown.clone());
+        }
+    }
+    for clause in catches {
+        // JLS §11.2.2 precise rethrow: an (effectively final) catch parameter
+        // rethrows only what the body can throw that this clause catches.
+        let precise = if body_thrown.unknown || is_reassigned(&clause.name, &clause.body) {
+            None
+        } else {
+            Some(
+                body_thrown
+                    .list
+                    .iter()
+                    .filter(|thrown| {
+                        clause
+                            .types
+                            .iter()
+                            .filter_map(|t| resolve_typeref(t, ctx.table))
+                            .any(|c| covers(&c, thrown, ctx.table))
+                    })
+                    .cloned()
+                    .collect(),
+            )
+        };
+        ctx.locals
+            .insert(clause.name.clone(), Binding::Precise(precise));
+        out.absorb(thrown_of_block(&clause.body, handlers, ctx));
+    }
+    if let Some(finally_body) = finally_body {
+        out.absorb(thrown_of_block(finally_body, handlers, ctx));
+    }
+    out
+}
+
+/// Whether the catch parameter is assigned anywhere in the clause body —
+/// which forfeits precise rethrow (JLS §11.2.2 requires effectively final).
+fn is_reassigned(name: &str, body: &[Stmt]) -> bool {
+    fn in_stmt(name: &str, stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Assign { target, .. } => {
+                matches!(target, crate::ast::AssignTarget::Var(v) if v == name)
+            }
+            Stmt::Block(body) => body.iter().any(|s| in_stmt(name, s)),
+            Stmt::If { then, els, .. } => {
+                in_stmt(name, then) || els.as_deref().is_some_and(|e| in_stmt(name, e))
+            }
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::ForEach { body, .. }
+            | Stmt::Labeled { body, .. } => in_stmt(name, body),
+            Stmt::Try {
+                body,
+                catches,
+                finally_body,
+                ..
+            } => {
+                body.iter().any(|s| in_stmt(name, s))
+                    || catches
+                        .iter()
+                        .any(|c| c.body.iter().any(|s| in_stmt(name, s)))
+                    || finally_body
+                        .as_ref()
+                        .is_some_and(|f| f.iter().any(|s| in_stmt(name, s)))
+            }
+            Stmt::Switch { arms, .. } => {
+                arms.iter().any(|a| a.body.iter().any(|s| in_stmt(name, s)))
+            }
+            _ => false,
+        }
+    }
+    body.iter().any(|s| in_stmt(name, s))
+}
+
+// ---------------------------------------------------------------------------
+// Expressions: calls and constructors are the throwers
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_lines)] // one arm per expression kind
+fn thrown_of_expr(expr: &Expr, handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> ThrownSet {
+    match expr {
+        Expr::Call {
+            receiver,
+            method,
+            args,
+            span,
+        } => {
+            let mut out = ThrownSet::default();
+            if let Some(r) = receiver {
+                out.absorb(thrown_of_expr(r, handlers, ctx));
+            }
+            for a in args {
+                out.absorb(thrown_of_expr(a, handlers, ctx));
+            }
+            out.absorb(call_throws(
+                receiver.as_deref(),
+                method,
+                args.len(),
+                *span,
+                handlers,
+                ctx,
+            ));
+            out
+        }
+        Expr::NewObject {
+            class, args, span, ..
+        } => {
+            let mut out = ThrownSet::default();
+            for a in args {
+                out.absorb(thrown_of_expr(a, handlers, ctx));
+            }
+            out.absorb(ctor_throws(class, args, *span, handlers, ctx));
+            out
+        }
+        Expr::SuperMethodCall { args, .. } => {
+            let mut out = ThrownSet::default();
+            for a in args {
+                out.absorb(thrown_of_expr(a, handlers, ctx));
+            }
+            // A super.m() call: the superclass method's clause.
+            out.unknown = true;
+            out
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            let mut out = thrown_of_expr(lhs, handlers, ctx);
+            out.absorb(thrown_of_expr(rhs, handlers, ctx));
+            out
+        }
+        Expr::Unary { operand, .. } | Expr::Cast { operand, .. } => {
+            thrown_of_expr(operand, handlers, ctx)
+        }
+        Expr::Ternary {
+            cond, then, els, ..
+        } => {
+            let mut out = thrown_of_expr(cond, handlers, ctx);
+            out.absorb(thrown_of_expr(then, handlers, ctx));
+            out.absorb(thrown_of_expr(els, handlers, ctx));
+            out
+        }
+        Expr::Index { array, index, .. } => {
+            let mut out = thrown_of_expr(array, handlers, ctx);
+            out.absorb(thrown_of_expr(index, handlers, ctx));
+            out
+        }
+        Expr::Field { object, .. } => thrown_of_expr(object, handlers, ctx),
+        Expr::NewArray { dims, init, .. } => {
+            let mut out = ThrownSet::default();
+            for d in dims.iter().flatten() {
+                out.absorb(thrown_of_expr(d, handlers, ctx));
+            }
+            for e in init.iter().flatten() {
+                out.absorb(thrown_of_expr(e, handlers, ctx));
+            }
+            out
+        }
+        Expr::ArrayLiteral { elements, .. } => {
+            let mut out = ThrownSet::default();
+            for e in elements {
+                out.absorb(thrown_of_expr(e, handlers, ctx));
+            }
+            out
+        }
+        Expr::InstanceOf { value, .. } | Expr::Assign { value, .. } => {
+            thrown_of_expr(value, handlers, ctx)
+        }
+        Expr::IncDec { .. }
+        | Expr::Literal { .. }
+        | Expr::Name { .. }
+        | Expr::This { .. }
+        | Expr::Super { .. }
+        | Expr::MethodRef { .. }
+        | Expr::Lambda { .. } => ThrownSet::default(),
+    }
+}
+
+/// The declared throws of a call, resolved as far as a syntactic pass can:
+/// bare calls against the current class, `Type.m()` statics, and receivers
+/// whose declared type is in the local map. Anything else is `unknown`.
+fn call_throws(
+    receiver: Option<&Expr>,
+    method: &str,
+    arity: usize,
+    span: SourceSpan,
+    handlers: &[Vec<Exc>],
+    ctx: &mut Ctx,
+) -> ThrownSet {
+    match receiver {
+        None | Some(Expr::This { .. }) => {
+            let own = ctx.class.name.clone();
+            callee_throws_named(&own, method, arity, span, handlers, ctx)
+        }
+        Some(Expr::Name { path, .. }) if path.len() == 1 => {
+            let head = &path[0];
+            if let Some(binding) = ctx.locals.get(head).cloned() {
+                // A typed receiver: a user class method, or a library kind.
+                if let Binding::Declared(ty) = binding {
+                    receiver_type_throws(&ty, method, arity, span, handlers, ctx)
+                } else {
+                    // A catch parameter as a receiver (e.getMessage()):
+                    // throwable methods throw nothing checked.
+                    ThrownSet::default()
+                }
+            } else if ctx.table.has_class(head) {
+                let head = head.clone();
+                callee_throws_named(&head, method, arity, span, handlers, ctx)
+            } else {
+                library_static_throws(head, method, span, handlers, ctx)
+            }
+        }
+        // A dotted static path (`java.nio.file.Files.readString`).
+        Some(Expr::Name { path, .. }) if path.len() > 1 => {
+            let last = path[path.len() - 1].clone();
+            library_static_throws(&last, method, span, handlers, ctx)
+        }
+        // A directly-constructed receiver: `new Foo().m()`.
+        Some(Expr::NewObject { class, .. }) => {
+            let class = class.clone();
+            if ctx.table.has_class(&class) {
+                callee_throws_named(&class, method, arity, span, handlers, ctx)
+            } else {
+                library_kind_throws(library_kind_of_class(&class), method, span, handlers, ctx)
+            }
+        }
+        _ => ThrownSet {
+            list: Vec::new(),
+            unknown: true,
+        },
+    }
+}
+
+/// Throws of `class.method/arity` (user classes), reported at `span`.
+fn callee_throws_named(
+    class: &str,
+    method: &str,
+    arity: usize,
+    span: SourceSpan,
+    handlers: &[Vec<Exc>],
+    ctx: &mut Ctx,
+) -> ThrownSet {
+    let names: Vec<String> = ctx.table.declared_throws(class, method, arity).to_vec();
+    let mut out = ThrownSet::default();
+    for name in names {
+        match resolve_exc(&name, ctx.table) {
+            Some(e) => out.push(e),
+            None => out.unknown = true,
+        }
+    }
+    ctx.report_escapes(&out, handlers, span);
+    out
+}
+
+/// Throws of a call through a receiver with a DECLARED type.
+fn receiver_type_throws(
+    ty: &TypeRef,
+    method: &str,
+    arity: usize,
+    span: SourceSpan,
+    handlers: &[Vec<Exc>],
+    ctx: &mut Ctx,
+) -> ThrownSet {
+    let name = match ty {
+        TypeRef::Named(n) => n.clone(),
+        TypeRef::Generic { base, .. } => base.clone(),
+        _ => return ThrownSet::default(),
+    };
+    if ctx.table.has_class(&name) {
+        return callee_throws_named(&name, method, arity, span, handlers, ctx);
+    }
+    library_kind_throws(library_kind_of_class(&name), method, span, handlers, ctx)
+}
+
+/// The library "kind" a declared type name maps to, for the closed-world
+/// thrower table. Only kinds with checked throwers are named.
+fn library_kind_of_class(name: &str) -> Option<&'static str> {
+    let simple = name.rsplit('.').next().unwrap_or(name);
+    match simple {
+        "BufferedReader" | "FileReader" | "InputStreamReader" | "Reader" => Some("Reader"),
+        "File" => Some("File"),
+        "Class" => Some("Class"),
+        "Method" => Some("Method"),
+        "Field" => Some("Field"),
+        "Constructor" => Some("Constructor"),
+        _ => None,
+    }
+}
+
+/// Checked exceptions of instance methods on modeled library kinds — the
+/// CLOSED WORLD enumeration. Everything not listed throws nothing checked,
+/// which is true for caturra's whole modeled surface outside I/O and
+/// reflection.
+fn library_kind_throws(
+    kind: Option<&'static str>,
+    method: &str,
+    span: SourceSpan,
+    handlers: &[Vec<Exc>],
+    ctx: &mut Ctx,
+) -> ThrownSet {
+    let thrown: &[&'static str] = match (kind, method) {
+        (Some("Reader"), "read" | "readLine" | "ready" | "close" | "lines") => {
+            &["java/io/IOException"]
+        }
+        (Some("File"), "createNewFile") => &["java/io/IOException"],
+        (
+            Some("Class"),
+            "getMethod" | "getDeclaredMethod" | "getConstructor" | "getDeclaredConstructor",
+        ) => &["java/lang/NoSuchMethodException"],
+        (Some("Class"), "getField" | "getDeclaredField") => &["java/lang/NoSuchFieldException"],
+        (Some("Class"), "newInstance") => &[
+            "java/lang/InstantiationException",
+            "java/lang/IllegalAccessException",
+        ],
+        (Some("Method"), "invoke") => &[
+            "java/lang/IllegalAccessException",
+            "java/lang/reflect/InvocationTargetException",
+        ],
+        (
+            Some("Field"),
+            "get" | "set" | "getInt" | "setInt" | "getDouble" | "setDouble" | "getBoolean"
+            | "setBoolean" | "getLong" | "setLong",
+        ) => &["java/lang/IllegalAccessException"],
+        (Some("Constructor"), "newInstance") => &[
+            "java/lang/InstantiationException",
+            "java/lang/IllegalAccessException",
+            "java/lang/reflect/InvocationTargetException",
+        ],
+        _ => &[],
+    };
+    let mut out = ThrownSet::default();
+    for internal in thrown {
+        out.push(Exc::Lib(internal));
+    }
+    ctx.report_escapes(&out, handlers, span);
+    out
+}
+
+/// Checked exceptions of modeled library STATICS.
+fn library_static_throws(
+    class: &str,
+    method: &str,
+    span: SourceSpan,
+    handlers: &[Vec<Exc>],
+    ctx: &mut Ctx,
+) -> ThrownSet {
+    let thrown: &[&'static str] = match (class, method) {
+        // Every modeled Files operation that touches content throws
+        // IOException; the pure predicates do not.
+        ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => &[],
+        ("Files", _) => &["java/io/IOException"],
+        ("Class", "forName") => &["java/lang/ClassNotFoundException"],
+        _ => &[],
+    };
+    let mut out = ThrownSet::default();
+    for internal in thrown {
+        out.push(Exc::Lib(internal));
+    }
+    ctx.report_escapes(&out, handlers, span);
+    out
+}
+
+/// Checked exceptions a constructor call can throw.
+fn ctor_throws(
+    class: &str,
+    args: &[Expr],
+    span: SourceSpan,
+    handlers: &[Vec<Exc>],
+    ctx: &mut Ctx,
+) -> ThrownSet {
+    if ctx.table.has_class(class) {
+        let class = class.to_owned();
+        return callee_throws_named(&class, "<init>", args.len(), span, handlers, ctx);
+    }
+    let simple = class.rsplit('.').next().unwrap_or(class);
+    let mut out = ThrownSet::default();
+    match simple {
+        // `new FileReader(...)` / `new PrintWriter(file-or-name)`.
+        "FileReader" | "PrintWriter" => out.push(Exc::Lib("java/io/FileNotFoundException")),
+        // `new Scanner(file)` throws; `new Scanner("text")` does not. The
+        // argument's kind decides, and only a File-typed argument is certain.
+        "Scanner" => match args.first() {
+            Some(Expr::NewObject { class, .. }) if class == "File" || class.ends_with(".File") => {
+                out.push(Exc::Lib("java/io/FileNotFoundException"));
+            }
+            Some(Expr::Name { path, .. }) if path.len() == 1 => {
+                match ctx.locals.get(&path[0]) {
+                    Some(Binding::Declared(TypeRef::Named(n)))
+                        if n == "File" || n == "java.io.File" =>
+                    {
+                        out.push(Exc::Lib("java/io/FileNotFoundException"));
+                    }
+                    Some(Binding::Declared(_)) => {}
+                    // Unknown argument: might be a File from elsewhere.
+                    _ => out.unknown = true,
+                }
+            }
+            Some(Expr::Literal { .. }) => {}
+            _ => out.unknown = true,
+        },
+        _ => {}
+    }
+    ctx.report_escapes(&out, handlers, span);
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Exception identity
+// ---------------------------------------------------------------------------
+
+/// The types a `throw` statement can throw.
+fn throw_types(value: &Expr, ctx: &Ctx) -> ThrownSet {
+    let mut out = ThrownSet::default();
+    match value {
+        Expr::NewObject { class, .. } => match resolve_exc(class, ctx.table) {
+            Some(e) => out.push(e),
+            None => out.unknown = true,
+        },
+        Expr::Name { path, .. } if path.len() == 1 => match ctx.locals.get(&path[0]) {
+            Some(Binding::Precise(Some(list))) => {
+                for e in list {
+                    out.push(e.clone());
+                }
+            }
+            Some(Binding::Declared(ty)) => match typeref_exc(ty, ctx.table) {
+                Some(e) => out.push(e),
+                None => out.unknown = true,
+            },
+            Some(Binding::Precise(None)) | None => out.unknown = true,
+        },
+        Expr::Cast { ty, .. } => match resolve_typeref(ty, ctx.table) {
+            Some(e) => out.push(e),
+            None => out.unknown = true,
+        },
+        _ => out.unknown = true,
+    }
+    out
+}
+
+fn typeref_exc(ty: &TypeRef, table: &MethodTable) -> Option<Exc> {
+    match ty {
+        TypeRef::Named(name) => resolve_exc(name, table),
+        _ => None,
+    }
+}
+
+fn resolve_typeref(ty: &TypeRef, table: &MethodTable) -> Option<Exc> {
+    typeref_exc(ty, table)
+}
+
+/// Resolve an exception NAME (simple or dotted) to a tracked type.
+fn resolve_exc(name: &str, table: &MethodTable) -> Option<Exc> {
+    let simple = name.rsplit('.').next().unwrap_or(name);
+    // A user class shadows a library name.
+    if table.has_class(simple) && table.is_user_throwable(simple) {
+        return Some(Exc::User(simple.to_owned()));
+    }
+    if let Some(internal) = exc::internal_name_of(simple) {
+        return Some(Exc::Lib(internal));
+    }
+    None
+}
+
+/// Checked = a throwable NOT under `RuntimeException` or `Error` (JLS §11.1.1).
+fn is_checked(e: &Exc, table: &MethodTable) -> bool {
+    let internal = match e {
+        Exc::Lib(internal) => internal,
+        Exc::User(name) => match table.user_throwable_ancestor(name) {
+            Some(ancestor) => ancestor,
+            None => return false,
+        },
+    };
+    !exc::is_exception_subclass(internal, "java/lang/RuntimeException")
+        && !exc::is_exception_subclass(internal, "java/lang/Error")
+}
+
+/// Whether `thrown` is `catch_t` or a subclass of it.
+fn covers(catch_t: &Exc, thrown: &Exc, table: &MethodTable) -> bool {
+    match (catch_t, thrown) {
+        (Exc::Lib(c), Exc::Lib(t)) => exc::is_exception_subclass(t, c),
+        // A user exception is caught by a library catch when its library
+        // ancestor is under the catch type.
+        (Exc::Lib(c), Exc::User(t)) => table
+            .user_throwable_ancestor(t)
+            .is_some_and(|ancestor| exc::is_exception_subclass(ancestor, c)),
+        // A library exception is never a subclass of a user class.
+        (Exc::User(_), Exc::Lib(_)) => false,
+        (Exc::User(c), Exc::User(t)) => table.user_class_is_subtype(t, c),
+    }
+}

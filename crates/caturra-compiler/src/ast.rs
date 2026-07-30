@@ -141,6 +141,10 @@ pub struct MethodDecl {
     /// Retained annotations (`@Test`, `@Order(1)`, `@BeforeEach`, …) with
     /// an optional integer argument — enough for the `JUnit` test runner.
     pub annotations: Vec<Annotation>,
+    /// The `throws` clause's exception names, as written (`IOException`,
+    /// `java.io.IOException`). Recorded for JLS §11.2 checked-exception
+    /// enforcement; empty when absent.
+    pub throws: Vec<String>,
     pub span: SourceSpan,
 }
 

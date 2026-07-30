@@ -231,6 +231,36 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **CHECKED EXCEPTIONS ARE ENFORCED** (2026-07-30, JLS §11.2) — round 6's
+  headline: five audit rounds never probed it, and caturra enforced nothing.
+  A new `thrown.rs` pass (beside `flow.rs`) performs both javac rejections:
+  - **Unreported exception** — a `throw` of a checked exception, or a call to
+    a method/constructor that declares one, must be caught by an enclosing
+    `try` or declared by the enclosing method: "unreported exception X; must
+    be caught or declared to be thrown" (javac's sentence). Enforced at throw
+    sites, user method/ctor calls (`throws` clauses are now RECORDED, not
+    discarded), chained `this(...)`/`super(...)` ctors, static initializers,
+    and the modeled library's checked throwers — a CLOSED-WORLD enumeration:
+    reader `read`/`readLine`/`close` (IOException), `FileReader`/`PrintWriter`
+    ctors and `new Scanner(file)` (FileNotFoundException),
+    `File.createNewFile`, `Files.*` content operations, and the reflective
+    surface (`Class.forName`, `getMethod`/`getField`, `newInstance`,
+    `Method.invoke`, `Field.get`/`set`).
+  - **Never thrown** (JLS §11.2.3) — a `catch` of a checked exception the try
+    body cannot throw: "exception X is never thrown in body of corresponding
+    try statement". `Exception` and `Throwable` are exempt, as javac exempts
+    them.
+  - **Conservative by construction**, like `flow.rs`: anything the syntactic
+    pass cannot resolve (a chained receiver, an unresolvable overload)
+    contributes an *unknown* marker that suppresses BOTH checks around it —
+    a missed error is the status quo, a spurious one rejects a valid program.
+    JLS §11.2.2 precise rethrow is modeled (an effectively-final catch
+    parameter rethrows only what its clause caught), so
+    `try {...} catch (Exception e) { throw e; }` keeps compiling in a method
+    that declares only the specific exception. Bundled library units and
+    synthesized lambda/anonymous/local classes are exempt (a lambda's
+    contract lives on its erased functional interface). The whole
+    2,600-level corpus compiles unchanged under the new rule.
 - **BOXED AT REST** (2026-07-30) — the representation change, closing the last
   audit-round findings. Wrapper values now live BOXED in every container, so an
   element read through the `Object` boundary keeps its identity instead of

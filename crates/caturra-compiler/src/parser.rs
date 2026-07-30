@@ -1186,7 +1186,7 @@ impl Parser<'_> {
             && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
         {
             let (name, name_span) = self.expect_ident("for the constructor")?;
-            let (params, body) = self.method_rest(name_span, false)?;
+            let (params, throws, body) = self.method_rest(name_span, false)?;
             return Ok(Member::Method(MethodDecl {
                 name,
                 is_static: false,
@@ -1201,6 +1201,7 @@ impl Parser<'_> {
                 params,
                 body: body.unwrap_or_default(),
                 annotations: annotations.clone(),
+                throws,
                 span: SourceSpan {
                     start: start.start,
                     end: name_span.end,
@@ -1257,7 +1258,7 @@ impl Parser<'_> {
             return Ok(Member::Fields(fields));
         }
 
-        let (params, body) = self.method_rest(name_span, true)?;
+        let (params, throws, body) = self.method_rest(name_span, true)?;
         let is_abstract = body.is_none();
         if is_interface {
             self.validate_interface_method(
@@ -1283,6 +1284,7 @@ impl Parser<'_> {
             params,
             body: body.unwrap_or_default(),
             annotations,
+            throws,
             span: SourceSpan {
                 start: start.start,
                 end: name_span.end,
@@ -1305,11 +1307,12 @@ impl Parser<'_> {
 
     /// Parameter list and body, shared by methods and constructors.
     /// With `allow_abstract`, a `;` instead of a body yields `None`.
+    #[allow(clippy::type_complexity)]
     fn method_rest(
         &mut self,
         name_span: SourceSpan,
         allow_abstract: bool,
-    ) -> Parsed<(Vec<Param>, Option<Vec<Stmt>>)> {
+    ) -> Parsed<(Vec<Param>, Vec<String>, Option<Vec<Stmt>>)> {
         self.expect_symbol("(", "to open the parameter list")?;
         let mut params = Vec::new();
         if !self.at_symbol(")") {
@@ -1346,18 +1349,22 @@ impl Parser<'_> {
         }
         self.expect_symbol(")", "to close the parameter list")?;
 
-        // `throws FileNotFoundException, ...` — accepted and ignored
-        // (caturra does not enforce checked exceptions).
+        // `throws FileNotFoundException, ...` — recorded for JLS §11.2
+        // checked-exception enforcement.
+        let mut throws = Vec::new();
         if self.eat_keyword(Keyword::Throws) {
             loop {
-                self.expect_ident("after 'throws'")?;
+                let (mut name, _) = self.expect_ident("after 'throws'")?;
                 // Qualified exception names: `throws java.io.IOException`.
                 while self.at_symbol(".")
                     && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
                 {
                     self.pos += 1;
-                    self.expect_ident("in the qualified exception")?;
+                    let (segment, _) = self.expect_ident("in the qualified exception")?;
+                    name.push('.');
+                    name.push_str(&segment);
                 }
+                throws.push(name);
                 if !self.eat_symbol(",") {
                     break;
                 }
@@ -1369,11 +1376,11 @@ impl Parser<'_> {
                 self.error_at(name_span, "constructors need a body");
                 return Err(Abort);
             }
-            return Ok((params, None));
+            return Ok((params, throws, None));
         }
         self.expect_symbol("{", "to open the method body")?;
         let body = self.block_body();
-        Ok((params, Some(body)))
+        Ok((params, throws, Some(body)))
     }
 
     /// Skip a `<...>` type-argument list on a supertype reference
@@ -3871,6 +3878,7 @@ fn desugar_enum(
             params: lead_params(),
             body: store_stmts(),
             annotations: Vec::new(),
+            throws: Vec::new(),
             span: zero,
         });
     }
@@ -3933,6 +3941,7 @@ fn desugar_enum(
             span: zero,
         }],
         annotations: Vec::new(),
+        throws: Vec::new(),
         span: zero,
     });
 
@@ -3972,6 +3981,7 @@ fn desugar_enum(
             span: zero,
         }],
         annotations: Vec::new(),
+        throws: Vec::new(),
         span: zero,
     });
 
@@ -4001,6 +4011,7 @@ fn desugar_enum(
                 span: zero,
             }],
             annotations: Vec::new(),
+            throws: Vec::new(),
             span: zero,
         });
     }
@@ -4102,6 +4113,7 @@ fn desugar_enum(
             // IllegalArgumentException.
             body: vec![null_check, for_each, throw],
             annotations: Vec::new(),
+            throws: Vec::new(),
             span: zero,
         });
     }
@@ -5048,6 +5060,7 @@ fn simple_return_method(
             span,
         }],
         annotations: Vec::new(),
+        throws: Vec::new(),
         span,
     }
 }

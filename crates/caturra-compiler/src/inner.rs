@@ -90,6 +90,7 @@ fn add_outer_binding(class: &mut ClassDecl, outer: &str) {
             params: vec![param()],
             body: vec![store()],
             annotations: Vec::new(),
+            throws: Vec::new(),
             span: zero,
         });
         return;

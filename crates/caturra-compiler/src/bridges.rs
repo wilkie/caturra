@@ -231,6 +231,7 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         params,
         body,
         annotations: Vec::new(),
+        throws: Vec::new(),
         span: zero,
     }
 }

@@ -41,6 +41,7 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
         for class in &unit.classes {
             check_enum_static_references(class, path, &mut diagnostics);
             crate::flow::check(class, path, &mut diagnostics);
+            crate::thrown::check(class, path, &table, &mut diagnostics);
             check_inner_static_members(class, path, &mut diagnostics);
             classes.push(CompiledClass {
                 binary_name: class.name.clone(),
@@ -180,6 +181,7 @@ fn emit_class(
             params: Vec::new(),
             body: Vec::new(),
             annotations: Vec::new(),
+            throws: Vec::new(),
             span: decl.span,
         };
         let compiled = emit_method(
@@ -448,7 +450,7 @@ struct StaticImport {
 }
 
 /// All classes in the compilation.
-struct MethodTable {
+pub(crate) struct MethodTable {
     /// Indexed by [`ClassId`].
     class_names: Vec<String>,
     classes: std::collections::HashMap<String, ClassInfo>,
@@ -464,6 +466,11 @@ struct MethodTable {
     /// Filled during type resolution (hence the interior mutability) and read
     /// back where an element's true type matters (`get`/`add`/for-each).
     nested: std::cell::RefCell<NestedTypes>,
+    /// `throws` clauses by (class, method-or-`<init>`, arity), for JLS §11.2
+    /// checked-exception enforcement. A side table (not a `MethodSig` field)
+    /// so the many synthetic-signature literals stay untouched; empty clauses
+    /// are not recorded.
+    throws_clauses: std::collections::HashMap<(String, String, usize), Vec<String>>,
 }
 
 /// The arena backing `ElemType::Nested` (see [`MethodTable::nested`]).
@@ -518,6 +525,7 @@ impl MethodTable {
             object_id: ClassId(0),
             static_imports,
             nested: std::cell::RefCell::default(),
+            throws_clauses: std::collections::HashMap::new(),
         };
         // The synthetic top type: `Object`. It carries the universal
         // methods; user classes are registered as its subtypes.
@@ -789,6 +797,17 @@ impl MethodTable {
                 }
 
                 for method in &class.methods {
+                    if !method.throws.is_empty() {
+                        let key_name = if method.is_constructor {
+                            String::from("<init>")
+                        } else {
+                            method.name.clone()
+                        };
+                        table.throws_clauses.insert(
+                            (class.name.clone(), key_name, method.params.len()),
+                            method.throws.clone(),
+                        );
+                    }
                     let sig = MethodSig {
                         name: if method.is_constructor {
                             String::from("<init>")
@@ -1187,6 +1206,55 @@ impl MethodTable {
             .unwrap_or(JType::Error)
     }
 
+    /// Whether this user class descends from a library throwable — i.e. it
+    /// IS an exception class (for the checked-exception pass).
+    pub(crate) fn is_user_throwable(&self, name: &str) -> bool {
+        self.classes
+            .get(name)
+            .is_some_and(|info| self.library_throwable_ancestor(info.id).is_some())
+    }
+
+    /// The library throwable ancestor's INTERNAL name of a user exception
+    /// class, if it has one.
+    pub(crate) fn user_throwable_ancestor(&self, name: &str) -> Option<&'static str> {
+        let info = self.classes.get(name)?;
+        self.library_throwable_ancestor(info.id)
+    }
+
+    /// Whether user class `sub` is `sup` or descends from it, by name.
+    pub(crate) fn user_class_is_subtype(&self, sub: &str, sup: &str) -> bool {
+        match (self.classes.get(sub), self.classes.get(sup)) {
+            (Some(a), Some(b)) => self.is_subtype(a.id, b.id),
+            _ => false,
+        }
+    }
+
+    /// The declared `throws` names of `class.method/arity`, walking the
+    /// superclass chain so an inherited method's clause is found — empty when
+    /// none is declared anywhere.
+    pub(crate) fn declared_throws(&self, class: &str, method: &str, arity: usize) -> &[String] {
+        let mut current = Some(class.to_owned());
+        let mut steps = 0usize;
+        while let Some(name) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 2 {
+                break;
+            }
+            if let Some(list) = self
+                .throws_clauses
+                .get(&(name.clone(), method.to_owned(), arity))
+            {
+                return list;
+            }
+            current = self
+                .classes
+                .get(&name)
+                .and_then(|info| info.superclass)
+                .map(|id| self.class_name(id).to_owned());
+        }
+        &[]
+    }
+
     fn is_subtype(&self, sub: ClassId, sup: ClassId) -> bool {
         if sub == sup {
             return true;
@@ -1374,7 +1442,7 @@ impl MethodTable {
             })
     }
 
-    fn has_class(&self, name: &str) -> bool {
+    pub(crate) fn has_class(&self, name: &str) -> bool {
         self.classes.contains_key(name)
     }
 
