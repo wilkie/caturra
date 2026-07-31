@@ -231,6 +231,33 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Switch labels and the switch scope** (2026-07-30) — four round-6 findings:
+  - **Any constant expression is a case label** (JLS §15.29): arithmetic,
+    shifts, char arithmetic (`case 'a' + 1:`), compile-time string
+    concatenation (`case "he" + "llo":`), and `final` constant variables
+    (JLS §4.12.4 — the textbook `final int MENU_QUIT = 3; … case
+    MENU_QUIT:`). caturra accepted only bare literals and static-final
+    field names, and its refusal ("case labels must be constants") was
+    factually wrong about labels that WERE constants; the messages are now
+    javac's ("constant expression required" / "constant string expression
+    required"). Folded labels join the duplicate check, so `case 13:` and
+    `case 2 * 3 + 7:` collide, exactly as on javac.
+  - **Shifts fold** in the shared constant folder, with exact int
+    semantics (count masked to five bits) — safe because a `long` literal
+    or `final long` variable is a distinct `Literal::Long` the int folder
+    never matches, so `1L << 40` stays a runtime computation. Bonus:
+    `byte b = 1 << 3;` (constant narrowing through a shift) now compiles.
+  - **The switch block is ONE scope** (JLS §6.3): a variable declared in
+    one case group is in scope in every later group — `case 1: int v; …
+    case 2: v = 20;` compiles, and redeclaring in a later group is
+    "variable 'v' is already defined", not "cannot find variable".
+  - **Definite assignment per case group** (JLS §16.2.9): every group can
+    be jumped into directly, so a variable declared (even initialized) in
+    an earlier group is NOT definitely assigned at the next group's start —
+    reading it there is javac's "variable 'v' might not have been
+    initialized" (it used to be the wrong claim that v did not exist).
+    Assign-then-read within the fallen-into group stays legal, and the
+    existing all-ways-out merge for DA after the switch is unchanged.
 - **Interface defaults, resolved right** (2026-07-30) — four round-6 findings:
   - **The most specific default wins** (JLS §9.4.1): a sub-interface's
     redeclaration overrides the default it inherits, no matter where the

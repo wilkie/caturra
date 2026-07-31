@@ -4666,6 +4666,18 @@ fn fold_const_int(op: BinaryOp, l: i64, r: i64) -> Option<i64> {
         BinaryOp::BitAnd => l & r,
         BinaryOp::BitOr => l | r,
         BinaryOp::BitXor => l ^ r,
+        // Shifts fold with Java INT semantics (count masked to 5 bits): only
+        // int-typed constants reach this folder — a `long` literal or a
+        // `final long` variable is a `Literal::Long`, which `const_int` never
+        // matches — so the 32-bit evaluation is exact, as javac's is.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        BinaryOp::Shl => i64::from((l as i32).wrapping_shl(r as u32 & 31)),
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        BinaryOp::Shr => i64::from((l as i32).wrapping_shr(r as u32 & 31)),
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        BinaryOp::Ushr => {
+            i64::from(((l as i32).cast_unsigned().wrapping_shr(r as u32 & 31)).cast_signed())
+        }
         _ => return None,
     })
 }
@@ -10009,21 +10021,19 @@ impl BodyGen<'_> {
                     self.code.push_op_u16(op::GETSTATIC, field_ref, 1);
                     self.code.branch(op::IF_ACMPEQ, arm_labels[index], 2);
                 } else if is_string {
-                    let Expr::Literal {
-                        value: Literal::Str(text),
-                        ..
-                    } = value
-                    else {
-                        self.error(value.span(), "case labels must be constants");
+                    // JLS §15.29: any constant String expression is a label —
+                    // a literal, a `final` constant variable, folded `+`.
+                    let Some(Literal::Str(text)) = self.const_eval(value) else {
+                        self.error(value.span(), "constant string expression required");
                         continue;
                     };
-                    if seen_strings.iter().any(|s| s == text) {
+                    if seen_strings.iter().any(|s| s == &text) {
                         self.error(value.span(), "duplicate case label");
                     }
                     seen_strings.push(text.clone());
                     // selector.equals("text")
                     self.emit_load(selector_slot, selector_ty);
-                    let utf8 = self.pool.intern_utf8(text);
+                    let utf8 = self.pool.intern_utf8(&text);
                     let string_index = self.pool.intern(Constant::String { string_index: utf8 });
                     self.code.push_ldc(string_index);
                     let equals = intern_method_ref(
@@ -10036,8 +10046,16 @@ impl BodyGen<'_> {
                     self.code.drop_stack(2);
                     self.code.branch(op::IFNE, arm_labels[index], 1);
                 } else {
-                    let Some(constant) = self.case_label_value(value) else {
-                        self.error(value.span(), "case labels must be constants");
+                    // JLS §15.29: any constant expression is a label — the
+                    // static-field walk first (it also reads `Other.CONST`
+                    // spelled as a field access), then the full constant
+                    // folder (arithmetic, shifts, casts, ternaries, `final`
+                    // constant variables).
+                    let Some(constant) = self
+                        .case_label_value(value)
+                        .or_else(|| self.const_int(value))
+                    else {
+                        self.error(value.span(), "constant expression required");
                         continue;
                     };
                     // JLS §14.11: a case constant must be assignable to the
@@ -10088,24 +10106,37 @@ impl BodyGen<'_> {
         });
         let last = arms.len().saturating_sub(1);
         let mut falls_out: Option<Vec<Vec<bool>>> = None;
+        // The switch block is ONE scope spanning every case group (JLS §6.3):
+        // `case 1: int v; … case 2: v = 20;` is legal, and a redeclaration in
+        // a later group is "already defined". (It used to be a scope per arm,
+        // so the second group said the variable did not exist.)
+        self.scopes.push(Vec::new());
         for (index, arm) in arms.iter().enumerate() {
             self.code.bind(arm_labels[index]);
             self.code.mark_line(arm.span.start.line);
             // Every group is reachable through its own label, so each one starts
             // from what was assigned BEFORE the switch (JLS §16.2.9) — not from
-            // whatever the group above it happened to assign.
+            // whatever the group above it happened to assign. A variable
+            // DECLARED in an earlier group is in scope but never definitely
+            // assigned at a group's start (the jump-in path skips its
+            // initializer), which the snapshot cannot say — it predates the
+            // switch scope — so those flags clear explicitly.
             self.restore_assigned(&before_flags);
-            self.scopes.push(Vec::new());
+            if let Some(scope) = self.scopes.last_mut() {
+                for (_, var) in scope.iter_mut() {
+                    var.assigned = false;
+                }
+            }
             for stmt in &arm.body {
                 self.statement(stmt);
             }
-            self.scopes.pop();
             // Running off the end of the LAST group is a way out of the switch;
             // running off the end of any other group just falls into the next.
             if index == last && crate::flow::block_completes_normally(&arm.body) {
                 falls_out = Some(self.assigned_flags());
             }
         }
+        self.scopes.pop();
         let exits = self.loop_stack.pop().map(|entry| entry.break_flags);
         self.code.bind(end);
 
@@ -20191,9 +20222,8 @@ impl BodyGen<'_> {
     /// decide whether a narrowing assignment (`byte b = expr`, JLS §5.2) is
     /// allowed. Computed in i64; a wrapping int overflow can only make the value
     /// LESS likely to fit a narrow target, so any imprecision keeps the outcome
-    /// on the safe (stricter-than-javac) side. Shifts are not folded (their
-    /// width-dependent count masking is ambiguous here), which just leaves the
-    /// expression non-constant — again the safe direction.
+    /// on the safe (stricter-than-javac) side. Shifts fold with exact int
+    /// semantics — see `fold_const_int` for why the width is unambiguous.
     fn const_int(&mut self, expr: &Expr) -> Option<i64> {
         match expr {
             Expr::Literal {

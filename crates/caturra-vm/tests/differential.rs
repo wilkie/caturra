@@ -16794,3 +16794,153 @@ public class DiffConstOk {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-6 switch labels and scoping: constant-expression labels, constant
+// variables, the single switch-block scope, and JLS §16.2.9 definite
+// assignment across case groups.
+
+// JLS §15.28/§15.29: arithmetic, shifts, string concatenation, and `final`
+// constant variables are all legal case labels — caturra accepted only bare
+// literals and static-final field names.
+differential_test!(
+    diff_switch_constant_labels,
+    "DiffSwitchConstLabels",
+    r#"
+public class DiffSwitchConstLabels {
+    public static void main(String[] a) {
+        int x = 13;
+        switch (x) {
+            case 2 * 3 + 7: System.out.println("13"); break;
+            case 1 << 4: System.out.println("16"); break;
+            default: System.out.println("d");
+        }
+        switch ("hello") {
+            case "he" + "llo": System.out.println("concat"); break;
+            default: System.out.println("d");
+        }
+        final int K = 10;
+        final String S = "go";
+        switch (12) {
+            case K + 2: System.out.println("K+2"); break;
+            case K: System.out.println("K"); break;
+            default: System.out.println("d");
+        }
+        switch ("go") {
+            case S: System.out.println("S"); break;
+            default: System.out.println("d");
+        }
+        char c = 'b';
+        switch (c) {
+            case 'a' + 1: System.out.println("b"); break;
+            default: System.out.println("d");
+        }
+        switch (3) {
+            case -1 >>> 30: System.out.println("ushr"); break;
+            default: System.out.println("d");
+        }
+        // Shift folding feeds constant narrowing too; a LONG shift stays a
+        // runtime computation (the folder never sees long literals).
+        byte b = 1 << 3;
+        final long L = 1L << 40;
+        System.out.println(b + " " + L);
+    }
+}
+"#
+);
+
+// The switch block is ONE scope (JLS §6.3): declare in one group, assign and
+// use in a later one.
+differential_test!(
+    diff_switch_single_scope,
+    "DiffSwitchScope",
+    r#"
+public class DiffSwitchScope {
+    public static void main(String[] a) {
+        int x = 2;
+        switch (x) {
+            case 1:
+                int v;
+                v = 1;
+                System.out.println("one " + v);
+                break;
+            case 2:
+                v = 20;
+                System.out.println("two " + v);
+                break;
+        }
+        // Fall-through: assigning in the fallen-into group before reading.
+        switch (x) {
+            case 2: int w = 10;
+            case 3: w = 5; System.out.println(w); break;
+        }
+    }
+}
+"#
+);
+
+// A folded label colliding with a literal is a duplicate; a non-constant
+// local is not a label; a redeclaration across groups is already-defined;
+// reading a variable declared in an earlier group without assignment is a
+// definite-assignment error (v IS in scope — the message used to claim it
+// did not exist).
+differential_reject!(
+    reject_switch_duplicate_folded_label,
+    "RejSwitchDupFold",
+    r#"
+public class RejSwitchDupFold {
+    public static void main(String[] a) {
+        switch (1) {
+            case 13: System.out.println("a"); break;
+            case 2 * 3 + 7: System.out.println("b"); break;
+        }
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_switch_nonconstant_label,
+    "RejSwitchNonConst",
+    r#"
+public class RejSwitchNonConst {
+    public static void main(String[] a) {
+        int k = 5;
+        switch (k) {
+            case k: System.out.println("k"); break;
+        }
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_switch_redeclaration_across_groups,
+    "RejSwitchRedecl",
+    r"
+public class RejSwitchRedecl {
+    public static void main(String[] a) {
+        switch (1) {
+            case 1: int v = 1; break;
+            case 2: int v = 2; break;
+        }
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_switch_cross_group_definite_assignment,
+    "RejSwitchDA",
+    r"
+public class RejSwitchDA {
+    public static void main(String[] a) {
+        int x = 2;
+        switch (x) {
+            case 1: int v = 10;
+            case 2: System.out.println(v);
+        }
+    }
+}
+"
+);
