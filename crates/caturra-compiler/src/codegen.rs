@@ -1067,6 +1067,53 @@ impl MethodTable {
                     }
                 }
 
+                // JLS §8.4.8.1/§9.4.1: a STATIC method may not override or
+                // hide an inherited instance method — including a default,
+                // which the superclass walk below never reaches. javac:
+                // "who() in C cannot implement who() in A: overriding method
+                // is static".
+                for method in &class.methods {
+                    if !method.is_static || method.is_constructor {
+                        continue;
+                    }
+                    let params: Vec<JType> = method
+                        .params
+                        .iter()
+                        .filter_map(|p| self.resolve_type(&p.ty))
+                        .collect();
+                    if params.len() != method.params.len() {
+                        continue;
+                    }
+                    for iface in &info.interfaces {
+                        let Some(parent) = self.info_by_id(*iface) else {
+                            continue;
+                        };
+                        if parent.methods.iter().any(|m| {
+                            m.name == method.name
+                                && !m.is_static
+                                && !m.is_abstract
+                                && m.params == params
+                        }) {
+                            let verb = if class.is_interface {
+                                "clashes with"
+                            } else {
+                                "cannot implement"
+                            };
+                            diagnostics.push(Diagnostic::error(
+                                path,
+                                format!(
+                                    "{}() in {} {verb} {}() in {}: overriding method is static",
+                                    method.name,
+                                    class.name,
+                                    method.name,
+                                    self.class_name(*iface)
+                                ),
+                                method.span,
+                            ));
+                        }
+                    }
+                }
+
                 // Override compatibility against ancestors.
                 for method in &class.methods {
                     if method.is_constructor {
@@ -16005,6 +16052,17 @@ impl BodyGen<'_> {
                     );
                     None
                 }
+                // `Outer.Nested.staticMethod()` — a nested TYPE named
+                // through its enclosing one. Nested types are flattened to
+                // their simple names, so the qualifier carries nothing and
+                // the call is an ordinary static call on the last segment.
+                [enclosing, nested]
+                    if self.lookup(enclosing).is_none()
+                        && self.table.has_class(enclosing)
+                        && self.table.has_class(nested) =>
+                {
+                    Some(CallTarget::Static((*nested).to_owned()))
+                }
                 // Dotted receivers (p.pos.move()) are general
                 // expressions; name() knows how to read them.
                 _ => Some(CallTarget::Instance(expr)),
@@ -16287,6 +16345,19 @@ impl BodyGen<'_> {
             }
         };
 
+        // A PRIVATE static member is reachable only from inside its own
+        // top-level type (JLS §6.6.1) — including a private static method of
+        // an interface, which Java 9 added and which only its own defaults
+        // and statics may call. The instance-call path already checked this;
+        // the static path did not, so `Helper.secret()` compiled from
+        // anywhere.
+        if sig.is_private
+            && let Some(owner) = self.table.class_id(class)
+            && !self.table.shares_top_level(owner, self.current_class_id)
+        {
+            self.error(span, format!("{method}() has private access in {class}"));
+            return None;
+        }
         if !sig.is_static {
             self.error(
                 span,
@@ -17581,6 +17652,15 @@ impl BodyGen<'_> {
                 .table
                 .class_id(&path[path.len() - 2])
                 .map_or(JType::Error, JType::Object),
+            Expr::Name { path, span } if self.strip_enclosing_type_prefix(path).is_some() => {
+                let short = self
+                    .strip_enclosing_type_prefix(path)
+                    .expect("checked in guard");
+                self.type_of(&Expr::Name {
+                    path: short,
+                    span: *span,
+                })
+            }
             Expr::Name { path, span } if self.strip_package_prefix(path).is_some() => {
                 let short = self.strip_package_prefix(path).expect("checked in guard");
                 self.type_of(&Expr::Name {
@@ -19036,6 +19116,26 @@ impl BodyGen<'_> {
         }
     }
 
+    /// `Outer.Nested…` with the enclosing type qualifier removed, when the
+    /// path really does name a type INSIDE a type — nested types are
+    /// flattened to their simple names, so the qualifier carries nothing.
+    /// `None` when the path is not of that shape.
+    fn strip_enclosing_type_prefix(&self, path: &[String]) -> Option<Vec<String>> {
+        if path.len() < 3 {
+            return None;
+        }
+        // A local of that name is a VALUE, not a type qualifier.
+        if self
+            .scopes
+            .iter()
+            .any(|scope| scope.iter().any(|(name, _)| name == &path[0]))
+        {
+            return None;
+        }
+        (self.table.has_class(&path[0]) && self.table.has_class(&path[1]))
+            .then(|| path[1..].to_vec())
+    }
+
     #[allow(clippy::too_many_lines)] // one resolution ladder, clearest linear
     fn name(&mut self, path: &[String], span: SourceSpan) -> JType {
         // `Outer.this` (JLS §15.8.4) — the parser encodes qualified this as a
@@ -19067,6 +19167,12 @@ impl BodyGen<'_> {
         }
         // Fully qualified statics: java.lang.Integer.MAX_VALUE, ...
         if let Some(short) = self.strip_package_prefix(path) {
+            return self.name(&short, span);
+        }
+        // `Outer.Nested.MEMBER` — caturra flattens nested types to their
+        // simple names, so the enclosing qualifier is dropped once both
+        // segments name types (`Holder.Kind.RED` is `Kind.RED`).
+        if let Some(short) = self.strip_enclosing_type_prefix(path) {
             return self.name(&short, span);
         }
         // A dotted path whose head is a value — a local, or an implicit

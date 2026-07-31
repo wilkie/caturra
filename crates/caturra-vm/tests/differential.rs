@@ -18421,3 +18421,138 @@ public class DiffLibraryTail {
 }
 "##
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 interface members: member types (implicitly static, and nameable
+// through the interface), and the JLS §9 rules on statics and privacy.
+
+differential_test!(
+    diff_interface_member_types,
+    "DiffIfaceMembers",
+    r#"
+interface Shape {
+    class Point {
+        int x, y;
+        Point(int x, int y) { this.x = x; this.y = y; }
+        @Override public String toString() { return "(" + x + "," + y + ")"; }
+    }
+    interface Tagged { String tag(); }
+    enum Kind { ROUND, FLAT }
+    int SIDES = 4;
+    Point origin();
+    default String describe() { return "shape at " + origin(); }
+    static Shape unit() { return () -> new Point(0, 0); }
+    private static int helper() { return 42; }
+    static int viaHelper() { return helper(); }
+}
+class Circle implements Shape, Shape.Tagged {
+    public Point origin() { return new Point(1, 2); }
+    public String tag() { return "circle"; }
+}
+public class DiffIfaceMembers {
+    public static void main(String[] args) {
+        Circle c = new Circle();
+        System.out.println(c.origin() + " " + c.describe() + " " + c.tag());
+        System.out.println(new Shape.Point(3, 4) + " " + Shape.SIDES);
+        System.out.println(Shape.Kind.ROUND + " " + Shape.Kind.valueOf("FLAT")
+            + " " + Shape.Kind.values().length);
+        System.out.println(Shape.unit().origin() + " " + Shape.viaHelper());
+    }
+}
+"#
+);
+
+// A nested type named through its enclosing one, in a CLASS too.
+differential_test!(
+    diff_qualified_nested_type_access,
+    "DiffNestedAccess",
+    r#"
+class Holder {
+    enum Kind { RED, BLUE }
+    static class Deep { int v = 7; }
+}
+public class DiffNestedAccess {
+    public static void main(String[] args) {
+        System.out.println(Holder.Kind.RED + " " + Holder.Kind.valueOf("BLUE")
+            + " " + new Holder.Deep().v);
+        Holder.Kind k = Holder.Kind.BLUE;
+        System.out.println(k + " " + Holder.Kind.values().length);
+    }
+}
+"#
+);
+
+// JLS §9: an interface has no constructor, its private statics are its own,
+// and a static method may not override or hide an inherited default.
+differential_reject!(
+    reject_interface_constructor,
+    "RejIfaceCtor",
+    r#"
+interface Bad {
+    Bad() {}
+}
+public class RejIfaceCtor {
+    public static void main(String[] args) { System.out.println("no"); }
+}
+"#
+);
+
+differential_reject!(
+    reject_private_interface_static_from_outside,
+    "RejIfacePrivate",
+    r"
+interface Calc {
+    private static int base() { return 10; }
+    static int pub() { return base(); }
+}
+public class RejIfacePrivate {
+    public static void main(String[] args) { System.out.println(Calc.base()); }
+}
+"
+);
+
+differential_reject!(
+    reject_private_static_of_another_class,
+    "RejPrivateStatic",
+    r"
+class Helper {
+    private static int secret() { return 5; }
+    static int open() { return secret(); }
+}
+public class RejPrivateStatic {
+    public static void main(String[] args) { System.out.println(Helper.secret()); }
+}
+"
+);
+
+differential_reject!(
+    reject_static_method_implementing_a_default,
+    "RejStaticImplements",
+    r#"
+interface HasWho {
+    default String who() { return "A"; }
+}
+class Impl implements HasWho {
+    public static String who() { return "C"; }
+}
+public class RejStaticImplements {
+    public static void main(String[] args) { System.out.println(new Impl().who()); }
+}
+"#
+);
+
+differential_reject!(
+    reject_subinterface_static_hiding_a_default,
+    "RejStaticHides",
+    r#"
+interface UpA {
+    default String who() { return "A"; }
+}
+interface UpB extends UpA {
+    static String who() { return "B"; }
+}
+public class RejStaticHides {
+    public static void main(String[] args) { System.out.println("no"); }
+}
+"#
+);

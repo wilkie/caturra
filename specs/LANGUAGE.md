@@ -231,6 +231,29 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Interface members** (2026-07-31, round 7) — 7 of 8 findings:
+  - **A member type of an interface is implicitly static** (JLS §9.5), so
+    `interface Shape { class Point {…} }` needs no enclosing instance;
+    member INTERFACES and enums declare there too, and `implements
+    Outer.Inner` parses (a member type is named through its enclosing one,
+    which caturra drops since it flattens nested types to simple names).
+  - **`Outer.Nested.MEMBER` resolves** — the constant of a nested enum, a
+    static call on a nested type (`Holder.Kind.valueOf("BLUE")`), and `new
+    Holder.Deep()`. This was never interface-specific: a nested type inside
+    a CLASS could not be named through its enclosing one either.
+  - **An interface has no constructor** (JLS §9.1.4): one is now refused
+    where it used to be accepted and silently ignored.
+  - **A PRIVATE static is reachable only from its own top-level type**
+    (JLS §6.6.1). The instance-call path checked this; the STATIC path did
+    not, so `Calc.base()` on a private interface static — or on any other
+    class's private static — compiled from anywhere.
+  - **A static method may not override or hide an inherited default**
+    (JLS §8.4.8.1/§9.4.1): `class C implements A { static who() }` and
+    `interface B extends A { static who() }` both ran, picking whichever
+    the dispatch found. The override walk climbs superclasses only, so the
+    interface case needed its own check.
+  - **One left open**: `Interface.super.m()`, which does not parse — the
+    way an overriding class reaches the default it overrode.
 - **The library tail** (2026-07-31, round 7) — 6 of 9 findings:
   - **`Objects.deepEquals`, `checkIndex` and `compare(a, b, cmp)`** exist
     now. `deepEquals` compares two PRIMITIVE arrays element by element as

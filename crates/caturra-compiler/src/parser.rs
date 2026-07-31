@@ -832,7 +832,15 @@ impl Parser<'_> {
     /// arguments written on it (empty when raw).
     fn supertype_ref(&mut self) -> Parsed<(String, Vec<TypeRef>)> {
         let start = self.pos;
-        let (name, _) = self.expect_ident("after 'extends'")?;
+        let (mut name, _) = self.expect_ident("after 'extends'")?;
+        // `implements Outer.Inner` — a MEMBER type named through its
+        // enclosing one. Nested types are flattened to their simple names, so
+        // the qualifier is read and dropped.
+        while self.at_symbol(".") && matches!(self.peek_at(1), Some(TokenKind::Identifier(_))) {
+            self.pos += 1;
+            let (segment, _) = self.expect_ident("after '.'")?;
+            name = segment;
+        }
         if !self.at_symbol("<") {
             return Ok((name, Vec::new()));
         }
@@ -1219,8 +1227,11 @@ impl Parser<'_> {
                 modifiers.is_final,
             )?;
             // A non-static nested CLASS is an inner class, bound to an enclosing
-            // instance. Interfaces and enums are implicitly static.
-            nested.is_inner = !modifiers.is_static && !nested.is_interface && !nested.is_enum;
+            // instance. Interfaces and enums are implicitly static — and so is
+            // EVERY member type of an interface (JLS §9.5), which is why
+            // `interface Shape { class Point {…} }` needs no outer instance.
+            nested.is_inner =
+                !modifiers.is_static && !is_interface && !nested.is_interface && !nested.is_enum;
             return Ok(Member::Nested(nested));
         }
 
@@ -1244,7 +1255,17 @@ impl Parser<'_> {
         // before either shape is recognized: `<T> H(T t)` is a constructor.
         let method_type_params = self.parse_type_params()?;
 
-        // Constructor: `ClassName(...)` with no return type.
+        // Constructor: `ClassName(...)` with no return type. An INTERFACE
+        // has none (JLS §9.1.4) — javac reads the name as a return type and
+        // asks for an identifier.
+        if is_interface
+            && let Some(TokenKind::Identifier(name)) = self.peek()
+            && name == class_name
+            && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
+        {
+            self.error_here("<identifier> expected (an interface has no constructors)");
+            return Err(Abort);
+        }
         if let Some(TokenKind::Identifier(name)) = self.peek()
             && name == class_name
             && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
