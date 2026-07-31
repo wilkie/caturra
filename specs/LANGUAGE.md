@@ -231,6 +231,32 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Scanner and the print stream** (2026-07-31, round 7) — 8 of 9 findings:
+  - **`System.out.write(int)`, `append(char)`/`append(CharSequence)` and
+    `flush()`** exist (they were "cannot find symbol" for real JDK APIs).
+    `append` answers the stream, which caturra discards — nothing here has
+    a `PrintStream` value to chain from.
+  - **`printf` writes as it goes**, so a specifier that throws leaves
+    everything before it PRINTED: `printf("a%dz%s", 5)` shows `a5z` and
+    then throws, as the JDK's Formatter does (it appends to its
+    destination one specifier at a time).
+  - **An unknown conversion is `UnknownFormatConversionException`**,
+    reported before the argument is fetched — `printf("%q")` had been
+    complaining that the argument was missing.
+  - **Scanner's numeric messages are the JDK's**: a well-formed number that
+    does not fit reports `For input string: "99999999999"`, and
+    `nextByte`/`nextShort` report `Value out of range. Value:"200"
+    Radix:10`. Both had been a bare `InputMismatchException` with no
+    message. A token that is not a numeral at all still has none, as on a
+    JDK.
+  - **Locale grouping is read**: `1,234` and `1,234,567` are integers (and
+    `1,234.5` a double), while `1,23`, `12,34` and `,123` are not — the
+    JDK validates the group widths, and so does this.
+  - **`nextInt(radix)` / `hasNextInt(radix)`** read a token in another
+    base.
+  - **One left open**: two Scanners over `System.in`. A JDK's first
+    Scanner BUFFERS ahead, so a second sees nothing; caturra's read from
+    the live stream, so the second still finds input.
 - **Interface members** (2026-07-31, round 7) — 7 of 8 findings:
   - **A member type of an interface is implicitly static** (JLS §9.5), so
     `interface Shape { class Point {…} }` needs no enclosing instance;

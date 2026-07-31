@@ -524,12 +524,48 @@ pub fn invoke_virtual(
                 _ => String::new(),
             };
             let format_args = crate::format::args_from_descriptor(descriptor, &args[1..])?;
-            let text = crate::format::java_format(heap, &template, &format_args)?;
+            // The JDK's Formatter writes to its destination as it goes, so a
+            // specifier that throws leaves everything before it PRINTED —
+            // `printf("a%dz%s", 5)` shows "a5z" and then throws.
+            let (produced, result) =
+                crate::format::java_format_partial(heap, &template, &format_args);
+            let text = match result {
+                Ok(text) => text,
+                Err(error) => {
+                    match stream {
+                        StdStream::Out => console.stdout(produced.as_bytes()),
+                        StdStream::Err => console.stderr(produced.as_bytes()),
+                    }
+                    return Err(error);
+                }
+            };
             match stream {
                 StdStream::Out => console.stdout(text.as_bytes()),
                 StdStream::Err => console.stderr(text.as_bytes()),
             }
             Ok(None)
+        }
+        // `write(int)` writes the low byte as one character; `append(...)`
+        // is `print` that answers the stream (which caturra discards).
+        (HeapObject::PrintStream(stream), "write" | "append") => {
+            let stream = *stream;
+            let text = match (method, args) {
+                ("write", [JValue::Int(byte)]) => {
+                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                    let unit = u32::from((*byte & 0xFF) as u8);
+                    char::from_u32(unit).map(String::from).unwrap_or_default()
+                }
+                _ => print_argument_text(heap, descriptor, args)?,
+            };
+            if stream == StdStream::Out && console.capturing() {
+                console.capture_message(&text);
+            } else {
+                match stream {
+                    StdStream::Out => console.stdout(text.as_bytes()),
+                    StdStream::Err => console.stderr(text.as_bytes()),
+                }
+            }
+            Ok(Some(JValue::Ref(Some(receiver))))
         }
         (HeapObject::PrintStream(stream), "print" | "println") => {
             let stream = *stream;
@@ -556,7 +592,7 @@ pub fn invoke_virtual(
             builder_method(heap, receiver, method, descriptor, args)
         }
         (HeapObject::JavaString(_), _) => string_method(heap, receiver, method, args),
-        (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method),
+        (HeapObject::Scanner { .. }, _) => scanner_method(heap, console, receiver, method, args),
         (HeapObject::Reader { .. }, _) => reader_method(heap, console, receiver, method),
         (
             HeapObject::ArrayList(_) | HeapObject::LinkedList(_) | HeapObject::ArrayBackedList(_),
@@ -2078,6 +2114,7 @@ fn scanner_method(
     console: &mut dyn ConsoleIo,
     receiver: HeapRef,
     method: &str,
+    args: &[JValue],
 ) -> Result<Option<JValue>, VmError> {
     // Every method but `close` refuses a closed Scanner, as the JDK's does.
     // Closing twice is a no-op there, so `close` is exempt.
@@ -2100,12 +2137,20 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(has))))
         }
         "nextLong" => {
-            let value = scanner_take(heap, console, receiver, |t| t.parse::<i64>().ok())?;
+            let value = scanner_take_msg(heap, console, receiver, |t| {
+                let digits = scanner_ungroup(t).ok_or(None)?;
+                digits.parse::<i64>().map_err(|_| {
+                    scanner_numeric_token(&digits, 10)
+                        .then(|| format!("For input string: \"{digits}\""))
+                })
+            })?;
             Ok(Some(JValue::Long(value)))
         }
         "hasNextLong" => {
             let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token.is_some_and(|t| t.parse::<i64>().is_ok());
+            let ok = token
+                .and_then(|t| scanner_ungroup(&t))
+                .is_some_and(|t| t.parse::<i64>().is_ok());
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextFloat" => {
@@ -2127,8 +2172,15 @@ fn scanner_method(
             } else {
                 (i32::from(i8::MIN), i32::from(i8::MAX))
             };
-            let value = scanner_take(heap, console, receiver, |t| {
-                t.parse::<i32>().ok().filter(|v| *v >= lo && *v <= hi)
+            let value = scanner_take_msg(heap, console, receiver, |t| {
+                let digits = scanner_ungroup(t).ok_or(None)?;
+                let parsed = digits.parse::<i64>().map_err(|_| None)?;
+                if parsed < i64::from(lo) || parsed > i64::from(hi) {
+                    return Err(Some(format!(
+                        "Value out of range. Value:\"{digits}\" Radix:10"
+                    )));
+                }
+                i32::try_from(parsed).map_err(|_| None)
             })?;
             Ok(Some(JValue::Int(value)))
         }
@@ -2186,17 +2238,36 @@ fn scanner_method(
             Ok(Some(JValue::Int(i32::from(token.is_some()))))
         }
         "nextInt" => {
-            let value = scanner_take(heap, console, receiver, |t| t.parse::<i32>().ok())?;
+            let radix = match args {
+                [JValue::Int(radix)] => u32::try_from(*radix).unwrap_or(10),
+                _ => 10,
+            };
+            let value = scanner_take_msg(heap, console, receiver, |t| {
+                let digits = scanner_ungroup(t).ok_or(None)?;
+                i32::from_str_radix(&digits, radix).map_err(|_| {
+                    // A token that IS a number but does not fit reports the
+                    // parse failure; anything else is a plain mismatch.
+                    scanner_numeric_token(&digits, radix)
+                        .then(|| format!("For input string: \"{digits}\""))
+                })
+            })?;
             Ok(Some(JValue::Int(value)))
         }
         "hasNextInt" => {
+            let radix = match args {
+                [JValue::Int(radix)] => u32::try_from(*radix).unwrap_or(10),
+                _ => 10,
+            };
             let token = scanner_peek_token(heap, console, receiver)?;
-            let ok = token.is_some_and(|t| t.parse::<i32>().is_ok());
+            let ok = token
+                .and_then(|t| scanner_ungroup(&t))
+                .is_some_and(|t| i32::from_str_radix(&t, radix).is_ok());
             Ok(Some(JValue::Int(i32::from(ok))))
         }
         "nextDouble" => {
             let value = scanner_take(heap, console, receiver, |t| {
-                is_java_float_token(t)
+                let t = scanner_ungroup(t)?;
+                is_java_float_token(&t)
                     .then(|| t.parse::<f64>().ok())
                     .flatten()
             })?;
@@ -2400,6 +2471,69 @@ fn scanner_peek_line(
 /// still there — which is what makes the usual recovery loop
 /// (`catch (InputMismatchException e) { in.next(); }`) skip the bad word rather
 /// than the one after it. `None` from `parse` means a mismatch.
+/// A `java.util.Scanner` integer token with its LOCALE grouping separators
+/// removed — the default locale's is `,`, and the JDK accepts it only in
+/// well-formed groups: `1,234` and `1,234,567` are numbers, `1,23` and
+/// `,123` are not. `None` when the grouping is malformed.
+/// Whether a token is a well-formed numeral in `radix` — the JDK reports a
+/// parse failure ("For input string") only for one of these; anything else
+/// is a plain mismatch with no message.
+fn scanner_numeric_token(token: &str, radix: u32) -> bool {
+    let digits = token.strip_prefix(['-', '+']).unwrap_or(token);
+    !digits.is_empty() && digits.chars().all(|c| c.is_digit(radix))
+}
+
+fn scanner_ungroup(token: &str) -> Option<String> {
+    if !token.contains(',') {
+        return Some(token.to_owned());
+    }
+    // A floating token groups its INTEGER part only (`1,234.5`); the
+    // fraction and exponent come along untouched.
+    if let Some((integer, rest)) = token.split_once('.') {
+        let integer = scanner_ungroup(integer)?;
+        return Some(format!("{integer}.{rest}"));
+    }
+    let (sign, digits) = match token.strip_prefix(['-', '+']) {
+        Some(rest) => (&token[..1], rest),
+        None => ("", token),
+    };
+    let groups: Vec<&str> = digits.split(',').collect();
+    let [first, rest @ ..] = groups.as_slice() else {
+        return None;
+    };
+    if rest.is_empty()
+        || first.is_empty()
+        || first.len() > 3
+        || !first.bytes().all(|b| b.is_ascii_digit())
+        || !rest
+            .iter()
+            .all(|group| group.len() == 3 && group.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    Some(format!("{sign}{first}{}", rest.concat()))
+}
+
+/// `scanner_take`, with the JDK's `InputMismatchException` MESSAGE: a token
+/// that is a well-formed number but does not fit reports the failure the
+/// underlying parse would have ("For input string", or the range complaint
+/// the byte/short paths give).
+fn scanner_take_msg<T>(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+    parse: impl FnOnce(&str) -> Result<T, Option<String>>,
+) -> Result<T, VmError> {
+    let token = scanner_peek_token(heap, console, receiver)?
+        .ok_or_else(|| throw("java.util.NoSuchElementException"))?;
+    let value = parse(&token).map_err(|message| match message {
+        Some(message) => throw(format!("java.util.InputMismatchException: {message}")),
+        None => throw("java.util.InputMismatchException"),
+    })?;
+    scanner_next_token(heap, console, receiver)?;
+    Ok(value)
+}
+
 fn scanner_take<T>(
     heap: &mut Heap,
     console: &mut dyn ConsoleIo,
@@ -6123,7 +6257,13 @@ fn descriptor_params(descriptor: &str) -> &str {
 
 /// Render a print/println argument the way Java would.
 fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result<String, VmError> {
-    let text = match (descriptor, args) {
+    // `append` has the same argument shapes as `print`, but answers the
+    // stream — so its descriptors end in the stream type, not `V`.
+    let descriptor = match descriptor.split_once(')') {
+        Some((params, _)) => format!("{params})V"),
+        None => descriptor.to_owned(),
+    };
+    let text = match (descriptor.as_str(), args) {
         ("()V", []) => String::new(),
         ("(I)V", [JValue::Int(v)]) => v.to_string(),
         ("(J)V", [JValue::Long(v)]) => v.to_string(),
@@ -6138,12 +6278,16 @@ fn print_argument_text(heap: &Heap, descriptor: &str, args: &[JValue]) -> Result
         // (`"" + chars` does not — that is `append(Object)` and prints
         // `[C@hash`. A classic Java trap, faithfully reproduced.)
         ("([C)V", [value]) => String::from_utf16_lossy(&char_array_units(heap, value)?),
-        ("(Ljava/lang/String;)V", [JValue::Ref(reference)]) => match reference {
-            None => String::from("null"),
-            Some(reference) => heap.string_text(*reference).ok_or_else(|| {
-                VmError::UnknownIntrinsic(String::from("println argument is not a string object"))
-            })?,
-        },
+        ("(Ljava/lang/String;)V" | "(Ljava/lang/CharSequence;)V", [JValue::Ref(reference)]) => {
+            match reference {
+                None => String::from("null"),
+                Some(reference) => heap.string_text(*reference).ok_or_else(|| {
+                    VmError::UnknownIntrinsic(String::from(
+                        "println argument is not a string object",
+                    ))
+                })?,
+            }
+        }
         _ => {
             return Err(VmError::UnknownIntrinsic(format!(
                 "PrintStream overload {descriptor} with {} args",

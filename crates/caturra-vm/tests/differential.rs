@@ -18556,3 +18556,106 @@ public class RejStaticHides {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 scanner/IO: PrintStream's write/append/flush, the formatter's
+// unknown conversion and its PARTIAL output, and Scanner's numeric messages,
+// locale grouping and radix overloads.
+
+differential_test!(
+    diff_print_stream_write_append,
+    "DiffPrintStream",
+    r#"
+public class DiffPrintStream {
+    public static void main(String[] args) {
+        System.out.write(65);
+        System.out.write(66);
+        System.out.flush();
+        System.out.append('x');
+        System.out.append("yz");
+        System.out.println();
+        System.out.print("done");
+        System.out.println();
+    }
+}
+"#
+);
+
+// The Formatter writes as it goes, so a specifier that throws leaves what
+// came before it printed; and an unknown conversion is reported before the
+// argument is even fetched.
+differential_test!(
+    diff_printf_partial_and_unknown,
+    "DiffPrintfPartial",
+    r#"
+public class DiffPrintfPartial {
+    public static void main(String[] args) {
+        try {
+            System.out.printf("a%dz%s", 5);
+        } catch (Exception e) {
+            System.out.println("<CAUGHT " + e.getClass().getName() + ">");
+        }
+        try {
+            System.out.printf("%q");
+        } catch (Exception e) {
+            System.out.println(e.getClass().getName() + ": " + e.getMessage());
+        }
+        System.out.printf("%s-%d%n", "ok", 7);
+    }
+}
+"#
+);
+
+// Scanner's numeric reads: the JDK's InputMismatchException messages, the
+// locale grouping separator, and the radix overloads.
+differential_test!(
+    diff_scanner_numeric_tokens,
+    "DiffScannerNumbers",
+    r#"
+import java.util.Scanner;
+public class DiffScannerNumbers {
+    static void t(String in, String what) {
+        Scanner sc = new Scanner(in);
+        try {
+            Object v;
+            if (what.equals("int")) v = sc.nextInt();
+            else if (what.equals("byte")) v = sc.nextByte();
+            else if (what.equals("short")) v = sc.nextShort();
+            else if (what.equals("long")) v = sc.nextLong();
+            else v = sc.nextDouble();
+            System.out.println("[" + in + "]." + what + " -> " + v);
+        } catch (Exception e) {
+            System.out.println("[" + in + "]." + what + " -> "
+                + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+    static void h(String in) {
+        System.out.println("[" + in + "] hasNextInt=" + new Scanner(in).hasNextInt());
+    }
+    public static void main(String[] args) {
+        t("99999999999", "int");
+        t("abc", "int");
+        t("200", "byte");
+        t("40000", "short");
+        t("1,234", "int");
+        t("1,23", "int");
+        t("12,34", "int");
+        t(",123", "int");
+        t("1,234,567", "int");
+        t("1,234.5", "double");
+        t("99999999999999999999", "long");
+        h("1,234");
+        h("1,23");
+        h("abc");
+        h("12");
+        h(",1");
+        Scanner r = new Scanner("ff 101");
+        System.out.println(r.nextInt(16) + " " + r.nextInt(2));
+        // The recovery idiom still leaves the offending token in place.
+        Scanner s = new Scanner("x 5");
+        try { s.nextInt(); } catch (Exception e) { System.out.println("skip " + s.next()); }
+        System.out.println(s.nextInt());
+    }
+}
+"#
+);

@@ -5996,6 +5996,9 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Int,
         descriptor: "()I",
     },
+    // `nextInt(radix)` / `hasNextInt(radix)` read the token in that radix.
+    bm("nextInt", &[I], BRet::Int, "(I)I"),
+    bm("hasNextInt", &[I], BRet::Boolean, "(I)Z"),
     BuiltinMethod {
         name: "nextDouble",
         params: &[],
@@ -17480,6 +17483,47 @@ impl BodyGen<'_> {
                 intern_method_ref(self.pool, "java/io/PrintStream", "printf", &descriptor);
             self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
             self.code.drop_stack(1 + width);
+            return;
+        }
+        // `write(int)` writes ONE byte (no newline, no flush of its own);
+        // `append(char)`/`append(CharSequence)` are `print` by another name
+        // and return the stream, which only chaining would use.
+        if matches!(method, "write" | "append") && args.len() == 1 {
+            let field = intern_field_ref(
+                self.pool,
+                "java/lang/System",
+                stream,
+                "Ljava/io/PrintStream;",
+            );
+            self.code.push_op_u16(op::GETSTATIC, field, 1);
+            let arg_ty = self.expr(&args[0]);
+            let (descriptor, width) = if method == "write" {
+                self.numeric_conversion(arg_ty, JType::Int);
+                ("(I)V", 1)
+            } else if matches!(arg_ty, JType::Char) {
+                ("(C)Ljava/io/PrintStream;", 1)
+            } else {
+                let coerced = self.coerce_to_string_for_output(arg_ty);
+                self.numeric_conversion(coerced, JType::Str);
+                ("(Ljava/lang/CharSequence;)Ljava/io/PrintStream;", 1)
+            };
+            let method_ref =
+                intern_method_ref(self.pool, "java/io/PrintStream", method, descriptor);
+            let returns = u16::from(method == "append");
+            self.code
+                .push_op_u16(op::INVOKEVIRTUAL, method_ref, returns);
+            self.code.drop_stack(1 + width);
+            // A chained `append(...)` value is discarded here; caturra has no
+            // PrintStream value to hand back.
+            if returns == 1 {
+                self.code.push_op(op::POP, 0);
+                self.code.drop_stack(1);
+            }
+            return;
+        }
+        // `flush()` — caturra's console is unbuffered, so there is nothing
+        // to push, but the call must compile.
+        if method == "flush" && args.is_empty() {
             return;
         }
         if method != "println" && method != "print" {

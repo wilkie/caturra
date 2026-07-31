@@ -78,8 +78,32 @@ struct Spec {
     conversion: char,
 }
 
-/// Format `template` with `args`, Java-style.
+/// Format `template` with `args`, Java-style — discarding whatever was
+/// produced before a failure. Callers that WRITE the result as they go (a
+/// `printf` to a stream) want [`java_format_partial`] instead, because the
+/// JDK's Formatter appends to its destination one specifier at a time and so
+/// leaves the prefix visible when a later one throws.
 pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<String, VmError> {
+    java_format_partial(heap, template, args).1
+}
+
+/// [`java_format`], also handing back the text produced before any failure.
+pub fn java_format_partial(
+    heap: &Heap,
+    template: &str,
+    args: &[FormatArg],
+) -> (String, Result<String, VmError>) {
+    let mut produced = String::new();
+    let result = java_format_inner(heap, template, args, &mut produced);
+    (produced, result)
+}
+
+fn java_format_inner(
+    heap: &Heap,
+    template: &str,
+    args: &[FormatArg],
+    produced: &mut String,
+) -> Result<String, VmError> {
     let chars: Vec<char> = template.chars().collect();
     let mut out = String::new();
     let mut at = 0;
@@ -93,14 +117,22 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
     while at < chars.len() {
         if chars[at] != '%' {
             out.push(chars[at]);
+            produced.push(chars[at]);
             at += 1;
             continue;
         }
         let spec = parse_spec(&chars, &mut at)?;
         validate_spec(&spec)?;
         match spec.conversion {
-            '%' => out.push_str(&pad(&spec, "%")),
-            'n' => out.push('\n'),
+            '%' => {
+                let text = pad(&spec, "%");
+                out.push_str(&text);
+                produced.push_str(&text);
+            }
+            'n' => {
+                out.push('\n');
+                produced.push('\n');
+            }
             _ => {
                 // `%<s` with nothing before it: there is no previous argument
                 // to reuse. The JDK reports the specifier as a missing
@@ -128,7 +160,9 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
                         &format!("Format specifier '{}'", spec.text),
                     )
                 })?;
-                out.push_str(&render(heap, &spec, arg)?);
+                let text = render(heap, &spec, arg)?;
+                out.push_str(&text);
+                produced.push_str(&text);
             }
         }
     }
@@ -270,6 +304,19 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
         return Ok(());
     }
     let lower = c.to_ascii_lowercase();
+    // An unknown conversion is reported BEFORE anything else about the
+    // specifier — including before the argument is fetched, which is why
+    // `printf("%q")` is an UnknownFormatConversionException and not a
+    // missing-argument one.
+    if !matches!(
+        lower,
+        's' | 'b' | 'h' | 'c' | 'd' | 'o' | 'x' | 'e' | 'f' | 'g' | 'a'
+    ) {
+        return Err(throw(
+            "java.util.UnknownFormatConversionException",
+            &format!("Conversion = '{c}'"),
+        ));
+    }
 
     // A flag that needs a width but has none — `%-d`, `%0x` — is a
     // `MissingFormatWidthException` naming the whole specifier. `,`/`+`/` `/`(`
