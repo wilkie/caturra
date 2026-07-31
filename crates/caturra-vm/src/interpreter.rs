@@ -10216,8 +10216,14 @@ impl<'run> Interpreter<'run> {
         match (a, b) {
             (JValue::Int(x), JValue::Int(y)) => x.cmp(y),
             (JValue::Long(x), JValue::Long(y)) => x.cmp(y),
-            (JValue::Double(x), JValue::Double(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
-            (JValue::Float(x), JValue::Float(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+            // `Double.compare`/`Float.compare`, NOT the primitive `<`: the
+            // wrappers impose a TOTAL order, in which NaN is greater than
+            // everything (and equal to itself) and -0.0 is less than 0.0.
+            // `partial_cmp(...).unwrap_or(Equal)` made every NaN comparison
+            // "equal", so a NaN swallowed a TreeSet, `Collections.max` never
+            // saw it, and a PriorityQueue polled in the wrong order.
+            (JValue::Double(x), JValue::Double(y)) => java_double_order(*x, *y),
+            (JValue::Float(x), JValue::Float(y)) => java_double_order(f64::from(*x), f64::from(*y)),
             (JValue::Ref(Some(ra)), JValue::Ref(Some(rb))) => {
                 match (self.heap.get(*ra), self.heap.get(*rb)) {
                     (Some(HeapObject::JavaString(sa)), Some(HeapObject::JavaString(sb))) => {
@@ -12324,6 +12330,15 @@ fn is_synthesized_anonymous(name: &str) -> bool {
 
 /// The simple name of a (possibly `/`- or `.`-qualified) class name.
 /// caturra is a flat namespace, so this is usually a no-op.
+/// The order `Double.compare`/`Float.compare` impose (JLS §4.2.3 total
+/// order): all NaNs are equal and greater than everything else, and -0.0 is
+/// strictly less than 0.0. Rust's `total_cmp` is that order once NaN is
+/// canonicalized to a positive one, which is what `doubleToLongBits` does.
+fn java_double_order(x: f64, y: f64) -> std::cmp::Ordering {
+    let canonical = |value: f64| if value.is_nan() { f64::NAN } else { value };
+    canonical(x).total_cmp(&canonical(y))
+}
+
 /// `Class.toString()`: the binary name, prefixed with "class " — or
 /// "interface " for an interface, and nothing at all for a primitive, which
 /// is the JDK's rule.

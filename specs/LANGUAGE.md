@@ -231,6 +231,33 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Floating point: the total order, the parse grammar, the literal shapes**
+  (2026-07-30, round 7):
+  - **`Double`/`Float` impose a TOTAL order** (JLS §4.2.3): NaN is greater
+    than everything and equal to itself, and -0.0 is strictly less than
+    0.0. Every sorted structure compared PRIMITIVELY, so
+    `partial_cmp(...).unwrap_or(Equal)` made each NaN comparison "equal" —
+    a NaN swallowed a `TreeSet` (four elements collapsed to two, the map to
+    one), `Collections.max` never saw it, and a `PriorityQueue` polled in
+    the wrong order. One shared comparison now canonicalizes NaN and uses
+    the IEEE total order, which is exactly `Double.compare`. The identity
+    relations beside it are unchanged: `Double.valueOf(NaN).equals(NaN)` is
+    true, `0.0.equals(-0.0)` is false, `NaN == NaN` is false.
+  - **`Double.parseDouble`/`Float.parseFloat` take Java's word forms
+    only** — `NaN` and `Infinity`, with an optional sign and no type
+    suffix. Rust's parser also accepts `inf`, `infinity` and `nan` in any
+    case, so `parseDouble("infinity")` had been returning Infinity where a
+    JDK throws NumberFormatException.
+  - **The floating-literal shapes the lexer did not know** (JLS §3.10.2):
+    the fraction digits after the dot are OPTIONAL (`5.`, `5.d`, `5.e2`),
+    and HEXADECIMAL literals (`0x1.fp3` = 15.5) have a mandatory binary
+    exponent — `0x1.f` is javac's "malformed floating point literal". A hex
+    float was previously read as `0x1` followed by a field access `.fp3`.
+  - **A literal that does not fit its type is an error**: "floating point
+    number too large" when it rounds to an infinity, "too small" when a
+    NONZERO significand rounds all the way to zero — `1e400`, `1e-400` and
+    `1e40f` were silently becoming Infinity/0.0. `0e-400` and `0.0e999`
+    stay legal, as on javac, because their significand is zero.
 - **Arrays check their stores** (2026-07-30, round 7) — the arrays cluster:
   - **`ArrayStoreException` exists** (JLS §10.5): a store through a widened
     array reference whose value does not fit the RUNTIME component type

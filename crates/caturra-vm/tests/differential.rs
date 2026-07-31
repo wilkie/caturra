@@ -17551,3 +17551,133 @@ public class DiffClassArray {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 float/double: the wrappers' TOTAL order (NaN greatest, -0.0 < 0.0)
+// in every sorted structure, Java's parse grammar for the word forms, and the
+// floating-literal shapes the lexer did not know.
+
+// Double/Float impose a total order (JLS §4.2.3): NaN is greater than
+// everything and equal to itself, -0.0 is strictly less than 0.0. Comparing
+// primitively made every NaN comparison "equal", which swallowed a TreeSet,
+// hid NaN from Collections.max, and mis-ordered a PriorityQueue.
+differential_test!(
+    diff_double_total_order,
+    "DiffDoubleOrder",
+    r#"
+import java.util.*;
+public class DiffDoubleOrder {
+    public static void main(String[] args) {
+        TreeSet<Double> ts = new TreeSet<>();
+        ts.add(1.0); ts.add(Double.NaN); ts.add(-0.0); ts.add(0.0);
+        System.out.println(ts + " " + ts.size() + " " + ts.contains(Double.NaN));
+        System.out.println(ts.first() + " " + ts.last() + " " + ts.higher(0.0));
+        TreeMap<Double, String> tm = new TreeMap<>();
+        tm.put(Double.NaN, "nan"); tm.put(0.0, "pos"); tm.put(-0.0, "neg"); tm.put(1.0, "one");
+        System.out.println(tm + " " + tm.get(Double.NaN));
+        System.out.println(tm.firstKey() + " " + tm.lastKey());
+        System.out.println(Collections.max(Arrays.asList(3.0, Double.NaN, 1.0)));
+        System.out.println(Collections.min(Arrays.asList(Double.NaN, 1.0, 5.0)));
+        System.out.println(Collections.min(Arrays.asList(0.0, -0.0)) + " "
+            + Collections.max(Arrays.asList(-0.0, 0.0)));
+        PriorityQueue<Double> pq = new PriorityQueue<>();
+        pq.add(3.0); pq.add(Double.NaN); pq.add(1.0); pq.add(-0.0); pq.add(0.0);
+        StringBuilder sb = new StringBuilder();
+        while (!pq.isEmpty()) sb.append(pq.poll()).append(" ");
+        System.out.println(sb.toString().trim());
+        List<Double> list = new ArrayList<>(Arrays.asList(3.0, Double.NaN, 1.0, -0.0, 0.0));
+        Collections.sort(list);
+        System.out.println(list);
+        list.sort(Comparator.reverseOrder());
+        System.out.println(list);
+        List<Float> floats = new ArrayList<>(Arrays.asList(2.0f, Float.NaN, -0.0f, 0.0f));
+        Collections.sort(floats);
+        System.out.println(floats + " " + Collections.max(floats));
+        // The identity relations these orders rest on, unchanged.
+        System.out.println(Double.compare(Double.NaN, 1.0) + " " + Double.compare(-0.0, 0.0));
+        System.out.println(Double.valueOf(Double.NaN).equals(Double.NaN) + " "
+            + Double.valueOf(0.0).equals(-0.0) + " " + (Double.NaN == Double.NaN));
+        Set<Double> hs = new HashSet<>(Arrays.asList(Double.NaN, Double.NaN, 0.0, -0.0));
+        System.out.println(hs.size() + " " + hs.contains(Double.NaN));
+        // Integers and Strings are untouched by the change.
+        System.out.println(Collections.max(Arrays.asList(3, 1, 2)) + " "
+            + Collections.max(Arrays.asList("b", "a", "c")));
+    }
+}
+"#
+);
+
+// Java's parse grammar admits exactly `NaN` and `Infinity` as word forms,
+// with an optional sign and no type suffix — not Rust's `inf`/`nan`.
+differential_test!(
+    diff_parse_double_grammar,
+    "DiffParseDouble",
+    r#"
+public class DiffParseDouble {
+    static void d(String s) {
+        try { System.out.println("[" + s + "] -> " + Double.parseDouble(s)); }
+        catch (Throwable e) {
+            System.out.println("[" + s + "] -> " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+    static void f(String s) {
+        try { System.out.println("f[" + s + "] -> " + Float.parseFloat(s)); }
+        catch (Throwable e) {
+            System.out.println("f[" + s + "] -> " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+    public static void main(String[] args) {
+        String[] cases = {"NaN", "nan", "-NaN", "+NaN", "NaNd", "Infinity", "infinity", "INFINITY",
+            "-Infinity", "+Infinity", "Infinityf", "inf", "-inf", "1.5", "1.5f", "1.5D", " 2.5 ",
+            "1.", "+.5", "0x1.8p1", "1e400", "-1e400", "1e-400", "", "x", ".", "1e", "1.0e5f"};
+        for (String s : cases) d(s);
+        f("NaN"); f("nan"); f("Infinity"); f("inf"); f("1e40"); f("3.4e39");
+    }
+}
+"#
+);
+
+// The floating-literal shapes JLS §3.10.2 allows: an optional fraction after
+// the dot, hexadecimal literals with a mandatory binary exponent, and the
+// range rules (too large when it rounds to infinity, too small when a
+// NONZERO significand rounds to zero — `0e-400` is fine).
+differential_test!(
+    diff_float_literal_shapes,
+    "DiffFloatLiterals",
+    r#"
+public class DiffFloatLiterals {
+    public static void main(String[] args) {
+        System.out.println(5. + " " + 5.d + " " + 2.f + " " + 5.e2 + " " + 5.e-2);
+        System.out.println(0x1.fp3 + " " + 0x1p3 + " " + 0x1.8p1f + " " + 0x0.0p0 + " " + 0x1.8P1);
+        System.out.println(1e-323 + " " + 0e-400 + " " + 0.0e999);
+        System.out.println(1e-45f + " " + 3.4e38f + " " + 1.7976931348623157e308);
+        // The integer literal forms beside them are unchanged.
+        System.out.println(0xFF + " " + 0xFFL + " " + 0b1010 + " " + 0777 + " " + 1_000.5);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_float_literal_too_large,
+    "RejFloatBig",
+    "public class RejFloatBig { public static void main(String[] a) { double d = 1e400; System.out.println(d); } }"
+);
+
+differential_reject!(
+    reject_float_literal_too_small,
+    "RejFloatSmall",
+    "public class RejFloatSmall { public static void main(String[] a) { double d = 1e-400; System.out.println(d); } }"
+);
+
+differential_reject!(
+    reject_float_literal_float_suffix_too_large,
+    "RejFloatSuffixBig",
+    "public class RejFloatSuffixBig { public static void main(String[] a) { float f = 1e40f; System.out.println(f); } }"
+);
+
+differential_reject!(
+    reject_hex_float_without_exponent,
+    "RejHexFloatNoExp",
+    "public class RejHexFloatNoExp { public static void main(String[] a) { double d = 0x1.f; System.out.println(d); } }"
+);

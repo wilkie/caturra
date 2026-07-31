@@ -4944,9 +4944,41 @@ fn parse_hex_float(s: &str) -> Option<f64> {
     Some(if neg { -value } else { value })
 }
 
+/// Java's grammar admits exactly two WORD forms — `NaN` and `Infinity`, with
+/// an optional sign and no type suffix. Rust's parser also takes `inf`,
+/// `infinity` and `nan` in any case, and would take `NaNd` once the suffix
+/// is stripped, all of which Java rejects. `None` when the text is not a
+/// word form at all; `Some(None)` when it is one Java does not accept.
+#[allow(clippy::option_option)] // "not a word" and "a word Java rejects" differ
+fn java_float_word(core: &str) -> Option<Option<f64>> {
+    let (negative, unsigned) = match core.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, core.strip_prefix('+').unwrap_or(core)),
+    };
+    if !unsigned
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    Some(match unsigned {
+        "NaN" => Some(f64::NAN),
+        "Infinity" => Some(if negative {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        }),
+        _ => None,
+    })
+}
+
 /// Parse per Java's `Double.parseDouble` grammar — a trailing type suffix and
 /// the hexadecimal form, both of which Rust's `str::parse` rejects.
 fn parse_java_double(trimmed: &str) -> Option<f64> {
+    if let Some(word) = java_float_word(trimmed) {
+        return word;
+    }
     let core = strip_float_suffix(trimmed);
     let unsigned = core.trim_start_matches(['+', '-']);
     if unsigned.starts_with("0x") || unsigned.starts_with("0X") {
@@ -4959,6 +4991,9 @@ fn parse_java_double(trimmed: &str) -> Option<f64> {
 /// float.
 #[allow(clippy::cast_possible_truncation)]
 fn parse_java_float(trimmed: &str) -> Option<f32> {
+    if let Some(word) = java_float_word(trimmed) {
+        return word.map(|value| value as f32);
+    }
     let core = strip_float_suffix(trimmed);
     let unsigned = core.trim_start_matches(['+', '-']);
     if unsigned.starts_with("0x") || unsigned.starts_with("0X") {

@@ -344,6 +344,23 @@ impl Lexer<'_> {
                 for _ in 0..prefix_len {
                     self.bump();
                 }
+                // A HEX FLOAT (`0x1.fp3`): hex digits, an optional fraction,
+                // and a MANDATORY binary exponent. Decided by lookahead,
+                // since the integer scan below would stop at the `.` and
+                // leave `.fp3` to be read as a field access.
+                if radix == 16 {
+                    let mut ahead = 0usize;
+                    while self
+                        .peek_at(ahead)
+                        .is_some_and(|c| c.is_ascii_hexdigit() || c == '_')
+                    {
+                        ahead += 1;
+                    }
+                    if matches!(self.peek_at(ahead), Some('.' | 'p' | 'P')) {
+                        self.hex_float(start);
+                        return;
+                    }
+                }
                 let mut digits = String::new();
                 while self
                     .peek()
@@ -396,9 +413,11 @@ impl Lexer<'_> {
         while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
             digits.push(self.bump().expect("peeked"));
         }
-        // A '.' starts a fraction only when followed by a digit, so
-        // `list.size()` and `1..2` don't confuse the lexer.
-        if self.peek() == Some('.') && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
+        // The fraction digits are OPTIONAL (JLS §3.10.2): `5.`, `5.d` and
+        // `5.e2` are all doubles. Only a number can reach here — a `.` that
+        // begins a member access follows an identifier, not a digit — so
+        // consuming it unconditionally cannot swallow a field selector.
+        if self.peek() == Some('.') {
             is_double = true;
             digits.push(self.bump().expect("peeked"));
             while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
@@ -438,7 +457,10 @@ impl Lexer<'_> {
                 self.bump();
                 let digits = digits.replace('_', "");
                 match digits.parse::<f32>() {
-                    Ok(value) => self.push(TokenKind::FloatLiteral(value), start),
+                    Ok(value) if self.float_in_range(f64::from(value), &digits, start) => {
+                        self.push(TokenKind::FloatLiteral(value), start);
+                    }
+                    Ok(_) => {}
                     Err(_) => {
                         self.error(format!("invalid float literal '{digits}'"), start);
                     }
@@ -471,7 +493,10 @@ impl Lexer<'_> {
             }
         } else if is_double {
             match digits.parse::<f64>() {
-                Ok(value) => self.push(TokenKind::DoubleLiteral(value), start),
+                Ok(value) if self.float_in_range(value, &digits, start) => {
+                    self.push(TokenKind::DoubleLiteral(value), start);
+                }
+                Ok(_) => {}
                 Err(_) => self.error(format!("invalid floating-point literal '{digits}'"), start),
             }
         } else {
@@ -479,6 +504,109 @@ impl Lexer<'_> {
                 Ok(value) => self.push(TokenKind::IntLiteral(value), start),
                 Err(_) => self.error(format!("integer literal '{digits}' is out of range"), start),
             }
+        }
+    }
+
+    /// JLS §3.10.2: a floating literal that does not FIT its type is a
+    /// compile error — "too large" when it rounds to an infinity, and "too
+    /// small" when a nonzero significand rounds all the way to zero (`0e-400`
+    /// is fine: its significand is zero). Reports the error and answers
+    /// whether the literal is usable.
+    fn float_in_range(&mut self, value: f64, text: &str, start: SourcePosition) -> bool {
+        if value.is_infinite() {
+            self.error("floating point number too large", start);
+            return false;
+        }
+        let significand = text
+            .split_once(['e', 'E', 'p', 'P'])
+            .map_or(text, |(mantissa, _)| mantissa);
+        let nonzero = significand
+            .chars()
+            .any(|c| c.is_ascii_hexdigit() && c != '0');
+        if value == 0.0 && nonzero {
+            self.error("floating point number too small", start);
+            return false;
+        }
+        true
+    }
+
+    /// A hexadecimal floating-point literal (`0x1.fp3` = 15.5), positioned
+    /// just past the `0x`. The binary `p` exponent is mandatory — `0x1.f`
+    /// alone is javac's "malformed floating point literal".
+    fn hex_float(&mut self, start: SourcePosition) {
+        let mut integer = String::new();
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_hexdigit() || c == '_')
+        {
+            integer.push(self.bump().expect("peeked"));
+        }
+        let mut fraction = String::new();
+        if self.peek() == Some('.') {
+            self.bump();
+            while self
+                .peek()
+                .is_some_and(|c| c.is_ascii_hexdigit() || c == '_')
+            {
+                fraction.push(self.bump().expect("peeked"));
+            }
+        }
+        let malformed = "malformed floating point literal";
+        if !matches!(self.peek(), Some('p' | 'P')) {
+            self.error(malformed, start);
+            return;
+        }
+        self.bump();
+        let mut exponent = String::new();
+        if matches!(self.peek(), Some('+' | '-')) {
+            exponent.push(self.bump().expect("peeked"));
+        }
+        while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '_') {
+            exponent.push(self.bump().expect("peeked"));
+        }
+        let is_float = match self.peek() {
+            Some('f' | 'F') => {
+                self.bump();
+                true
+            }
+            Some('d' | 'D') => {
+                self.bump();
+                false
+            }
+            _ => false,
+        };
+        let (integer, fraction) = (integer.replace('_', ""), fraction.replace('_', ""));
+        let exponent = exponent.replace('_', "");
+        if (integer.is_empty() && fraction.is_empty()) || exponent.is_empty() {
+            self.error(malformed, start);
+            return;
+        }
+        let Ok(exponent) = exponent.parse::<i32>() else {
+            self.error(malformed, start);
+            return;
+        };
+        let mut value = 0f64;
+        for c in integer.chars() {
+            value = value * 16.0 + f64::from(c.to_digit(16).expect("hex digit"));
+        }
+        let mut scale = 1.0 / 16.0;
+        for c in fraction.chars() {
+            value += f64::from(c.to_digit(16).expect("hex digit")) * scale;
+            scale /= 16.0;
+        }
+        value *= 2f64.powi(exponent);
+        // The significand for the range check is the hex digits themselves.
+        let significand = format!("{integer}{fraction}");
+        if is_float {
+            #[allow(clippy::cast_possible_truncation)]
+            let narrowed = value as f32;
+            if self.float_in_range(f64::from(narrowed), &significand, start) {
+                self.push(TokenKind::FloatLiteral(narrowed), start);
+            }
+            return;
+        }
+        if self.float_in_range(value, &significand, start) {
+            self.push(TokenKind::DoubleLiteral(value), start);
         }
     }
 
