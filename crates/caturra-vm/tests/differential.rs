@@ -18361,3 +18361,63 @@ public class RejFieldNested {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 library tail: Objects' missing statics, Boolean.valueOf(String),
+// chaining on the empty collections, wrapping a diamond, and decode's message.
+
+differential_test!(
+    diff_library_tail_statics,
+    "DiffLibraryTail",
+    r##"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+public class DiffLibraryTail {
+    public static void main(String[] args) {
+        System.out.println(Collections.emptyList().size() + " " + Collections.emptyList().isEmpty()
+            + " " + Collections.emptySet().size() + " " + Collections.emptyMap().size());
+        List<String> e = Collections.emptyList();
+        System.out.println(e + " " + e.size());
+        List<String> u = Collections.unmodifiableList(new ArrayList<>());
+        System.out.println(u + " " + u.size());
+        List<String> src = new ArrayList<>(Arrays.asList("a", "b"));
+        List<String> u2 = Collections.unmodifiableList(src);
+        System.out.println(u2 + " " + u2.get(0));
+        try { u2.add("c"); } catch (UnsupportedOperationException x) { System.out.println("UOE"); }
+        int[] p = {1, 2, 3};
+        int[] q = {1, 2, 3};
+        int[] r = {1, 2, 4};
+        String[] s1 = {"x"};
+        String[] s2 = {"x"};
+        System.out.println(Objects.deepEquals(p, q) + " " + Objects.deepEquals(p, r)
+            + " " + Objects.deepEquals(s1, s2) + " " + Objects.deepEquals(null, null)
+            + " " + Objects.deepEquals("a", "a") + " " + Objects.deepEquals(p, s1));
+        System.out.println(Objects.checkIndex(2, 5));
+        try {
+            Objects.checkIndex(5, 5);
+        } catch (IndexOutOfBoundsException x) {
+            System.out.println(x.getMessage());
+        }
+        Comparator<String> c = (x, y) -> x.compareTo(y);
+        System.out.println(Objects.compare("a", "b", c) + " " + Objects.compare(null, null, c)
+            + " " + Objects.compare("z", "a", c));
+        System.out.println(Boolean.valueOf("TRUE") + " " + Boolean.valueOf("nope")
+            + " " + Boolean.valueOf(true));
+        String[] decodes = {"0x", "#", "0xZZ", "0x1F", "#FF", "010", "42", "-0x10"};
+        for (String t : decodes) {
+            try {
+                System.out.println(t + " -> " + Integer.decode(t));
+            } catch (NumberFormatException x) {
+                System.out.println(t + " -> " + x.getMessage());
+            }
+        }
+        System.out.println(Objects.equals(null, null) + " " + Objects.hashCode(null)
+            + " " + Objects.toString(null, "d"));
+    }
+}
+"##
+);

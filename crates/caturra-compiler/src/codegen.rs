@@ -7792,6 +7792,9 @@ const BOOLEAN_METHODS: &[BuiltinMethod] = &[
     bm("parseBoolean", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
     bm("toString", &[Z], BRet::Str, "(Z)Ljava/lang/String;"),
     bm("valueOf", &[Z], BRet::Boolean, "(Z)Z"),
+    // `Boolean.valueOf(String)` — `parseBoolean`'s answer, boxed on a JDK
+    // and a plain boolean here.
+    bm("valueOf", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
     bm("compare", &[Z, Z], BRet::Int, "(ZZ)I"),
     bm("hashCode", &[Z], BRet::Int, "(Z)I"),
     bm("logicalAnd", &[Z, Z], BRet::Boolean, "(ZZ)Z"),
@@ -8843,6 +8846,38 @@ const ENTRY_METHODS: &[BuiltinMethod] = &[
     ),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
+
+/// Which empty collection a `Collections.emptyX()` call produces — the one
+/// case where a `null`-typed receiver is really an object with methods.
+#[derive(Clone, Copy)]
+enum EmptyKind {
+    List,
+    Set,
+    Map,
+}
+
+fn empty_collection_kind(receiver: &Expr) -> Option<EmptyKind> {
+    let Expr::Call {
+        receiver: Some(owner),
+        method,
+        args,
+        ..
+    } = receiver
+    else {
+        return None;
+    };
+    if !args.is_empty()
+        || !matches!(owner.as_ref(), Expr::Name { path, .. } if path.last().is_some_and(|n| n == "Collections"))
+    {
+        return None;
+    }
+    match method.as_str() {
+        "emptyList" => Some(EmptyKind::List),
+        "emptySet" => Some(EmptyKind::Set),
+        "emptyMap" => Some(EmptyKind::Map),
+        _ => None,
+    }
+}
 
 /// The intrinsic method table and JVM class for a receiver type.
 fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinMethod])> {
@@ -14002,6 +14037,7 @@ impl BodyGen<'_> {
     /// Resolve and emit an instance method call with the receiver
     /// expression. `None` means a diagnostic was reported.
     #[allow(clippy::option_option)] // error / void / value are distinct outcomes
+    #[allow(clippy::too_many_lines)] // one arm per receiver kind
     fn instance_call(
         &mut self,
         receiver: &Expr,
@@ -14104,7 +14140,31 @@ impl BodyGen<'_> {
                 );
                 return None;
             }
-            other => {
+            // `Collections.emptyList()` and friends type as `null` so they
+            // assign to a list of ANY element type — but they are real empty
+            // collections, so a method called straight on one resolves
+            // against the general (Object-element) face.
+            JType::Null => {
+                let general = ElemType::Object(self.table.object_id);
+                let (table_ty, table) = match empty_collection_kind(receiver) {
+                    Some(EmptyKind::List) => (JType::List(general), LIST_METHODS),
+                    Some(EmptyKind::Set) => (JType::Set(general), SET_METHODS),
+                    Some(EmptyKind::Map) => (
+                        JType::Map {
+                            key: general,
+                            value: general,
+                        },
+                        MAP_METHODS,
+                    ),
+                    None => {
+                        self.error(span, "cannot call methods on null");
+                        return None;
+                    }
+                };
+                let _ = table;
+                return self.builtin_instance_call(table_ty, method, args, span);
+            }
+            other @ JType::Unsupported => {
                 self.error(
                     span,
                     format!("cannot call methods on {}", other.describe(self.table)),
@@ -16711,7 +16771,16 @@ impl BodyGen<'_> {
             self.no_suitable_library_method("Collections", method, args, span);
             return None;
         }
-        let list_ty = self.type_of(&args[0]);
+        // A DIAMOND argument (`unmodifiableList(new ArrayList<>())`) types as
+        // `null` — its element comes from context, and here the context is
+        // this call. An empty list of `Object` elements is exactly what it
+        // denotes, and the result assigns onward like any other list.
+        let diamond_argument = self.type_of(&args[0]) == JType::Null;
+        let list_ty = if diamond_argument {
+            JType::List(ElemType::Object(self.table.object_id))
+        } else {
+            self.type_of(&args[0])
+        };
         let JType::List(elem) = list_ty else {
             // javac reports this as overload resolution failing, not as one
             // argument's type: `no suitable method found for max(int)`.
@@ -16792,7 +16861,14 @@ impl BodyGen<'_> {
             }
             "unmodifiableList" => (
                 String::from("(Ljava/util/ArrayList;)Ljava/util/ArrayList;"),
-                Some(list_ty),
+                // Wrapping a DIAMOND keeps the element unknown, so the result
+                // types as `null` does — assignable to a list of any element,
+                // which is what the target type will decide.
+                Some(if diamond_argument {
+                    JType::Null
+                } else {
+                    list_ty
+                }),
             ),
             // `addAll(list, e1, e2, ...)`: pack the varargs into an array of
             // the list's element type, as javac packs them into a `T[]`. A
@@ -16906,6 +16982,50 @@ impl BodyGen<'_> {
                     self.emit_array_literal(args, array_ty, span);
                 }
                 self.invoke_objects("hash", "([Ljava/lang/Object;)I", 1, 1);
+                Some(Some(JType::Int))
+            }
+            // `deepEquals(a, b)` — like `equals`, except two ARRAYS compare
+            // element by element (and recursively).
+            ("deepEquals", [a, b]) => {
+                self.emit_object_arg(a);
+                self.emit_object_arg(b);
+                self.invoke_objects(
+                    "deepEquals",
+                    "(Ljava/lang/Object;Ljava/lang/Object;)Z",
+                    2,
+                    1,
+                );
+                Some(Some(JType::Boolean))
+            }
+            // `checkIndex(index, length)` — returns the index, or throws
+            // IndexOutOfBoundsException with the JDK's message.
+            ("checkIndex", [index, length]) => {
+                let index_ty = self.expr(index);
+                self.numeric_conversion(index_ty, JType::Int);
+                let length_ty = self.expr(length);
+                self.numeric_conversion(length_ty, JType::Int);
+                self.invoke_objects("checkIndex", "(II)I", 2, 1);
+                Some(Some(JType::Int))
+            }
+            // `compare(a, b, cmp)` — 0 when the arguments are the same object
+            // (so two nulls are equal), else the comparator's answer.
+            ("compare", [a, b, comparator]) => {
+                self.emit_object_arg(a);
+                self.emit_object_arg(b);
+                let comparator_ty = self.expr(comparator);
+                if comparator_ty != JType::Null && !self.is_comparator_type(comparator_ty) {
+                    self.error(
+                        comparator.span(),
+                        "Objects.compare(a, b, cmp) takes a Comparator",
+                    );
+                    return None;
+                }
+                self.invoke_objects(
+                    "compare",
+                    "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)I",
+                    3,
+                    1,
+                );
                 Some(Some(JType::Int))
             }
             ("toString", [a]) => {

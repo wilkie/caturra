@@ -4137,6 +4137,30 @@ impl<'run> Interpreter<'run> {
                 }
                 JValue::Int(hash)
             }
+            // `deepEquals` — `equals`, except two arrays compare element by
+            // element (recursively, which `java_deep_equals` does).
+            ("deepEquals", [a, b]) => JValue::Int(i32::from(self.deep_equals(*a, *b, 0)?)),
+            ("checkIndex", [JValue::Int(index), JValue::Int(length)]) => {
+                if *index < 0 || index >= length {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: Index {index} out of bounds for length {length}"
+                    )));
+                }
+                JValue::Int(*index)
+            }
+            // `compare(a, b, cmp)`: identical arguments are equal WITHOUT
+            // consulting the comparator, which is what makes two nulls 0.
+            ("compare", [a, b, comparator]) => {
+                if a == b {
+                    JValue::Int(0)
+                } else {
+                    let comparator = match comparator {
+                        JValue::Ref(Some(reference)) => Some(*reference),
+                        _ => None,
+                    };
+                    JValue::Int(self.compare_with(*a, *b, comparator)?)
+                }
+            }
             ("toString", [o]) => {
                 let text = self.string_value_of(*o, 0)?;
                 JValue::Ref(Some(self.heap.alloc_string(&text)))
@@ -4771,6 +4795,14 @@ impl<'run> Interpreter<'run> {
         let (JValue::Ref(Some(left)), JValue::Ref(Some(right))) = (a, b) else {
             return Ok(false);
         };
+        // Two PRIMITIVE arrays compare element by element as well —
+        // `Objects.deepEquals(new int[]{1}, new int[]{1})` is true, and only
+        // the reference-array case needs the recursive walk below.
+        if let (Some(ours), Some(theirs)) = (self.heap.get(left), self.heap.get(right))
+            && let Some(equal) = primitive_arrays_equal(ours, theirs)
+        {
+            return Ok(equal);
+        }
         let (Some(HeapObject::RefArray(_, ours)), Some(HeapObject::RefArray(_, theirs))) =
             (self.heap.get(left), self.heap.get(right))
         else {
@@ -12571,6 +12603,43 @@ fn render_array(items: impl Iterator<Item = String>) -> String {
 
 /// The length of a heap array, whatever its element type; `None` if the object
 /// is not an array at all.
+/// Whether two PRIMITIVE arrays of the same kind hold equal elements —
+/// `None` when the pair is not two primitive arrays of one kind, which
+/// leaves the reference-array walk (or plain inequality) to the caller.
+/// `HeapObject` has no `PartialEq` on purpose (Java equality is heap-aware),
+/// so the element vectors are compared per kind.
+fn primitive_arrays_equal(
+    ours: &crate::value::HeapObject,
+    theirs: &crate::value::HeapObject,
+) -> Option<bool> {
+    use crate::value::HeapObject;
+    Some(match (ours, theirs) {
+        (HeapObject::IntArray(a, ours), HeapObject::IntArray(b, theirs)) => {
+            a == b && ours == theirs
+        }
+        (HeapObject::LongArray(ours), HeapObject::LongArray(theirs)) => ours == theirs,
+        (HeapObject::ShortArray(ours), HeapObject::ShortArray(theirs)) => ours == theirs,
+        (HeapObject::ByteArray(ours), HeapObject::ByteArray(theirs)) => ours == theirs,
+        // Floating point compares by BITS here, as `Arrays.equals` does:
+        // NaN equals NaN and 0.0 does not equal -0.0.
+        (HeapObject::DoubleArray(ours), HeapObject::DoubleArray(theirs)) => {
+            ours.len() == theirs.len()
+                && ours
+                    .iter()
+                    .zip(theirs)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+        }
+        (HeapObject::FloatArray(ours), HeapObject::FloatArray(theirs)) => {
+            ours.len() == theirs.len()
+                && ours
+                    .iter()
+                    .zip(theirs)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+        }
+        _ => return None,
+    })
+}
+
 fn array_length(object: &crate::value::HeapObject) -> Option<usize> {
     use crate::value::HeapObject as H;
     match object {

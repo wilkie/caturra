@@ -4702,11 +4702,6 @@ fn checked_radix(radix: i32) -> Result<u32, VmError> {
 /// `Integer.decode`/`Long.decode`: an optional sign, then `0x`/`0X`/`#` (hex),
 /// a leading `0` (octal), or decimal. Returned as i64 for the caller to range.
 fn decode_integer(text: &str) -> Result<i64, VmError> {
-    let nfe = || {
-        throw(format!(
-            "java.lang.NumberFormatException: For input string: \"{text}\""
-        ))
-    };
     let (neg, body) = match text.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, text.strip_prefix('+').unwrap_or(text)),
@@ -4721,7 +4716,14 @@ fn decode_integer(text: &str) -> Result<i64, VmError> {
         } else {
             (10, body)
         };
-    let magnitude = i64::from_str_radix(digits, radix).map_err(|_| nfe())?;
+    // The JDK parses the STRIPPED remnant (`Integer.parseInt(digits,
+    // radix)`), so its message names that, not the whole input: `decode("0x")`
+    // is `For input string: ""`.
+    let magnitude = i64::from_str_radix(digits, radix).map_err(|_| {
+        throw(format!(
+            "java.lang.NumberFormatException: For input string: \"{digits}\""
+        ))
+    })?;
     Ok(if neg { -magnitude } else { magnitude })
 }
 
@@ -5549,7 +5551,9 @@ fn boolean_static(
 ) -> Result<Option<JValue>, VmError> {
     let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     match (method, args) {
-        ("parseBoolean", [text @ JValue::Ref(_)]) => {
+        // `valueOf(String)` is `parseBoolean`'s answer (boxed on a JDK, a
+        // plain boolean here) — anything but "true", in any case, is false.
+        ("parseBoolean" | "valueOf", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
             z(text.eq_ignore_ascii_case("true"))
         }

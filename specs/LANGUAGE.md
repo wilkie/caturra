@@ -231,6 +231,32 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **The library tail** (2026-07-31, round 7) — 6 of 9 findings:
+  - **`Objects.deepEquals`, `checkIndex` and `compare(a, b, cmp)`** exist
+    now. `deepEquals` compares two PRIMITIVE arrays element by element as
+    well (the deep walk only knew reference arrays), `checkIndex` returns
+    the index or throws with the JDK's "Index 5 out of bounds for length
+    5", and `compare` answers 0 for identical arguments WITHOUT consulting
+    the comparator — which is what makes two nulls equal.
+  - **`Boolean.valueOf(String)`** — `parseBoolean`'s answer, which the
+    table simply lacked beside `valueOf(boolean)`.
+  - **A method called straight on `Collections.emptyList()`** (or
+    `emptySet`/`emptyMap`) works: those type as `null` so they assign to a
+    collection of ANY element type, and a receiver in that position now
+    resolves against the general Object-element face instead of "cannot
+    call methods on null".
+  - **`Collections.unmodifiableList(new ArrayList<>())`** — a DIAMOND
+    argument types as `null`, which no longer fails overload resolution;
+    the result stays element-unknown so it assigns onward, exactly as
+    `emptyList()` does.
+  - **`Integer.decode`'s message names the stripped remnant**, as the
+    JDK's does: `decode("0x")` is `For input string: ""`, not the whole
+    input.
+  - **Three left open**: `List.of`/`Set.of`/`Map.of` (JDK 9 factories,
+    still refused — with a message that wrongly blames the type name), and
+    `remove(Object)` of an ABSENT element on an empty or singleton list,
+    which should answer `false` rather than throwing (only a removal that
+    would really remove throws).
 - **`Outer.this`, and the static-context diagnostics** (2026-07-31, round
   7) — 4 of the 10 inner-class findings:
   - **`Outer.this` in a STATIC context is an error**, checked before the
