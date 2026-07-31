@@ -3385,53 +3385,25 @@ impl<'run> Interpreter<'run> {
     /// whose subtypes it cannot enumerate it stays silent — a missed throw is
     /// tolerable, a spurious one on valid code is not.
     fn array_store_check(&self, array: HeapRef, value: JValue) -> Result<(), VmError> {
-        // A null store never throws; a bare primitive only reaches an
-        // `Object[]`, which accepts anything.
-        let JValue::Ref(Some(value_ref)) = value else {
-            return Ok(());
-        };
         let Some(crate::value::HeapObject::RefArray(array_class, _)) = self.heap.get(array) else {
             return Ok(());
         };
-        // Class elements only (`[L...;`); a nested-array element is left alone.
-        let Some(element) = array_class
-            .strip_prefix("[L")
-            .and_then(|s| s.strip_suffix(';'))
-        else {
+        let Some(element) = array_class.strip_prefix('[') else {
             return Ok(());
         };
-        if element == "java/lang/Object" {
+        if value_fits_element(self.classes, &self.heap, element, value) {
             return Ok(());
         }
-        let element = element.to_owned();
-        let value_class = self.object_class_name(value_ref);
-        if value_class == element {
+        let JValue::Ref(Some(value_ref)) = value else {
             return Ok(());
-        }
-        let assignable = if self.classes.contains_key(&element) {
-            // A user-class/interface element: the whole hierarchy is known.
-            self.is_runtime_subtype(&value_class, &element)
-        } else if is_final_library_class(&element) {
-            // A final library element (String, a wrapper): only an exact match
-            // fits, and that already returned above — so this is a violation.
-            false
-        } else if value_class == "java/lang/String"
-            && (element == "java/lang/CharSequence" || is_comparable(&element))
-        {
-            true
-        } else {
-            // An element whose subtypes we cannot enumerate: do not risk a
-            // spurious throw on code a JDK would accept.
-            true
         };
-        if assignable {
-            Ok(())
-        } else {
-            Err(VmError::UncaughtException(format!(
-                "java.lang.ArrayStoreException: {}",
-                value_class.replace('/', ".")
-            )))
-        }
+        let named = self
+            .heap
+            .get(value_ref)
+            .map_or_else(|| String::from("java.lang.Object"), heap_object_binary_name);
+        Err(VmError::UncaughtException(format!(
+            "java.lang.ArrayStoreException: {named}"
+        )))
     }
 
     fn is_runtime_subtype(&self, sub: &str, sup: &str) -> bool {
@@ -3551,6 +3523,18 @@ impl<'run> Interpreter<'run> {
             Some(HeapObject::UnmodifiableSet(inner) | HeapObject::UnmodifiableMap(inner)) => *inner,
             _ => reference,
         };
+        // A `Class` renders as `Class.toString()` — "interface X" for an
+        // interface, which only the class table can tell (the heap-only
+        // display path always says "class").
+        if let Some(HeapObject::Class { name }) = self.heap.get(reference) {
+            let name = name.clone();
+            let is_interface = self.classes.get(&name).is_some_and(|class| {
+                class
+                    .access_flags
+                    .contains(caturra_classfile::ClassAccessFlags::INTERFACE)
+            });
+            return Ok(class_to_string(&name, is_interface));
+        }
         // Copy out what we need before calling back into Java, which may
         // allocate and so cannot hold a borrow of the heap.
         let renderable = match self.heap.get(reference) {
@@ -8160,6 +8144,17 @@ impl<'run> Interpreter<'run> {
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
         }
+        // `System.arraycopy(...)`: answered here, not in the heap-only
+        // intrinsics, because a reference copy's per-element store check
+        // needs the class hierarchy.
+        if class_name == "java/lang/System" && method_name == "arraycopy" {
+            let classes: &'run HashMap<String, ClassFile> = self.classes;
+            let fits = move |heap: &Heap, element: &str, value: JValue| {
+                value_fits_element(classes, heap, element, value)
+            };
+            intrinsics::system_arraycopy(&mut self.heap, args, &fits)?;
+            return Ok(None);
+        }
         // `System.identityHashCode(x)`: stable per OBJECT — the heap
         // reference — never consulting a user hashCode; 0 for null (JDK). The
         // VALUE differs from a real JVM's, which hands out address bits; only
@@ -10298,9 +10293,22 @@ impl<'run> Interpreter<'run> {
                     // is not a name Java has ever produced. A user class is
                     // unqualified either way (caturra has one flat namespace).
                     "getName" => {
-                        let binary = name.replace('/', ".");
+                        let binary = class_binary_name(&name);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&binary)))))
                     }
+                    // `int[].class.isArray()` — the heap stores an array's
+                    // class under its DESCRIPTOR, which is exactly the test.
+                    "isArray" => Ok(Some(JValue::Int(i32::from(name.starts_with('['))))),
+                    // The component `Class` of an array type, `null` otherwise
+                    // (`int[][]` → `int[]`, `int[]` → `int`).
+                    "getComponentType" => match name.strip_prefix('[') {
+                        Some(component) => {
+                            let component = descriptor_class_name(component);
+                            let reference = self.intern_class(component);
+                            Ok(Some(JValue::Ref(Some(reference))))
+                        }
+                        None => Ok(Some(JValue::NULL)),
+                    },
                     // `Class` inherits `Object`'s identity `equals`/`hashCode`,
                     // and identity is meaningful because a class has exactly
                     // one `Class` instance (see `intern_class`).
@@ -10317,6 +10325,19 @@ impl<'run> Interpreter<'run> {
                         // an enum constant WITH A BODY is an anonymous subclass,
                         // so `E.X.getClass().getSimpleName()` printed `Anon$1`
                         // where a JDK prints nothing at all.
+                        // An ARRAY's simple name is its component's simple
+                        // name plus `[]` (`int[]`, `String[][]`), not the
+                        // descriptor the heap keys it by.
+                        if name.starts_with('[') {
+                            let full = descriptor_type_name(&name);
+                            let simple = match full.split_once("[]") {
+                                Some((base, rest)) => {
+                                    format!("{}[]{rest}", simple_class_name(base))
+                                }
+                                None => full.clone(),
+                            };
+                            return Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&simple)))));
+                        }
                         let simple = if is_synthesized_anonymous(&name) {
                             ""
                         } else {
@@ -10327,7 +10348,12 @@ impl<'run> Interpreter<'run> {
                     // `Class.toString()` is "class <name>" (used when a Class is
                     // concatenated, e.g. a reflect type argument).
                     "toString" => {
-                        let text = format!("class {}", simple_class_name(&name));
+                        let is_interface = self.classes.get(&name).is_some_and(|class| {
+                            class
+                                .access_flags
+                                .contains(caturra_classfile::ClassAccessFlags::INTERFACE)
+                        });
+                        let text = class_to_string(&name, is_interface);
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&text)))))
                     }
                     // `this.isAssignableFrom(other)`: `other` is `this` or a
@@ -12298,6 +12324,67 @@ fn is_synthesized_anonymous(name: &str) -> bool {
 
 /// The simple name of a (possibly `/`- or `.`-qualified) class name.
 /// caturra is a flat namespace, so this is usually a no-op.
+/// `Class.toString()`: the binary name, prefixed with "class " — or
+/// "interface " for an interface, and nothing at all for a primitive, which
+/// is the JDK's rule.
+pub(crate) fn class_to_string(name: &str, is_interface: bool) -> String {
+    let binary = class_binary_name(name);
+    if matches!(
+        binary.as_str(),
+        "int" | "long" | "double" | "float" | "short" | "byte" | "char" | "boolean" | "void"
+    ) {
+        return binary;
+    }
+    let prefix = if is_interface { "interface" } else { "class" };
+    format!("{prefix} {binary}")
+}
+
+/// A `Class`'s binary name: dotted, with caturra's synthetic class names
+/// canonicalized, and an array spelled as its descriptor (`[Ljava.lang.
+/// Number;`) exactly as `Class.getName` does.
+fn class_binary_name(name: &str) -> String {
+    if let Some(component) = name.strip_prefix('[') {
+        return format!("[{}", class_binary_name(component));
+    }
+    // Inside a descriptor a class rides as `L…;`; a bare letter there is a
+    // primitive, which `getName` spells exactly as the descriptor does.
+    if let Some(inner) = name
+        .strip_prefix('L')
+        .and_then(|rest| rest.strip_suffix(';'))
+    {
+        return format!("L{};", canonical_class_name(inner).replace('/', "."));
+    }
+    if name.len() == 1 && "IJDFSBCZ".contains(name) {
+        return name.to_owned();
+    }
+    canonical_class_name(name).replace('/', ".")
+}
+
+/// The name the heap keys a descriptor's CLASS by: `Ljava/lang/String;` →
+/// `java/lang/String`, `[I` → `[I`, `I` → `int` (a primitive `Class`).
+fn descriptor_class_name(descriptor: &str) -> String {
+    if descriptor.starts_with('[') {
+        return descriptor.to_owned();
+    }
+    match descriptor {
+        "I" => String::from("int"),
+        "J" => String::from("long"),
+        "D" => String::from("double"),
+        "F" => String::from("float"),
+        "S" => String::from("short"),
+        "B" => String::from("byte"),
+        "C" => String::from("char"),
+        "Z" => String::from("boolean"),
+        other => canonical_class_name(
+            other
+                .strip_prefix('L')
+                .and_then(|rest| rest.strip_suffix(';'))
+                .unwrap_or(other),
+        )
+        .to_owned(),
+    }
+}
+
 fn simple_class_name(name: &str) -> &str {
     name.rsplit(['/', '.']).next().unwrap_or(name)
 }
@@ -12837,6 +12924,210 @@ fn is_comparable(target: &str) -> bool {
 /// of it accepts ONLY that exact class (used by the `aastore` covariance check
 /// to know a mismatch is a genuine `ArrayStoreException`, not an unknown
 /// relationship).
+/// The binary (dotted) name of a heap object's class, for diagnostics that
+/// name a value's type. Arrays render as their descriptor with dots
+/// (`[Ljava.lang.Integer;`), as `Class.getName` does.
+pub(crate) fn heap_object_binary_name(object: &crate::value::HeapObject) -> String {
+    use crate::value::HeapObject;
+    match object {
+        HeapObject::JavaString(_) => String::from("java.lang.String"),
+        HeapObject::StringBuilder(_) => String::from("java.lang.StringBuilder"),
+        HeapObject::Instance { class_name, .. } | HeapObject::Boxed { class_name, .. } => {
+            class_name.replace('/', ".")
+        }
+        HeapObject::Exception { class_name, .. } => class_name.clone(),
+        HeapObject::RefArray(descriptor, _) => descriptor.replace('/', "."),
+        HeapObject::IntArray(kind, _) => String::from(match kind {
+            crate::value::IntKind::Int => "[I",
+            crate::value::IntKind::Boolean => "[Z",
+            crate::value::IntKind::Char => "[C",
+        }),
+        HeapObject::DoubleArray(_) => String::from("[D"),
+        HeapObject::LongArray(_) => String::from("[J"),
+        HeapObject::FloatArray(_) => String::from("[F"),
+        HeapObject::ShortArray(_) => String::from("[S"),
+        HeapObject::ByteArray(_) => String::from("[B"),
+        _ => String::from("java.lang.Object"),
+    }
+}
+
+/// A descriptor as a Java TYPE name: `[Ljava/lang/Object;` →
+/// `java.lang.Object[]`, `[[I` → `int[][]`, `Ljava/lang/String;` →
+/// `java.lang.String`, `I` → `int`.
+pub(crate) fn descriptor_type_name(descriptor: &str) -> String {
+    let dims = descriptor.bytes().take_while(|b| *b == b'[').count();
+    let base = &descriptor[dims..];
+    let name = match base {
+        "I" => String::from("int"),
+        "J" => String::from("long"),
+        "D" => String::from("double"),
+        "F" => String::from("float"),
+        "S" => String::from("short"),
+        "B" => String::from("byte"),
+        "C" => String::from("char"),
+        "Z" => String::from("boolean"),
+        other => canonical_class_name(
+            other
+                .strip_prefix('L')
+                .and_then(|rest| rest.strip_suffix(';'))
+                .unwrap_or(other),
+        )
+        .replace('/', "."),
+    };
+    format!("{name}{}", "[]".repeat(dims))
+}
+
+/// The internal name a class descriptor really denotes. caturra models
+/// `java.lang.Number` as a synthetic compile-time class under the bare name
+/// `Number`, which must not reach a runtime name or a store check.
+pub(crate) fn canonical_class_name(internal: &str) -> &str {
+    match internal {
+        "Number" => "java/lang/Number",
+        other => other,
+    }
+}
+
+/// Whether `value` may be stored in an array whose ELEMENT descriptor is
+/// `element` (JLS §10.5). Shared by `aastore` and `System.arraycopy`, which
+/// must agree — the same question, asked one element at a time.
+pub(crate) fn value_fits_element(
+    classes: &HashMap<String, ClassFile>,
+    heap: &Heap,
+    element: &str,
+    value: JValue,
+) -> bool {
+    // A null store never throws; a bare primitive only reaches an
+    // `Object[]`, which accepts anything.
+    let JValue::Ref(Some(value_ref)) = value else {
+        return true;
+    };
+    if element == "Ljava/lang/Object;" {
+        return true;
+    }
+    // An ARRAY element type (`String[][]` holds `String[]` rows): the value
+    // must itself be an array, and its own element type must fit — array
+    // covariance, recursively.
+    if let Some(inner) = element.strip_prefix('[') {
+        let Some(object) = heap.get(value_ref) else {
+            return true;
+        };
+        let value_descriptor = heap_object_binary_name(object).replace('.', "/");
+        let Some(value_inner) = value_descriptor.strip_prefix('[') else {
+            return false; // not an array at all
+        };
+        if value_inner == inner {
+            return true;
+        }
+        // Primitive component types must match EXACTLY (`int[]` is not an
+        // `Object[]`), so only reference components go on to widen.
+        if !inner.starts_with('L') && !inner.starts_with('[') {
+            return false;
+        }
+        let Some(sample) = element_class_of(inner) else {
+            return true;
+        };
+        return value_class_fits(classes, &sample, value_inner);
+    }
+    let Some(element_class) = element_class_of(element) else {
+        return true;
+    };
+    let value_class = object_class_of(heap, value_ref);
+    value_class_fits(classes, &element_class, &value_class)
+}
+
+/// The internal class name an `L…;` element descriptor names.
+fn element_class_of(element: &str) -> Option<String> {
+    let inner = element.strip_prefix('L')?.strip_suffix(';')?;
+    Some(canonical_class_name(inner).to_owned())
+}
+
+/// The runtime class name of a heap value, in internal form.
+fn object_class_of(heap: &Heap, reference: HeapRef) -> String {
+    heap.get(reference).map_or_else(
+        || String::from("java/lang/Object"),
+        |object| heap_object_binary_name(object).replace('.', "/"),
+    )
+}
+
+/// Whether a value of runtime class `value_class` fits an element of class
+/// `element`. Conservative in the safe direction: an element type whose
+/// subtypes caturra cannot enumerate accepts anything, so no legal program
+/// gets a spurious `ArrayStoreException`.
+fn value_class_fits(
+    classes: &HashMap<String, ClassFile>,
+    element: &str,
+    value_class: &str,
+) -> bool {
+    if value_class == element || element == "java/lang/Object" {
+        return true;
+    }
+    // An array value only fits a class element if that element is Object,
+    // handled above (or Cloneable/Serializable, which caturra does not model).
+    if value_class.starts_with('[') {
+        return false;
+    }
+    if classes.contains_key(element) {
+        return runtime_subtype(classes, value_class, element);
+    }
+    if is_final_library_class(element) {
+        return false;
+    }
+    // `java.lang.Number` and the wrappers: a known, closed hierarchy.
+    if element == "java/lang/Number" {
+        return matches!(
+            value_class,
+            "java/lang/Integer"
+                | "java/lang/Long"
+                | "java/lang/Double"
+                | "java/lang/Float"
+                | "java/lang/Short"
+                | "java/lang/Byte"
+        );
+    }
+    if value_class == "java/lang/String"
+        && (element == "java/lang/CharSequence" || is_comparable(element))
+    {
+        return true;
+    }
+    // An element whose subtypes we cannot enumerate: do not risk a spurious
+    // throw on code a JDK would accept.
+    true
+}
+
+/// Whether `sub` reaches `sup` through the loaded classes' extends/implements
+/// graph. A free function so both the store check and `arraycopy` can use it.
+fn runtime_subtype(classes: &HashMap<String, ClassFile>, sub: &str, sup: &str) -> bool {
+    if sub == sup {
+        return true;
+    }
+    let mut stack = vec![sub.to_owned()];
+    let mut steps = 0usize;
+    while let Some(name) = stack.pop() {
+        steps += 1;
+        if steps > classes.len() + 2 {
+            break;
+        }
+        let Some(class) = classes.get(&name) else {
+            continue;
+        };
+        if let Some(parent) = class.constant_pool.get_class_name(class.super_class) {
+            if parent == sup {
+                return true;
+            }
+            stack.push(parent.to_owned());
+        }
+        for index in &class.interfaces {
+            if let Some(iface) = class.constant_pool.get_class_name(*index) {
+                if iface == sup {
+                    return true;
+                }
+                stack.push(iface.to_owned());
+            }
+        }
+    }
+    false
+}
+
 fn is_final_library_class(internal: &str) -> bool {
     matches!(
         internal,

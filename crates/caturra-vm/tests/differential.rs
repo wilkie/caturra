@@ -9720,10 +9720,37 @@ fn reject_wording_tracks_javac() {
 // caturra starts rejecting should be deleted from the list, not left passing.
 // ---------------------------------------------------------------------------
 
-stricter_than_javac!(
-    strict_arraycopy_rejects_a_non_array_source,
-    "StrictArrayCopy",
-    "public class StrictArrayCopy { static void r() { int[] c = new int[2]; System.arraycopy(\"a\", 0, c, 0, 1); } }"
+// `System.arraycopy`'s parameters are `Object`, as javac's are: a non-array
+// argument compiles and throws ArrayStoreException at run time. (This used
+// to be pinned as a deliberate strictness — caturra demanded array types —
+// until the VM learned the JDK's runtime check.)
+differential_test!(
+    diff_arraycopy_non_array_argument,
+    "DiffArrayCopyObj",
+    r#"
+public class DiffArrayCopyObj {
+    public static void main(String[] args) {
+        int[] c = new int[2];
+        Object notAnArray = "a";
+        try {
+            System.arraycopy(notAnArray, 0, c, 0, 1);
+        } catch (ArrayStoreException e) {
+            System.out.println("src: " + e.getMessage());
+        }
+        try {
+            System.arraycopy(c, 0, notAnArray, 0, 1);
+        } catch (ArrayStoreException e) {
+            System.out.println("dst: " + e.getMessage());
+        }
+        Object[] dst = new Object[1];
+        try {
+            System.arraycopy("hello", 0, dst, 0, 1);
+        } catch (ArrayStoreException e) {
+            System.out.println("lit: " + e.getMessage());
+        }
+    }
+}
+"#
 );
 
 stricter_than_javac!(
@@ -17403,6 +17430,123 @@ public class DiffIfaceInitOrder {
         new ImplI();
         System.out.println("mid");
         System.out.println(WithDefault.K + " " + NoDefault.K2);
+    }
+}
+"#
+);
+
+// ---------------------------------------------------------------------------
+// Round-7 arrays: runtime store checks (JLS §10.5), arraycopy's JVM checks
+// and messages, and the array-aware corners of Class.
+
+// Array covariance is checked AT THE STORE: an element that does not fit the
+// array's runtime component type throws ArrayStoreException naming the
+// offending value's class — including array-typed rows of a 2-D array, and a
+// Number[] whose closed wrapper hierarchy caturra can decide.
+differential_test!(
+    diff_array_store_checks,
+    "DiffArrayStore",
+    r#"
+public class DiffArrayStore {
+    static void show(String tag, Throwable e) {
+        System.out.println(tag + ": " + e.getClass().getName() + " | " + e.getMessage());
+    }
+    public static void main(String[] a) {
+        Object[] o1 = new String[2];
+        try { o1[0] = Integer.valueOf(1); } catch (Throwable e) { show("str", e); }
+        o1[1] = "fits";
+        System.out.println(o1[1]);
+        Object[] o2 = new Number[2];
+        try { o2[0] = "s"; } catch (Throwable e) { show("num", e); }
+        o2[1] = Integer.valueOf(4);
+        System.out.println(o2[1]);
+        Object[] rows = new String[1][1];
+        try { rows[0] = new Integer[] {5}; } catch (Throwable e) { show("row", e); }
+        rows[0] = new String[] {"row"};
+        System.out.println(((String[]) rows[0])[0]);
+        // An Object[] takes anything, including a primitive array.
+        Object[] any = new Object[2];
+        any[0] = new int[] {1};
+        any[1] = "any";
+        System.out.println(((int[]) any[0])[0] + " " + any[1]);
+    }
+}
+"#
+);
+
+// System.arraycopy's own checks, in the JVM's order and wording: type
+// mismatch first, then source index, destination index, negative length, and
+// the two last-index checks — with "object array" naming every reference
+// array, as the JVM does.
+differential_test!(
+    diff_arraycopy_checks_and_messages,
+    "DiffArrayCopyChecks",
+    r#"
+import java.util.Arrays;
+public class DiffArrayCopyChecks {
+    static void show(String tag, Throwable e) {
+        System.out.println(tag + ": " + e.getClass().getName() + " | " + e.getMessage());
+    }
+    public static void main(String[] a) {
+        int[] si = {1, 2, 3};
+        int[] di = new int[3];
+        String[] ss = {"a", "b", "c"};
+        String[] ds = new String[3];
+        double[] sd = new double[3];
+        try { System.arraycopy(si, -1, di, 0, 2); } catch (Throwable e) { show("A", e); }
+        try { System.arraycopy(si, 0, di, 0, -1); } catch (Throwable e) { show("B", e); }
+        try { System.arraycopy(si, 2, di, 0, 2); } catch (Throwable e) { show("C", e); }
+        try { System.arraycopy(si, 0, di, 2, 2); } catch (Throwable e) { show("D", e); }
+        try { System.arraycopy(si, 0, di, -1, 1); } catch (Throwable e) { show("E", e); }
+        try { System.arraycopy(ss, 2, ds, 0, 2); } catch (Throwable e) { show("F", e); }
+        try { System.arraycopy(sd, 2, new double[3], 0, 2); } catch (Throwable e) { show("G", e); }
+        try { System.arraycopy(si, 0, sd, 0, 1); } catch (Throwable e) { show("H", e); }
+        try { System.arraycopy(si, 0, ds, 0, 1); } catch (Throwable e) { show("I", e); }
+        try { System.arraycopy(si, -1, di, 0, -1); } catch (Throwable e) { show("J", e); }
+        try { System.arraycopy(si, 0, di, -1, -1); } catch (Throwable e) { show("K", e); }
+        // A reference copy whose elements do not all fit copies the prefix
+        // that does, then throws — a partially written destination.
+        Object[] mixed = {"a", "b", Integer.valueOf(3), "d"};
+        String[] dst = new String[4];
+        dst[3] = "keep";
+        try { System.arraycopy(mixed, 0, dst, 0, 4); } catch (Throwable e) { show("M", e); }
+        System.out.println(Arrays.toString(dst));
+        // Legal copies, including self-overlap in both directions.
+        int[] ov = {1, 2, 3, 4, 5};
+        System.arraycopy(ov, 0, ov, 1, 3);
+        System.out.println(Arrays.toString(ov));
+        String[] sov = {"a", "b", "c"};
+        System.arraycopy(sov, 0, sov, 1, 2);
+        System.out.println(Arrays.toString(sov));
+        Object[] widened = new Object[2];
+        System.arraycopy(ss, 0, widened, 0, 2);
+        System.out.println(Arrays.toString(widened));
+    }
+}
+"#
+);
+
+// Class knows about arrays: isArray, getComponentType (null for a
+// non-array), the descriptor binary name, and a simple name that spells the
+// component plus []. Class.toString is "class <binary name>" — "interface"
+// for an interface, bare for a primitive.
+differential_test!(
+    diff_class_array_reflection,
+    "DiffClassArray",
+    r#"
+interface Marker { }
+class Holder implements Marker { }
+public class DiffClassArray {
+    public static void main(String[] a) {
+        System.out.println(new int[0].getClass().isArray() + " " + String.class.isArray());
+        System.out.println(new int[0].getClass().getComponentType() + " | " + String.class.getComponentType());
+        System.out.println(new String[0][0].getClass().getComponentType().getName());
+        System.out.println(new int[0].getClass().getName() + " " + new int[0].getClass().getSimpleName());
+        System.out.println(new String[0].getClass().getName() + " " + new String[0].getClass().getSimpleName());
+        System.out.println(new int[0][0].getClass().getName() + " " + new int[0][0].getClass().getSimpleName());
+        System.out.println(new Number[0].getClass().getName() + " " + new Number[0].getClass().getSimpleName());
+        System.out.println(String.class + " | " + Holder.class + " | " + Marker.class);
+        System.out.println(new int[0].getClass() + " | " + new String[0].getClass());
     }
 }
 "#

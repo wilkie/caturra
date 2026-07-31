@@ -7601,12 +7601,14 @@ const LONG_METHODS: &[BuiltinMethod] = &[
 const SYSTEM_METHODS: &[BuiltinMethod] = &[
     bm("currentTimeMillis", &[], BRet::Long, "()J"),
     bm("nanoTime", &[], BRet::Long, "()J"),
-    // `arraycopy(Object src, int srcPos, Object dest, int destPos, int len)`.
-    // Typed to arrays, where javac takes `Object` and throws
-    // `ArrayStoreException` for anything else — stricter, the safe direction.
+    // `arraycopy(Object src, int srcPos, Object dest, int destPos, int len)`,
+    // typed as javac types it: any reference. caturra used to demand arrays
+    // statically, which refused the legal `Object`-typed call; the VM now
+    // throws the JDK's "source type X is not an array" ArrayStoreException,
+    // so the runtime check does the job the strictness was standing in for.
     bm(
         "arraycopy",
-        &[BParam::RefArray, I, BParam::RefArray, I, I],
+        &[BParam::Object, I, BParam::Object, I, I],
         BRet::Void,
         "(Ljava/lang/Object;ILjava/lang/Object;II)V",
     ),
@@ -7713,6 +7715,9 @@ const BOOLEAN_METHODS: &[BuiltinMethod] = &[
 const CLASS_METHODS: &[BuiltinMethod] = &[
     bm("getSimpleName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("isArray", &[], BRet::Boolean, "()Z"),
+    // `null` for a non-array class, so the return is a nullable Class.
+    bm("getComponentType", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `Class` does not override `Object`'s — a class has exactly one `Class`
     // instance, so both are identity — but they still have to RESOLVE.
     bm(

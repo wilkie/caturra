@@ -231,6 +231,37 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Arrays check their stores** (2026-07-30, round 7) — the arrays cluster:
+  - **`ArrayStoreException` exists** (JLS §10.5): a store through a widened
+    array reference whose value does not fit the RUNTIME component type
+    throws, naming the value's class. caturra had the check but it saw only
+    `[L…;` elements of known classes, so an ARRAY-typed element
+    (`String[][]` holding a row) and a `Number[]` both accepted anything.
+    The check now walks array components recursively (covariance, one level
+    at a time) and knows the wrappers' closed hierarchy under `Number`; an
+    element type whose subtypes caturra cannot enumerate still accepts
+    anything, so no legal program gets a spurious throw.
+  - **`System.arraycopy` performs the JVM's checks, in the JVM's order,
+    with the JVM's messages**: not-an-array (`arraycopy: source type
+    java.lang.String is not an array`), kind mismatch (`type mismatch: can
+    not copy int[] into double[]`), then source index, destination index,
+    negative length, and the two last-index checks — `arraycopy: last
+    source index 4 out of bounds for int[3]`, with "object array" naming
+    every reference array as the JVM does. The bounds messages used to
+    report a bare, in-bounds-looking index.
+  - **A reference copy is checked element by element**, so the elements
+    that fit are copied and the first that does not throws — a partially
+    written destination, observable exactly as on a JDK.
+  - **`arraycopy`'s array parameters are `Object`**, as javac's are: a
+    non-array argument compiles and throws at run time. (This was a
+    documented deliberate strictness; the runtime check it stood in for now
+    exists, so the strictness is gone.)
+  - **`Class` knows about arrays**: `isArray()`, `getComponentType()`
+    (`null` for a non-array, a primitive `Class` for `int[]`), and
+    `getSimpleName()` spelling `int[]` / `String[][]` instead of the raw
+    descriptor. `Class.toString()` now gives the JDK's `class
+    java.lang.String` / `interface Marker` / bare `int` — it used to print
+    the INTERNAL `class java/lang/String`, a name Java never produces.
 - **`finally` runs, whatever discards what** (2026-07-30, round 7) — the
   finally cluster, all silent-wrong: when an inner finally's `return` or
   `break` discarded a pending return, every ENCLOSING finally was skipped —
@@ -1674,11 +1705,11 @@ c = ...`), or a **lambda** (`(a, b) -> a.age - b.age`), and use it to order
     component types exactly (a `boolean[]` never copies into an
     `int[]`, though both hold their elements as 32-bit words), and a
     copy within one array behaves as if it went through a temporary, as
-    Java's does. Its parameters are typed to arrays, where javac takes
-    `Object` and throws `ArrayStoreException` for anything else —
-    stricter, so anything compiling here still compiles on a JDK.
-    Bounds errors are `ArrayIndexOutOfBoundsException`, a null array is
-    a `NullPointerException`. `lineSeparator()` is always `"\n"`: the
+    Java's does. Its parameters are `Object`, as javac's are; every
+    check the JVM makes — not-an-array, kind mismatch, the four bounds
+    cases, and the per-element check of a reference copy — throws with
+    the JVM's own message (2026-07-30, see the round-7 entry above).
+    A null array is a `NullPointerException`. `lineSeparator()` is always `"\n"`: the
     JVM's is system-dependent, and caturra runs where a line ends with a
     newline. Pinned by `diff_system_arraycopy_and_line_separator`.
   - A real Java 11 class caturra does not model (`Stack`, `ArrayDeque`,
@@ -2085,8 +2116,6 @@ case cannot silently change direction, and neither list can grow unnoticed.
 `stricter_than_javac!` test fails if javac ever starts rejecting the
 program, which would mean it is a shared rule rather than a strictness:
 
-- `System.arraycopy("a", 0, intArray, 0, 1)` — javac's parameters are
-  `Object`; caturra's are arrays.
 - `new StringBuilder().capacity()` — capacity is an implementation detail
   of a growable buffer caturra does not model.
 - `Arrays.fill(new String[1], 5)` — javac erases to `fill(Object[], Object)`

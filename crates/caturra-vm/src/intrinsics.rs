@@ -2477,7 +2477,52 @@ fn take_chunk(heap: &Heap, source: HeapRef, from: usize, count: usize) -> Option
     })
 }
 
-fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, VmError> {
+/// The name JDK arraycopy diagnostics give an array's type: the primitive
+/// for a primitive array, and the catch-all "object array" for every
+/// reference array (the JVM's own wording — it does not name the component).
+fn arraycopy_type_name(object: &HeapObject) -> Option<&'static str> {
+    Some(match object {
+        HeapObject::IntArray(kind, _) => match kind {
+            IntKind::Int => "int",
+            IntKind::Boolean => "boolean",
+            IntKind::Char => "char",
+        },
+        HeapObject::DoubleArray(_) => "double",
+        HeapObject::LongArray(_) => "long",
+        HeapObject::FloatArray(_) => "float",
+        HeapObject::ShortArray(_) => "short",
+        HeapObject::ByteArray(_) => "byte",
+        HeapObject::RefArray(_, _) => "object array",
+        _ => return None,
+    })
+}
+
+fn arraycopy_len(object: &HeapObject) -> Option<usize> {
+    Some(match object {
+        HeapObject::IntArray(_, values) => values.len(),
+        HeapObject::DoubleArray(values) => values.len(),
+        HeapObject::LongArray(values) => values.len(),
+        HeapObject::FloatArray(values) => values.len(),
+        HeapObject::ShortArray(values) => values.len(),
+        HeapObject::ByteArray(values) => values.len(),
+        HeapObject::RefArray(_, values) => values.len(),
+        _ => return None,
+    })
+}
+
+/// `System.arraycopy`, with the JVM's own checks and messages: both
+/// arguments must be arrays of the same kind, the range must fit, and a
+/// reference copy whose element types differ is checked ELEMENT BY ELEMENT —
+/// copying the prefix that fits before throwing, exactly as the JDK does.
+///
+/// The reference-element check needs the class hierarchy, so it is not done
+/// here; the caller (`Interpreter::arrays_static_intrinsic`) supplies it.
+#[allow(clippy::too_many_lines)] // the JVM's check sequence, in its order
+pub(crate) fn system_arraycopy(
+    heap: &mut Heap,
+    args: &[JValue],
+    fits: &dyn Fn(&Heap, &str, JValue) -> bool,
+) -> Result<Option<JValue>, VmError> {
     let [
         JValue::Ref(source),
         JValue::Int(source_pos),
@@ -2491,53 +2536,103 @@ fn system_arraycopy(heap: &mut Heap, args: &[JValue]) -> Result<Option<JValue>, 
     let (Some(source), Some(destination)) = (*source, *destination) else {
         return Err(throw("java.lang.NullPointerException"));
     };
-
-    // The component types must match exactly: a `boolean[]` never copies into
-    // an `int[]`, even though both hold their elements as 32-bit words.
-    let store_error = || throw("java.lang.ArrayStoreException: incompatible array types");
     let (Some(source_object), Some(destination_object)) = (heap.get(source), heap.get(destination))
     else {
-        return Err(store_error());
+        return Err(throw("java.lang.ArrayStoreException: arraycopy"));
     };
-    let (source_len, destination_len) = match (source_object, destination_object) {
-        (HeapObject::IntArray(from, a), HeapObject::IntArray(to, b)) if from == to => {
-            (a.len(), b.len())
-        }
-        (HeapObject::DoubleArray(a), HeapObject::DoubleArray(b)) => (a.len(), b.len()),
-        (HeapObject::LongArray(a), HeapObject::LongArray(b)) => (a.len(), b.len()),
-        (HeapObject::FloatArray(a), HeapObject::FloatArray(b)) => (a.len(), b.len()),
-        (HeapObject::ShortArray(a), HeapObject::ShortArray(b)) => (a.len(), b.len()),
-        (HeapObject::ByteArray(a), HeapObject::ByteArray(b)) => (a.len(), b.len()),
-        (HeapObject::RefArray(_, a), HeapObject::RefArray(_, b)) => (a.len(), b.len()),
-        _ => return Err(store_error()),
-    };
-
-    let out_of_range = |index: i32| {
+    // Not an array at all (the parameters are declared `Object`).
+    let not_array = |which: &str, object: &HeapObject| {
         throw(format!(
-            "java.lang.ArrayIndexOutOfBoundsException: arraycopy: {index}"
+            "java.lang.ArrayStoreException: arraycopy: {which} type {} is not an array",
+            crate::interpreter::heap_object_binary_name(object)
         ))
     };
-    // A negative position or length is out of range before any bound is even
-    // consulted.
-    for index in [*source_pos, *destination_pos, *length] {
-        if index < 0 {
-            return Err(out_of_range(index));
-        }
-    }
-    let (Ok(from), Ok(to), Ok(count)) = (
-        usize::try_from(*source_pos),
-        usize::try_from(*destination_pos),
-        usize::try_from(*length),
-    ) else {
-        return Err(out_of_range(*length));
+    let Some(source_kind) = arraycopy_type_name(source_object) else {
+        return Err(not_array("source", source_object));
     };
-    if from + count > source_len {
-        return Err(out_of_range(*source_pos));
+    let Some(destination_kind) = arraycopy_type_name(destination_object) else {
+        return Err(not_array("destination", destination_object));
+    };
+    // Kinds must match exactly: a `boolean[]` never copies into an `int[]`,
+    // even though both hold their elements as 32-bit words.
+    if source_kind != destination_kind {
+        return Err(throw(format!(
+            "java.lang.ArrayStoreException: arraycopy: type mismatch: can not copy \
+             {source_kind}[] into {destination_kind}[]"
+        )));
     }
-    if to + count > destination_len {
-        return Err(out_of_range(*destination_pos));
+    let source_len = arraycopy_len(source_object).unwrap_or(0);
+    let destination_len = arraycopy_len(destination_object).unwrap_or(0);
+
+    // The JVM's order: source index, destination index, negative length,
+    // then the two last-index checks.
+    let bounds = |text: String| throw(format!("java.lang.ArrayIndexOutOfBoundsException: {text}"));
+    if *source_pos < 0 {
+        return Err(bounds(format!(
+            "arraycopy: source index {source_pos} out of bounds for {source_kind}[{source_len}]"
+        )));
+    }
+    if *destination_pos < 0 {
+        return Err(bounds(format!(
+            "arraycopy: destination index {destination_pos} out of bounds for \
+             {destination_kind}[{destination_len}]"
+        )));
+    }
+    if *length < 0 {
+        return Err(bounds(format!("arraycopy: length {length} is negative")));
+    }
+    let (from, to, count) = (
+        usize::try_from(*source_pos).unwrap_or(usize::MAX),
+        usize::try_from(*destination_pos).unwrap_or(usize::MAX),
+        usize::try_from(*length).unwrap_or(usize::MAX),
+    );
+    if from.saturating_add(count) > source_len {
+        return Err(bounds(format!(
+            "arraycopy: last source index {} out of bounds for {source_kind}[{source_len}]",
+            i64::from(*source_pos) + i64::from(*length)
+        )));
+    }
+    if to.saturating_add(count) > destination_len {
+        return Err(bounds(format!(
+            "arraycopy: last destination index {} out of bounds for \
+             {destination_kind}[{destination_len}]",
+            i64::from(*destination_pos) + i64::from(*length)
+        )));
     }
 
+    // A reference copy between arrays of DIFFERENT element types is checked
+    // per element (JLS §10.5 store semantics): the elements that fit are
+    // copied, and the first that does not throws — so a partially-copied
+    // destination is observable, as on a real JVM.
+    if let (
+        Some(HeapObject::RefArray(source_class, _)),
+        Some(HeapObject::RefArray(destination_class, _)),
+    ) = (heap.get(source), heap.get(destination))
+        && source_class != destination_class
+    {
+        let (source_class, destination_class) = (source_class.clone(), destination_class.clone());
+        let element = destination_class.strip_prefix('[').unwrap_or("").to_owned();
+        let taken = match heap.get(source) {
+            Some(HeapObject::RefArray(_, values)) => values[from..from + count].to_vec(),
+            _ => Vec::new(),
+        };
+        for (offset, value) in taken.into_iter().enumerate() {
+            if !fits(heap, &element, value) {
+                return Err(throw(format!(
+                    "java.lang.ArrayStoreException: arraycopy: element type mismatch: can not \
+                     cast one of the elements of {} to the type of the destination array, {}",
+                    crate::interpreter::descriptor_type_name(&source_class),
+                    crate::interpreter::descriptor_type_name(&element)
+                )));
+            }
+            if let Some(HeapObject::RefArray(_, values)) = heap.get_mut(destination) {
+                values[to + offset] = value;
+            }
+        }
+        return Ok(None);
+    }
+
+    let store_error = || throw("java.lang.ArrayStoreException: incompatible array types");
     let taken = take_chunk(heap, source, from, count).ok_or_else(store_error)?;
     match (heap.get_mut(destination), taken) {
         (Some(HeapObject::IntArray(_, values)), ArrayChunk::Int(taken)) => {
@@ -3841,7 +3936,9 @@ pub fn invoke_static(
         "java/lang/Short" => small_int_static(heap, "Short", method, args),
         "java/lang/Byte" => small_int_static(heap, "Byte", method, args),
         "java/lang/System" => match method {
-            "arraycopy" => system_arraycopy(heap, args),
+            // The interpreter intercepts arraycopy (its element check needs the
+            // class hierarchy); this path only runs if that one is bypassed.
+            "arraycopy" => system_arraycopy(heap, args, &|_, _, _| true),
             // The JVM's is system-dependent; caturra always runs where a line
             // ends with a newline.
             "lineSeparator" => Ok(Some(JValue::Ref(Some(heap.alloc_string("\n"))))),
@@ -5596,7 +5693,11 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
             Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
                 String::from_utf16_lossy(units)
             }
-            Some(HeapObject::Class { name }) => format!("class {name}"),
+            // `Class.toString()`: "class <binary name>", "interface <name>"
+            // for an interface, and the bare name for a primitive (JDK). The
+            // name was rendered raw, so it printed the INTERNAL
+            // `class java/lang/String`, a name Java never produces.
+            Some(HeapObject::Class { name }) => crate::interpreter::class_to_string(name, false),
             // An array does not override `toString`, so it gets Object's:
             // `[I@1b6d3586`. Not `Arrays.toString`'s `[1, 2, 3]`.
             Some(_) if array_class_name(heap, reference).is_some() => {

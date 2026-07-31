@@ -10858,21 +10858,15 @@ fn system_arraycopy_and_line_separator() {
     );
 }
 
-/// `System.arraycopy` is typed to arrays, where javac takes `Object` and
-/// throws `ArrayStoreException` — stricter, so anything compiling here still
-/// compiles on a JDK.
+/// `System.arraycopy` takes `Object` for the two array parameters, as javac
+/// does — a non-array argument compiles and throws `ArrayStoreException` at
+/// run time (pinned by `diff_arraycopy_non_array_argument`). Only the ARITY
+/// is a compile error.
 #[test]
-fn system_arraycopy_rejects_a_non_array() {
-    for (source, want) in [
-        (
-            "int[] d = new int[2]; System.arraycopy(\"a\", 0, d, 0, 1);",
-            "no suitable method found for arraycopy(String,int,int[],int,int) in class System",
-        ),
-        (
-            "int[] d = new int[2]; System.arraycopy(d, 0, d, 0);",
-            "no suitable method found for arraycopy(int[],int,int[],int) in class System",
-        ),
-    ] {
+fn system_arraycopy_rejects_a_wrong_arity_call() {
+    {
+        let source = "int[] d = new int[2]; System.arraycopy(d, 0, d, 0);";
+        let want = "no suitable method found for arraycopy(int[],int,int[],int) in class System";
         let text = format!("class M {{ static void r() {{ {source} }} }}");
         let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
             path: String::from("M.java"),
