@@ -231,6 +231,38 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Unicode escapes are translated BEFORE lexing** (2026-07-31, round 7,
+  JLS §3.3) — the unicode-text cluster:
+  - **A `\uXXXX` escape is a property of the SOURCE TEXT, not of string
+    literals.** caturra decoded them inside literals only, so six programs
+    behaved differently from javac: `"\u0022"` compiled (the quote should
+    close the literal early), `"a\u000Ab"` and `'\u000A'` compiled (the
+    escape is a real line terminator, so both are unclosed), a `\u000A`
+    inside a `//` comment did NOT end the comment — silently hiding live
+    code — and the `\uuuu0041` and identifier forms were rejected outright.
+    A new translation pass runs before the lexer, honoring the eligibility
+    rule (a backslash preceded by an EVEN number of backslashes, so
+    `"\\u0041"` stays six characters) and combining a SURROGATE PAIR of
+    escapes into the supplementary character it spells. Known gap: an
+    UNPAIRED surrogate escape still renders as U+FFFD, because caturra's
+    tokens hold Rust `char`s.
+  - **Octal escapes** (JLS §3.10.6): one to three digits, at most `\377`,
+    with the three-digit form needing a leading 0-3 — so `\400` is `\40`
+    then a literal `0`, and `\1234` is `S4`.
+  - **`Character.toChars`/`toCodePoint`** and **`String.codePoints()`** (a
+    real `IntStream`, where a surrogate pair counts once) — the last had
+    been refused with the FALSE claim that streams are unsupported.
+  - **The Character data tables**, generated from JDK 11 itself so they
+    match the Unicode version caturra targets: `getNumericValue` knows the
+    letter-numbers, superscripts and fractions (Roman `Ⅷ` is 8, `½` is -2);
+    the integer parsers accept every Unicode decimal digit
+    (`Integer.parseInt("٣٤")` is 34, as `Character.digit` always allowed);
+    `toTitleCase` returns the THIRD form of the twelve Latin digraphs (`ǆ`
+    titlecases to `ǅ`, not to `Ǆ`); `equalsIgnoreCase` compares code unit
+    by code unit with the SIMPLE mappings (`"İ".equalsIgnoreCase("i")` is
+    true — lowercasing whole strings with Rust's FULL mapping expanded
+    `\u0130` to two characters); and `isLetter` excludes the
+    letter-NUMBERS that `isAlphabetic` includes.
 - **Floating point: the total order, the parse grammar, the literal shapes**
   (2026-07-30, round 7):
   - **`Double`/`Float` impose a TOTAL order** (JLS §4.2.3): NaN is greater

@@ -17681,3 +17681,151 @@ differential_reject!(
     "RejHexFloatNoExp",
     "public class RejHexFloatNoExp { public static void main(String[] a) { double d = 0x1.f; System.out.println(d); } }"
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 unicode-text: JLS §3.3 translates \uXXXX escapes BEFORE lexing,
+// octal escapes, the surrogate helpers, and the Character data tables.
+
+// The escape is a property of the SOURCE, not of string literals: it forms
+// identifiers, ends comments, and an ineligible one (its backslash escaped)
+// is left alone. A surrogate PAIR of escapes spells one supplementary char.
+differential_test!(
+    diff_unicode_escape_translation,
+    "DiffUnicodeEscapes",
+    r#"
+public class DiffUnicodeEscapes {
+    public static void main(String[] a) {
+        String raw = "\\u0041";
+        System.out.println(raw + " " + raw.length());
+        System.out.println("Ab" + " " + 'C');
+        System.out.println("\uuu0044N" + " " + "O");
+        int abc = 7;
+        System.out.println(abc);
+        // this comment ends at the escape 
+ System.out.println("live");
+        System.out.println("after");
+        System.out.println("a\\b\tc\nd".length());
+        System.out.println("\101B\102" + " " + (int) '\0' + " " + "\400".length()
+            + " " + "\1234");
+        System.out.println((int) '\'' + " " + (int) '\\' + " " + (int) '"');
+        String music = "𝄞";
+        System.out.println(music.length() + " " + music.codePointCount(0, music.length())
+            + " " + (int) music.charAt(0) + " " + (int) music.charAt(1)
+            + " " + music.codePointAt(0));
+    }
+}
+"#
+);
+
+// The escapes that make a program ILLEGAL once translated: a quote closes
+// the literal early, and a line terminator unclosees a string or char.
+differential_reject!(
+    reject_unicode_escape_quote_closes_literal,
+    "RejEscapeQuote",
+    r#"
+public class RejEscapeQuote {
+    public static void main(String[] args) {
+        String s = """;
+        System.out.println(s);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unicode_escape_newline_in_string,
+    "RejEscapeNewlineStr",
+    r#"
+public class RejEscapeNewlineStr {
+    public static void main(String[] args) {
+        String s = "a
+b";
+        System.out.println(s);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_unicode_escape_newline_in_char,
+    "RejEscapeNewlineChar",
+    r"
+public class RejEscapeNewlineChar {
+    public static void main(String[] args) {
+        char c = '
+';
+        System.out.println((int) c);
+    }
+}
+"
+);
+
+// Character's Unicode data: numeric values across scripts and categories,
+// the simple case mappings (titlecase is a THIRD form for the Latin
+// digraphs), equalsIgnoreCase's per-character rule, Unicode digits in the
+// integer parsers, and isLetter excluding the letter-NUMBERS.
+differential_test!(
+    diff_unicode_character_data,
+    "DiffUnicodeData",
+    r#"
+public class DiffUnicodeData {
+    public static void main(String[] a) {
+        int[] cs = {'0', '9', 'A', 'z', '٣', '٩', '０', '५',
+            'Ⅷ', '½', '²', '፪', '₁', '〇', 'x'};
+        StringBuilder sb = new StringBuilder();
+        for (int c : cs) sb.append(Character.getNumericValue((char) c)).append(",");
+        System.out.println(sb);
+        sb.setLength(0);
+        for (int c : cs) sb.append(Character.digit((char) c, 10)).append(",");
+        System.out.println(sb);
+        sb.setLength(0);
+        for (int c : cs) sb.append(Character.digit((char) c, 16)).append(",");
+        System.out.println(sb);
+        int[] ms = {'a', 'A', 'ß', 'İ', 'ı', 'Ǆ', 'ǅ', 'ǆ',
+            'Ǳ', 'ﬁ', 'ᾀ', 'ᾳ', 'Σ'};
+        sb.setLength(0);
+        for (int c : ms) sb.append((int) Character.toUpperCase((char) c)).append(",");
+        System.out.println(sb);
+        sb.setLength(0);
+        for (int c : ms) sb.append((int) Character.toLowerCase((char) c)).append(",");
+        System.out.println(sb);
+        sb.setLength(0);
+        for (int c : ms) sb.append((int) Character.toTitleCase((char) c)).append(",");
+        System.out.println(sb);
+        String[][] pairs = {{"İ", "i"}, {"i", "I"}, {"straße", "STRASSE"},
+            {"abc", "ABC"}, {"a", "b"}, {"", ""}, {"Ǆ", "ǆ"},
+            {"Σ", "σ"}, {"Ab", "aB"}, {"ab", "abc"}};
+        sb.setLength(0);
+        for (String[] p : pairs) sb.append(p[0].equalsIgnoreCase(p[1])).append(",");
+        System.out.println(sb);
+        System.out.println(Integer.parseInt("٣٤") + " " + Long.parseLong("１２")
+            + " " + Integer.parseInt("-٣") + " " + Integer.parseInt("०१", 8));
+        System.out.println(Character.isDigit('٣') + " " + Character.isDigit('Ⅷ')
+            + " " + Character.isLetter('Ⅷ') + " " + Character.isAlphabetic('Ⅷ')
+            + " " + Character.isLetter('A') + " " + Character.isLetter('〇'));
+    }
+}
+"#
+);
+
+// The surrogate helpers and the code-point stream.
+differential_test!(
+    diff_code_point_helpers,
+    "DiffCodePoints",
+    r#"
+public class DiffCodePoints {
+    public static void main(String[] a) {
+        char[] pair = Character.toChars(0x1D11E);
+        System.out.println(pair.length + ":" + (int) pair[0] + ":" + (int) pair[1]);
+        System.out.println(Character.toCodePoint(pair[0], pair[1]) + " "
+            + Character.charCount(0x1D11E) + " " + Character.charCount('a'));
+        char[] one = Character.toChars('Z');
+        System.out.println(one.length + ":" + one[0]);
+        String s = "a𝄞b";
+        System.out.println(s.codePoints().count() + " " + s.chars().count());
+        System.out.println("abc".codePoints().sum() + " " + "abc".chars().sum());
+        s.codePoints().forEach(c -> System.out.println(c));
+    }
+}
+"#
+);

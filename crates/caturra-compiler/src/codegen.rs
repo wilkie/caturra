@@ -5566,6 +5566,13 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         ret: BRet::IntStream,
         descriptor: "()Ljava/util/stream/IntStream;",
     },
+    // `codePoints()` — like `chars()`, but a surrogate PAIR counts once.
+    BuiltinMethod {
+        name: "codePoints",
+        params: &[],
+        ret: BRet::IntStream,
+        descriptor: "()Ljava/util/stream/IntStream;",
+    },
     BuiltinMethod {
         name: "compareToIgnoreCase",
         params: &[BParam::Str],
@@ -5789,7 +5796,6 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 #[rustfmt::skip]
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("String", "getBytes", "byte arrays are not supported by caturra"),
-    ("String", "codePoints", "streams are not supported by caturra"),
     ("StringBuilder", "capacity", "caturra does not model a builder's capacity, only its contents"),
     ("StringBuilder", "chars", "streams are not supported by caturra"),
     ("StringBuilder", "codePoints", "streams are not supported by caturra"),
@@ -7443,6 +7449,10 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     bm("isLowSurrogate", &[C], BRet::Boolean, "(C)Z"),
     bm("isSurrogate", &[C], BRet::Boolean, "(C)Z"),
     bm("charCount", &[I], BRet::Int, "(I)I"),
+    // The surrogate conversions: a code point to its `char[]`, and a
+    // surrogate pair back to the code point it spells.
+    bm("toChars", &[I], BRet::CharArray, "(I)[C"),
+    bm("toCodePoint", &[C, C], BRet::Int, "(CC)I"),
 ];
 
 const SHORT_METHODS: &[BuiltinMethod] = &[

@@ -1608,7 +1608,7 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if method == "lines" && args.is_empty() {
         return Some(TypeRef::Named(String::from("String")));
     }
-    if method == "chars" && args.is_empty() {
+    if matches!(method.as_str(), "chars" | "codePoints") && args.is_empty() {
         return Some(TypeRef::Int);
     }
     // `IntStream.range(a, b)` / `rangeClosed(a, b)` — a source of `int`s.

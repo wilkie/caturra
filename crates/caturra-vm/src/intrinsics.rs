@@ -834,10 +834,27 @@ fn string_method(
             if matches!(other, JValue::Ref(None)) {
                 return Ok(Some(JValue::Int(0)));
             }
+            // Java compares CODE UNIT by code unit with the SIMPLE case
+            // mappings: equal, or equal uppercased, or equal lowercased
+            // after that. Lowercasing the whole string with Rust's FULL
+            // mapping is a different question — it expands `\u0130` to two
+            // characters, so "\u0130".equalsIgnoreCase("i") answered false
+            // where a JDK says true.
             let other = arg_units(other)?;
-            let a = String::from_utf16_lossy(&units).to_lowercase();
-            let b = String::from_utf16_lossy(&other).to_lowercase();
-            Ok(Some(JValue::Int(i32::from(a == b))))
+            let same = units.len() == other.len()
+                && units.iter().zip(&other).all(|(a, b)| {
+                    if a == b {
+                        return true;
+                    }
+                    let (Some(a), Some(b)) =
+                        (char::from_u32(u32::from(*a)), char::from_u32(u32::from(*b)))
+                    else {
+                        return false;
+                    };
+                    let (upper_a, upper_b) = (java_simple_upper(a), java_simple_upper(b));
+                    upper_a == upper_b || java_simple_lower(upper_a) == java_simple_lower(upper_b)
+                });
+            Ok(Some(JValue::Int(i32::from(same))))
         }
         ("compareTo", [other]) => {
             let other = arg_units(other)?;
@@ -931,6 +948,34 @@ fn string_method(
             }
             let stream = heap.alloc(HeapObject::Stream {
                 source: line_refs,
+                ops: Vec::new(),
+            });
+            Ok(Some(JValue::Ref(Some(stream))))
+        }
+        // `codePoints()` — like `chars()`, but a well-formed surrogate PAIR
+        // yields the single code point it spells.
+        ("codePoints", []) => {
+            let mut source: Vec<JValue> = Vec::new();
+            let mut at = 0usize;
+            while at < units.len() {
+                let unit = units[at];
+                let paired = (0xD800..=0xDBFF).contains(&unit)
+                    && units
+                        .get(at + 1)
+                        .is_some_and(|low| (0xDC00..=0xDFFF).contains(low));
+                if paired {
+                    let low = units[at + 1];
+                    let code_point =
+                        0x10000 + ((i32::from(unit) - 0xD800) << 10) + (i32::from(low) - 0xDC00);
+                    source.push(JValue::Int(code_point));
+                    at += 2;
+                } else {
+                    source.push(JValue::Int(i32::from(unit)));
+                    at += 1;
+                }
+            }
+            let stream = heap.alloc(HeapObject::Stream {
+                source,
                 ops: Vec::new(),
             });
             Ok(Some(JValue::Ref(Some(stream))))
@@ -4719,8 +4764,11 @@ fn parse_unsigned_long(text: &str, radix: u32) -> Result<Option<JValue>, VmError
 
 fn parse_int_text(heap: &Heap, value: &JValue) -> Result<String, VmError> {
     match value {
+        // Java parses with `Character.digit`, which accepts every Unicode
+        // decimal digit; Rust's parsers are ASCII-only, so fold them first.
         JValue::Ref(Some(reference)) => heap
             .string_text(*reference)
+            .map(|text| ascii_digits(&text))
             .ok_or_else(|| throw("java.lang.ClassCastException: not a String")),
         // JDK 11's message for a null string is literally "null".
         JValue::Ref(None) => Err(throw("java.lang.NumberFormatException: null")),
@@ -5109,6 +5157,226 @@ const ND_STARTS: [u32; 37] = [
     0xFF10,
 ];
 
+/// Every BMP character whose `Character.getNumericValue` is not simply its
+/// `digit(c, 36)` value, as runs of `(first, last, value_at_first)` — Roman
+/// numerals, Ethiopic and Tamil numbers, superscripts, and the fractions
+/// (which answer -2: "a numeric value that is not a nonnegative integer").
+/// Generated from JDK 11 itself, so it matches the Unicode version caturra
+/// targets rather than a newer one.
+const NUMERIC_RUNS: &[(u32, u32, i32)] = &[
+    (0x00B2, 0x00B3, 2),
+    (0x00B9, 0x00B9, 1),
+    (0x00BC, 0x00BC, -2),
+    (0x00BD, 0x00BD, -2),
+    (0x00BE, 0x00BE, -2),
+    (0x09F4, 0x09F4, -2),
+    (0x09F5, 0x09F5, -2),
+    (0x09F6, 0x09F6, -2),
+    (0x09F7, 0x09F7, -2),
+    (0x09F8, 0x09F8, -2),
+    (0x09F9, 0x09F9, 16),
+    (0x0B72, 0x0B72, -2),
+    (0x0B73, 0x0B73, -2),
+    (0x0B74, 0x0B74, -2),
+    (0x0B75, 0x0B75, -2),
+    (0x0B76, 0x0B76, -2),
+    (0x0B77, 0x0B77, -2),
+    (0x0BF0, 0x0BF0, 10),
+    (0x0BF1, 0x0BF1, 100),
+    (0x0BF2, 0x0BF2, 1000),
+    (0x0C78, 0x0C7B, 0),
+    (0x0C7C, 0x0C7E, 1),
+    (0x0D58, 0x0D58, -2),
+    (0x0D59, 0x0D59, -2),
+    (0x0D5A, 0x0D5A, -2),
+    (0x0D5B, 0x0D5B, -2),
+    (0x0D5C, 0x0D5C, -2),
+    (0x0D5D, 0x0D5D, -2),
+    (0x0D5E, 0x0D5E, -2),
+    (0x0D70, 0x0D70, 10),
+    (0x0D71, 0x0D71, 100),
+    (0x0D72, 0x0D72, 1000),
+    (0x0D73, 0x0D73, -2),
+    (0x0D74, 0x0D74, -2),
+    (0x0D75, 0x0D75, -2),
+    (0x0D76, 0x0D76, -2),
+    (0x0D77, 0x0D77, -2),
+    (0x0D78, 0x0D78, -2),
+    (0x0F2A, 0x0F2A, -2),
+    (0x0F2B, 0x0F2B, -2),
+    (0x0F2C, 0x0F2C, -2),
+    (0x0F2D, 0x0F2D, -2),
+    (0x0F2E, 0x0F2E, -2),
+    (0x0F2F, 0x0F2F, -2),
+    (0x0F30, 0x0F30, -2),
+    (0x0F31, 0x0F31, -2),
+    (0x0F32, 0x0F32, -2),
+    (0x0F33, 0x0F33, -2),
+    (0x1369, 0x1372, 1),
+    (0x1373, 0x1373, 20),
+    (0x1374, 0x1374, 30),
+    (0x1375, 0x1375, 40),
+    (0x1376, 0x1376, 50),
+    (0x1377, 0x1377, 60),
+    (0x1378, 0x1378, 70),
+    (0x1379, 0x1379, 80),
+    (0x137A, 0x137A, 90),
+    (0x137B, 0x137B, 100),
+    (0x137C, 0x137C, 10_000),
+    (0x16EE, 0x16F0, 17),
+    (0x17F0, 0x17F9, 0),
+    (0x19DA, 0x19DA, 1),
+    (0x2070, 0x2070, 0),
+    (0x2074, 0x2079, 4),
+    (0x2080, 0x2089, 0),
+    (0x2150, 0x2150, -2),
+    (0x2151, 0x2151, -2),
+    (0x2152, 0x2152, -2),
+    (0x2153, 0x2153, -2),
+    (0x2154, 0x2154, -2),
+    (0x2155, 0x2155, -2),
+    (0x2156, 0x2156, -2),
+    (0x2157, 0x2157, -2),
+    (0x2158, 0x2158, -2),
+    (0x2159, 0x2159, -2),
+    (0x215A, 0x215A, -2),
+    (0x215B, 0x215B, -2),
+    (0x215C, 0x215C, -2),
+    (0x215D, 0x215D, -2),
+    (0x215E, 0x215E, -2),
+    (0x215F, 0x215F, 1),
+    (0x2160, 0x216B, 1),
+    (0x216C, 0x216C, 50),
+    (0x216D, 0x216D, 100),
+    (0x216E, 0x216E, 500),
+    (0x216F, 0x216F, 1000),
+    (0x2170, 0x217B, 1),
+    (0x217C, 0x217C, 50),
+    (0x217D, 0x217D, 100),
+    (0x217E, 0x217E, 500),
+    (0x217F, 0x217F, 1000),
+    (0x2180, 0x2180, 1000),
+    (0x2181, 0x2181, 5000),
+    (0x2182, 0x2182, 10_000),
+    (0x2185, 0x2185, 6),
+    (0x2186, 0x2186, 50),
+    (0x2187, 0x2187, 50_000),
+    (0x2188, 0x2188, 100_000),
+    (0x2189, 0x2189, 0),
+    (0x2460, 0x2473, 1),
+    (0x2474, 0x2487, 1),
+    (0x2488, 0x249B, 1),
+    (0x24EA, 0x24EA, 0),
+    (0x24EB, 0x24F4, 11),
+    (0x24F5, 0x24FE, 1),
+    (0x24FF, 0x24FF, 0),
+    (0x2776, 0x277F, 1),
+    (0x2780, 0x2789, 1),
+    (0x278A, 0x2793, 1),
+    (0x2CFD, 0x2CFD, -2),
+    (0x3007, 0x3007, 0),
+    (0x3021, 0x3029, 1),
+    (0x3038, 0x3038, 10),
+    (0x3039, 0x3039, 20),
+    (0x303A, 0x303A, 30),
+    (0x3192, 0x3195, 1),
+    (0x3220, 0x3229, 1),
+    (0x3248, 0x3248, 10),
+    (0x3249, 0x3249, 20),
+    (0x324A, 0x324A, 30),
+    (0x324B, 0x324B, 40),
+    (0x324C, 0x324C, 50),
+    (0x324D, 0x324D, 60),
+    (0x324E, 0x324E, 70),
+    (0x324F, 0x324F, 80),
+    (0x3251, 0x325F, 21),
+    (0x3280, 0x3289, 1),
+    (0x32B1, 0x32BF, 36),
+    (0xA6E6, 0xA6EE, 1),
+    (0xA6EF, 0xA6EF, 0),
+    (0xA830, 0xA830, -2),
+    (0xA831, 0xA831, -2),
+    (0xA832, 0xA832, -2),
+    (0xA833, 0xA833, -2),
+    (0xA834, 0xA834, -2),
+    (0xA835, 0xA835, -2),
+    (0xF96B, 0xF96B, 3),
+    (0xF973, 0xF973, 10),
+    (0xF978, 0xF978, 2),
+    (0xF9B2, 0xF9B2, 0),
+    (0xF9D1, 0xF9D1, 6),
+    (0xF9D3, 0xF9D3, 6),
+    (0xF9FD, 0xF9FD, 10),
+];
+
+/// `Character.getNumericValue(c)` for a character the digit tables do not
+/// cover; `None` when the character has no numeric value.
+fn numeric_run_value(c: char) -> Option<i32> {
+    let cp = u32::from(c);
+    NUMERIC_RUNS.iter().find_map(|&(first, last, base)| {
+        (cp >= first && cp <= last).then(|| {
+            if base < 0 {
+                base
+            } else {
+                base + i32::try_from(cp - first).unwrap_or(0)
+            }
+        })
+    })
+}
+
+/// Java's `Character.toTitleCase(char)`: the uppercase mapping, except for
+/// the twelve Latin digraphs whose TITLECASE form is a third character
+/// (`\u01C6` lowercase dz, `\u01C4` uppercase DZ, `\u01C5` titlecase Dz).
+fn java_title_case(c: char) -> char {
+    match c {
+        '\u{01C4}'..='\u{01C6}' => '\u{01C5}',
+        '\u{01C7}'..='\u{01C9}' => '\u{01C8}',
+        '\u{01CA}'..='\u{01CC}' => '\u{01CB}',
+        '\u{01F1}'..='\u{01F3}' => '\u{01F2}',
+        other => java_simple_upper(other),
+    }
+}
+
+/// Java's simple LOWERCASE mapping — the first character of Rust's full one,
+/// which agrees with the JDK across the BMP (including `\u0130`, whose full
+/// mapping is two characters but whose simple mapping is plain `i`).
+fn java_simple_lower(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+/// Rewrite every Unicode decimal digit as its ASCII counterpart, so the
+/// integer parsers (which are ASCII-only) see what `Character.digit` would
+/// have given them: `Integer.parseInt("\u0663\u0664")` is 34 on a JDK.
+fn ascii_digits(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            nd_digit_value(c)
+                .and_then(|value| char::from_digit(value, 10))
+                .unwrap_or(c)
+        })
+        .collect()
+}
+
+/// The `LETTER_NUMBER` (Nl) characters of the BMP — Roman numerals, the
+/// runic and CJK number letters. Java counts them as `isAlphabetic` but NOT
+/// as `isLetter`; Rust's `is_alphabetic` includes them either way.
+const NL_RANGES: [(u32, u32); 7] = [
+    (0x16EE, 0x16F0),
+    (0x2160, 0x2182),
+    (0x2185, 0x2188),
+    (0x3007, 0x3007),
+    (0x3021, 0x3029),
+    (0x3038, 0x303A),
+    (0xA6E6, 0xA6EF),
+];
+
+fn is_letter_number(c: char) -> bool {
+    let cp = u32::from(c);
+    NL_RANGES
+        .iter()
+        .any(|&(first, last)| cp >= first && cp <= last)
+}
+
 /// Java's Unicode decimal-digit value (category `Nd`): 0..=9, or `None`.
 /// Rust's `char::to_digit` is ASCII-only, so Arabic-Indic '٠', fullwidth '０',
 /// Devanagari '५' etc. all need this table.
@@ -5170,7 +5438,15 @@ fn character_static(
         }
         // isAlphabetic is a superset of isLetter in real Java (letter
         // numbers); identical under this approximation.
-        ("isLetter" | "isAlphabetic", [JValue::Int(v)]) => z(c_of(v).is_alphabetic()),
+        // `isLetter` is the L* categories; `isAlphabetic` is L* plus
+        // LETTER_NUMBER (Roman numerals and the CJK number letters), which
+        // is where the two part company — Rust's `is_alphabetic` is the
+        // wider one, so `isLetter('\u2167')` used to answer true.
+        ("isLetter", [JValue::Int(v)]) => {
+            let c = c_of(v);
+            z(c.is_alphabetic() && !is_letter_number(c))
+        }
+        ("isAlphabetic", [JValue::Int(v)]) => z(c_of(v).is_alphabetic()),
         ("isUpperCase", [JValue::Int(v)]) => z(c_of(v).is_uppercase()),
         ("isLowerCase", [JValue::Int(v)]) => z(c_of(v).is_lowercase()),
         ("isWhitespace", [JValue::Int(v)]) => z(java_is_whitespace(c_of(v))),
@@ -5193,9 +5469,8 @@ fn character_static(
             let lower = c.to_lowercase().next().unwrap_or(c);
             z(upper != c && lower != c)
         }
-        // toTitleCase reuses the simple-uppercase mapping; the ~30 chars whose
-        // titlecase differs from their uppercase remain approximated.
-        ("toTitleCase" | "toUpperCase", [JValue::Int(v)]) => ch_ret(java_simple_upper(c_of(v))),
+        ("toTitleCase", [JValue::Int(v)]) => ch_ret(java_title_case(c_of(v))),
+        ("toUpperCase", [JValue::Int(v)]) => ch_ret(java_simple_upper(c_of(v))),
         ("toLowerCase", [JValue::Int(v)]) => {
             // The first char of Rust's full lowercase equals Java's simple
             // lowercase across the whole BMP (verified against a real JVM).
@@ -5204,12 +5479,13 @@ fn character_static(
         }
         ("getNumericValue", [JValue::Int(v)]) => {
             let c = c_of(v);
-            // Nd decimal value (0..=9), else a Latin letter's 10..=35 value.
-            // The letter-number/other-number specials (Roman numerals -> value,
-            // fractions -> -2, superscripts) remain approximated as -1.
+            // The Nd decimal value (0..=9) or a Latin letter's 10..=35 —
+            // then the letter-number/other-number table, which carries the
+            // Roman numerals, the superscripts, and the fractions' -2.
             let value = nd_digit_value(c)
                 .or_else(|| c.to_digit(36))
                 .and_then(|d| i32::try_from(d).ok())
+                .or_else(|| numeric_run_value(c))
                 .unwrap_or(-1);
             Ok(Some(JValue::Int(value)))
         }
@@ -5248,6 +5524,20 @@ fn character_static(
         ("isLowSurrogate", [JValue::Int(v)]) => z((0xDC00..0xE000).contains(v)),
         ("isSurrogate", [JValue::Int(v)]) => z((0xD800..0xE000).contains(v)),
         ("charCount", [JValue::Int(v)]) => Ok(Some(JValue::Int(if *v >= 0x10000 { 2 } else { 1 }))),
+        // `toChars(codePoint)` — one unit in the BMP, a surrogate pair above
+        // it. `char[]` lives in an IntArray, so an unpaired half survives.
+        ("toChars", [JValue::Int(code_point)]) => {
+            let units = code_point_units(*code_point)?;
+            let values: Vec<i32> = units.iter().map(|u| i32::from(*u)).collect();
+            let array = heap.alloc(HeapObject::IntArray(IntKind::Char, values));
+            Ok(Some(JValue::Ref(Some(array))))
+        }
+        // `toCodePoint(high, low)` — the JDK does NOT validate the halves,
+        // it just composes them.
+        ("toCodePoint", [JValue::Int(high), JValue::Int(low)]) => {
+            let composed = ((high - 0xD800) << 10) + (low - 0xDC00) + 0x10000;
+            Ok(Some(JValue::Int(composed)))
+        }
         _ => Err(VmError::UnknownIntrinsic(format!("Character.{method}"))),
     }
 }

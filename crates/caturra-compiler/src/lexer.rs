@@ -171,18 +171,124 @@ struct Lexer<'a> {
     errors: Vec<Diagnostic>,
 }
 
+/// JLS §3.3, step ONE of translation: every eligible `\uXXXX` escape in the
+/// source becomes the character it denotes BEFORE anything is lexed. That is
+/// not a string-literal feature — it is a property of the source text — so
+/// `\u0022` really does close a string literal, `\u000A` really is a line
+/// terminator (ending a `//` comment, and making a char literal illegal),
+/// and `\u0061bc` really is the identifier `abc`.
+///
+/// An escape is eligible only when its backslash is preceded by an EVEN
+/// number of backslashes: `"\\u0041"` is a backslash followed by `u0041`,
+/// not an `A`. Any number of `u`s may follow the backslash.
+///
+/// A SURROGATE pair of escapes combines into the one supplementary
+/// character it spells. A lone surrogate escape is left in place for the
+/// literal lexer, which is the only context where it means anything (and
+/// where it still renders as U+FFFD — caturra's tokens hold Rust `char`s,
+/// which cannot represent an unpaired surrogate).
+fn translate_unicode_escapes(path: &str, text: &str, errors: &mut Vec<Diagnostic>) -> Vec<char> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    // Where a run of backslashes began, so the eligibility of the NEXT one
+    // is decided by how many precede it.
+    let mut eligible = true;
+    let mut index = 0usize;
+    // Track the position in the ORIGINAL text for diagnostics.
+    let (mut line, mut column) = (1u32, 1u32);
+    // The escape at `index`, as (code unit, index just past it).
+    let escape_at = |index: usize| -> Option<(u32, usize)> {
+        if chars.get(index) != Some(&'\\') || chars.get(index + 1) != Some(&'u') {
+            return None;
+        }
+        let mut at = index + 1;
+        while chars.get(at) == Some(&'u') {
+            at += 1;
+        }
+        let mut value = 0u32;
+        for offset in 0..4 {
+            let digit = chars.get(at + offset)?.to_digit(16)?;
+            value = value * 16 + digit;
+        }
+        Some((value, at + 4))
+    };
+    while index < chars.len() {
+        let current = chars[index];
+        if current == '\\' && eligible && chars.get(index + 1) == Some(&'u') {
+            match escape_at(index) {
+                Some((value, next)) => {
+                    // A high surrogate followed by a low one is a single
+                    // supplementary character.
+                    let paired = (0xD800..=0xDBFF)
+                        .contains(&value)
+                        .then(|| escape_at(next))
+                        .flatten();
+                    if let Some((low, after)) = paired
+                        && (0xDC00..=0xDFFF).contains(&low)
+                    {
+                        let combined = 0x10000 + ((value - 0xD800) << 10) + (low - 0xDC00);
+                        if let Some(character) = char::from_u32(combined) {
+                            out.push(character);
+                            index = after;
+                            eligible = true;
+                            continue;
+                        }
+                    }
+                    // An unpaired surrogate has no `char`: leave the escape
+                    // for the literal lexer, the only place it can mean
+                    // anything.
+                    if let Some(character) = char::from_u32(value) {
+                        out.push(character);
+                    } else {
+                        out.extend(&chars[index..next]);
+                    }
+                    index = next;
+                    eligible = true;
+                    continue;
+                }
+                None => {
+                    errors.push(Diagnostic::error(
+                        path,
+                        "illegal unicode escape",
+                        SourceSpan {
+                            start: SourcePosition { line, column },
+                            end: SourcePosition { line, column },
+                        },
+                    ));
+                }
+            }
+        }
+        if current == '\\' {
+            eligible = !eligible;
+        } else {
+            eligible = true;
+        }
+        if current == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+        out.push(current);
+        index += 1;
+    }
+    out
+}
+
 /// Tokenize a source file. Always returns the tokens it could produce;
 /// lexical problems are reported as diagnostics alongside.
 #[must_use]
 pub fn lex(path: &str, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
+    let mut errors = Vec::new();
+    let chars = translate_unicode_escapes(path, text, &mut errors);
     let mut lexer = Lexer {
         path,
-        chars: text.chars().collect(),
+        chars,
         pos: 0,
         line: 1,
         column: 1,
         tokens: Vec::new(),
-        errors: Vec::new(),
+        errors,
     };
     lexer.run();
     (lexer.tokens, lexer.errors)
@@ -617,7 +723,27 @@ impl Lexer<'_> {
             Some('r') => Some('\r'),
             Some('b') => Some('\u{8}'),
             Some('f') => Some('\u{c}'),
-            Some('0') => Some('\0'),
+            // OCTAL escapes (JLS §3.10.6): one to three octal digits, at
+            // most \377 — a three-digit form needs a leading 0-3, so `\400`
+            // is `\40` followed by a literal '0'. `\0` is just its
+            // one-digit case.
+            Some(first @ '0'..='7') => {
+                let mut value = first.to_digit(8).expect("octal digit");
+                let mut digits = 1;
+                while digits < 3
+                    && let Some(next) = self.peek()
+                    && let Some(digit) = next.to_digit(8)
+                {
+                    // The third digit only fits when the first is 0-3.
+                    if digits == 2 && first > '3' {
+                        break;
+                    }
+                    value = value * 8 + digit;
+                    self.bump();
+                    digits += 1;
+                }
+                char::from_u32(value)
+            }
             Some('\\') => Some('\\'),
             Some('\'') => Some('\''),
             Some('"') => Some('"'),
