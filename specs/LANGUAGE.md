@@ -231,6 +231,39 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Method references, in every form and context** (2026-07-31, round 7):
+  - **Target-typed wherever a lambda is**: a CAST (`(Op) P::m` — the usual
+    way to give a reference a type where nothing else would), an ARRAY
+    INITIALIZER (`Op[] ops = { P::m }`), a FIELD assignment through another
+    object (`q.stored = q::add`), and both branches of a CONDITIONAL. The
+    last needed a type rule as well: two synthesized lambda classes are
+    unrelated, so the conditional joined them at `Object`; it now joins at
+    the interface they share (the erased least upper bound), when there is
+    exactly one.
+  - **The parse shapes**: `super::m`, `String[]::new` and `int[]::new`
+    (modelled as the allocating lambda they denote), `Box<String>::new`,
+    and an explicit witness `Type::<T>m` (erased). `super::m` cannot be a
+    plain lambda — a synthesized class may not make a non-virtual call on
+    another object's superclass — so the enclosing class gets a bridge
+    method that does, exactly as javac emits one.
+  - **A bound reference's variable need not be effectively final** (JLS
+    §15.13.3): its receiver is read when the reference is created, so a
+    later assignment cannot be observed. Synthesized reference classes are
+    named apart from lambda classes so the capture rules can differ.
+  - **The checks that decide which of the four forms applies** (JLS
+    §15.13.1), each of which caturra used to accept or misdiagnose: a
+    STATIC method named through an instance, a name fitting BOTH the static
+    and unbound-instance forms (ambiguous), an arity fitting neither (it
+    blamed a wrapper class it had inferred), a checked exception the
+    interface does not declare, and `SomeEnum::new` (which said the
+    constructor took the wrong arguments rather than that enums may not be
+    instantiated).
+  - **Two gaps left open**, both about WHEN a bound receiver is evaluated:
+    `make()::read` re-evaluates the receiver expression on every call
+    (Java evaluates it once, at reference creation), and a null receiver
+    NPEs at the first call rather than at creation. Both need the receiver
+    hoisted out of the synthesized class's body, which is a statement-level
+    rewrite this pass does not do yet.
 - **Unicode escapes are translated BEFORE lexing** (2026-07-31, round 7,
   JLS §3.3) — the unicode-text cluster:
   - **A `\uXXXX` escape is a property of the SOURCE TEXT, not of string

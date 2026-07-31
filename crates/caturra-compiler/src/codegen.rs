@@ -2049,6 +2049,42 @@ impl MethodTable {
         out
     }
 
+    /// An interface both classes implement, if there is exactly one such
+    /// interface at the nearest level — the erased least upper bound a
+    /// conditional needs when its branches are unrelated classes (two
+    /// synthesized lambda classes, or two implementations of one interface).
+    fn shared_interface(&self, a: ClassId, b: ClassId) -> Option<ClassId> {
+        let interfaces_of = |id: ClassId| -> Vec<ClassId> {
+            let mut found: Vec<ClassId> = Vec::new();
+            let mut stack = vec![id];
+            let mut steps = 0usize;
+            while let Some(current) = stack.pop() {
+                steps += 1;
+                if steps > self.class_names.len() * 4 + 4 {
+                    break;
+                }
+                let Some(info) = self.info_by_id(current) else {
+                    continue;
+                };
+                if info.is_interface && current != id && !found.contains(&current) {
+                    found.push(current);
+                }
+                if let Some(parent) = info.superclass {
+                    stack.push(parent);
+                }
+                stack.extend(info.interfaces.iter().copied());
+            }
+            found
+        };
+        let mine = interfaces_of(a);
+        let theirs = interfaces_of(b);
+        let mut shared = mine.into_iter().filter(|id| theirs.contains(id));
+        let first = shared.next()?;
+        // More than one common interface is an intersection type caturra does
+        // not model; Object is the honest answer there.
+        shared.next().is_none().then_some(first)
+    }
+
     /// The class that DECLARES the static method `sig` reachable from `class`,
     /// walking the superclass chain (a static method is inherited from a
     /// superCLASS, not an interface — JLS §8.4.8). Falls back to `class`.
@@ -9616,10 +9652,7 @@ impl BodyGen<'_> {
     /// gated to synthesized lambda classes.
     fn lambda_enclosing(&self) -> Option<(FieldSig, ClassId)> {
         if self.in_constructor
-            || !self
-                .table
-                .class_name(self.current_class_id)
-                .starts_with("Lambda$")
+            || !crate::is_lambda_class(self.table.class_name(self.current_class_id))
         {
             return None;
         }
@@ -15850,7 +15883,7 @@ impl BodyGen<'_> {
         // turned every such combinator into infinite recursion. Skipping
         // self-resolution sends the call down the captured-outer chain
         // below, exactly as a bare field read already resolves.
-        let own = if self.current_class.starts_with("Lambda$") {
+        let own = if crate::is_lambda_class(self.current_class) {
             Resolution::UnknownName
         } else {
             table.resolve(self.current_class, method, &arg_types)
@@ -19509,6 +19542,15 @@ impl BodyGen<'_> {
         }
         if widens(els_ty, then_ty, self.table) {
             return then_ty;
+        }
+        // Two unrelated CLASSES that share an interface join there — which
+        // is what makes `flag ? P::inc : P::dec` an `Op`: each branch is its
+        // own synthesized lambda class, and the only thing they have in
+        // common is the functional interface both implement.
+        if let (JType::Object(then_id), JType::Object(els_id)) = (then_ty, els_ty)
+            && let Some(shared) = self.table.shared_interface(then_id, els_id)
+        {
+            return JType::Object(shared);
         }
         // Unrelated pairs — String vs StringBuilder, Boolean vs Integer, int
         // vs String, even boolean vs char — join at Object: each branch boxes

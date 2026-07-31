@@ -210,7 +210,7 @@ fn inject_outer_captures(
         let Some((fields, methods)) = instance_members.get(owner) else {
             continue;
         };
-        let needs = if name.starts_with("Lambda$") {
+        let needs = if crate::is_lambda_class(name) {
             lambda_needs_outer(body, fields, methods)
         } else {
             // An anonymous or local class HAS members of its own, and may
@@ -614,9 +614,17 @@ fn find_in_expr(
                 // write, so the program would quietly disagree with a JDK
                 // that refuses to compile it.
                 let written_inside = assigned_in_class(body);
+                // JLS §15.13.3: a METHOD REFERENCE evaluates its receiver
+                // when the reference is created, so a later assignment to the
+                // variable cannot be observed — javac imposes no
+                // effective-finality requirement there.
+                let from_method_ref = class.starts_with(crate::METHOD_REF_CLASS_PREFIX);
                 for (name, _) in &caps {
+                    if from_method_ref {
+                        break;
+                    }
                     if !mutations.effectively_final(name) || written_inside.contains(name) {
-                        let what = if class.starts_with("Lambda$") {
+                        let what = if crate::is_lambda_class(class) {
                             "a lambda expression"
                         } else {
                             "an inner class"

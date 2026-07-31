@@ -344,6 +344,22 @@ fn imports_package(units: &[(String, ast::CompilationUnit)], package: &[&str]) -
 
 /// Compile a set of Java source files. All files are parsed first so
 /// classes can call each other's static methods regardless of file
+/// The name prefix of a class synthesized for a LAMBDA. Several passes key
+/// on it: a lambda has no `this` of its own, and its bare names resolve in
+/// the enclosing scope.
+pub(crate) const LAMBDA_CLASS_PREFIX: &str = "Lambda$";
+
+/// The prefix for a class synthesized from a METHOD REFERENCE. It behaves
+/// like a lambda everywhere except capture: JLS §15.13.3 evaluates the
+/// receiver when the reference is created, so the variable it came from need
+/// not be effectively final.
+pub(crate) const METHOD_REF_CLASS_PREFIX: &str = "MethodRef$";
+
+/// Whether a class name is one of the synthesized function classes.
+pub(crate) fn is_lambda_class(name: &str) -> bool {
+    name.starts_with(LAMBDA_CLASS_PREFIX) || name.starts_with(METHOD_REF_CLASS_PREFIX)
+}
+
 /// order.
 #[must_use]
 #[allow(clippy::too_many_lines)] // the bundle-injection pipeline

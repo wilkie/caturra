@@ -17829,3 +17829,179 @@ public class DiffCodePoints {
 }
 "#
 );
+
+
+// ---------------------------------------------------------------------------
+// Round-7 method references: the four forms in every target context, the
+// parse shapes, and the JLS §15.13.1 checks that decide which form applies.
+
+// A reference is target-typed wherever a lambda is: a cast, an array
+// initializer, a field assignment through another object, and both branches
+// of a conditional (whose two synthesized classes join at the interface they
+// share). `super::m` reaches the superclass implementation, and an array
+// constructor reference allocates.
+differential_test!(
+    diff_method_ref_contexts_and_forms,
+    "DiffMethodRefForms",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+interface Op { int run(int x); }
+interface Make { List<String> make(); }
+interface StrArr { String[] make(int n); }
+class RefBase {
+    String who() { return "base"; }
+    int twice(int x) { return 2 * x; }
+}
+public class DiffMethodRefForms extends RefBase {
+    String who() { return "derived"; }
+    Op stored;
+    int add(int x) { return 100 + x; }
+    static int sq(int x) { return x * x; }
+    static <T> T firstOf(T a, T b) { return a; }
+    public static void main(String[] args) {
+        Op inc = x -> x + 1;
+        Op[] ops = { DiffMethodRefForms::sq, inc };
+        Op cast = (Op) DiffMethodRefForms::sq;
+        boolean up = args.length == 0;
+        Op tern = up ? DiffMethodRefForms::sq : inc;
+        System.out.println(ops[0].run(4) + " " + cast.run(5) + " " + tern.run(6));
+        DiffMethodRefForms n = new DiffMethodRefForms();
+        n.stored = n::add;
+        System.out.println(n.stored.run(2));
+        n.demo();
+        StrArr maker = String[]::new;
+        System.out.println(maker.make(3).length + ":" + maker.make(1)[0]);
+        Make list = ArrayList<String>::new;
+        System.out.println(list.make().size());
+        Pick pick = DiffMethodRefForms::<String>firstOf;
+        System.out.println(pick.pick("L", "R"));
+        // A bound reference does not require its variable to be effectively
+        // final: the receiver is read when the reference is created.
+        Cell c = new Cell("first");
+        Get g = c::read;
+        c = new Cell("second");
+        System.out.println(g.get() + " " + c.read());
+    }
+    void demo() {
+        Op sup = super::twice;
+        System.out.println(sup.run(21) + " " + super.who());
+    }
+}
+interface Pick { String pick(String a, String b); }
+interface Get { String get(); }
+class Cell {
+    String s;
+    Cell(String s) { this.s = s; }
+    String read() { return s; }
+}
+"#
+);
+
+// The forms javac rejects (JLS §15.13.1): a static method named through an
+// instance, a name that fits both the static and unbound-instance forms, an
+// arity that fits neither, a checked exception the interface does not
+// declare, and a constructor reference to an enum.
+differential_reject!(
+    reject_method_ref_static_through_instance,
+    "RejRefStaticInstance",
+    r"
+interface Op { int run(int x); }
+public class RejRefStaticInstance {
+    static int twice(int x) { return 2 * x; }
+    public static void main(String[] args) {
+        RejRefStaticInstance p = new RejRefStaticInstance();
+        Op o = p::twice;
+        System.out.println(o.run(4));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_method_ref_ambiguous,
+    "RejRefAmbiguous",
+    r"
+interface Op { int run(RejRefAmbiguous p); }
+public class RejRefAmbiguous {
+    static int val(RejRefAmbiguous p) { return 1; }
+    int val() { return 2; }
+    public static void main(String[] args) {
+        Op o = RejRefAmbiguous::val;
+        System.out.println(o.run(new RejRefAmbiguous()));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_method_ref_wrong_arity,
+    "RejRefArity",
+    r"
+interface Op { int run(int x); }
+public class RejRefArity {
+    int inst(int x) { return x + 1; }
+    public static void main(String[] args) {
+        Op o = RejRefArity::inst;
+        System.out.println(o.run(4));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_method_ref_checked_exception,
+    "RejRefThrows",
+    r"
+interface Op { int run(int x); }
+public class RejRefThrows {
+    static int risky(int x) throws Exception { return x; }
+    public static void main(String[] args) {
+        Op o = RejRefThrows::risky;
+        System.out.println(o.run(1));
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_enum_constructor_reference,
+    "RejRefEnumNew",
+    r"
+interface Make { RefEnum make(); }
+enum RefEnum { A, B }
+public class RejRefEnumNew {
+    public static void main(String[] args) {
+        Make m = RefEnum::new;
+        System.out.println(m.make());
+    }
+}
+"
+);
+
+// The lookaheads the new parse forms need must not swallow ordinary
+// comparisons, generic declarations, or array indexing.
+differential_test!(
+    diff_method_ref_lookahead_neighbors,
+    "DiffRefLookahead",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+public class DiffRefLookahead {
+    public static void main(String[] args) {
+        int a = 1, b = 2, c = 3, d = 4;
+        System.out.println((a < b) + " " + (a < b && c > d) + " " + (a < b ? c : d));
+        boolean p = a < b, q = c > d;
+        System.out.println(p + " " + q);
+        List<String> list = new ArrayList<>();
+        Map<String, List<Integer>> m = new HashMap<>();
+        m.put("k", new ArrayList<>());
+        System.out.println(m.size() + " " + list.size());
+        int[] arr = {5, 6};
+        System.out.println(arr[0] + " " + arr[1]);
+    }
+}
+"#
+);

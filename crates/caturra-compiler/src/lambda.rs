@@ -41,6 +41,18 @@ pub fn desugar_lambdas(
     let constructors = constructor_signatures(units);
     let static_methods = static_method_names(units);
     let class_names = class_name_set(units);
+    let shapes = method_shapes(units);
+    let enums = enum_names(units);
+    let field_types: HashMap<(String, String), TypeRef> = units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .flat_map(|class| {
+            class
+                .fields
+                .iter()
+                .map(|field| ((class.name.clone(), field.name.clone()), field.ty.clone()))
+        })
+        .collect();
 
     // Lambda-class names stay globally unique (one counter), but each
     // synthesized class is appended to the SAME unit its lambda came from, so
@@ -51,6 +63,8 @@ pub fn desugar_lambdas(
     for (path, unit) in units.iter_mut() {
         let mut new_classes: Vec<ClassDecl> = Vec::new();
         for class in &mut unit.classes {
+            let class_name = class.name.clone();
+            let mut bridges: Vec<MethodDecl> = Vec::new();
             let return_types: Vec<Option<TypeRef>> = class
                 .methods
                 .iter()
@@ -83,6 +97,12 @@ pub fn desugar_lambdas(
                     new_classes: &mut new_classes,
                     counter: &mut counter,
                     scope: vec![fields.clone(), params],
+                    fields: &field_types,
+                    current_class: Some(class_name.as_str()),
+                    bridges: &mut bridges,
+                    shapes: &shapes,
+                    enums: &enums,
+                    class_prefix: crate::LAMBDA_CLASS_PREFIX,
                     path,
                     diags: &mut diags,
                 };
@@ -102,12 +122,19 @@ pub fn desugar_lambdas(
                         new_classes: &mut new_classes,
                         counter: &mut counter,
                         scope: vec![HashMap::new()],
+                        fields: &field_types,
+                        current_class: Some(class_name.as_str()),
+                        bridges: &mut bridges,
+                        shapes: &shapes,
+                        enums: &enums,
+                        class_prefix: crate::LAMBDA_CLASS_PREFIX,
                         path,
                         diags: &mut diags,
                     };
                     desugar_expr(init, Some(&field.ty), &mut ctx);
                 }
             }
+            class.methods.append(&mut bridges);
         }
         // The class iteration's borrow of `unit.classes` is released here, so
         // this unit's synthesized lambda classes can be appended to it.
@@ -132,6 +159,25 @@ struct Ctx<'a> {
     counter: &'a mut usize,
     /// Local-variable types, for assignment-target typing.
     scope: Vec<HashMap<String, TypeRef>>,
+    /// Every class's fields, by (class, field) — a method reference assigned
+    /// to ANOTHER object's field (`q.stored = q::add`) needs the declared
+    /// type to target-type it.
+    fields: &'a HashMap<(String, String), TypeRef>,
+    /// The class whose body is being walked, for `this.field` targets.
+    current_class: Option<&'a str>,
+    /// Declared methods per class, for method-reference validation.
+    shapes: &'a HashMap<String, Vec<MethodShape>>,
+    /// The `enum` classes, which have no accessible constructor.
+    enums: &'a std::collections::HashSet<String>,
+    /// The prefix for the next synthesized class — a method REFERENCE gets
+    /// its own, because its captures follow different rules (see
+    /// `crate::METHOD_REF_CLASS_PREFIX`).
+    class_prefix: &'static str,
+    /// Methods to append to the enclosing class: a `super::m` reference
+    /// needs one, because the synthesized lambda class cannot itself make a
+    /// non-virtual call on another object's superclass (javac writes the
+    /// same kind of bridge).
+    bridges: &'a mut Vec<MethodDecl>,
     /// The unit's source path, for diagnostics.
     path: &'a str,
     /// Call-shape errors only this pass can see (declared generic arguments
@@ -196,6 +242,50 @@ fn functional_interfaces(units: &[(String, CompilationUnit)]) -> HashMap<String,
 /// Method name -> the parameter-type lists of each declaration, for
 /// single-candidate target typing of a lambda argument.
 /// Class name -> its declared static method names.
+/// What method-reference validation needs to know about one declared method.
+struct MethodShape {
+    name: String,
+    is_static: bool,
+    arity: usize,
+    /// The checked exceptions the method declares, as written.
+    throws: Vec<String>,
+}
+
+/// Every class's declared methods, for the JLS §15.13.1 checks a method
+/// reference needs: which of the four forms it is, whether that form is
+/// ambiguous, and whether its thrown types fit the functional interface.
+fn method_shapes(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<MethodShape>> {
+    let mut out: HashMap<String, Vec<MethodShape>> = HashMap::new();
+    for (_, unit) in units {
+        for class in &unit.classes {
+            let entry = out.entry(class.name.clone()).or_default();
+            for method in &class.methods {
+                if method.is_constructor {
+                    continue;
+                }
+                entry.push(MethodShape {
+                    name: method.name.clone(),
+                    is_static: method.is_static,
+                    arity: method.params.len(),
+                    throws: method.throws.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The classes declared as `enum` — `E::new` is "enum types may not be
+/// instantiated", not an arity complaint.
+fn enum_names(units: &[(String, CompilationUnit)]) -> std::collections::HashSet<String> {
+    units
+        .iter()
+        .flat_map(|(_, unit)| unit.classes.iter())
+        .filter(|class| class.is_enum)
+        .map(|class| class.name.clone())
+        .collect()
+}
+
 fn static_method_names(
     units: &[(String, CompilationUnit)],
 ) -> HashMap<String, std::collections::HashSet<String>> {
@@ -449,7 +539,21 @@ fn assign_target_type(target: &crate::ast::AssignTarget, ctx: &Ctx) -> Option<Ty
                 None
             }
         }
-        crate::ast::AssignTarget::Field { .. } => None,
+        // `obj.f = P::m` / `this.f = ...`: the field's declared type is the
+        // target type, looked up on the class the object names.
+        crate::ast::AssignTarget::Field { object, name } => {
+            let owner = match object.as_ref() {
+                Expr::This { .. } => ctx.current_class.map(str::to_owned),
+                Expr::Name { path, .. } if path.len() == 1 => match ctx.lookup(&path[0]) {
+                    Some(TypeRef::Named(class) | TypeRef::Generic { base: class, .. }) => {
+                        Some(class)
+                    }
+                    _ => ctx.class_names.contains(&path[0]).then(|| path[0].clone()),
+                },
+                _ => None,
+            }?;
+            ctx.fields.get(&(owner, name.clone())).cloned()
+        }
     }
 }
 
@@ -469,12 +573,16 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 params: spec.params.clone(),
                 ret: spec.result.clone().unwrap_or(spec.ret),
             };
+            validate_method_ref(expr, &sam, ctx);
             *expr = method_ref_to_lambda(expr, &sam, ctx);
+            ctx.class_prefix = crate::METHOD_REF_CLASS_PREFIX;
         } else if let Some(target) = expected
             && let Some(name) = interface_name(target)
             && let Some(sam) = ctx.sams.get(name).cloned()
         {
+            validate_method_ref(expr, &sam, ctx);
             *expr = method_ref_to_lambda(expr, &sam, ctx);
+            ctx.class_prefix = crate::METHOD_REF_CLASS_PREFIX;
             // Fall through to lambda handling below.
         } else {
             if let Expr::MethodRef { qualifier, .. } = expr {
@@ -964,8 +1072,13 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             desugar_expr(lhs, None, ctx);
             desugar_expr(rhs, None, ctx);
         }
+        // A CAST is a target type (`(Op) P::m` is the standard way to give a
+        // reference one where nothing else would).
+        Expr::Cast { ty, operand, .. } => {
+            let ty = ty.clone();
+            desugar_expr(operand, Some(&ty), ctx);
+        }
         Expr::Unary { operand, .. }
-        | Expr::Cast { operand, .. }
         | Expr::Field {
             object: operand, ..
         }
@@ -983,19 +1096,28 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             desugar_expr(els, expected, ctx);
         }
         Expr::IncDec { target, .. } => desugar_expr(target, None, ctx),
-        Expr::NewArray { dims, init, .. } => {
+        Expr::NewArray {
+            elem, dims, init, ..
+        } => {
+            let element = elem.clone();
             for d in dims.iter_mut().flatten() {
                 desugar_expr(d, None, ctx);
             }
             if let Some(elems) = init {
                 for e in elems {
-                    desugar_expr(e, None, ctx);
+                    desugar_expr(e, Some(&element), ctx);
                 }
             }
         }
+        // `Op[] ops = { P::m }`: each element is target-typed by the array's
+        // ELEMENT type, one dimension down.
         Expr::ArrayLiteral { elements, .. } => {
+            let element = match expected {
+                Some(TypeRef::Array(inner)) => Some((**inner).clone()),
+                _ => None,
+            };
             for e in elements {
-                desugar_expr(e, None, ctx);
+                desugar_expr(e, element.as_ref(), ctx);
             }
         }
         Expr::Assign { target, value, .. } => {
@@ -1024,7 +1146,187 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
 /// Convert a method reference into an equivalent lambda, choosing the
 /// call form (static, unbound-instance, bound-instance, or
 /// constructor) from the qualifier and the SAM's arity.
-fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &Ctx) -> Expr {
+/// JLS §15.13.1: decide which of the four method-reference forms applies and
+/// report the ones javac rejects — a static method named through an
+/// INSTANCE, a name that fits both the static and the unbound-instance form
+/// (ambiguous), an arity that fits neither, and a referenced method whose
+/// checked exceptions the functional interface does not allow.
+///
+/// Silent when the qualifier's class is unknown (a library type, a generic
+/// position): the checks must never fire on something caturra cannot see.
+fn validate_method_ref(expr: &Expr, sam: &Sam, ctx: &mut Ctx) {
+    let Expr::MethodRef {
+        qualifier,
+        method,
+        span,
+    } = expr
+    else {
+        return;
+    };
+    let arity = sam.params.len();
+    // `Type::new` on an enum: there is no constructor to reference.
+    if method == "new"
+        && let Expr::Name { path, .. } = qualifier.as_ref()
+        && path.len() == 1
+        && ctx.enums.contains(&path[0])
+    {
+        ctx.diags.push(crate::diagnostics::Diagnostic::error(
+            ctx.path,
+            "enum types may not be instantiated",
+            *span,
+        ));
+        return;
+    }
+    if method == "new" {
+        return;
+    }
+    // Which class is being searched, and whether the qualifier names a TYPE
+    // (static or unbound-instance forms) or a VALUE (bound form).
+    let (class, by_type) = match qualifier.as_ref() {
+        Expr::Name { path, .. } if path.len() == 1 => {
+            if let Some(TypeRef::Named(named) | TypeRef::Generic { base: named, .. }) =
+                ctx.lookup(&path[0])
+            {
+                (named, false)
+            } else if ctx.class_names.contains(&path[0]) {
+                (path[0].clone(), true)
+            } else {
+                return;
+            }
+        }
+        _ => return,
+    };
+    let Some(shapes) = ctx.shapes.get(&class) else {
+        return; // a library class: caturra cannot enumerate its overloads
+    };
+    let named: Vec<&MethodShape> = shapes.iter().filter(|m| m.name == *method).collect();
+    if named.is_empty() {
+        return; // resolution reports the missing method itself
+    }
+    let describe = |m: &MethodShape| format!("{}({} args)", m.name, m.arity);
+    if by_type {
+        // A static method takes the SAM's arguments; an unbound instance one
+        // takes the receiver FIRST, so it fits one argument fewer.
+        let statics: Vec<&&MethodShape> = named
+            .iter()
+            .filter(|m| m.is_static && m.arity == arity)
+            .collect();
+        let unbound: Vec<&&MethodShape> = named
+            .iter()
+            .filter(|m| !m.is_static && arity > 0 && m.arity == arity - 1)
+            .collect();
+        if !statics.is_empty() && !unbound.is_empty() {
+            ctx.diags.push(crate::diagnostics::Diagnostic::error(
+                ctx.path,
+                format!("invalid method reference: reference to {method} is ambiguous"),
+                *span,
+            ));
+            return;
+        }
+        if statics.is_empty() && unbound.is_empty() {
+            // Whichever kind exists is the one to blame, in javac's words.
+            let instance = named.iter().find(|m| !m.is_static);
+            let message = match instance {
+                Some(m) => format!(
+                    "invalid method reference: unexpected instance method {}",
+                    describe(m)
+                ),
+                None => format!(
+                    "invalid method reference: unexpected static method {}",
+                    named.first().map_or_else(String::new, |m| describe(m))
+                ),
+            };
+            ctx.diags.push(crate::diagnostics::Diagnostic::error(
+                ctx.path, message, *span,
+            ));
+            return;
+        }
+        check_thrown(statics.first().or(unbound.first()).map(|m| **m), ctx, *span);
+        return;
+    }
+    // A BOUND reference: the method must be an instance method of the
+    // receiver's class taking exactly the SAM's arguments.
+    if named.iter().all(|m| m.is_static) {
+        ctx.diags.push(crate::diagnostics::Diagnostic::error(
+            ctx.path,
+            format!(
+                "invalid method reference: unexpected static method {}",
+                named.first().map_or_else(String::new, |m| describe(m))
+            ),
+            *span,
+        ));
+        return;
+    }
+    let chosen = named.iter().find(|m| !m.is_static && m.arity == arity);
+    check_thrown(chosen.copied(), ctx, *span);
+}
+
+/// A method reference may not throw checked exceptions its functional
+/// interface does not declare (JLS §15.13.2). caturra's user functional
+/// interfaces are the ones it can see; a SAM that declares nothing allows
+/// nothing.
+fn check_thrown(chosen: Option<&MethodShape>, ctx: &mut Ctx, span: crate::diagnostics::SourceSpan) {
+    let Some(chosen) = chosen else {
+        return;
+    };
+    // Only the library throwables can be judged here (a user exception's
+    // ancestry needs the method table, which this pass does not build); an
+    // unknown name is left alone rather than reported wrongly.
+    let unchecked = |name: &String| {
+        let simple = name.rsplit(['.', '/']).next().unwrap_or(name);
+        match caturra_classfile::exceptions::internal_name_of(simple) {
+            Some(internal) => {
+                caturra_classfile::exceptions::is_exception_subclass(
+                    internal,
+                    "java/lang/RuntimeException",
+                ) || caturra_classfile::exceptions::is_exception_subclass(
+                    internal,
+                    "java/lang/Error",
+                )
+            }
+            None => true,
+        }
+    };
+    if let Some(thrown) = chosen.throws.iter().find(|name| !unchecked(name)) {
+        ctx.diags.push(crate::diagnostics::Diagnostic::error(
+            ctx.path,
+            format!("incompatible thrown types {thrown} in functional expression"),
+            span,
+        ));
+    }
+}
+
+/// The bridge a `super::m` reference calls: an ordinary instance method on
+/// the enclosing class whose body makes the non-virtual super call.
+fn super_bridge(
+    name: &str,
+    params: Vec<Param>,
+    return_type: TypeRef,
+    body: Vec<Stmt>,
+    span: crate::diagnostics::SourceSpan,
+) -> MethodDecl {
+    MethodDecl {
+        name: name.to_owned(),
+        is_static: false,
+        is_public: false,
+        is_private: false,
+        is_protected: false,
+        is_final: false,
+        is_constructor: false,
+        is_abstract: false,
+        type_params: Vec::new(),
+        infer_return: None,
+        return_type,
+        params,
+        body,
+        annotations: Vec::new(),
+        throws: Vec::new(),
+        span,
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one arm per reference form
+fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
     let Expr::MethodRef {
         qualifier,
         method,
@@ -1041,6 +1343,64 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &Ctx) -> Expr {
         span,
     };
 
+    // `super::m` — the synthesized lambda class cannot make a non-virtual
+    // call on the enclosing object's superclass, so the enclosing class gets
+    // a bridge that does it and the reference targets THAT (javac emits the
+    // same shape). The SAM gives the bridge its signature.
+    if matches!(qualifier.as_ref(), Expr::Super { .. }) {
+        let bridge = format!("__caturraSuper${method}");
+        if !ctx.bridges.iter().any(|m| m.name == bridge) {
+            let params: Vec<Param> = sam
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, ty)| Param {
+                    ty: ty.clone(),
+                    name: format!("__s{i}"),
+                    is_varargs: false,
+                    is_final: false,
+                })
+                .collect();
+            let args: Vec<Expr> = params
+                .iter()
+                .map(|p| Expr::Name {
+                    path: vec![p.name.clone()],
+                    span,
+                })
+                .collect();
+            let call = Expr::SuperMethodCall {
+                method: method.clone(),
+                args,
+                span,
+            };
+            let body = if matches!(sam.ret, TypeRef::Void) {
+                vec![Stmt::Expr(call)]
+            } else {
+                vec![Stmt::Return {
+                    value: Some(call),
+                    span,
+                }]
+            };
+            ctx.bridges
+                .push(super_bridge(&bridge, params, sam.ret.clone(), body, span));
+        }
+        return Expr::Lambda {
+            params: param_names
+                .iter()
+                .map(|name| crate::ast::LambdaParam {
+                    name: name.clone(),
+                    ty: None,
+                })
+                .collect(),
+            body: LambdaBody::Expr(Box::new(Expr::Call {
+                receiver: Some(Box::new(Expr::This { span })),
+                method: bridge,
+                args: param_names.iter().map(|n| name_expr(n)).collect(),
+                span,
+            })),
+            span,
+        };
+    }
     // Is the qualifier a bare class name?
     let qualifier_class = match qualifier.as_ref() {
         Expr::Name { path, .. } if path.len() == 1 && ctx.class_names.contains(&path[0]) => {
@@ -1855,7 +2215,10 @@ fn build_erased_lambda(
     };
     let span = *span;
     *ctx.counter += 1;
-    let name = format!("Lambda${}", ctx.counter);
+    // One-shot: the prefix applies to the class being built now, and reverts
+    // so nested lambdas inside its body are named as lambdas.
+    let prefix = std::mem::replace(&mut ctx.class_prefix, crate::LAMBDA_CLASS_PREFIX);
+    let name = format!("{prefix}{}", ctx.counter);
 
     let object = || TypeRef::Named(String::from("Object"));
     let erased: Vec<Param> = (0..elem_types.len())
@@ -1997,7 +2360,10 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
     };
     let span = *span;
     *ctx.counter += 1;
-    let name = format!("Lambda${}", ctx.counter);
+    // One-shot: the prefix applies to the class being built now, and reverts
+    // so nested lambdas inside its body are named as lambdas.
+    let prefix = std::mem::replace(&mut ctx.class_prefix, crate::LAMBDA_CLASS_PREFIX);
+    let name = format!("{prefix}{}", ctx.counter);
 
     // The synthesized method takes the SAM's parameter types with the
     // lambda's parameter names.
@@ -2131,7 +2497,7 @@ mod tests {
         let lambda = compilation
             .classes
             .iter()
-            .find(|c| c.binary_name.starts_with("Lambda$"))
+            .find(|c| crate::is_lambda_class(&c.binary_name))
             .expect("a synthesized lambda class");
         assert_eq!(
             source_file_of(&lambda.class_file).as_deref(),

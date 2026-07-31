@@ -1450,6 +1450,127 @@ impl Parser<'_> {
         Ok(params)
     }
 
+    /// Whether the cursor sits on the `[]` pairs of an ARRAY constructor
+    /// reference (`String[]::new`), rather than on an index or a declaration.
+    fn at_array_constructor_reference(&self) -> bool {
+        let mut at = self.pos;
+        let mut pairs = 0usize;
+        while matches!(
+            self.tokens.get(at).map(|t| &t.kind),
+            Some(TokenKind::Symbol("["))
+        ) && matches!(
+            self.tokens.get(at + 1).map(|t| &t.kind),
+            Some(TokenKind::Symbol("]"))
+        ) {
+            at += 2;
+            pairs += 1;
+        }
+        pairs > 0
+            && matches!(
+                self.tokens.get(at).map(|t| &t.kind),
+                Some(TokenKind::Symbol("::"))
+            )
+    }
+
+    /// `String[]::new` — modelled as a one-parameter lambda that allocates
+    /// the array, which is exactly what the reference means (JLS §15.13.3).
+    fn array_constructor_reference(&mut self, element: &str, start: SourceSpan) -> Expr {
+        let mut dims = 0usize;
+        while self.at_symbol("[") {
+            self.pos += 2; // `[` and `]`
+            dims += 1;
+        }
+        self.pos += 1; // `::`
+        self.pos += 1; // `new`
+        let span = SourceSpan {
+            start: start.start,
+            end: self.here().start,
+        };
+        let mut ty = match element {
+            "int" => TypeRef::Int,
+            "long" => TypeRef::Long,
+            "double" => TypeRef::Double,
+            "float" => TypeRef::Float,
+            "short" => TypeRef::Short,
+            "byte" => TypeRef::Byte,
+            "char" => TypeRef::Char,
+            "boolean" => TypeRef::Boolean,
+            other => TypeRef::Named(other.to_owned()),
+        };
+        for _ in 1..dims {
+            ty = TypeRef::Array(Box::new(ty));
+        }
+        let length = String::from("__caturraLen");
+        Expr::Lambda {
+            params: vec![LambdaParam {
+                name: length.clone(),
+                ty: Some(TypeRef::Int),
+            }],
+            body: LambdaBody::Expr(Box::new(Expr::NewArray {
+                elem: ty,
+                dims: vec![Some(Expr::Name {
+                    path: vec![length],
+                    span,
+                })],
+                init: None,
+                span,
+            })),
+            span,
+        }
+    }
+
+    /// Consume a balanced `<...>` type-argument list, which erasure drops.
+    /// Used where the arguments cannot change the meaning of what follows:
+    /// an explicit witness on a method reference, and the type arguments of
+    /// a constructor reference (`Box<String>::new`).
+    fn skip_type_arguments(&mut self) {
+        if !self.at_symbol("<") {
+            return;
+        }
+        let start = self.pos;
+        self.pos += 1;
+        let mut depth = 1usize;
+        while depth > 0 {
+            if self.at_symbol("<") {
+                depth += 1;
+            } else if self.at_symbol(">") {
+                depth -= 1;
+            } else if self.at_symbol(">>") {
+                depth = depth.saturating_sub(2);
+            } else if self.peek().is_none() || self.at_symbol(";") || self.at_symbol("{") {
+                self.pos = start; // not a type-argument list after all
+                return;
+            }
+            self.pos += 1;
+        }
+    }
+
+    /// Whether a `<` at the cursor opens a type-argument list that is
+    /// followed by `::` — the one place a generic type NAME can appear in
+    /// expression position (`Box<String>::new`).
+    fn at_generic_constructor_reference(&self) -> bool {
+        if !self.at_symbol("<") {
+            return false;
+        }
+        let mut at = self.pos + 1;
+        let mut depth = 1usize;
+        while depth > 0 {
+            match self.tokens.get(at).map(|t| &t.kind) {
+                Some(TokenKind::Symbol("<")) => depth += 1,
+                Some(TokenKind::Symbol(">")) => depth -= 1,
+                Some(TokenKind::Symbol(">>")) => depth = depth.saturating_sub(2),
+                Some(TokenKind::Identifier(_) | TokenKind::Symbol("," | "?")) => {}
+                Some(TokenKind::Keyword(kw)) if primitive_type_name(*kw).is_some() => {}
+                _ => return false,
+            }
+            at += 1;
+        }
+        matches!(
+            self.tokens.get(at).map(|t| &t.kind),
+            Some(TokenKind::Symbol("::"))
+        )
+    }
+
     fn type_ref(&mut self) -> Parsed<TypeRef> {
         let mut ty = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Void)) => {
@@ -3092,6 +3213,11 @@ impl Parser<'_> {
             // Method reference: `qualifier::method` or `Type::new`.
             if self.at_symbol("::") {
                 self.pos += 1;
+                // An explicit type witness (`Type::<String>m`) is erased, so
+                // it is parsed and dropped — exactly what it contributes.
+                if self.at_symbol("<") {
+                    self.skip_type_arguments();
+                }
                 let method = if self.eat_keyword(Keyword::New) {
                     String::from("new")
                 } else {
@@ -3615,6 +3741,15 @@ impl Parser<'_> {
                 // `var` here is a NAME (a variable or method called var) —
                 // the declaration head never reaches primary_expression.
                 let (name, name_span) = self.expect_ident("to start the expression")?;
+                // `String[]::new` — an ARRAY constructor reference, whose
+                // qualifier is a type, not a value.
+                if self.at_array_constructor_reference() {
+                    return Ok(self.array_constructor_reference(&name, name_span));
+                }
+                // `Box<String>::new` — the type arguments erase away.
+                if self.at_generic_constructor_reference() {
+                    self.skip_type_arguments();
+                }
                 Ok(Expr::Name {
                     path: vec![name],
                     span: name_span,
@@ -3642,6 +3777,11 @@ impl Parser<'_> {
             Some(TokenKind::Keyword(Keyword::Super)) => {
                 let start = self.here();
                 self.pos += 1;
+                // `super::method` — a method REFERENCE to the superclass's
+                // implementation; the postfix loop reads the `::`.
+                if self.at_symbol("::") {
+                    return Ok(Expr::Super { span: start });
+                }
                 if !self.eat_symbol(".") {
                     self.error_at(start, "expected '.' after 'super' (super.method(...))");
                     return Err(Abort);
@@ -3672,10 +3812,13 @@ impl Parser<'_> {
             }
             Some(TokenKind::Keyword(kw)) if primitive_type_name(*kw).is_some() => {
                 // `int.class` / `int[].class` — a (possibly array) primitive
-                // class literal.
+                // class literal; `int[]::new` — an array constructor ref.
                 let name = primitive_type_name(*kw).expect("checked");
                 let start = self.here();
                 self.pos += 1;
+                if self.at_array_constructor_reference() {
+                    return Ok(self.array_constructor_reference(name, start));
+                }
                 // Trailing `[]` pairs: `int[].class`, `int[][].class`.
                 let mut dims = 0usize;
                 while self.at_symbol("[") {
