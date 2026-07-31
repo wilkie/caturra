@@ -18104,3 +18104,167 @@ public class RejGenericArray {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 enums: the members and modifiers JLS §8.9 forbids, delegation
+// between enum constructors, and the messages for instantiating or
+// extending one.
+
+// A constructor may delegate with `this(...)`, and the blank final it
+// assigns is definitely assigned through the delegation — beside the
+// ordinary enum surface, which must keep working.
+differential_test!(
+    diff_enum_constructor_delegation,
+    "DiffEnumDelegate",
+    r#"
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+enum Planet {
+    MERCURY(3.3e23), VENUS(4.87e24);
+    private final double mass;
+    Planet(double m) { mass = m; }
+    double mass() { return mass; }
+}
+enum Oper {
+    PLUS("+") { int apply(int a, int b) { return a + b; } },
+    TIMES("*") { int apply(int a, int b) { return a * b; } };
+    final String sym;
+    Oper(String s) { sym = s; }
+    abstract int apply(int a, int b);
+    static final int CONSTANT = 7;
+}
+enum Chained {
+    A, B(5);
+    final int v;
+    Chained() { this(1); }
+    Chained(int v) { this.v = v; }
+}
+interface Labelled { String label(); }
+enum WithIface implements Labelled {
+    X { public String label() { return "x"; } },
+    Y { public String label() { return "y"; } }
+}
+public class DiffEnumDelegate {
+    public static void main(String[] args) {
+        for (Planet p : Planet.values()) {
+            System.out.println(p + " " + p.mass() + " " + p.ordinal());
+        }
+        System.out.println(Oper.PLUS.apply(2, 3) + " " + Oper.TIMES.apply(2, 3)
+            + " " + Oper.PLUS.sym + Oper.CONSTANT);
+        System.out.println(Chained.A.v + "," + Chained.B.v + " " + Chained.valueOf("B"));
+        for (WithIface w : WithIface.values()) System.out.print(w.label());
+        System.out.println();
+        System.out.println(Planet.valueOf("VENUS") + " " + Arrays.toString(Oper.values()));
+        Map<Planet, String> m = new HashMap<>();
+        m.put(Planet.VENUS, "v");
+        System.out.println(m.get(Planet.VENUS) + " " + Planet.MERCURY.compareTo(Planet.VENUS));
+        switch (Oper.PLUS) {
+            case PLUS: System.out.println("plus"); break;
+            default: System.out.println("other");
+        }
+    }
+}
+"#
+);
+
+// The declarations JLS §8.9 forbids.
+differential_reject!(
+    reject_enum_final_modifier,
+    "RejEnumFinal",
+    r"
+public class RejEnumFinal {
+    final enum E { A }
+    public static void main(String[] args) { System.out.println(E.A); }
+}
+"
+);
+
+differential_reject!(
+    reject_enum_public_constructor,
+    "RejEnumPublicCtor",
+    r"
+public class RejEnumPublicCtor {
+    enum E {
+        A(1);
+        int v;
+        public E(int v) { this.v = v; }
+    }
+    public static void main(String[] args) { System.out.println(E.A.v); }
+}
+"
+);
+
+differential_reject!(
+    reject_enum_redeclares_values,
+    "RejEnumValues",
+    r"
+public class RejEnumValues {
+    enum E {
+        A, B;
+        static E[] values() { return null; }
+    }
+    public static void main(String[] args) { System.out.println(E.values().length); }
+}
+"
+);
+
+differential_reject!(
+    reject_enum_redeclares_value_of,
+    "RejEnumValueOf",
+    r#"
+public class RejEnumValueOf {
+    enum E {
+        A, B;
+        static E valueOf(String s) { return A; }
+    }
+    public static void main(String[] args) { System.out.println(E.valueOf("B")); }
+}
+"#
+);
+
+differential_reject!(
+    reject_static_declaration_in_enum_constant_body,
+    "RejEnumConstStatic",
+    r"
+public class RejEnumConstStatic {
+    enum E {
+        A {
+            static int s = 1;
+            int f() { return s; }
+        };
+        abstract int f();
+    }
+    public static void main(String[] args) { System.out.println(E.A.f()); }
+}
+"
+);
+
+differential_reject!(
+    reject_enum_instantiation,
+    "RejEnumNew",
+    r"
+public class RejEnumNew {
+    enum E {
+        A;
+        E() { }
+    }
+    public static void main(String[] args) {
+        E e = new E();
+        System.out.println(e);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_extending_an_enum,
+    "RejEnumExtend",
+    r#"
+public class RejEnumExtend {
+    enum E { A }
+    static class C extends E { }
+    public static void main(String[] args) { System.out.println("ran"); }
+}
+"#
+);

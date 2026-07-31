@@ -231,6 +231,33 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Enums, round 2** (2026-07-31, round 7) — 8 of 10 findings, six of them
+  the dangerous direction:
+  - **The declarations JLS §8.9 forbids** now are: a `final` or `abstract`
+    modifier on the enum (it is implicitly both, as its constants
+    require), an access modifier on its constructor (implicitly private),
+    and a redeclaration of `values()` or `valueOf(String)` — the last was
+    not merely accepted but REPLACED the synthesized member, so a user
+    `values()` returning null made `E.values().length` throw.
+  - **A static declaration inside a constant's body** is refused ("Illegal
+    static declaration in inner class"), since that body is an anonymous
+    class; a `static final` constant variable stays legal, as in Java.
+  - **`new E()` says "enum types may not be instantiated"** and `class C
+    extends E` says "cannot inherit from final E" — both used to complain
+    that the constructor could not be applied to `()`, which is not why
+    either is wrong. Both checks exempt what the desugaring itself
+    generates: the constants' own construction, and a constant body (an
+    anonymous subclass of the enum, the one thing that may extend it).
+  - **A constructor may delegate with `this(...)`**: the enum rewrite used
+    to insert the hidden name/ordinal stores AHEAD of the delegation,
+    which both displaced the mandatory-first call and made the blank final
+    the delegate assigns look unassigned. The synthetic arguments are
+    threaded THROUGH the delegation instead, so only the constructor that
+    ends the chain stores them.
+  - **Two left open**: `java.lang.Enum` is not a nameable type (`Enum<E> e
+    = E.A`), and a PRIVATE instance field of the enum read by simple name
+    from a constant body is accepted where javac refuses it — a real javac
+    quirk (a non-private field, or a getter, compiles on both).
 - **Generics, round 3** (2026-07-31, round 7) — 8 of 12 findings:
   - **A type variable in ARGUMENT position keeps its bound**: `<T extends
     Number> T firstOf(List<T> l)` could not `return l.get(0)`, because the

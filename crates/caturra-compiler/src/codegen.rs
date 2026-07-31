@@ -1022,6 +1022,22 @@ impl MethodTable {
                 let Some(info) = self.classes.get(&class.name) else {
                     continue;
                 };
+                // An ENUM is implicitly final (JLS §8.9), so nothing may
+                // extend it — javac: "cannot inherit from final E". caturra
+                // complained about the constructor instead.
+                // (An enum constant's own BODY is a synthesized anonymous
+                // subclass of the enum — the one thing that legitimately
+                // extends it.)
+                if let Some(sup) = info.superclass
+                    && self.is_enum(sup)
+                    && !class.is_anonymous
+                {
+                    diagnostics.push(Diagnostic::error(
+                        path,
+                        format!("cannot inherit from final {}", self.class_name(sup)),
+                        class.span,
+                    ));
+                }
                 // Shape checks: classes extend classes, implement interfaces.
                 if let Some(sup) = info.superclass
                     && self.info_by_id(sup).is_some_and(|s| s.is_interface)
@@ -12665,6 +12681,15 @@ impl BodyGen<'_> {
             }
             return JType::Error;
         };
+        // JLS §8.9: an enum's constructor is not accessible — only its own
+        // constant initializers may create instances, which is where the
+        // desugaring puts them (in the enum, or in a constant's body
+        // subclass). caturra used to report the arity complaint of a
+        // constructor it would not have let you call anyway.
+        if self.table.is_enum(class_id) && !self.table.is_subtype(self.current_class_id, class_id) {
+            self.error(span, "enum types may not be instantiated");
+            return JType::Error;
+        }
         if self
             .table
             .info_by_id(class_id)

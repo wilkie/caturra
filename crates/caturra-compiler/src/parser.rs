@@ -364,6 +364,8 @@ struct Modifiers {
 struct ClassModifiers {
     is_abstract: bool,
     is_public: bool,
+    /// Recorded only to REFUSE it on an enum, which is implicitly final.
+    is_final: bool,
 }
 
 /// One parsed class member.
@@ -770,7 +772,12 @@ impl Parser<'_> {
     fn class_decl(&mut self) -> Parsed<ClassDecl> {
         let start = self.here();
         let modifiers = self.class_modifiers();
-        self.type_after_modifiers(start, modifiers.is_abstract, modifiers.is_public)
+        self.type_after_modifiers(
+            start,
+            modifiers.is_abstract,
+            modifiers.is_public,
+            modifiers.is_final,
+        )
     }
 
     /// The `extends` / `implements` clauses: `(superclass, interfaces)`.
@@ -852,8 +859,18 @@ impl Parser<'_> {
         start: SourceSpan,
         is_abstract_modifier: bool,
         is_public: bool,
+        is_final_modifier: bool,
     ) -> Parsed<ClassDecl> {
         if self.at_keyword(Keyword::Enum) {
+            // JLS §8.9: an enum is implicitly final (or implicitly abstract
+            // when a constant has a body), so neither modifier may be
+            // written. javac: "modifier final not allowed here".
+            if is_abstract_modifier {
+                self.error_at(start, "modifier abstract not allowed here");
+            }
+            if is_final_modifier {
+                self.error_at(start, "modifier final not allowed here");
+            }
             let mut decl = self.enum_decl(start)?;
             decl.is_public = is_public;
             return Ok(decl);
@@ -1040,6 +1057,38 @@ impl Parser<'_> {
         }
         self.eat_symbol("}");
 
+        // JLS §8.9.2: an enum constructor is implicitly private, so an
+        // access modifier on one is an error; and `values()`/`valueOf(String)`
+        // are compiler-supplied members that may not be redeclared (caturra
+        // used to let a redeclaration REPLACE the synthesized one, so
+        // `values()` returned whatever the user wrote — null, in the probe).
+        for method in &methods {
+            if method.is_constructor && (method.is_public || method.is_protected) {
+                let modifier = if method.is_public {
+                    "public"
+                } else {
+                    "protected"
+                };
+                self.error_at(method.span, format!("modifier {modifier} not allowed here"));
+            }
+            let synthesized = (method.name == "values" && method.params.is_empty())
+                || (method.name == "valueOf" && method.params.len() == 1);
+            if synthesized && method.is_static {
+                self.error_at(
+                    method.span,
+                    format!(
+                        "method {}({}) is already defined in enum {name}",
+                        method.name,
+                        if method.params.is_empty() {
+                            ""
+                        } else {
+                            "String"
+                        }
+                    ),
+                );
+            }
+        }
+
         // `Enum`'s `name`/`ordinal`/`equals`/`hashCode`/`compareTo`/
         // `getDeclaringClass` are FINAL, so an enum may not override them
         // (JLS §8.9). caturra used the override silently.
@@ -1090,6 +1139,7 @@ impl Parser<'_> {
                     self.pos += 1;
                 }
                 Some(TokenKind::Keyword(Keyword::Final)) => {
+                    modifiers.is_final = true;
                     self.pos += 1;
                 }
                 Some(TokenKind::Symbol("@")) => self.skip_annotation(),
@@ -1162,8 +1212,12 @@ impl Parser<'_> {
         ) {
             // A nested type may be `public`; the file-name rule is top-level
             // only (JLS §7.6), so this is recorded and never checked.
-            let mut nested =
-                self.type_after_modifiers(start, modifiers.is_abstract, modifiers.is_public)?;
+            let mut nested = self.type_after_modifiers(
+                start,
+                modifiers.is_abstract,
+                modifiers.is_public,
+                modifiers.is_final,
+            )?;
             // A non-static nested CLASS is an inner class, bound to an enclosing
             // instance. Interfaces and enums are implicitly static.
             nested.is_inner = !modifiers.is_static && !nested.is_interface && !nested.is_enum;
@@ -1755,7 +1809,7 @@ impl Parser<'_> {
             }
             self.pos += 1;
         }
-        let mut decl = self.type_after_modifiers(start, is_abstract, false)?;
+        let mut decl = self.type_after_modifiers(start, is_abstract, false, false)?;
         let name = decl.name.clone();
         self.local_counter += 1;
         decl.name = format!("{name}$Local{}", self.local_counter);
@@ -3481,6 +3535,23 @@ impl Parser<'_> {
                     Member::Method(m) => methods.push(m),
                     Member::Fields(mut declared) => {
                         for f in &mut declared {
+                            // JLS §8.1.3: an anonymous class body — which is
+                            // what an enum constant's body is — may not
+                            // declare static members, except constant
+                            // variables. javac: "Illegal static declaration
+                            // in inner class".
+                            let constant_variable =
+                                f.is_final && matches!(&f.init, Some(Expr::Literal { .. }));
+                            if f.is_static && !constant_variable {
+                                self.error_at(
+                                    f.span,
+                                    format!(
+                                        "Illegal static declaration in inner class \
+                                         <anonymous {supertype}$1>: {}",
+                                        f.name
+                                    ),
+                                );
+                            }
                             f.order = order;
                             order += 1;
                         }
@@ -4087,9 +4158,24 @@ fn desugar_enum(
                 let mut params = lead_params();
                 params.append(&mut method.params);
                 method.params = params;
-                let mut body = store_stmts();
-                body.append(&mut method.body);
-                method.body = body;
+                // A constructor that DELEGATES (`E() { this(1); }`) must
+                // keep the delegation first (JLS §8.8.7.1) and must not
+                // store the name and ordinal itself — the constructor it
+                // calls does, and assigning them twice would also make the
+                // hidden fields look doubly assigned. The synthetic
+                // arguments are threaded through the delegation instead.
+                let delegates = matches!(method.body.first(), Some(Stmt::ThisCall { .. }));
+                if delegates {
+                    if let Some(Stmt::ThisCall { args, .. }) = method.body.first_mut() {
+                        let mut forwarded = vec![var("__name"), var("__ordinal")];
+                        forwarded.append(args);
+                        *args = forwarded;
+                    }
+                } else {
+                    let mut body = store_stmts();
+                    body.append(&mut method.body);
+                    method.body = body;
+                }
                 method.is_private = true;
             }
         }

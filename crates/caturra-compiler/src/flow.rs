@@ -361,11 +361,15 @@ fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>)
         }
         for constructor in &constructors {
             // A constructor delegating with `this(...)` relies on the one it
-            // calls, which is checked on its own.
+            // calls, which is checked on its own. The delegation is FIRST in
+            // source, but an enum's constructors are rewritten with a
+            // synthetic prologue (the constant's name and ordinal) ahead of
+            // it — so look for it anywhere, which `this(...)`'s own
+            // position rule makes safe.
             if constructor
                 .body
-                .first()
-                .is_some_and(|s| matches!(s, Stmt::ThisCall { .. }))
+                .iter()
+                .any(|s| matches!(s, Stmt::ThisCall { .. }))
             {
                 continue;
             }
