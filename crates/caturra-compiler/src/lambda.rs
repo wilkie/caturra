@@ -746,15 +746,17 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // `list.forEach(x -> ...)` / `list.removeIf(x -> ...)`: a single
             // lambda whose parameter type is the receiver's element type. The
             // erased SAM is `__Consumer` (void) or `__Predicate` (boolean).
-            if matches!(method.as_str(), "forEach" | "removeIf" | "replaceAll")
-                && args.len() == 1
+            if matches!(
+                method.as_str(),
+                "forEach" | "forEachRemaining" | "removeIf" | "replaceAll"
+            ) && args.len() == 1
                 && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
                 && let Some(r) = receiver.as_deref()
                 && let Some(elem) = list_elem_type(r, ctx)
             {
                 let object = TypeRef::Named(String::from("Object"));
                 let (iface, sam, ret) = match method.as_str() {
-                    "forEach" => ("__Consumer", "accept", TypeRef::Void),
+                    "forEach" | "forEachRemaining" => ("__Consumer", "accept", TypeRef::Void),
                     "removeIf" => ("__Predicate", "test", TypeRef::Boolean),
                     // `UnaryOperator<E>` — `E apply(E)`, erased to `Object
                     // apply(Object)`. The result is boxed on return.
@@ -1612,6 +1614,14 @@ fn map_type_args(receiver: &Expr, ctx: &Ctx) -> Option<(TypeRef, TypeRef)> {
             base: class.clone(),
             args: type_args.clone(),
         },
+        // `Collections.unmodifiableMap(m).keySet()` — a read-only view keeps
+        // the map's key and value types.
+        Expr::Call { method, args, .. }
+            if matches!(method.as_str(), "unmodifiableMap" | "unmodifiableSortedMap")
+                && args.len() == 1 =>
+        {
+            return map_type_args(&args[0], ctx);
+        }
         _ => return None,
     };
     let TypeRef::Generic { base, args } = ty else {
@@ -2043,23 +2053,35 @@ fn optional_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 }
 
 fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
-    // A `map.keySet()`/`values()` view: the element is the map's key or value
-    // type. `entrySet()` yields `Map.Entry`, whose lambda parameter typing
-    // differs, so it is not handled here.
     if let Expr::Call {
-        receiver: Some(map),
+        receiver: Some(inner),
         method,
         args,
         ..
     } = receiver
         && args.is_empty()
-        && let Some((key, value)) = map_type_args(map, ctx)
     {
-        return match method.as_str() {
-            "keySet" => Some(key),
-            "values" => Some(value),
-            _ => None,
-        };
+        // A `map.keySet()`/`values()`/`entrySet()` view: the element is the
+        // map's key, its value, or a whole `Map.Entry` — which is what makes
+        // `entrySet().removeIf(e -> ...)` the only form that can decide by key
+        // AND value together.
+        if let Some((key, value)) = map_type_args(inner, ctx) {
+            return match method.as_str() {
+                "keySet" => Some(key),
+                "values" => Some(value),
+                "entrySet" => Some(TypeRef::Generic {
+                    base: String::from("Map.Entry"),
+                    args: vec![key, value],
+                }),
+                _ => None,
+            };
+        }
+        // A cursor over a collection walks that collection's elements:
+        // `list.iterator().forEachRemaining(x -> ...)`.
+        if matches!(method.as_str(), "iterator" | "listIterator") {
+            return list_elem_type(inner, ctx);
+        }
+        return None;
     }
     let ty = match receiver {
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
@@ -2093,6 +2115,10 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             | "Deque"
             | "PriorityQueue"
             | "Collection"
+            // A cursor declared `Iterator<E>` walks `E`s, for
+            // `forEachRemaining`.
+            | "Iterator"
+            | "ListIterator"
     );
     (is_collection && args.len() == 1).then(|| args[0].clone())
 }

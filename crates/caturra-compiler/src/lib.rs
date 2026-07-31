@@ -513,6 +513,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     }
     if sources.iter().any(|s| {
         s.text.contains(".forEach(")
+            || s.text.contains(".forEachRemaining(")
             || s.text.contains(".removeIf(")
             || s.text.contains(".replaceAll(")
             || s.text.contains(".sort(")

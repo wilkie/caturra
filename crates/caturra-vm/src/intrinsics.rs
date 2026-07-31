@@ -8,7 +8,9 @@
 
 use crate::io::ConsoleIo;
 use crate::map::JavaHashMap;
-use crate::value::{Heap, HeapObject, HeapRef, IntKind, JValue, MapViewKind, StdStream};
+use crate::value::{
+    Heap, HeapObject, HeapRef, IntKind, IteratorWrites, JValue, MapViewKind, StdStream,
+};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
@@ -3134,7 +3136,7 @@ fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
     if let Some(values) = heap.list_values(source) {
         return values.get(index).copied().unwrap_or(JValue::NULL);
     }
-    if let Some(HeapObject::MapView { map, kind }) = heap.get(source) {
+    if let Some(HeapObject::MapView { map, kind, .. }) = heap.get(source) {
         return match kind {
             MapViewKind::Values => map_value_at(heap, *map, index),
             _ => map_key_at(heap, *map, index),
@@ -3196,6 +3198,20 @@ fn iterated_remove(heap: &mut Heap, source: HeapRef, index: usize) {
     }
 }
 
+/// One step of `Iterator.forEachRemaining`: the next element, or `None` once
+/// the cursor is spent. `forEachRemaining` lives in the interpreter (it runs a
+/// user `accept`), but its stepping is exactly the JDK default's
+/// `while (hasNext()) action.accept(next())` — fail-fast check included.
+pub(crate) fn iterator_step(heap: &mut Heap, cursor: HeapRef) -> Result<Option<JValue>, VmError> {
+    if !matches!(
+        iterator_method(heap, cursor, "hasNext", &[])?,
+        Some(JValue::Int(1))
+    ) {
+        return Ok(None);
+    }
+    iterator_method(heap, cursor, "next", &[])
+}
+
 /// `java.util.Iterator`: `hasNext`/`next`/`remove` over the position the iterator
 /// holds. The collection is read live, so a `remove()` (or any other mutation)
 /// shows through on the next call — caturra does not model
@@ -3212,11 +3228,42 @@ fn iterator_method(
         index,
         last,
         expected_len,
+        writes,
     }) = heap.get(receiver)
     else {
         unreachable!("receiver kind checked by caller");
     };
-    let (source, index, last, expected_len) = (*source, *index, *last, *expected_len);
+    let (source, index, last, expected_len, writes) =
+        (*source, *index, *last, *expected_len, *writes);
+    // A cursor over a read-only view refuses the same mutators the view does —
+    // `set` survives on a FIXED-SIZE `Arrays.asList`, whose element write goes
+    // through to the array. The JDK reaches this by having `Itr.remove` call
+    // the collection's own `remove`; here the capability rides on the cursor.
+    let allowed = matches!(
+        (method, writes),
+        (_, IteratorWrites::All) | ("set", IteratorWrites::FixedSize)
+    );
+    if !allowed {
+        match (method, writes) {
+            ("remove", IteratorWrites::ArrayCursor) => {
+                return Err(throw("java.lang.UnsupportedOperationException: remove"));
+            }
+            // A GENERIC cursor checks its OWN state before asking the
+            // collection to change: a `remove()` with no `next()` first is an
+            // IllegalStateException, and only a well-placed one reaches the
+            // collection's refusal. A view's own cursor (`IteratorWrites::None`)
+            // has no such order — it throws outright.
+            ("remove" | "set", IteratorWrites::FixedSize | IteratorWrites::NoneChecked)
+                if last.is_none() =>
+            {
+                return Err(throw("java.lang.IllegalStateException"));
+            }
+            ("remove" | "set" | "add", _) => {
+                return Err(throw("java.lang.UnsupportedOperationException"));
+            }
+            _ => {}
+        }
+    }
     match method {
         // `hasNext` does NOT check for comodification — the JDK's is a bare
         // `cursor != size`. That is not an oversight to fix: it is what makes
@@ -3238,10 +3285,17 @@ fn iterator_method(
             if let Some(HeapObject::MapView {
                 map,
                 kind: MapViewKind::Entries,
+                ..
             }) = heap.get(source)
             {
                 let (map, key) = (*map, map_key_at(heap, *map, index));
-                let entry = heap.alloc(HeapObject::MapEntry { map, key });
+                // A cursor that may not write back hands out entries that may
+                // not either — `setValue` on one would reach the backing map.
+                let entry = heap.alloc(HeapObject::MapEntry {
+                    map,
+                    key,
+                    read_only: writes == IteratorWrites::None,
+                });
                 if let Some(HeapObject::Iterator { index, last, .. }) = heap.get_mut(receiver) {
                     *last = Some(*index);
                     *index += 1;
@@ -3392,13 +3446,40 @@ fn list_method(
     match (method, descriptor, args) {
         // `iterator()` and `listIterator()` share the cursor object; the extra
         // ListIterator methods (`previous`/`set`/…) act on the same fields.
-        ("iterator" | "listIterator", _, []) => {
+        // `listIterator(int)` starts the cursor at an index — the standard way
+        // to walk a list backwards (`list.listIterator(list.size())`).
+        ("iterator" | "listIterator", _, [] | [JValue::Int(_)]) => {
             let expected_len = iterated_len(heap, receiver);
+            let index = match args {
+                [JValue::Int(at)] => usize::try_from(*at)
+                    .ok()
+                    .filter(|at| *at <= expected_len)
+                    .ok_or_else(|| {
+                        throw(format!(
+                            "java.lang.IndexOutOfBoundsException: Index: {at}, Size: {expected_len}"
+                        ))
+                    })?,
+                _ => 0,
+            };
+            // An `Arrays.asList` view is FIXED-SIZE, not immutable, and the two
+            // cursors it hands out differ: `iterator()` is JDK 9's `ArrayItr`
+            // (no `remove` at all), while `listIterator()` is `AbstractList`'s,
+            // whose `set` writes through to the array.
+            let writes = if matches!(heap.get(receiver), Some(HeapObject::ArrayBackedList(_))) {
+                if method == "iterator" {
+                    IteratorWrites::ArrayCursor
+                } else {
+                    IteratorWrites::FixedSize
+                }
+            } else {
+                IteratorWrites::All
+            };
             let iterator = heap.alloc(HeapObject::Iterator {
                 source: receiver,
-                index: 0,
+                index,
                 last: None,
                 expected_len,
+                writes,
             });
             Ok(Some(JValue::Ref(Some(iterator))))
         }

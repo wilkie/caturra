@@ -4057,6 +4057,7 @@ fn is_collections_method(method: &str) -> bool {
             | "singletonMap"
             | "unmodifiableSet"
             | "unmodifiableMap"
+            | "unmodifiableCollection"
             | "rotate"
             | "fill"
             | "copy"
@@ -6078,6 +6079,14 @@ const LIST_METHODS: &[BuiltinMethod] = &[
         BRet::ListIterator,
         "()Ljava/util/ListIterator;",
     ),
+    // `listIterator(int)` starts the cursor at an index — how a backward walk
+    // begins (`list.listIterator(list.size())`).
+    bm(
+        "listIterator",
+        &[BParam::Int],
+        BRet::ListIterator,
+        "(I)Ljava/util/ListIterator;",
+    ),
     BuiltinMethod {
         name: "size",
         params: &[],
@@ -6360,6 +6369,9 @@ const STACK_METHODS: &[BuiltinMethod] = &[
 /// `poll`/`peek` return the boxed element so their empty-collection `null` is
 /// representable; `remove()`/`element()` throw on empty instead.
 const QUEUE_METHODS: &[BuiltinMethod] = &[
+    // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
+    // is the only way to remove from the MIDDLE of one.
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),
@@ -6419,6 +6431,9 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 /// `java.util.Deque<E>` — everything a `Queue` has, plus the two-ended and
 /// stack (`push`/`pop`) operations.
 const DEQUE_METHODS: &[BuiltinMethod] = &[
+    // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
+    // is the only way to remove from the MIDDLE of one.
+    bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("clear", &[], BRet::Void, "()V"),
@@ -6867,6 +6882,12 @@ const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     bm("next", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
     bm("remove", &[], BRet::Void, "()V"),
+    bm(
+        "forEachRemaining",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
 ];
 
 /// `java.lang.CharSequence` — the read-only face shared by `String` and
@@ -6886,6 +6907,13 @@ const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
 
 const ITERATOR_METHODS: &[BuiltinMethod] = &[
     bm("hasNext", &[], BRet::Boolean, "()Z"),
+    // `forEachRemaining(Consumer)` — the JDK 8 default that drains the cursor.
+    bm(
+        "forEachRemaining",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     // `BoxedElem`, not `Elem`: a list stores its elements unboxed and a set stores
     // them boxed, and the VM's `next()` boxes a primitive so both come back the
     // same — a `List<Integer>` and a `TreeSet<Integer>` iterator alike return an
@@ -6899,6 +6927,12 @@ const ITERATOR_METHODS: &[BuiltinMethod] = &[
 /// back an `Integer` either way.
 const LIST_ITERATOR_METHODS: &[BuiltinMethod] = &[
     bm("hasNext", &[], BRet::Boolean, "()Z"),
+    bm(
+        "forEachRemaining",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     bm("hasPrevious", &[], BRet::Boolean, "()Z"),
     bm("next", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm("previous", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
@@ -8663,6 +8697,16 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
         "(Ljava/util/Collection;)Z",
     ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
+    // Every reference type has these. A `keySet()` compares as a Set does and
+    // hashes to the sum of its elements; a `values()` view is a bare
+    // `Collection`, so it keeps `Object`'s identity equals and hash.
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
@@ -8876,6 +8920,27 @@ const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
+    // `removeIf` and `forEach` over the ENTRIES: the only way to decide by key
+    // and value together, so the lambda sees a live `Map.Entry`.
+    bm(
+        "removeIf",
+        &[BParam::Predicate],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "forEach",
+        &[BParam::Consumer],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
 ];
 
@@ -16645,6 +16710,37 @@ impl BodyGen<'_> {
             self.code.drop_stack(key_ty.width() + value_ty.width());
             return Some(Some(JType::Map { key, value }));
         }
+        // `unmodifiableCollection(c)` — the same read-only view its List/Set
+        // siblings give, but typed (and usable) as the `Collection` face, so it
+        // takes any of them. The VM wraps by the argument's runtime kind.
+        if method == "unmodifiableCollection" {
+            let [collection] = args else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let collection_ty = self.expr(collection);
+            let elem = match collection_ty {
+                JType::Stack(elem) => Some(elem),
+                other => collection_element_type(other),
+            };
+            let Some(elem) = elem else {
+                self.error(
+                    collection.span(),
+                    String::from("Collections.unmodifiableCollection takes a Collection"),
+                );
+                self.code.discard();
+                return None;
+            };
+            let method_ref = intern_method_ref(
+                self.pool,
+                "Collections",
+                method,
+                "(Ljava/util/Collection;)Ljava/util/Collection;",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(1);
+            return Some(Some(JType::Collection(elem)));
+        }
         // `unmodifiableSet(set)` / `unmodifiableMap(map)` — an immutable view of
         // the argument, keeping its own set/map type.
         if method == "unmodifiableSet" || method == "unmodifiableMap" {
@@ -19644,6 +19740,17 @@ impl BodyGen<'_> {
         {
             if !matches!(source, JType::List(_)) {
                 let class_index = intern_class(self.pool, "java/util/ArrayList");
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return target;
+        }
+        // Casting a reference (commonly the erased `Object` parameter of an
+        // `entrySet().removeIf(e -> ...)` lambda) to a `Map.Entry`.
+        if let JType::MapEntry { .. } = target
+            && source.is_reference()
+        {
+            if !matches!(source, JType::MapEntry { .. } | JType::Null) {
+                let class_index = intern_class(self.pool, "java/util/Map$Entry");
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
             }
             return target;

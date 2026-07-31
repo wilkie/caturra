@@ -18749,3 +18749,204 @@ public class RejUnderscoreSuffix {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Collection views (audit round 8): a read-only view stays read-only THROUGH
+// its cursor and its entries, and the view faces carry their whole surface.
+// ---------------------------------------------------------------------------
+
+// The headline: `Collections.unmodifiable*` exists to make a collection
+// read-only, and the cursor is the one door it must not leave open. Every
+// mutator — `Iterator.remove`, a `ListIterator`'s `set`/`add`/`remove`, and a
+// `Map.Entry.setValue` reached through the entrySet — throws, and the backing
+// collection is untouched.
+differential_test!(
+    diff_unmodifiable_views_refuse_their_cursors,
+    "DiffViewCursors",
+    r#"
+import java.util.*;
+
+public class DiffViewCursors {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        Iterator<String> li = Collections.unmodifiableList(list).iterator();
+        li.next();
+        try { li.remove(); } catch (UnsupportedOperationException e) { System.out.println("list"); }
+
+        ListIterator<String> lit = Collections.unmodifiableList(list).listIterator();
+        lit.next();
+        try { lit.set("Z"); } catch (UnsupportedOperationException e) { System.out.println("set"); }
+        try { lit.add("Y"); } catch (UnsupportedOperationException e) { System.out.println("add"); }
+        try { lit.remove(); } catch (UnsupportedOperationException e) { System.out.println("remove"); }
+
+        Set<String> set = new TreeSet<>(Arrays.asList("a", "b", "c"));
+        Iterator<String> si = Collections.unmodifiableSet(set).iterator();
+        si.next();
+        try { si.remove(); } catch (UnsupportedOperationException e) { System.out.println("set view"); }
+
+        Map<String, Integer> map = new TreeMap<>();
+        map.put("a", 1);
+        map.put("b", 2);
+        Map<String, Integer> frozen = Collections.unmodifiableMap(map);
+        Iterator<String> ki = frozen.keySet().iterator();
+        ki.next();
+        try { ki.remove(); } catch (UnsupportedOperationException e) { System.out.println("keySet"); }
+        for (Map.Entry<String, Integer> e : frozen.entrySet()) {
+            try { e.setValue(99); } catch (UnsupportedOperationException x) { System.out.println("setValue"); }
+        }
+        Iterator<Map.Entry<String, Integer>> ei = frozen.entrySet().iterator();
+        try { ei.next().setValue(99); } catch (UnsupportedOperationException e) { System.out.println("entry"); }
+        try { frozen.entrySet().removeIf(e -> true); } catch (UnsupportedOperationException e) { System.out.println("removeIf"); }
+
+        System.out.println(list + " " + set + " " + map);
+    }
+}
+"#
+);
+
+// The immutable single-element and empty factories cannot be emptied through a
+// cursor either — and the two families refuse DIFFERENTLY: `singleton*` has its
+// own iterator that throws outright, while `nCopies`/`empty*` use a generic
+// cursor that checks its own state first (so a `remove()` before any `next()`
+// is an IllegalStateException).
+differential_test!(
+    diff_immutable_factories_refuse_their_cursors,
+    "DiffFactoryCursors",
+    r#"
+import java.util.*;
+
+public class DiffFactoryCursors {
+    public static void main(String[] args) {
+        List<String> sl = Collections.singletonList("s");
+        Iterator<String> a = sl.iterator();
+        a.next();
+        try { a.remove(); } catch (RuntimeException e) { System.out.println("1 " + e); }
+
+        Set<String> ss = Collections.singleton("s");
+        Iterator<String> b = ss.iterator();
+        b.next();
+        try { b.remove(); } catch (RuntimeException e) { System.out.println("2 " + e); }
+
+        Map<String, Integer> sm = Collections.singletonMap("k", 1);
+        Iterator<String> c = sm.keySet().iterator();
+        c.next();
+        try { c.remove(); } catch (RuntimeException e) { System.out.println("3 " + e); }
+
+        List<String> nc = Collections.nCopies(2, "x");
+        Iterator<String> d = nc.iterator();
+        try { d.remove(); } catch (RuntimeException e) { System.out.println("4 " + e); }
+        d.next();
+        try { d.remove(); } catch (RuntimeException e) { System.out.println("5 " + e); }
+
+        try { Collections.emptyList().iterator().remove(); } catch (RuntimeException e) { System.out.println("6 " + e); }
+        try { Collections.emptySet().iterator().remove(); } catch (RuntimeException e) { System.out.println("7 " + e); }
+        try { Collections.emptyMap().keySet().iterator().remove(); } catch (RuntimeException e) { System.out.println("8 " + e); }
+
+        System.out.println(sl + " " + ss + " " + sm + " " + nc);
+    }
+}
+"#
+);
+
+// `Arrays.asList` is FIXED-SIZE, not immutable, and hands out two DIFFERENT
+// cursors: `iterator()` is JDK 9's `ArrayItr`, which has no `remove` at all
+// (`UnsupportedOperationException: remove`, whatever its state), while
+// `listIterator()` is `AbstractList`'s, whose `set` writes straight through to
+// the backing array and whose `add`/`remove` reach the list's refusal only
+// after its own state check.
+differential_test!(
+    diff_fixed_size_list_cursors,
+    "DiffFixedCursors",
+    r#"
+import java.util.*;
+
+public class DiffFixedCursors {
+    public static void main(String[] args) {
+        String[] array = {"a", "b", "c"};
+        List<String> view = Arrays.asList(array);
+
+        Iterator<String> it = view.iterator();
+        it.next();
+        try { it.remove(); } catch (RuntimeException e) { System.out.println("1 " + e); }
+
+        ListIterator<String> lit = view.listIterator();
+        try { lit.remove(); } catch (RuntimeException e) { System.out.println("2 " + e); }
+        try { lit.set("Q"); } catch (RuntimeException e) { System.out.println("3 " + e); }
+        lit.next();
+        lit.set("Z");
+        System.out.println(Arrays.toString(array) + " " + view);
+        try { lit.remove(); } catch (RuntimeException e) { System.out.println("4 " + e); }
+        try { lit.add("Y"); } catch (RuntimeException e) { System.out.println("5 " + e); }
+
+        System.out.println(Arrays.toString(array) + " " + view);
+    }
+}
+"#
+);
+
+// The view faces carry their whole surface: `iterator()` on a Queue/Deque
+// (both are Collections), `listIterator(int)` and its bounds message,
+// `forEachRemaining`, `entrySet().removeIf` (the only form that can decide by
+// key AND value together), `unmodifiableCollection`, and the `equals`/
+// `hashCode` every reference type has.
+differential_test!(
+    diff_view_and_cursor_surface,
+    "DiffViewSurface",
+    r#"
+import java.util.*;
+
+public class DiffViewSurface {
+    public static void main(String[] args) {
+        Queue<Integer> q = new LinkedList<>(Arrays.asList(4, 5, 6));
+        Iterator<Integer> qi = q.iterator();
+        qi.next();
+        qi.remove();
+        System.out.println(q);
+
+        Deque<Integer> dq = new ArrayDeque<>(Arrays.asList(7, 8, 9));
+        Iterator<Integer> di = dq.iterator();
+        di.next();
+        di.remove();
+        System.out.println(dq);
+
+        List<String> l = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        ListIterator<String> at = l.listIterator(1);
+        System.out.println(at.next() + " " + at.previousIndex() + " " + at.nextIndex());
+        ListIterator<String> back = l.listIterator(l.size());
+        while (back.hasPrevious()) { System.out.print(back.previous()); }
+        System.out.println();
+        try { l.listIterator(9); } catch (IndexOutOfBoundsException e) { System.out.println(e); }
+        try { l.listIterator(-1); } catch (IndexOutOfBoundsException e) { System.out.println(e); }
+
+        l.iterator().forEachRemaining(s -> System.out.print(s + "."));
+        System.out.println();
+        Iterator<String> half = l.iterator();
+        half.next();
+        half.forEachRemaining(s -> System.out.print(s + ","));
+        System.out.println();
+
+        Map<String, Integer> m = new TreeMap<>();
+        m.put("a", 1);
+        m.put("b", 2);
+        m.put("c", 3);
+        System.out.println(m.entrySet().removeIf(e -> e.getValue() % 2 == 1) + " " + m);
+        m.entrySet().forEach(e -> System.out.println(e.getKey() + "=" + e.getValue()));
+
+        Collection<String> uc = Collections.unmodifiableCollection(l);
+        System.out.println(uc + " " + uc.size() + " " + uc.contains("b"));
+        l.add("d");
+        System.out.println(uc + " " + uc.size());
+        try { uc.add("e"); } catch (UnsupportedOperationException e) { System.out.println("frozen"); }
+
+        Map<String, Integer> other = new TreeMap<>();
+        other.put("b", 2);
+        System.out.println(m.values().equals(m.values()));
+        System.out.println(m.keySet().equals(other.keySet()) + " " + m.entrySet().equals(other.entrySet()));
+        other.put("b", 5);
+        System.out.println(m.keySet().equals(other.keySet()) + " " + m.entrySet().equals(other.entrySet()));
+        System.out.println(m.keySet().equals(m.entrySet()));
+        System.out.println(m.entrySet().hashCode() + " " + m.keySet().hashCode());
+    }
+}
+"#
+);

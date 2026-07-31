@@ -441,6 +441,57 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **A read-only view stays read-only THROUGH its cursor** (2026-07-31,
+  round 8) — the collection-views cluster, and the round's most dangerous
+  finding:
+  - **`Collections.unmodifiable*` was not read-only.** Every direct mutator
+    threw, but the ITERATOR was a hole: `unmodifiableList(data).iterator()
+    .remove()`, a `ListIterator`'s `set`/`add`/`remove`, and a
+    `Map.Entry.setValue()` reached through an `unmodifiableMap`'s entrySet
+    all wrote STRAIGHT INTO the backing collection, with no error. So did
+    `Arrays.asList(a).iterator().remove()` — which made a `String[3]` appear
+    to become length 2 — and the `singletonList`/`singleton`/`singletonMap`
+    cursors, which emptied collections that can never change size. A
+    defensive `return Collections.unmodifiableList(data);` protected
+    nothing. The cause was structural: a view UNWRAPPED to its backing
+    collection before dispatch, so the cursor it built knew only the
+    backing. Cursors now carry what they may write (`IteratorWrites`) and
+    are built at the wrapper, not through it; entries from a read-only view
+    carry the same flag, so `setValue` throws however the entry was reached
+    (iterator, for-each, or `removeIf`).
+  - **The JDK's four cursor shapes are distinguished**, because they refuse
+    differently and the exception CLASS is observable. A view's own cursor
+    (`unmodifiable*`, `singleton*`) throws `UnsupportedOperationException`
+    whatever its state; a GENERIC cursor (`AbstractList`'s, behind
+    `nCopies`; the shared `EmptyIterator`, behind `empty*`) checks its own
+    state first, so a `remove()` with no `next()` is an
+    `IllegalStateException`; `Arrays.asList(a).listIterator()` is that
+    generic cursor over a FIXED-SIZE list, so its `set` writes through to
+    the array while `add`/`remove` refuse; and `Arrays.asList(a).iterator()`
+    is JDK 9's `ArrayItr`, which has no `remove` at all and so throws
+    `UnsupportedOperationException: remove`, message included. Known gap:
+    `singletonList().listIterator()` is the generic cursor in a JDK, so a
+    misplaced `set` there is an `IllegalStateException` where caturra says
+    `UnsupportedOperationException` — the wrapper does not record which
+    factory built it.
+  - **A map's three views are CACHED**, one per map per kind, as a JDK keeps
+    them in fields. This is observable: `m.values() == m.values()` is true,
+    and a `values()` view's `equals` is `AbstractCollection`'s identity, so
+    allocating a fresh view per call made `m.values().equals(m.values())`
+    wrongly false. `keySet()`/`entrySet()` compare and hash as Sets instead
+    (`AbstractSet`: same size and every element held, the hash their sum,
+    an entry's being `key.hashCode() ^ value.hashCode()`).
+  - **The view and cursor faces carry their whole surface**, each of which
+    had been refused with a reason that was false about the JDK:
+    `iterator()` on a `Queue`/`Deque` (both extend `Collection`, and it is
+    the only way to remove from the middle of one), `listIterator(int)`,
+    `Iterator.forEachRemaining`, `entrySet().removeIf`/`forEach` (the only
+    form that decides by key AND value together, so its lambda takes a live
+    `Map.Entry`), `Collections.unmodifiableCollection`, and the
+    `equals`/`hashCode` that every reference type has.
+  - Pinned by `diff_unmodifiable_views_refuse_their_cursors`,
+    `diff_immutable_factories_refuse_their_cursors`,
+    `diff_fixed_size_list_cursors` and `diff_view_and_cursor_surface`.
 - **Unicode escapes are translated BEFORE lexing** (2026-07-31, round 7,
   JLS §3.3) — the unicode-text cluster:
   - **A `\uXXXX` escape is a property of the SOURCE TEXT, not of string

@@ -119,11 +119,43 @@ impl OptionalKind {
 }
 
 /// Which of a map's three views a [`HeapObject::MapView`] presents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MapViewKind {
     Keys,
     Values,
     Entries,
+}
+
+/// What a [`HeapObject::Iterator`] may write back through to the collection it
+/// walks. A JDK iterator inherits its mutators from that collection — the JDK's
+/// `AbstractList.Itr.remove` calls the list's own `remove`, so a view that
+/// refuses one refuses the other. Modelling the cursor as always-mutable let
+/// `Collections.unmodifiableList(data).iterator().remove()` destroy the very
+/// list the view exists to protect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IteratorWrites {
+    /// Everything: `remove`, and a `ListIterator`'s `set` and `add`. What a
+    /// plain mutable collection's iterator allows.
+    All,
+    /// `set` only — `AbstractList`'s cursor over a FIXED-SIZE list, which is
+    /// what `Arrays.asList(a).listIterator()` returns. An element write goes
+    /// straight through to the array; `add`/`remove` would change the length,
+    /// and the cursor checks its own state (`IllegalStateException`) before
+    /// the list gets to refuse.
+    FixedSize,
+    /// Nothing, and the refusal reads `UnsupportedOperationException: remove`
+    /// — `Arrays.asList(a).iterator()` is JDK 9's `ArrayItr`, which simply
+    /// does not implement `remove`, so `Iterator`'s default throws that
+    /// whatever the cursor's state.
+    ArrayCursor,
+    /// Nothing, but only after the cursor's own state check — a GENERIC cursor
+    /// (`AbstractList`'s, or the `EmptyIterator` behind `emptyList()`) over a
+    /// collection that happens to refuse. `Collections.nCopies` and the
+    /// `empty*` factories hand these out.
+    NoneChecked,
+    /// Nothing — an unmodifiable or immutable view's own cursor, which refuses
+    /// outright rather than looking at its state or asking the collection.
+    None,
 }
 
 /// Which standard stream an intrinsic `PrintStream` writes to.
@@ -376,13 +408,28 @@ pub enum HeapObject {
         index: usize,
         last: Option<usize>,
         expected_len: usize,
+        /// What this cursor may write back through — see [`IteratorWrites`].
+        writes: IteratorWrites,
     },
     /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
     /// Java's are views too, so a later `put` shows through.
-    MapView { map: HeapRef, kind: MapViewKind },
+    ///
+    /// `read_only` marks a view taken from a `Collections.unmodifiableMap`:
+    /// every mutator throws, its iterator cannot remove, and the entries it
+    /// hands out refuse `setValue`.
+    MapView {
+        map: HeapRef,
+        kind: MapViewKind,
+        read_only: bool,
+    },
     /// One `Map.Entry` from an `entrySet()`, resolved against its map so
-    /// that `getValue`/`setValue` see the current value.
-    MapEntry { map: HeapRef, key: JValue },
+    /// that `getValue`/`setValue` see the current value. `read_only` is set
+    /// on an entry from an unmodifiable map's view, whose `setValue` throws.
+    MapEntry {
+        map: HeapRef,
+        key: JValue,
+        read_only: bool,
+    },
     /// The marker object behind `System.in`.
     InputStream,
     /// A `java.io.File`: a path into the virtual filesystem.

@@ -20,7 +20,7 @@ use crate::debug::{
 };
 use crate::intrinsics::{self, IntrinsicStatics, check_comodification, iterated_len_of};
 use crate::io::ConsoleIo;
-use crate::value::{Heap, HeapRef, JValue, MapViewKind};
+use crate::value::{Heap, HeapRef, IteratorWrites, JValue, MapViewKind};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
@@ -136,6 +136,20 @@ pub(crate) struct Interpreter<'run> {
     /// keep the original frames. Lines are the trace body only
     /// (`Class.method(File:line)`), innermost first.
     exception_traces: HashMap<HeapRef, Vec<String>>,
+    /// The `keySet()`/`values()`/`entrySet()` view each map (or unmodifiable
+    /// map wrapper) has already handed out. A JDK map keeps its three views in
+    /// fields and returns the same object every time, which is observable:
+    /// `m.values() == m.values()` is true, and a `values()` view's `equals` is
+    /// plain identity.
+    map_views: HashMap<(HeapRef, MapViewKind), HeapRef>,
+    /// Immutable collections whose cursor is a GENERIC one rather than a view's
+    /// own — `Collections.nCopies` (an `AbstractList`) and the `empty*`
+    /// factories (the shared `EmptyIterator`). A generic cursor checks its own
+    /// state before the collection refuses, so a misplaced `remove()` on one is
+    /// an `IllegalStateException` where `unmodifiableList`'s is an
+    /// `UnsupportedOperationException`. Held aside rather than in the wrapper
+    /// because it changes nothing else about the collection.
+    checked_cursor_views: std::collections::HashSet<HeapRef>,
 }
 
 /// Where the active frame is, for stack traces and snapshots.
@@ -219,6 +233,8 @@ impl<'run> Interpreter<'run> {
             watch_arena: None,
             last_thrown: None,
             exception_traces: HashMap::new(),
+            map_views: HashMap::new(),
+            checked_cursor_views: std::collections::HashSet::new(),
         }
     }
 
@@ -1808,6 +1824,13 @@ impl<'run> Interpreter<'run> {
                                     Some(crate::value::HeapObject::Optional { .. }) => {
                                         target == "java/util/Optional"
                                     }
+                                    // A `Map.Entry` — the erased parameter of an
+                                    // `entrySet().removeIf(e -> ...)` lambda
+                                    // casts back down to one.
+                                    Some(crate::value::HeapObject::MapEntry { .. }) => matches!(
+                                        target.as_str(),
+                                        "java/util/Map$Entry" | "java/util/Map.Entry"
+                                    ),
                                     Some(crate::value::HeapObject::StringBuilder(_)) => matches!(
                                         target.as_str(),
                                         "java/lang/StringBuilder" | "java/lang/CharSequence"
@@ -3563,7 +3586,7 @@ impl<'run> Interpreter<'run> {
             // A PriorityQueue prints its heap-array order (as Java's does).
             Some(HeapObject::PriorityQueue { heap, .. }) => Renderable::List(heap.clone()),
             Some(HeapObject::Optional { value, kind }) => Renderable::Optional(*value, *kind),
-            Some(HeapObject::MapView { map, kind }) => {
+            Some(HeapObject::MapView { map, kind, .. }) => {
                 let (map, kind) = (*map, *kind);
                 // A view over any map (Hash or Tree) renders its entries in that
                 // map's iteration order.
@@ -3576,7 +3599,7 @@ impl<'run> Interpreter<'run> {
                     Renderable::Opaque
                 }
             }
-            Some(HeapObject::MapEntry { map, key }) => Renderable::Entry(*map, *key),
+            Some(HeapObject::MapEntry { map, key, .. }) => Renderable::Entry(*map, *key),
             _ => Renderable::Opaque,
         };
 
@@ -3686,12 +3709,18 @@ impl<'run> Interpreter<'run> {
                 // UnsupportedOperationException like every other mutator.
                 let backing = self.heap.alloc(HeapObject::ArrayList(vec![*value; count]));
                 let list = self.heap.alloc(HeapObject::UnmodifiableList(backing));
+                // A `CopiesList` is an `AbstractList`, so it inherits the
+                // generic cursor rather than defining a refusing one.
+                self.checked_cursor_views.insert(list);
                 frame.stack.push(JValue::Ref(Some(list)));
                 return Ok(true);
             }
             ("emptyList", []) => {
                 let empty = self.heap.alloc(HeapObject::ArrayList(Vec::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(empty));
+                // The `empty*` factories share one `EmptyIterator`, whose
+                // `remove` is an IllegalStateException, not a refusal.
+                self.checked_cursor_views.insert(view);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -3732,6 +3761,7 @@ impl<'run> Interpreter<'run> {
                     .heap
                     .alloc(HeapObject::HashSet(crate::map::JavaHashMap::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableSet(inner));
+                self.checked_cursor_views.insert(view);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -3740,6 +3770,7 @@ impl<'run> Interpreter<'run> {
                     .heap
                     .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableMap(inner));
+                self.checked_cursor_views.insert(view);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -3779,6 +3810,19 @@ impl<'run> Interpreter<'run> {
         }
         if method_name == "unmodifiableMap" || method_name == "unmodifiableSortedMap" {
             let view = self.heap.alloc(HeapObject::UnmodifiableMap(list));
+            frame.stack.push(JValue::Ref(Some(view)));
+            return Ok(true);
+        }
+        // `unmodifiableCollection(c)` takes the `Collection` face, so which
+        // wrapper it needs is a RUNTIME question: both refuse every mutator and
+        // read through, they differ only in what they know how to walk.
+        if method_name == "unmodifiableCollection" {
+            let view = if self.heap.list_values(list).is_some() {
+                HeapObject::UnmodifiableList(list)
+            } else {
+                HeapObject::UnmodifiableSet(list)
+            };
+            let view = self.heap.alloc(view);
             frame.stack.push(JValue::Ref(Some(view)));
             return Ok(true);
         }
@@ -5059,6 +5103,15 @@ impl<'run> Interpreter<'run> {
         if !self.is_set_like(other) || self.set_like_len(receiver) != self.set_like_len(other) {
             return Ok(false);
         }
+        // An `entrySet()` view holds ENTRIES, which the element walk below
+        // cannot materialize (it does not allocate, and an entry is a heap
+        // object); compare through the map instead.
+        if let Some(map) = self.entry_set_map(receiver) {
+            return self.entry_set_equals(map, other);
+        }
+        if let Some(map) = self.entry_set_map(other) {
+            return self.entry_set_equals(map, receiver);
+        }
         let theirs = self.collection_elements(other);
         for element in self.collection_elements(receiver) {
             let mut found = false;
@@ -5076,15 +5129,72 @@ impl<'run> Interpreter<'run> {
     }
 
     /// Whether `reference` is a Set of any implementation — what
-    /// `AbstractSet.equals` will compare against.
+    /// `AbstractSet.equals` will compare against. A `values()` view is the one
+    /// map view that is NOT (it is a bare `Collection`).
     fn is_set_like(&self, reference: HeapRef) -> bool {
         use crate::value::HeapObject;
         match self.heap.get(reference) {
             Some(HeapObject::HashSet(_) | HeapObject::TreeSet { .. }) => true,
             Some(HeapObject::UnmodifiableSet(inner)) => self.is_set_like(*inner),
-            Some(HeapObject::MapView { kind, .. }) => matches!(kind, MapViewKind::Keys),
+            Some(HeapObject::MapView { kind, .. }) => !matches!(kind, MapViewKind::Values),
             _ => false,
         }
+    }
+
+    /// The map behind `reference` when it is an `entrySet()` view.
+    fn entry_set_map(&self, reference: HeapRef) -> Option<HeapRef> {
+        match self.heap.get(reference) {
+            Some(crate::value::HeapObject::MapView {
+                map,
+                kind: MapViewKind::Entries,
+                ..
+            }) => Some(*map),
+            Some(crate::value::HeapObject::UnmodifiableSet(inner)) => self.entry_set_map(*inner),
+            _ => None,
+        }
+    }
+
+    /// `entrySet().equals(other)` — `AbstractSet.equals`: another Set of the
+    /// same size holding exactly these mappings. Compared map-to-map when the
+    /// other side is an `entrySet()` too, and entry-by-entry when it is a real
+    /// `Set<Map.Entry>`.
+    fn entry_set_equals(&mut self, map: HeapRef, other: HeapRef) -> Result<bool, VmError> {
+        use crate::value::HeapObject;
+        if let Some(their_map) = self.entry_set_map(other) {
+            for (key, value) in self.map_entries(map) {
+                let Some(at) = self.map_find(their_map, key)? else {
+                    return Ok(false);
+                };
+                let held = self.map_value_at(their_map, at);
+                if !self.java_equals(held, value)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        for element in self.collection_elements(other) {
+            let JValue::Ref(Some(entry)) = element else {
+                return Ok(false);
+            };
+            let Some(HeapObject::MapEntry {
+                map: their_map,
+                key,
+                ..
+            }) = self.heap.get(entry)
+            else {
+                return Ok(false);
+            };
+            let (their_map, key) = (*their_map, *key);
+            let their_value = self.map_entry_value(their_map, key)?;
+            let Some(at) = self.map_find(map, key)? else {
+                return Ok(false);
+            };
+            let held = self.map_value_at(map, at);
+            if !self.java_equals(held, their_value)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// The element count of any set-like collection.
@@ -5592,11 +5702,20 @@ impl<'run> Interpreter<'run> {
             )
         {
             let expected_len = iterated_len_of(&self.heap, receiver);
+            // A view taken from an unmodifiable map hands out a read-only
+            // cursor — `Collections.unmodifiableMap(m).keySet().iterator()`
+            // used to `remove()` straight through into the caller's map.
+            let writes = if self.is_read_only_view(receiver) {
+                self.read_only_cursor(receiver)
+            } else {
+                IteratorWrites::All
+            };
             let iterator = self.heap.alloc(HeapObject::Iterator {
                 source: receiver,
                 index: 0,
                 last: None,
                 expected_len,
+                writes,
             });
             return Ok(Answered::Value(JValue::Ref(Some(iterator))));
         }
@@ -5617,6 +5736,21 @@ impl<'run> Interpreter<'run> {
                         "java.lang.UnsupportedOperationException",
                     )));
                 }
+                // The cursor is read-only too, and has to be built HERE:
+                // delegating would build it over the backing set, which knows
+                // nothing of the wrapper and would let `remove()` through.
+                if method_name == "iterator" {
+                    let expected_len = iterated_len_of(&self.heap, inner);
+                    let writes = self.read_only_cursor(receiver);
+                    let iterator = self.heap.alloc(HeapObject::Iterator {
+                        source: inner,
+                        index: 0,
+                        last: None,
+                        expected_len,
+                        writes,
+                    });
+                    return Ok(Answered::Value(JValue::Ref(Some(iterator))));
+                }
                 return self.map_intrinsic(inner, method_name, descriptor, args);
             }
             Some(HeapObject::UnmodifiableMap(inner)) => {
@@ -5627,27 +5761,39 @@ impl<'run> Interpreter<'run> {
                     )));
                 }
                 // `keySet`/`values`/`entrySet` of an unmodifiable map are
-                // themselves unmodifiable (else a `keySet().remove(k)` would
-                // write through), so wrap the delegated view.
-                let answered = self.map_intrinsic(inner, method_name, descriptor, args)?;
-                if matches!(method_name, "keySet" | "values" | "entrySet")
-                    && let Answered::Value(JValue::Ref(Some(view))) = answered
-                {
-                    let wrapped = self.heap.alloc(HeapObject::UnmodifiableSet(view));
-                    return Ok(Answered::Value(JValue::Ref(Some(wrapped))));
+                // themselves unmodifiable — else a `keySet().remove(k)`, or an
+                // entry's `setValue`, would write through — so the view is
+                // built read-only over the BACKING map, keyed on this wrapper
+                // so the same call twice answers the same view (as the JDK's
+                // cached view fields do).
+                if let Some(kind) = map_view_kind(method_name) {
+                    return Ok(Answered::Value(
+                        self.map_view_of(receiver, inner, kind, true),
+                    ));
                 }
-                return Ok(answered);
+                return self.map_intrinsic(inner, method_name, descriptor, args);
             }
             Some(HeapObject::PriorityQueue { .. }) => {
                 return self.priority_queue_intrinsic(receiver, method_name, descriptor, args);
             }
-            Some(HeapObject::MapView { map, kind }) => {
+            Some(HeapObject::MapView { map, kind, .. }) => {
                 let (map, kind) = (*map, *kind);
                 return self.map_view_intrinsic(receiver, map, kind, method_name, descriptor, args);
             }
-            Some(HeapObject::MapEntry { map, key }) => {
-                let (map, key) = (*map, *key);
-                return self.map_entry_intrinsic(map, key, method_name, descriptor, args);
+            Some(HeapObject::MapEntry {
+                map,
+                key,
+                read_only,
+            }) => {
+                let (map, key, read_only) = (*map, *key, *read_only);
+                return self.map_entry_intrinsic(
+                    map,
+                    key,
+                    read_only,
+                    method_name,
+                    descriptor,
+                    args,
+                );
             }
             _ => return Ok(Answered::No),
         }
@@ -5863,9 +6009,9 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(sum)
             }
             // Java's three views are live: a later `put` shows through them.
-            ("keySet", []) => self.alloc_map_view(receiver, MapViewKind::Keys),
-            ("values", []) => self.alloc_map_view(receiver, MapViewKind::Values),
-            ("entrySet", []) => self.alloc_map_view(receiver, MapViewKind::Entries),
+            ("keySet", []) => self.map_view_of(receiver, receiver, MapViewKind::Keys, false),
+            ("values", []) => self.map_view_of(receiver, receiver, MapViewKind::Values, false),
+            ("entrySet", []) => self.map_view_of(receiver, receiver, MapViewKind::Entries, false),
             _ => {
                 return Err(VmError::UnknownIntrinsic(format!(
                     "HashMap.{method_name}{descriptor}"
@@ -7572,7 +7718,7 @@ impl<'run> Interpreter<'run> {
                 .into_iter()
                 .map(|(element, _)| element)
                 .collect(),
-            Some(HeapObject::MapView { map, kind }) => {
+            Some(HeapObject::MapView { map, kind, .. }) => {
                 let (map, kind) = (*map, *kind);
                 self.map_entries(map)
                     .into_iter()
@@ -7670,11 +7816,59 @@ impl<'run> Interpreter<'run> {
         }
     }
 
-    fn alloc_map_view(&mut self, map: HeapRef, kind: MapViewKind) -> JValue {
-        JValue::Ref(Some(
-            self.heap
-                .alloc(crate::value::HeapObject::MapView { map, kind }),
-        ))
+    /// The `keySet()` / `values()` / `entrySet()` view of `map`, as seen
+    /// through `owner` — the map itself, or the `Collections.unmodifiableMap`
+    /// wrapper around it, which yields the same elements read-only.
+    ///
+    /// The view is CACHED per `(owner, kind)`, because a JDK map caches its
+    /// three views in fields and hands the same object back every time:
+    /// `m.values() == m.values()` is true there, and `values()`'s `equals` is
+    /// `AbstractCollection`'s identity — so allocating a fresh view per call
+    /// made `m.values().equals(m.values())` wrongly false.
+    fn map_view_of(
+        &mut self,
+        owner: HeapRef,
+        map: HeapRef,
+        kind: MapViewKind,
+        read_only: bool,
+    ) -> JValue {
+        if let Some(cached) = self.map_views.get(&(owner, kind)) {
+            return JValue::Ref(Some(*cached));
+        }
+        let view = self.heap.alloc(crate::value::HeapObject::MapView {
+            map,
+            kind,
+            read_only,
+        });
+        // `Collections.EmptyMap.keySet()` IS `emptySet()`, so the generic
+        // cursor carries across to the view.
+        if self.checked_cursor_views.contains(&owner) {
+            self.checked_cursor_views.insert(view);
+        }
+        self.map_views.insert((owner, kind), view);
+        JValue::Ref(Some(view))
+    }
+
+    /// The cursor a read-only collection hands out: its own refusing one, or a
+    /// generic one that checks its state first (see `checked_cursor_views`).
+    fn read_only_cursor(&self, view: HeapRef) -> IteratorWrites {
+        if self.checked_cursor_views.contains(&view) {
+            IteratorWrites::NoneChecked
+        } else {
+            IteratorWrites::None
+        }
+    }
+
+    /// Whether this reference is a map view that refuses to be written through
+    /// (one taken from a `Collections.unmodifiableMap`).
+    fn is_read_only_view(&self, reference: HeapRef) -> bool {
+        matches!(
+            self.heap.get(reference),
+            Some(crate::value::HeapObject::MapView {
+                read_only: true,
+                ..
+            })
+        )
     }
 
     /// `keySet()` / `values()` / `entrySet()`. These are views, not copies, so
@@ -7695,17 +7889,51 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
+        let read_only = self.is_read_only_view(view);
+        // A view of an unmodifiable map writes through to nothing.
+        if read_only && is_view_mutator(method_name) {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.UnsupportedOperationException",
+            )));
+        }
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(self.map_len(map)).unwrap_or(i32::MAX)),
             ("isEmpty", []) => JValue::Int(i32::from(self.map_len(map) == 0)),
-            // A `keySet()` IS a Set, so it compares like one against any other
-            // Set. (`values()` is a plain Collection, whose `equals` is
-            // identity — AbstractCollection does not override it — so it is
-            // deliberately not handled here.)
-            ("equals", [JValue::Ref(other)]) if matches!(kind, MapViewKind::Keys) => match *other {
-                Some(other) => JValue::Int(i32::from(self.set_like_equals(view, other)?)),
-                None => JValue::Int(0),
-            },
+            // A `keySet()` and an `entrySet()` ARE Sets, so each compares like
+            // one against any other Set. (`values()` is a plain Collection,
+            // whose `equals` is identity — `AbstractCollection` does not
+            // override it — so it falls through to the identity arm below.)
+            ("equals", [JValue::Ref(other)])
+                if matches!(kind, MapViewKind::Keys | MapViewKind::Entries) =>
+            {
+                match *other {
+                    Some(other) => JValue::Int(i32::from(self.set_like_equals(view, other)?)),
+                    None => JValue::Int(0),
+                }
+            }
+            ("equals", [other]) => JValue::Int(i32::from(
+                matches!(other, JValue::Ref(Some(r)) if *r == view),
+            )),
+            // `AbstractSet.hashCode` is the SUM of the element hashes, and a
+            // `Map.Entry`'s is `key.hashCode() ^ value.hashCode()`. A
+            // `values()` view inherits `Object`'s identity hash instead.
+            ("hashCode", []) => {
+                let mut hash = 0i32;
+                match kind {
+                    MapViewKind::Values => hash = intrinsics::identity_hash(view),
+                    _ => {
+                        for (key, value) in self.map_entries(map) {
+                            hash = hash.wrapping_add(match kind {
+                                MapViewKind::Entries => {
+                                    self.java_hash_code(key)? ^ self.java_hash_code(value)?
+                                }
+                                _ => self.java_hash_code(key)?,
+                            });
+                        }
+                    }
+                }
+                JValue::Int(hash)
+            }
             ("contains", [probe]) => {
                 let found = match kind {
                     MapViewKind::Keys => self.map_find(map, *probe)?.is_some(),
@@ -7719,6 +7947,7 @@ impl<'run> Interpreter<'run> {
                             Some(HeapObject::MapEntry {
                                 map: other_map,
                                 key,
+                                ..
                             }) => {
                                 let (other_map, key) = (*other_map, *key);
                                 let probe_value = self.map_entry_value(other_map, key)?;
@@ -7738,7 +7967,7 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(found))
             }
             ("forEach", [JValue::Ref(Some(consumer))]) => {
-                self.view_for_each(map, kind, *consumer)?;
+                self.view_for_each(map, kind, read_only, *consumer)?;
                 return Ok(Answered::Void);
             }
             // The element at a position in the map's iteration order.
@@ -7752,8 +7981,15 @@ impl<'run> Interpreter<'run> {
                 match kind {
                     MapViewKind::Keys => key,
                     MapViewKind::Values => value,
+                    // An entry from a read-only view is read-only too, else a
+                    // `for (Map.Entry e : unmodifiable.entrySet())` loop could
+                    // `setValue` straight through into the backing map.
                     MapViewKind::Entries => {
-                        JValue::Ref(Some(self.heap.alloc(HeapObject::MapEntry { map, key })))
+                        JValue::Ref(Some(self.heap.alloc(HeapObject::MapEntry {
+                            map,
+                            key,
+                            read_only,
+                        })))
                     }
                 }
             }
@@ -7806,6 +8042,7 @@ impl<'run> Interpreter<'run> {
                             Some(HeapObject::MapEntry {
                                 map: other_map,
                                 key,
+                                ..
                             }) => {
                                 let (other_map, key) = (*other_map, *key);
                                 let probe_value = self.map_entry_value(other_map, key)?;
@@ -7829,15 +8066,24 @@ impl<'run> Interpreter<'run> {
                 };
                 JValue::Int(i32::from(removed))
             }
-            // `removeIf` on a key or value view writes through: it drops every
-            // ENTRY whose key (or value) the predicate accepts, as removing
-            // through Java's view iterators does.
-            ("removeIf", [JValue::Ref(Some(predicate))]) if kind != MapViewKind::Entries => {
+            // `removeIf` on any of the three views writes through: it drops
+            // every ENTRY the predicate accepts, as removing through Java's
+            // view iterators does. The `entrySet()` form is the only way to
+            // decide by key AND value together, so it hands the predicate a
+            // live `Map.Entry` rather than one half of the mapping.
+            ("removeIf", [JValue::Ref(Some(predicate))]) => {
                 let mut doomed = Vec::new();
                 for (key, value) in self.map_entries(map) {
                     let probe = match kind {
                         MapViewKind::Keys => key,
-                        _ => value,
+                        MapViewKind::Values => value,
+                        MapViewKind::Entries => {
+                            JValue::Ref(Some(self.heap.alloc(HeapObject::MapEntry {
+                                map,
+                                key,
+                                read_only,
+                            })))
+                        }
                     };
                     if self.call_test(*predicate, probe)? {
                         doomed.push(key);
@@ -7922,6 +8168,7 @@ impl<'run> Interpreter<'run> {
         &mut self,
         map: HeapRef,
         key: JValue,
+        read_only: bool,
         method_name: &str,
         descriptor: &str,
         args: &[JValue],
@@ -7929,6 +8176,15 @@ impl<'run> Interpreter<'run> {
         let result = match (method_name, args) {
             ("getKey", []) => key,
             ("getValue", []) => self.map_entry_value(map, key)?,
+            // `Collections.unmodifiableMap` wraps every entry it hands out so
+            // that `setValue` throws — without that, merely ITERATING a
+            // supposedly read-only map was enough to rewrite the owner's
+            // values, with no error.
+            ("setValue", _) if read_only => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.UnsupportedOperationException",
+                )));
+            }
             ("setValue", [value]) => self.map_put(map, key, *value)?,
             // `Map.Entry.hashCode` is the key's hash XOR the value's.
             ("hashCode", []) => {
@@ -7943,6 +8199,7 @@ impl<'run> Interpreter<'run> {
                         Some(crate::value::HeapObject::MapEntry {
                             map: other_map,
                             key: other_key,
+                            ..
                         }) => {
                             let (other_map, other_key) = (*other_map, *other_key);
                             let value = self.map_entry_value(map, key)?;
@@ -8212,9 +8469,12 @@ impl<'run> Interpreter<'run> {
                 crate::map::JavaHashMap::new(),
             ));
             self.map_put(map, key, value)?;
-            let entry = self
-                .heap
-                .alloc(crate::value::HeapObject::MapEntry { map, key });
+            let entry = self.heap.alloc(crate::value::HeapObject::MapEntry {
+                map,
+                key,
+                // `AbstractMap.SimpleEntry` is a mutable standalone entry.
+                read_only: false,
+            });
             frame.stack.push(JValue::Ref(Some(entry)));
             return Ok(None);
         }
@@ -9288,6 +9548,36 @@ impl<'run> Interpreter<'run> {
                     "java.lang.UnsupportedOperationException",
                 )));
             }
+            // The cursor is read-only too, and has to be built HERE: forwarding
+            // would build it over the backing list, which knows nothing of this
+            // view and would let `remove`/`set`/`add` corrupt the caller's data.
+            if matches!(method_name, "iterator" | "listIterator") {
+                let writes = self.read_only_cursor(receiver);
+                let source = self.backing_list(receiver);
+                let expected_len = iterated_len_of(&self.heap, source);
+                let index = match args.first() {
+                    Some(JValue::Int(at)) => usize::try_from(*at)
+                        .ok()
+                        .filter(|at| *at <= expected_len)
+                        .ok_or_else(|| {
+                            VmError::UncaughtException(format!(
+                                "java.lang.IndexOutOfBoundsException: Index: {at}, \
+                                 Size: {expected_len}"
+                            ))
+                        })?,
+                    _ => 0,
+                };
+                let iterator = self.heap.alloc(crate::value::HeapObject::Iterator {
+                    source,
+                    index,
+                    last: None,
+                    expected_len,
+                    writes,
+                });
+                frame.stack.push(JValue::Ref(Some(iterator)));
+                self.vec_pool.push(args);
+                return Ok(None);
+            }
             self.backing_list(receiver)
         } else {
             receiver
@@ -9504,6 +9794,21 @@ impl<'run> Interpreter<'run> {
         // Turning a value into text can call a user `toString()`, which needs
         // the interpreter; the intrinsic layer holds only the heap.
         if self.container_to_string(frame, receiver, method_name, descriptor)? {
+            return Ok(None);
+        }
+        // Draining a cursor runs a user `accept` for each element, so it needs
+        // the interpreter too.
+        if method_name == "forEachRemaining"
+            && matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::Iterator { .. })
+            )
+        {
+            let consumer = match args.first() {
+                Some(JValue::Ref(consumer)) => *consumer,
+                _ => None,
+            };
+            self.iterator_for_each_remaining(receiver, consumer)?;
             return Ok(None);
         }
         // Likewise for comparing elements or keys, which may call a user
@@ -10040,6 +10345,41 @@ impl<'run> Interpreter<'run> {
     /// the snapshot to the end (what caturra did) both hid the exception and
     /// left the list a different size than a real JDK leaves it. Size stands in
     /// for `modCount`, as everywhere else in caturra's fail-fast.
+    /// `Iterator.forEachRemaining(action)` — the JDK 8 default that drains the
+    /// cursor, `while (hasNext()) action.accept(next())`. It runs a user
+    /// `accept`, so it lives here rather than in the heap-only intrinsics.
+    fn iterator_for_each_remaining(
+        &mut self,
+        cursor: HeapRef,
+        consumer: Option<HeapRef>,
+    ) -> Result<(), VmError> {
+        let class_name = match consumer.and_then(|c| self.heap.get(c)) {
+            Some(crate::value::HeapObject::Instance { class_name, .. }) => class_name.clone(),
+            // `Objects.requireNonNull(action)` is the default's first line.
+            _ => {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            }
+        };
+        let Some(consumer) = consumer else {
+            unreachable!("null consumer answered above");
+        };
+        while let Some(element) = intrinsics::iterator_step(&mut self.heap, cursor)? {
+            let dispatched = self.user_virtual_dispatch(
+                consumer,
+                &class_name,
+                "accept",
+                "(Ljava/lang/Object;)V",
+                &[element],
+            )?;
+            if let UserDispatch::Call(frame) = dispatched {
+                self.run_nested(frame)?;
+            }
+        }
+        Ok(())
+    }
+
     fn list_for_each(&mut self, receiver: HeapRef, consumer: HeapRef) -> Result<(), VmError> {
         let items = self.list_items(receiver);
         let expected = items.len();
@@ -10171,6 +10511,7 @@ impl<'run> Interpreter<'run> {
         &mut self,
         map: HeapRef,
         kind: MapViewKind,
+        read_only: bool,
         consumer: HeapRef,
     ) -> Result<(), VmError> {
         let entries = self.map_entries(map);
@@ -10185,10 +10526,13 @@ impl<'run> Interpreter<'run> {
             let element = match kind {
                 MapViewKind::Keys => key,
                 MapViewKind::Values => value,
-                MapViewKind::Entries => JValue::Ref(Some(
-                    self.heap
-                        .alloc(crate::value::HeapObject::MapEntry { map, key }),
-                )),
+                MapViewKind::Entries => {
+                    JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::MapEntry {
+                        map,
+                        key,
+                        read_only,
+                    })))
+                }
             };
             let dispatched = self.user_virtual_dispatch(
                 consumer,
@@ -11232,6 +11576,26 @@ fn is_map_mutator(method: &str) -> bool {
             | "compute"
             | "computeIfAbsent"
             | "computeIfPresent"
+    )
+}
+
+/// Which of a map's three views a method name asks for, if any.
+fn map_view_kind(method: &str) -> Option<MapViewKind> {
+    match method {
+        "keySet" => Some(MapViewKind::Keys),
+        "values" => Some(MapViewKind::Values),
+        "entrySet" => Some(MapViewKind::Entries),
+        _ => None,
+    }
+}
+
+/// Whether a map-view method writes through to the map behind it — what a view
+/// of an unmodifiable map refuses. (`add`/`addAll` are refused on EVERY view,
+/// read-only or not, so they are not listed here.)
+fn is_view_mutator(method: &str) -> bool {
+    matches!(
+        method,
+        "remove" | "removeAll" | "retainAll" | "clear" | "removeIf"
     )
 }
 
