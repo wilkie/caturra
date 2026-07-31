@@ -231,6 +231,42 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Generics, round 3** (2026-07-31, round 7) — 8 of 12 findings:
+  - **A type variable in ARGUMENT position keeps its bound**: `<T extends
+    Number> T firstOf(List<T> l)` could not `return l.get(0)`, because the
+    erased `List<T>` element read out as `Object`. The erasure marker now
+    carries the bound, so the element reads as `Number` while applicability
+    stays as permissive as a type variable requires.
+  - **`new ArrayList<T>()`** — the type ARGUMENTS of a `new` expression are
+    erased like any others; they were left alone, so the constructor saw a
+    bare `T` and refused an element type it could not name.
+  - **A generic constructor declaration** (`<T> H(T t)`) parses: the type
+    parameters are read before either the constructor or the method shape
+    is recognized.
+  - **`new T[n]` is "generic array creation"** (JLS §15.10.1): the type
+    variable stays marked through erasure so the array creation can refuse
+    it, instead of silently allocating an `Object[]`.
+  - **`list.add(null)` on a `List<?>`** is the one legal write to a
+    wildcard collection (`null` is assignable to every reference type); the
+    blanket refusal of element writes now lets it through.
+  - **An override may name the SUBSTITUTED return type**: `class SBox
+    extends Box<String>` inherits `String get()`, so declaring `String
+    get()` is an ordinary override, not a covariant one. Accepting it
+    required fixing DISPATCH first — the JVM looks up by descriptor, and
+    the parent's erased `T get()` matched the call site while the child's
+    `String get()` did not, so the inherited body ran. Virtual resolution
+    now prefers a same-name, same-PARAMETERS method in the more derived
+    class before climbing, which is exactly a covariant override (an
+    ordinary overload differs in its parameters and is never captured).
+  - **An intersection cast** (`(Comparable<String> & Serializable) s`)
+    parses and erases to its first type (JLS §4.9), instead of being a bare
+    "expected an expression". `java.io.Serializable` itself is now named as
+    unsupported rather than "cannot find symbol".
+  - **Four left open**, all about the explicit type WITNESS
+    (`Collections.<String>emptyList()`): caturra parses it and drops it, so
+    its arity is unchecked and it neither narrows a result nor types a
+    varargs call. Honoring it means carrying the witness on the call node
+    through resolution, which is its own change.
 - **Method references, in every form and context** (2026-07-31, round 7):
   - **Target-typed wherever a lambda is**: a CAST (`(Op) P::m` — the usual
     way to give a reference a type where nothing else would), an ARRAY

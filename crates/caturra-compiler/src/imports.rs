@@ -138,6 +138,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.io",
         &[
+            "Serializable",
             "BufferedWriter",
             "FileWriter",
             "PrintStream",

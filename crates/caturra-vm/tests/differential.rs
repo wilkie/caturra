@@ -17830,7 +17830,6 @@ public class DiffCodePoints {
 "#
 );
 
-
 // ---------------------------------------------------------------------------
 // Round-7 method references: the four forms in every target context, the
 // parse shapes, and the JLS §15.13.1 checks that decide which form applies.
@@ -18004,4 +18003,104 @@ public class DiffRefLookahead {
     }
 }
 "#
+);
+
+// ---------------------------------------------------------------------------
+// Round-7 generics: type variables in ARGUMENT position keep their bound,
+// generic constructors, generic array creation, wildcard writes of null,
+// intersection casts, and an override that names the substituted return.
+
+differential_test!(
+    diff_generic_type_variable_positions,
+    "DiffGenericTypeVars",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+class GBox<T> {
+    T v;
+    GBox(T v) { this.v = v; }
+    T get() { return v; }
+}
+class GSBox extends GBox<String> {
+    GSBox(String s) { super(s); }
+    @Override String get() { return "S:" + v; }
+}
+class GPair<A, B> {
+    A a;
+    B b;
+    <X> GPair(A a, B b, X ignored) { this.a = a; this.b = b; }
+    GPair(A a, B b) { this.a = a; this.b = b; }
+}
+public class DiffGenericTypeVars {
+    static <T extends Number> T firstOf(List<T> l) { return l.get(0); }
+    static <T extends Comparable<T>> T maxOf(List<T> l) {
+        T best = l.get(0);
+        for (T x : l) if (x.compareTo(best) > 0) best = x;
+        return best;
+    }
+    static <T> List<T> single(T x) {
+        List<T> l = new ArrayList<T>();
+        l.add(x);
+        return l;
+    }
+    static <T> int countOf(List<T> l) { return l.size(); }
+    public static void main(String[] args) {
+        System.out.println(firstOf(Arrays.asList(3, 9)) + " " + firstOf(Arrays.asList(1.5, 2.5)));
+        System.out.println(maxOf(Arrays.asList("a", "c", "b")));
+        System.out.println(single("x") + " " + single(7) + " " + countOf(single(1.0)));
+        // A parameterized supertype substitutes its argument, so `String get()`
+        // is an ordinary override — and DISPATCHES, which is the point.
+        GBox<String> b = new GSBox("hi");
+        System.out.println(b.get() + " " + new GSBox("q").get());
+        System.out.println(new GBox<>(5).get());
+        GPair<String, Integer> p = new GPair<>("k", 1);
+        System.out.println(p.a + "" + p.b);
+        // `null` is the one legal write to a wildcard collection.
+        List<?> any = new ArrayList<String>(Arrays.asList("a", "b"));
+        System.out.println(any.get(0) + " " + any.size());
+        any.add(null);
+        System.out.println(any.size());
+        List<? extends Number> nums = Arrays.asList(1, 2);
+        System.out.println(nums.get(0));
+    }
+}
+"#
+);
+
+// An intersection cast erases to its FIRST type (JLS §4.9).
+differential_test!(
+    diff_intersection_cast,
+    "DiffIntersectionCast",
+    r#"
+interface IA { }
+interface IB { }
+class IBoth implements IA, IB {
+    @Override public String toString() { return "both"; }
+}
+public class DiffIntersectionCast {
+    public static void main(String[] args) {
+        Object o = new IBoth();
+        IA x = (IA & IB) o;
+        System.out.println(x);
+    }
+}
+"#
+);
+
+// JLS §15.10.1: an array of a type VARIABLE is not reifiable.
+differential_reject!(
+    reject_generic_array_creation,
+    "RejGenericArray",
+    r"
+public class RejGenericArray {
+    static <T> int len(int n) {
+        T[] arr = (T[]) new T[n];
+        return arr.length;
+    }
+    public static void main(String[] args) {
+        System.out.println(RejGenericArray.<String>len(3));
+    }
+}
+"
 );

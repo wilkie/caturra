@@ -1086,7 +1086,30 @@ impl MethodTable {
                             // wrong answer, far worse than this refusal.
                             // The `Object`-to-`Object` case below is the
                             // subset that already dispatches correctly.
+                            // A parameterized supertype SUBSTITUTES its type
+                            // argument for the variable: `class S extends
+                            // Box<String>` inherits `String get()`, so
+                            // declaring `String get()` is an ordinary
+                            // override, not a covariant one. Without the
+                            // substitution the erased `T` return matched
+                            // nothing and every such override was refused.
+                            let substituted = (sup_sig.ret == Some(JType::TypeVar))
+                                .then(|| {
+                                    let parent = self.class_name(id).to_owned();
+                                    self.classes
+                                        .get(&class.name)
+                                        .and_then(|info| {
+                                            info.supertype_args
+                                                .iter()
+                                                .find(|(name, _)| *name == parent)
+                                                .cloned()
+                                        })
+                                        .and_then(|(_, args)| args.first().cloned())
+                                        .and_then(|arg| self.resolve_type(&arg))
+                                })
+                                .flatten();
                             let compatible_return = sup_sig.ret == ret
+                                || substituted.is_some_and(|want| ret == Some(want))
                                 || matches!(
                                     (ret, sup_sig.ret),
                                     (Some(JType::Object(sub)), Some(JType::Object(sup)))
@@ -2756,10 +2779,13 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
 /// an invariant `Object` element — stricter than javac, but never looser.
 fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
     let object = table.object_id;
-    // An erased type-variable argument (`List<T>`): any element, and writable.
+    // An erased type-variable argument (`List<T>`): any element, and
+    // writable. A BOUNDED variable reads out as its bound, so
+    // `<T extends Number> T first(List<T>)` can return `list.get(0)`.
     if variance == '=' {
+        let canonical = crate::imports::canonical_library_class(bound).unwrap_or(bound);
         return ElemType::Wildcard {
-            read: object,
+            read: table.class_id(canonical).unwrap_or(object),
             bound: WildcardBound::TypeVar,
         };
     }
@@ -14290,9 +14316,20 @@ impl BodyGen<'_> {
         // caturra does not model separately, so every element-taking mutator
         // is refused. Accepting `l.add(1)` on a `List<? extends Number>` let a
         // program compile here and fail on a JDK.
+        // ...except `null`, which IS assignable to every reference type, so
+        // `list.add(null)` on a `List<?>` is the one legal write (JLS §4.5.1).
+        let writes_null = args.len() == 1
+            && matches!(
+                &args[0],
+                Expr::Literal {
+                    value: Literal::Null,
+                    ..
+                }
+            );
         if let Some(ElemType::Wildcard { bound, .. }) = elem.first
             && matches!(bound, WildcardBound::Unbounded | WildcardBound::Upper(_))
             && WRITES_AN_ELEMENT.contains(&method)
+            && !writes_null
         {
             let (class, _) = builtin_instance_table(receiver_ty).expect("collection has a table");
             self.error(
@@ -18503,6 +18540,15 @@ impl BodyGen<'_> {
             self.error(span, "too many array dimensions");
             return JType::Error;
         };
+        // JLS §15.10.1: an array of a TYPE VARIABLE cannot be created — its
+        // component type is not reifiable. The parser leaves the variable
+        // marked so it can be told apart from its erasure here.
+        if let TypeRef::Named(name) = elem
+            && crate::ast::wildcard_parts(name).is_some()
+        {
+            self.error(span, "generic array creation");
+            return JType::Error;
+        }
         let Some(element) = self.table.resolve_type(elem).and_then(elem_type_of) else {
             self.error(span, "unknown array element type");
             return JType::Error;

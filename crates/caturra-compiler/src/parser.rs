@@ -1186,6 +1186,10 @@ impl Parser<'_> {
             }));
         }
 
+        // A generic method's or constructor's own type parameters, read
+        // before either shape is recognized: `<T> H(T t)` is a constructor.
+        let method_type_params = self.parse_type_params()?;
+
         // Constructor: `ClassName(...)` with no return type.
         if let Some(TokenKind::Identifier(name)) = self.peek()
             && name == class_name
@@ -1202,7 +1206,7 @@ impl Parser<'_> {
                 is_final: modifiers.is_final,
                 is_constructor: true,
                 is_abstract: false,
-                type_params: Vec::new(),
+                type_params: method_type_params,
                 infer_return: None,
                 return_type: TypeRef::Void,
                 params,
@@ -1216,8 +1220,6 @@ impl Parser<'_> {
             }));
         }
 
-        // Generic method: `<T> ReturnType method(...)`.
-        let method_type_params = self.parse_type_params()?;
         let member_type = self.type_ref()?;
         let (name, name_span) = self.expect_ident("for the class member")?;
 
@@ -3021,6 +3023,46 @@ impl Parser<'_> {
         {
             i += 2;
         }
+        // An INTERSECTION cast (`(Comparable<String> & Serializable) s`):
+        // additional bounds, which erase to the first one (JLS §4.9), so the
+        // scan just has to reach the `)`.
+        while matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == "&") {
+            i += 1;
+            if !matches!(self.peek_at(i), Some(TokenKind::Identifier(_))) {
+                return None;
+            }
+            i += 1;
+            while matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == ".")
+                && matches!(self.peek_at(i + 1), Some(TokenKind::Identifier(_)))
+            {
+                i += 2;
+            }
+            if matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == "<") {
+                let mut depth: i32 = 0;
+                loop {
+                    match self.peek_at(i)? {
+                        TokenKind::Symbol(s) => {
+                            let opens = s.chars().filter(|c| *c == '<').count();
+                            let closes = s.chars().filter(|c| *c == '>').count();
+                            if opens == 0
+                                && closes == 0
+                                && !matches!(*s, "," | "?" | "." | "[" | "]")
+                            {
+                                return None;
+                            }
+                            depth += i32::try_from(opens).ok()?;
+                            depth -= i32::try_from(closes).ok()?;
+                            i += 1;
+                            if depth <= 0 {
+                                break;
+                            }
+                        }
+                        TokenKind::Identifier(_) | TokenKind::Keyword(_) => i += 1,
+                        _ => return None,
+                    }
+                }
+            }
+        }
         if matches!(self.peek_at(i), Some(TokenKind::Symbol(s)) if *s == ")") {
             Some(i + 1)
         } else {
@@ -3140,6 +3182,11 @@ impl Parser<'_> {
         {
             self.pos += 1;
             let ty = self.type_ref()?;
+            // The extra bounds of an intersection cast erase away (JLS §4.9):
+            // the cast's erasure is its FIRST type, which is what is emitted.
+            while self.eat_symbol("&") {
+                let _ = self.type_ref()?;
+            }
             self.expect_symbol(")", "to close the cast")?;
             let operand = self.unary()?;
             let span = SourceSpan {
@@ -3190,6 +3237,11 @@ impl Parser<'_> {
         {
             self.pos += 1;
             let ty = self.type_ref()?;
+            // The extra bounds of an intersection cast erase away (JLS §4.9):
+            // the cast's erasure is its FIRST type, which is what is emitted.
+            while self.eat_symbol("&") {
+                let _ = self.type_ref()?;
+            }
             self.expect_symbol(")", "to close the cast")?;
             let operand = self.unary()?;
             let span = SourceSpan {
@@ -4753,7 +4805,18 @@ fn erase_in_type_arg(
     if let TypeRef::Named(name) = ty
         && (to_object.contains_key(name) || Some(name.as_str()) == tracked)
     {
-        *ty = TypeRef::Named(crate::ast::wildcard_type_name('=', ""));
+        // The BOUND rides along, so a `<T extends Number> … List<T>` reads
+        // its elements as `Number` rather than `Object` — the erasure of T
+        // (JLS §4.6), which is what the method's own body was typed against.
+        let bound = to_object
+            .get(name)
+            .map_or(String::new(), wildcard_bound_name);
+        let bound = if bound == "Object" {
+            String::new()
+        } else {
+            bound
+        };
+        *ty = TypeRef::Named(crate::ast::wildcard_type_name('=', &bound));
         return;
     }
     erase_in_type(ty, to_object, tracked);
@@ -4863,6 +4926,7 @@ fn erase_in_stmt(
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per expression kind
 fn erase_in_expr(
     expr: &mut Expr,
     to_object: &std::collections::HashMap<String, TypeRef>,
@@ -4880,7 +4944,11 @@ fn erase_in_expr(
         Expr::NewArray {
             elem, dims, init, ..
         } => {
-            erase_in_type(elem, to_object, tracked);
+            // A type variable stays MARKED here (as the wildcard sentinel)
+            // rather than erasing to its bound: `new T[n]` is javac's
+            // "generic array creation" error, which codegen reports from the
+            // marker — erasing first would have silently allocated Object[].
+            erase_in_type_arg(elem, to_object, tracked);
             for d in dims.iter_mut().flatten() {
                 erase_in_expr(d, to_object, tracked);
             }
@@ -4890,7 +4958,20 @@ fn erase_in_expr(
                 }
             }
         }
-        Expr::NewObject { args, .. } | Expr::SuperMethodCall { args, .. } => {
+        // `new ArrayList<T>()` — the TYPE ARGUMENTS erase too, exactly as
+        // they do in a declaration; without this the constructor saw a bare
+        // `T` and refused an element type it could not name.
+        Expr::NewObject {
+            type_args, args, ..
+        } => {
+            for arg in type_args {
+                erase_in_type_arg(arg, to_object, tracked);
+            }
+            for a in args {
+                erase_in_expr(a, to_object, tracked);
+            }
+        }
+        Expr::SuperMethodCall { args, .. } => {
             for a in args {
                 erase_in_expr(a, to_object, tracked);
             }

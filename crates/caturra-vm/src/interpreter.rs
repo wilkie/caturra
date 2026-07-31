@@ -13215,6 +13215,7 @@ fn stream_count_arg(value: JValue) -> usize {
 /// retry by argument count for generic erasure bridges (a call through
 /// `Comparable` uses `compareTo(Object)` while the class declares
 /// `compareTo(Card)`). `None` means no user method matched.
+#[allow(clippy::too_many_lines)] // one resolution stage per JVMS step
 fn resolve_virtual<'run>(
     classes: &'run HashMap<String, ClassFile>,
     instance_class: &str,
@@ -13231,15 +13232,39 @@ fn resolve_virtual<'run>(
         if steps > classes.len() + 1 {
             break;
         }
-        if let Some(method) = candidate.methods.iter().find(|m| {
+        let usable = |m: &&MethodInfo| {
             !m.access_flags
                 .contains(caturra_classfile::MethodAccessFlags::STATIC)
                 && !m
                     .access_flags
                     .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
                 && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
-                && candidate.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
-        }) {
+        };
+        if let Some(method) = candidate
+            .methods
+            .iter()
+            .find(|m| {
+                usable(m)
+                    && candidate.constant_pool.get_utf8(m.descriptor_index) == Some(descriptor)
+            })
+            // A COVARIANT override differs from the call site's descriptor
+            // only in its RETURN type (`String get()` overriding a `T get()`
+            // the parameterized supertype declares). Matching it HERE, in the
+            // more derived class, keeps dispatch correct — where falling
+            // through to the exact-descriptor match in the superclass would
+            // silently run the inherited method. The PARAMETERS must still
+            // match exactly, so an ordinary overload is never captured.
+            .or_else(|| {
+                candidate.methods.iter().find(|m| {
+                    usable(m)
+                        && candidate
+                            .constant_pool
+                            .get_utf8(m.descriptor_index)
+                            .zip(descriptor.find(')').map(|end| &descriptor[..=end]))
+                            .is_some_and(|(have, want)| have.starts_with(want))
+                })
+            })
+        {
             found = Some((candidate, method));
             break;
         }
