@@ -1925,12 +1925,13 @@ impl MethodTable {
                     JType::Char => ElemType::Char,
                     JType::Str => ElemType::Str,
                     JType::Object(id) => ElemType::Object(id),
-                    // `Throwable[]`/`Exception[]` — modelled as `Object[]`
-                    // (`ElemType` has no exception variant), matching what
-                    // `getSuppressed()` returns; reading an element needs a cast
-                    // to reach `getMessage()`. `T[]` (a type variable) likewise
-                    // erases to `Object[]` — the standard `(T[]) new Object[n]`.
-                    JType::Exception(_) | JType::TypeVar => ElemType::Object(self.object_id),
+                    // `Throwable[]`/`Exception[]` — a throwable element, so
+                    // `getSuppressed()` assigns and its elements reach
+                    // `getMessage()` without a cast.
+                    JType::Exception(id) => ElemType::Throwable(id),
+                    // `T[]` (a type variable) erases to `Object[]` — the
+                    // standard `(T[]) new Object[n]`.
+                    JType::TypeVar => ElemType::Object(self.object_id),
                     JType::Field => ElemType::Field,
                     JType::Method => ElemType::Method,
                     JType::Constructor => ElemType::Constructor,
@@ -2495,6 +2496,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         | ElemType::Method
         | ElemType::Constructor
         | ElemType::Class
+        | ElemType::Throwable(_)
         | ElemType::Wildcard { .. }
         | ElemType::Nested { .. } => "java/lang/Object",
     }
@@ -2590,6 +2592,11 @@ fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
         ElemType::Method => String::from("Method"),
         ElemType::Constructor => String::from("Constructor"),
         ElemType::Class => String::from("Class"),
+        ElemType::Throwable(id) => exception_internal(id)
+            .rsplit('/')
+            .next()
+            .unwrap_or("Throwable")
+            .to_owned(),
         // A wildcard reads out as its erased bound; a nested element erases to
         // Object. Describe both by their erased `read` class.
         ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. }
@@ -2863,6 +2870,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Str => Some(ElemType::Str),
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
+        JType::Exception(id) => Some(ElemType::Throwable(id)),
         // A wrapper array element is a boxed REFERENCE (`Integer[]`).
         JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
         _ => None,
@@ -3259,6 +3267,9 @@ enum ElemType {
     Constructor,
     /// `java.lang.Class` (element of a `Class[]`, e.g. `getConstructor` args).
     Class,
+    /// A throwable element (`Throwable[]` from `getSuppressed()`, or an
+    /// array of any exception class), carrying its exception id.
+    Throwable(u8),
     /// A wildcard type argument in a PARAMETER position (`List<? extends
     /// Number>`, `List<?>`). A wildcard never types a real value — you cannot
     /// write `new ArrayList<?>()` — so `read` carries the erased element type
@@ -3369,6 +3380,7 @@ impl ElemType {
             ElemType::Method => String::from("Ljava/lang/reflect/Method;"),
             ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             ElemType::Class => String::from("Ljava/lang/Class;"),
+            ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
             ElemType::Wildcard { read, .. } | ElemType::Nested { read, .. } => {
@@ -3394,6 +3406,7 @@ impl ElemType {
             ElemType::Method => JType::Method,
             ElemType::Constructor => JType::Constructor,
             ElemType::Class => JType::Class,
+            ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
             // inner type where it matters (`get`/`add`/for-each).
@@ -5308,6 +5321,9 @@ enum BRet {
     Type,
     /// `Object[]` (`ParameterizedType.getActualTypeArguments`, typed loosely).
     ObjectArray,
+    /// `Throwable[]` (`getSuppressed()`), typed so its elements can be
+    /// assigned, read, and iterated as throwables.
+    ThrowableArray,
     /// `java.lang.StringBuilder` (`StringBuilder.append`, for chaining).
     Builder,
     /// `java.lang.Object` (`Constructor.newInstance`).
@@ -7040,7 +7056,7 @@ const EXCEPTION_METHODS: &[BuiltinMethod] = &[
     BuiltinMethod {
         name: "getSuppressed",
         params: &[],
-        ret: BRet::ObjectArray,
+        ret: BRet::ThrowableArray,
         descriptor: "()[Ljava/lang/Throwable;",
     },
     // `addSuppressed(t)` — used by the try-with-resources desugaring, and
@@ -9264,6 +9280,7 @@ fn descriptor_param_kinds(descriptor: &str) -> impl Iterator<Item = bool> + '_ {
     })
 }
 
+#[allow(clippy::too_many_lines)] // one arm per return kind
 fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
         BRet::Void => None,
@@ -9360,6 +9377,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Type => Some(JType::Type),
         BRet::ObjectArray => Some(JType::Array {
             elem: ElemType::Object(table.object_id),
+            dims: 1,
+        }),
+        BRet::ThrowableArray => Some(JType::Array {
+            elem: ElemType::Throwable(0),
             dims: 1,
         }),
         BRet::Builder => Some(JType::StringBuilder),
@@ -14087,6 +14108,17 @@ impl BodyGen<'_> {
             self.code.drop_stack(1 + width);
             return Some(ret_ty);
         }
+        // `e.printStackTrace(System.out)` / `(System.err)` — the PrintStream
+        // argument can only name a standard stream (caturra has no
+        // PrintStream values), so encode WHICH one as an int the VM routes
+        // on.
+        if method == "printStackTrace"
+            && args.len() == 1
+            && let JType::Exception(id) = receiver_ty
+        {
+            let class_name = exception_internal(id).to_owned();
+            return Some(self.print_stack_trace_stream_call(&class_name, args, span));
+        }
         // Method.invoke(Object receiver, Object... args): pack the trailing
         // varargs into an Object[] (autoboxing primitives).
         if receiver_ty == JType::Method && method == "invoke" {
@@ -14800,6 +14832,67 @@ impl BodyGen<'_> {
         Some(ret)
     }
 
+    /// Whether the class (or an ancestor user class) declares a method of
+    /// this name — a user override of an inherited throwable method.
+    fn user_declares_method(&self, class_id: ClassId, name: &str) -> bool {
+        let mut current = Some(class_id);
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            steps += 1;
+            if steps > self.table.class_names.len() + 1 {
+                break;
+            }
+            let Some(info) = self.table.info_by_id(id) else {
+                break;
+            };
+            if info.methods.iter().any(|m| m.name == name) {
+                return true;
+            }
+            current = info.superclass;
+        }
+        false
+    }
+
+    /// `e.printStackTrace(System.out)` / `(System.err)`: the receiver is on
+    /// the stack; the stream is encoded as an int (1 = out, 0 = err) for the
+    /// VM to route, since caturra has no `PrintStream` values. Anything else as
+    /// the argument gets an honest refusal.
+    fn print_stack_trace_stream_call(
+        &mut self,
+        class_name: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<JType> {
+        let stream = match &args[0] {
+            Expr::Name { path, .. } if path.len() == 2 && path[0] == "System" => {
+                match path[1].as_str() {
+                    "out" => Some(1),
+                    "err" => Some(0),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some(stream) = stream else {
+            self.error(
+                span,
+                "printStackTrace takes System.out or System.err — other PrintStream \
+                 values are not supported by caturra",
+            );
+            return None;
+        };
+        self.push_int(stream);
+        let method_ref = intern_method_ref(
+            self.pool,
+            class_name,
+            "printStackTrace",
+            "(Ljava/io/PrintStream;)V",
+        );
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
+        self.code.drop_stack(2);
+        None
+    }
+
     /// The receiver object is already on the stack; resolve the
     /// overload, emit arguments, and invoke.
     #[allow(clippy::option_option, clippy::too_many_lines)]
@@ -14811,6 +14904,16 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> Option<Option<JType>> {
         let class_name = self.table.class_name(class_id).to_owned();
+        // `e.printStackTrace(System.out)` on a USER throwable: the argument
+        // names a standard stream, not a value, so it must not be typed as an
+        // expression — same intercept as the library-exception receiver path.
+        if method == "printStackTrace"
+            && args.len() == 1
+            && self.table.is_throwable(class_id)
+            && !self.user_declares_method(class_id, "printStackTrace")
+        {
+            return Some(self.print_stack_trace_stream_call(&class_name, args, span));
+        }
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         if arg_types.contains(&JType::Error) {
             for arg in args {
@@ -18422,6 +18525,11 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            ElemType::Throwable(id) => {
+                let class = intern_class(self.pool, exception_internal(id));
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             // `new Integer[n]` — a reference array, null-filled (Java's
             // default for references; the old int[] model zero-filled it).
             ElemType::Wrapper(prim) => {
@@ -18440,6 +18548,7 @@ impl BodyGen<'_> {
                     ElemType::Boolean => op::T_BOOLEAN,
                     ElemType::Char => op::T_CHAR,
                     ElemType::Str
+                    | ElemType::Throwable(_)
                     | ElemType::Object(_)
                     | ElemType::Field
                     | ElemType::Method
@@ -20544,6 +20653,7 @@ impl BodyGen<'_> {
             | ElemType::Method
             | ElemType::Constructor
             | ElemType::Class
+            | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }
             | ElemType::Wrapper(_) => "intValue",

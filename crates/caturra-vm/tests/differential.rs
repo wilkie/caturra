@@ -17069,3 +17069,125 @@ public class DiffNullCastIface {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-6 exception traces: traces fill at CONSTRUCTION (so rethrow keeps
+// the original frames), the Caused by:/Suppressed: blocks with "... N more"
+// elision, printStackTrace(System.out), and getSuppressed() typing.
+
+// A caught-and-rethrown exception keeps the frames captured when it was
+// CONSTRUCTED; wrap-and-rethrow prints the full Caused by: chain with the
+// JDK's common-frame elision; a VM-raised exception (division by zero)
+// chains the same way.
+differential_test!(
+    diff_trace_rethrow_and_cause,
+    "DiffTraceCause",
+    r#"
+public class DiffTraceCause {
+    static void origin() { throw new IllegalStateException("kept"); }
+    static void deep() {
+        try {
+            throw new IllegalStateException("inner");
+        } catch (IllegalStateException e) {
+            throw new RuntimeException("outer", e);
+        }
+    }
+    static void mid() { deep(); }
+    public static void main(String[] a) {
+        try {
+            try {
+                origin();
+            } catch (IllegalStateException e) {
+                throw e;
+            }
+        } catch (IllegalStateException e) {
+            e.printStackTrace(System.out);
+        }
+        try {
+            mid();
+        } catch (RuntimeException e) {
+            e.printStackTrace(System.out);
+        }
+        try {
+            int x = 1 / 0;
+        } catch (ArithmeticException e) {
+            new RuntimeException("wrap-vm", e).printStackTrace(System.out);
+        }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// try-with-resources: the close() failure prints as a tab-indented
+// Suppressed: block, with its own frames and elision.
+differential_test!(
+    diff_trace_suppressed_block,
+    "DiffTraceSuppressed",
+    r#"
+class Res implements AutoCloseable {
+    public void close() { throw new IllegalStateException("in close"); }
+}
+public class DiffTraceSuppressed {
+    public static void main(String[] a) {
+        try {
+            try (Res r = new Res()) {
+                throw new RuntimeException("in body");
+            }
+        } catch (RuntimeException e) {
+            e.printStackTrace(System.out);
+        }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// A user exception's trace names the `new` site (the constructor chain is
+// hidden, as fillInStackTrace hides it), through a factory method.
+differential_test!(
+    diff_trace_user_exception,
+    "DiffTraceUserEx",
+    r#"
+class TraceEx extends RuntimeException {
+    TraceEx(String m) { super(m); }
+}
+public class DiffTraceUserEx {
+    static TraceEx make() { return new TraceEx("custom"); }
+    public static void main(String[] a) {
+        make().printStackTrace(System.out);
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// getSuppressed() is a Throwable[]: assignable, indexable, iterable, its
+// elements answering getMessage()/getClass() without casts.
+differential_test!(
+    diff_get_suppressed_typed,
+    "DiffSuppressedTyped",
+    r#"
+public class DiffSuppressedTyped {
+    static class R implements AutoCloseable {
+        String name;
+        R(String n) { name = n; }
+        public void close() { throw new IllegalStateException("close-" + name); }
+    }
+    public static void main(String[] a) {
+        try {
+            try (R r1 = new R("A"); R r2 = new R("B")) {
+                throw new RuntimeException("body");
+            }
+        } catch (Exception e) {
+            Throwable[] sup = e.getSuppressed();
+            System.out.println(sup.length);
+            for (Throwable t : sup) {
+                System.out.println(t.getClass().getName() + ": " + t.getMessage());
+            }
+            System.out.println("first: " + sup[0].getMessage());
+        }
+    }
+}
+"#
+);

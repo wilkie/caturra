@@ -131,6 +131,11 @@ pub(crate) struct Interpreter<'run> {
     /// the catch variable so a user exception keeps its identity and
     /// fields (library throws allocate fresh objects instead).
     last_thrown: Option<HeapRef>,
+    /// Stack trace per throwable OBJECT, captured at CONSTRUCTION (as
+    /// `fillInStackTrace` does) — which is what makes catch-and-rethrow
+    /// keep the original frames. Lines are the trace body only
+    /// (`Class.method(File:line)`), innermost first.
+    exception_traces: HashMap<HeapRef, Vec<String>>,
 }
 
 /// Where the active frame is, for stack traces and snapshots.
@@ -213,6 +218,7 @@ impl<'run> Interpreter<'run> {
             debug: None,
             watch_arena: None,
             last_thrown: None,
+            exception_traces: HashMap::new(),
         }
     }
 
@@ -294,46 +300,224 @@ impl<'run> Interpreter<'run> {
             return message;
         }
         let mut full = message;
-        let location = |file: &str, line: Option<u16>| match line {
-            Some(line) => format!("{file}:{line}"),
-            None => file.to_owned(),
+        for line in self.stack_frame_lines() {
+            let _ = write!(full, "\n\tat {line}");
+        }
+        full
+    }
+
+    /// The frames of the CURRENT call stack, innermost first, each rendered
+    /// as the JVM's trace line body (`Class.method(File:line)`). Feeds both
+    /// the uncaught-exception trace and the trace an exception captures at
+    /// CONSTRUCTION, as `Throwable.fillInStackTrace` does — which is why a
+    /// caught-and-rethrown exception keeps its original frames.
+    fn stack_frame_lines(&self) -> Vec<String> {
+        let format_line = |class: &str, method: &str, file: &str, line: Option<u16>| match line {
+            Some(line) => format!("{class}.{method}({file}:{line})"),
+            None => format!("{class}.{method}({file})"),
         };
+        let mut lines = Vec::new();
         if let Some(current) = &self.current_location {
-            let _ = write!(
-                full,
-                "\n\tat {}.{}({})",
+            lines.push(format_line(
                 current.class_name,
                 current.method_name,
-                location(&current.code.source_file, current.line)
-            );
+                &current.code.source_file,
+                current.line,
+            ));
         }
-        let trace_frames = |frames: &[Frame<'run>], full: &mut String| {
+        let trace_frames = |frames: &[Frame<'run>], lines: &mut Vec<String>| {
             for suspended in frames.iter().rev() {
                 let class_name = suspended.class.class_name().unwrap_or("<unknown>");
-                let _ = write!(
-                    full,
-                    "\n\tat {class_name}.{}({})",
+                lines.push(format_line(
+                    class_name,
                     suspended.method_name,
-                    location(&suspended.code.source_file, suspended.current_line)
-                );
+                    &suspended.code.source_file,
+                    suspended.current_line,
+                ));
             }
         };
-        trace_frames(&self.frames, &mut full);
+        trace_frames(&self.frames, &mut lines);
         // Then the callers below each nested run (a `toString()` invoked while
         // rendering a container), innermost run first.
         for (caller, frames) in self.suspended_runs.iter().rev() {
             if let Some(caller) = caller {
-                let _ = write!(
-                    full,
-                    "\n\tat {}.{}({})",
+                lines.push(format_line(
                     caller.class_name,
                     caller.method_name,
-                    location(&caller.code.source_file, caller.line)
-                );
+                    &caller.code.source_file,
+                    caller.line,
+                ));
             }
-            trace_frames(frames, &mut full);
+            trace_frames(frames, &mut lines);
         }
-        full
+        lines
+    }
+
+    /// The trace a throwable captures at construction: the current frames,
+    /// minus the leading `<init>` frames of throwable classes — the JVM's
+    /// `fillInStackTrace` hides the exception's own constructor chain, so
+    /// `new MyEx()` traces to the `new` site, not into `MyEx.<init>`. A
+    /// non-throwable constructor below the chain stays visible.
+    fn construction_trace_lines(&mut self) -> Vec<String> {
+        let lines = self.stack_frame_lines();
+        let mut skip = 0usize;
+        for line in &lines {
+            let is_throwable_init = line
+                .split_once(".<init>(")
+                .is_some_and(|(class, _)| self.instance_is_throwable(class));
+            if is_throwable_init {
+                skip += 1;
+            } else {
+                break;
+            }
+        }
+        lines[skip..].to_vec()
+    }
+
+    /// The `Class: message` (or bare `Class`) header line of a throwable —
+    /// what `toString()` renders — for a library exception or a user
+    /// throwable instance.
+    fn throwable_header(&self, reference: HeapRef) -> String {
+        match self.heap.get(reference) {
+            Some(crate::value::HeapObject::Exception {
+                class_name,
+                message,
+                ..
+            }) => match message {
+                Some(message) => format!("{class_name}: {message}"),
+                None => class_name.clone(),
+            },
+            Some(object @ crate::value::HeapObject::Instance { class_name, .. }) => {
+                let message = object.field("__message").and_then(|value| match value {
+                    JValue::Ref(Some(text)) => self.heap.string_text(text),
+                    _ => None,
+                });
+                match message {
+                    Some(message) => format!("{class_name}: {message}"),
+                    None => class_name.to_string(),
+                }
+            }
+            _ => String::from("java.lang.Throwable"),
+        }
+    }
+
+    fn throwable_cause(&self, reference: HeapRef) -> Option<HeapRef> {
+        match self.heap.get(reference) {
+            Some(crate::value::HeapObject::Exception { cause, .. }) => *cause,
+            Some(object @ crate::value::HeapObject::Instance { .. }) => {
+                match object.field("__cause") {
+                    Some(JValue::Ref(cause)) => cause,
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn throwable_suppressed(&self, reference: HeapRef) -> Vec<HeapRef> {
+        match self.heap.get(reference) {
+            Some(crate::value::HeapObject::Exception { suppressed, .. }) => suppressed.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The JDK's `printStackTrace` rendering, without the leading
+    /// "Exception in thread" banner: the header, one `\tat` line per frame,
+    /// then every `Suppressed:` block and the `Caused by:` chain, with the
+    /// frames each enclosed trace shares with its enclosing one elided as
+    /// "... N more" — `Throwable.printEnclosedStackTrace`, faithfully.
+    fn render_throwable(&self, reference: HeapRef) -> String {
+        use std::fmt::Write as _;
+        let mut out = self.throwable_header(reference);
+        let trace = self
+            .exception_traces
+            .get(&reference)
+            .cloned()
+            .unwrap_or_default();
+        for line in &trace {
+            let _ = write!(out, "\n\tat {line}");
+        }
+        let mut seen = vec![reference];
+        for sup in self.throwable_suppressed(reference) {
+            self.render_enclosed(sup, &trace, "\t", "Suppressed: ", &mut out, &mut seen);
+        }
+        if let Some(cause) = self.throwable_cause(reference) {
+            self.render_enclosed(cause, &trace, "", "Caused by: ", &mut out, &mut seen);
+        }
+        out
+    }
+
+    fn render_enclosed(
+        &self,
+        reference: HeapRef,
+        enclosing: &[String],
+        prefix: &str,
+        caption: &str,
+        out: &mut String,
+        seen: &mut Vec<HeapRef>,
+    ) {
+        use std::fmt::Write as _;
+        if seen.contains(&reference) {
+            let _ = write!(
+                out,
+                "\n{prefix}{caption}[CIRCULAR REFERENCE: {}]",
+                self.throwable_header(reference)
+            );
+            return;
+        }
+        seen.push(reference);
+        let trace = self
+            .exception_traces
+            .get(&reference)
+            .cloned()
+            .unwrap_or_default();
+        // Frames shared with the enclosing trace, matched from the bottom.
+        let common = trace
+            .iter()
+            .rev()
+            .zip(enclosing.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let _ = write!(
+            out,
+            "\n{prefix}{caption}{}",
+            self.throwable_header(reference)
+        );
+        for line in &trace[..trace.len() - common] {
+            let _ = write!(out, "\n{prefix}\tat {line}");
+        }
+        if common > 0 {
+            let _ = write!(out, "\n{prefix}\t... {common} more");
+        }
+        let nested = format!("{prefix}\t");
+        for sup in self.throwable_suppressed(reference) {
+            self.render_enclosed(sup, &trace, &nested, "Suppressed: ", out, seen);
+        }
+        if let Some(cause) = self.throwable_cause(reference) {
+            self.render_enclosed(cause, &trace, prefix, "Caused by: ", out, seen);
+        }
+    }
+
+    /// Remember the trace lines already embedded in an error string for a
+    /// (re-)materialized throwable object, so a later rethrow of that object
+    /// keeps them.
+    fn store_parsed_trace(&mut self, reference: HeapRef, text: &str) {
+        if self.exception_traces.contains_key(&reference) {
+            return;
+        }
+        // The header may span lines (a multi-line message), so the trace
+        // starts at the first "\tat " line, wherever that is.
+        let Some(start) = text.find("\n\tat ") else {
+            return;
+        };
+        let lines: Vec<String> = text[start + 1..]
+            .lines()
+            .take_while(|line| line.starts_with("\tat "))
+            .map(|line| line["\tat ".len()..].to_owned())
+            .collect();
+        if !lines.is_empty() {
+            self.exception_traces.insert(reference, lines);
+        }
     }
 
     /// The per-instruction debugger hook: decides whether to pause at
@@ -1697,38 +1881,30 @@ impl<'run> Interpreter<'run> {
                                 ))
                             })?;
                             self.last_thrown = Some(reference);
-                            match self.heap.get(reference) {
-                                Some(crate::value::HeapObject::Exception {
-                                    class_name,
-                                    message,
-                                    ..
-                                }) => {
-                                    return Err(VmError::UncaughtException(match message {
-                                        Some(message) => format!("{class_name}: {message}"),
-                                        None => class_name.clone(),
-                                    }));
+                            let throwable = match self.heap.get(reference) {
+                                Some(crate::value::HeapObject::Exception { .. }) => true,
+                                Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                                    let class_name = class_name.clone();
+                                    self.instance_is_throwable(&class_name)
                                 }
-                                Some(
-                                    object @ crate::value::HeapObject::Instance {
-                                        class_name, ..
-                                    },
-                                ) if self.instance_is_throwable(class_name) => {
-                                    let message =
-                                        object.field("__message").and_then(|value| match value {
-                                            JValue::Ref(Some(text)) => self.heap.string_text(text),
-                                            _ => None,
-                                        });
-                                    return Err(VmError::UncaughtException(match message {
-                                        Some(message) => format!("{class_name}: {message}"),
-                                        None => class_name.to_string(),
-                                    }));
-                                }
-                                _ => {
-                                    return Err(malformed(String::from(
-                                        "athrow on a non-throwable",
-                                    )));
-                                }
+                                _ => false,
+                            };
+                            if !throwable {
+                                return Err(malformed(String::from("athrow on a non-throwable")));
                             }
+                            // A VM-materialized throwable has no construction
+                            // trace — fill it at the throw, which is where it
+                            // came to exist.
+                            if !self.exception_traces.contains_key(&reference) {
+                                let lines = self.stack_frame_lines();
+                                self.exception_traces.insert(reference, lines);
+                            }
+                            // The full JDK rendering — header, frames, then
+                            // Suppressed:/Caused by: blocks — travels in the
+                            // error string; a catch reads only the header.
+                            return Err(VmError::UncaughtException(
+                                self.render_throwable(reference),
+                            ));
                         }
 
                         // ----- objects -----
@@ -2253,6 +2429,10 @@ impl<'run> Interpreter<'run> {
                         suppressed: Vec::new(),
                     })
                 });
+                // A materialized object keeps the trace already embedded in
+                // the error text, so `throw e;` after the catch reports the
+                // ORIGINAL frames, not the rethrow site.
+                self.store_parsed_trace(exception, text);
                 frame.stack.clear();
                 frame.stack.push(JValue::Ref(Some(exception)));
                 frame.pc = handler_pc;
@@ -2543,6 +2723,20 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException",
             )));
         };
+        // A throwable fills its stack trace at CONSTRUCTION (the Throwable
+        // constructor calls fillInStackTrace), so the trace names the `new`
+        // site even if the exception is stored, thrown later, or rethrown.
+        // The capture point is the dispatch INTO the library exception's
+        // constructor — for a user subclass that is the bottom of its
+        // super() chain, so the user `<init>` frames appear in the trace
+        // (as a real JVM shows them) while Throwable's own do not.
+        if method_name == "<init>"
+            && caturra_classfile::exceptions::is_exception_class(target_class)
+            && !self.exception_traces.contains_key(&receiver)
+        {
+            let lines = self.construction_trace_lines();
+            self.exception_traces.insert(receiver, lines);
+        }
         // `new HashSet<>(collection)` copies the elements, deduplicating — which
         // may run a user `equals`/`hashCode`, so it belongs here rather than in
         // the heap-only intrinsic layer. Java pre-sizes the backing map to
@@ -8876,6 +9070,42 @@ impl<'run> Interpreter<'run> {
             // the wrapper.
             primitive => Some(self.box_primitive_value(primitive)),
         };
+        // `printStackTrace()` / `printStackTrace(PrintStream)` — answered at
+        // this level (not the heap-only intrinsics) because the full JDK
+        // rendering needs the construction-time traces and the
+        // cause/suppressed graph walk. The PrintStream argument arrives as
+        // an int the compiler encoded: 1 = System.out, 0 = System.err.
+        if method_name == "printStackTrace"
+            && let Some(exception) = receiver
+            && (matches!(
+                self.heap.get(exception),
+                Some(crate::value::HeapObject::Exception { .. })
+            ) || matches!(
+                self.heap.get(exception),
+                Some(crate::value::HeapObject::Instance { class_name, .. })
+                    if {
+                        let class_name = class_name.clone();
+                        self.instance_is_throwable(&class_name)
+                            // A user override of printStackTrace still wins.
+                            && resolve_virtual(
+                                self.classes,
+                                &class_name,
+                                "printStackTrace",
+                                descriptor,
+                            )
+                            .is_none()
+                    }
+            ))
+        {
+            let rendered = format!("{}\n", self.render_throwable(exception));
+            if matches!(args.first(), Some(JValue::Int(1))) {
+                self.console.stdout(rendered.as_bytes());
+            } else {
+                self.console.stderr(rendered.as_bytes());
+            }
+            self.vec_pool.push(args);
+            return Ok(None);
+        }
         let Some(receiver) = receiver else {
             let _ = (target_class, method_name);
             return Err(VmError::UncaughtException(String::from(

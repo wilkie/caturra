@@ -231,6 +231,36 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Exception traces, filled at construction** (2026-07-30) — the round-6
+  trace cluster:
+  - **A throwable's stack trace is captured when it is CONSTRUCTED** (as
+    `fillInStackTrace` in the Throwable constructor does), kept per object,
+    so `catch (E e) { throw e; }` reports the ORIGINAL throw site, an
+    exception built by a factory traces to the `new` site, and the
+    exception's own constructor chain is hidden (a user subclass's
+    `<init>` frames don't appear — the JDK hides them too). A caught
+    VM-raised exception (an AIOOBE from the array machinery) adopts the
+    frames from its error text, so rethrowing IT preserves them as well.
+  - **The uncaught rendering is the JDK's, in full**: header, `\tat`
+    frames, every `Suppressed:` block (tab-indented, from
+    try-with-resources), the `Caused by:` chain — recursively, with the
+    frames each enclosed trace shares with its enclosing one elided as
+    "... N more" (`Throwable.printEnclosedStackTrace`, faithfully) and a
+    `[CIRCULAR REFERENCE: …]` guard.
+  - **`printStackTrace(System.out)` (and `System.err`)** compiles and
+    prints that same full rendering — the argument names a standard
+    stream, encoded for the VM to route (an honest refusal for any other
+    PrintStream expression); the no-argument form now prints the full
+    trace to stderr instead of just the header line. A user override of
+    `printStackTrace` still wins.
+  - **`getSuppressed()` returns a real `Throwable[]`** (new
+    `ElemType::Throwable` carrying the exception id): assignable to its
+    declared type, indexable, iterable, elements reaching `getMessage()`
+    without casts — `Throwable[]`/`Exception[]` declarations now resolve
+    as throwable arrays generally (they were `Object[]`).
+  - Known cosmetic gap: a NESTED class in a trace frame prints its
+    flattened name (`R.close`) where the JVM writes `Outer$R.close` —
+    caturra flattens nested classes at compile time.
 - **StringBuilder sub-ranges** (2026-07-30) — five round-6 findings:
   - **The Java-5 sub-range overloads exist**: `append(CharSequence, start,
     end)` (null appends the sub-range of "null"), `insert(dst, CharSequence)`,
