@@ -9784,16 +9784,20 @@ impl BodyGen<'_> {
             self.error(span, format!("cannot find symbol: class {class_name}"));
             return JType::Error;
         };
-        if target == self.current_class_id {
-            self.code.push_op(op::ALOAD_0, 1);
-            return JType::Object(target);
-        }
+        // A STATIC context has no enclosing instance at all — checked first,
+        // because the same-class shortcut below would otherwise load local
+        // slot 0, which in a static method is the first PARAMETER (`P.this`
+        // in `main` evaluated to the args array).
         if self.in_static {
             self.error(
                 span,
                 "non-static variable this cannot be referenced from a static context",
             );
             return JType::Error;
+        }
+        if target == self.current_class_id {
+            self.code.push_op(op::ALOAD_0, 1);
+            return JType::Object(target);
         }
         // Each hop reads the `__caturraOuter` of the class reached so far.
         let mut current = self.current_class_id;
@@ -9819,7 +9823,25 @@ impl BodyGen<'_> {
             }
             current = enclosing;
         }
-        self.error(span, format!("not an enclosing class: {class_name}"));
+        // A STATIC nested class has no outer link, so the walk found
+        // nothing: javac's complaint is that `this` needs an instance, not
+        // that the class is unrelated (which it plainly is not).
+        let nested_in_target = self
+            .table
+            .info_by_id(self.current_class_id)
+            .and_then(|info| info.enclosing.clone())
+            .is_some_and(|outer| self.table.class_id(&outer) == Some(target));
+        let message = if nested_in_target
+            && self
+                .table
+                .field(self.current_class, crate::capture::OUTER_FIELD)
+                .is_none()
+        {
+            String::from("non-static variable this cannot be referenced from a static context")
+        } else {
+            format!("not an enclosing class: {class_name}")
+        };
+        self.error(span, message);
         JType::Error
     }
 
@@ -17432,6 +17454,13 @@ impl BodyGen<'_> {
                     span: *span,
                 }),
             },
+            // `Outer.this` — the type is the named enclosing class. Without
+            // this the path typed as `Error`, so `Outer.this.x + 1` reported
+            // "bad operand types" though the emitter reads it correctly.
+            Expr::Name { path, .. } if path.len() >= 2 && path[path.len() - 1] == "this" => self
+                .table
+                .class_id(&path[path.len() - 2])
+                .map_or(JType::Error, JType::Object),
             Expr::Name { path, span } if self.strip_package_prefix(path).is_some() => {
                 let short = self.strip_package_prefix(path).expect("checked in guard");
                 self.type_of(&Expr::Name {
@@ -18894,6 +18923,28 @@ impl BodyGen<'_> {
         if path.len() >= 2 && path[path.len() - 1] == "this" {
             return self.qualified_this(&path[path.len() - 2], span);
         }
+        // `Outer.this.field.more` — the same qualified this with a FIELD
+        // chain hanging off it. Without this the path fell through to the
+        // dotted-name ladder, which read `Outer` as a value and typed the
+        // whole thing as something arithmetic could not use.
+        if let Some(at) = path.iter().position(|segment| segment == "this")
+            && at >= 1
+            && at + 1 < path.len()
+        {
+            let receiver = Expr::Name {
+                path: path[..=at].to_vec(),
+                span,
+            };
+            let mut object = receiver;
+            for name in &path[at + 1..path.len() - 1] {
+                object = Expr::Field {
+                    object: Box::new(object),
+                    name: name.clone(),
+                    span,
+                };
+            }
+            return self.field(&object, &path[path.len() - 1], span);
+        }
         // Fully qualified statics: java.lang.Integer.MAX_VALUE, ...
         if let Some(short) = self.strip_package_prefix(path) {
             return self.name(&short, span);
@@ -19066,6 +19117,30 @@ impl BodyGen<'_> {
             }
         }
         let Some(var) = self.lookup(name) else {
+            // A STATIC nested class sees the enclosing class's members, but
+            // has no instance to read an instance field through — javac's
+            // complaint is the static context, not a missing name.
+            if let Some(owner) = self
+                .table
+                .info_by_id(self.current_class_id)
+                .and_then(|info| info.enclosing.clone())
+                && self
+                    .table
+                    .field(&owner, name)
+                    .is_some_and(|(_, field)| !field.is_static)
+                && self
+                    .table
+                    .field(self.current_class, crate::capture::OUTER_FIELD)
+                    .is_none()
+            {
+                self.error(
+                    span,
+                    format!(
+                        "non-static variable {name} cannot be referenced from a static context"
+                    ),
+                );
+                return JType::Error;
+            }
             self.error(span, format!("cannot find variable '{name}'"));
             return JType::Error;
         };

@@ -18268,3 +18268,96 @@ public class RejEnumExtend {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 inner classes: `Outer.this` as an expression and in a field chain,
+// and the static-context diagnostics.
+
+differential_test!(
+    diff_qualified_this_expressions,
+    "DiffQualifiedThis",
+    r#"
+public class DiffQualifiedThis {
+    int x = 10;
+    String tag = "outer";
+    static int stat = 99;
+    class Inner {
+        int x = 20;
+        int sum() { return DiffQualifiedThis.this.x + x + 1; }
+        String describe() {
+            return DiffQualifiedThis.this.tag + "/" + tag() + "/" + stat;
+        }
+        String tag() { return "inner"; }
+    }
+    class Deeper {
+        class Deepest {
+            int reach() { return DiffQualifiedThis.this.x; }
+        }
+    }
+    static class Nested {
+        int fromStatic() { return stat; }
+    }
+    interface Act { void run(); }
+    Act makeAct() {
+        return new Act() {
+            public void run() {
+                System.out.println("anon sees " + x + " " + DiffQualifiedThis.this.tag);
+            }
+        };
+    }
+    public static void main(String[] args) {
+        DiffQualifiedThis o = new DiffQualifiedThis();
+        DiffQualifiedThis.Inner i = o.new Inner();
+        System.out.println(i.sum() + " " + i.describe());
+        System.out.println(o.new Deeper().new Deepest().reach());
+        System.out.println(new Nested().fromStatic());
+        o.makeAct().run();
+    }
+}
+"#
+);
+
+// `Outer.this` needs an enclosing INSTANCE: a static method has none (it
+// used to load local slot 0, which in `main` is the args array), and a
+// static nested class has no outer link.
+differential_reject!(
+    reject_qualified_this_in_static_method,
+    "RejThisStatic",
+    r"
+public class RejThisStatic {
+    class Inner { }
+    public static void main(String[] args) {
+        Object o = RejThisStatic.this;
+        System.out.println(o);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_qualified_this_in_static_nested,
+    "RejThisNested",
+    r"
+public class RejThisNested {
+    int live = 1;
+    static class Nested {
+        void show() { System.out.println(RejThisNested.this.live); }
+    }
+    public static void main(String[] args) { new Nested().show(); }
+}
+"
+);
+
+differential_reject!(
+    reject_outer_instance_field_from_static_nested,
+    "RejFieldNested",
+    r"
+public class RejFieldNested {
+    int field = 9;
+    static class Nested {
+        int get() { return field; }
+    }
+    public static void main(String[] args) { System.out.println(new Nested().get()); }
+}
+"
+);

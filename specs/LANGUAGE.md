@@ -231,6 +231,27 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **`Outer.this`, and the static-context diagnostics** (2026-07-31, round
+  7) — 4 of the 10 inner-class findings:
+  - **`Outer.this` in a STATIC context is an error**, checked before the
+    same-class shortcut that used to load local slot 0 — which in `main` is
+    the args array, so `P.this` printed `[Ljava.lang.String;@0` instead of
+    being refused.
+  - **`Outer.this.field` in an expression** compiles: the type of a path
+    ending in `this` is the named enclosing class (it typed as an error, so
+    `Outer.this.x + 1` reported "bad operand types" although the emitter
+    read the field correctly), and a field chain hanging off a qualified
+    `this` resolves through it.
+  - **A static nested class gets javac's reason**, not a puzzle: reading
+    an outer INSTANCE field says "non-static variable field cannot be
+    referenced from a static context" rather than "cannot find variable",
+    and `Outer.this` from one says the same rather than "not an enclosing
+    class" — which was doubly wrong, since it plainly is one.
+  - **Six left open**: subclassing an inner class, `p.new Inner() {…}`,
+    `o.super()`, an anonymous class inside a LOCAL class reaching the outer
+    instance, a blank local assigned once per branch being capturable, and
+    member types (interface/enum/static class) declared inside an inner
+    class, which javac forbids.
 - **Enums, round 2** (2026-07-31, round 7) — 8 of 10 findings, six of them
   the dangerous direction:
   - **The declarations JLS §8.9 forbids** now are: a `final` or `abstract`
