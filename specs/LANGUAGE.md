@@ -231,6 +231,24 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **Numeric edges and evaluation** (2026-07-31, round 7) — the last five
+  findings, closing the round:
+  - **`2147483648` exists only as the DIRECT operand of unary minus**
+    (JLS §3.10.1): the negation now folds a literal only when it follows
+    the `-` immediately, so `-(2147483648)` is the out-of-range literal
+    javac rejects, while `- -2147483648` compiles and wraps back to
+    `Integer.MIN_VALUE` as it should.
+  - **An underscore may appear only BETWEEN digits**: `1_`, `_1`-adjacent
+    forms, `0x_FF`, `0xFF_`, `0b_101`, `10_L` and `1_.5` are errors, while
+    `1_000`, `1__0`, `0x1_F`, `0b1010_1010`, `1.5_2` and `1_0e1_0` stay
+    legal — the placement rule caturra had simply stripped.
+  - **`i++` on a BOXED counter is a value**: the increment unboxes for the
+    arithmetic (JLS §15.14.2), so `i++ + 1` and `i++ < n` are ordinary
+    expressions. They had been "bad operand types" — the increment itself
+    always worked, only its static type was wrong.
+  - **A blank `static final` may be assigned in a static initializer**
+    (JLS §8.3.1.2), exactly as a blank instance final may be in a
+    constructor. Both final-assignment checks now ask one predicate.
 - **Scanner and the print stream** (2026-07-31, round 7) — 8 of 9 findings:
   - **`System.out.write(int)`, `append(char)`/`append(CharSequence)` and
     `flush()`** exist (they were "cannot find symbol" for real JDK APIs).

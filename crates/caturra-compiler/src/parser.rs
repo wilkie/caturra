@@ -3176,34 +3176,40 @@ impl Parser<'_> {
                 span,
             });
         }
-        if self.eat_symbol("-") {
+        if self.at_symbol("-") {
+            // Fold a negated numeric literal — but only when the literal is
+            // the DIRECT operand (JLS §3.10.1): `2147483648` exists solely
+            // there, so `-(2147483648)` is an out-of-range literal and an
+            // error, while `- -2147483648` is fine (the inner minus takes
+            // the literal, and negating Integer.MIN_VALUE wraps back to it).
+            let folded = match self.peek_at(1) {
+                Some(TokenKind::IntLiteral(v)) => Some(Literal::Int(-v)),
+                Some(TokenKind::DoubleLiteral(v)) => Some(Literal::Double(-v)),
+                Some(TokenKind::FloatLiteral(v)) => Some(Literal::Float(-v)),
+                Some(TokenKind::LongLiteral(v)) => Some(Literal::Long(v.wrapping_neg())),
+                _ => None,
+            };
+            if let Some(value) = folded {
+                let end = self.tokens[self.pos + 1].span.end;
+                self.pos += 2;
+                return Ok(Expr::Literal {
+                    value,
+                    span: SourceSpan {
+                        start: start.start,
+                        end,
+                    },
+                });
+            }
+            self.pos += 1;
             let operand = self.unary()?;
             let span = SourceSpan {
                 start: start.start,
                 end: operand.span().end,
             };
-            // Fold negated numeric literals so `-2147483648` (which
-            // only exists as a negated literal) is representable.
-            return Ok(match operand {
-                Expr::Literal {
-                    value: Literal::Int(v),
-                    ..
-                } => Expr::Literal {
-                    value: Literal::Int(-v),
-                    span,
-                },
-                Expr::Literal {
-                    value: Literal::Double(v),
-                    ..
-                } => Expr::Literal {
-                    value: Literal::Double(-v),
-                    span,
-                },
-                operand => Expr::Unary {
-                    op: UnaryOp::Neg,
-                    operand: Box::new(operand),
-                    span,
-                },
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                operand: Box::new(operand),
+                span,
             });
         }
         if self.eat_symbol("!") {

@@ -18659,3 +18659,93 @@ public class DiffScannerNumbers {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 numeric edges and evaluation: where Integer.MIN_VALUE's literal may
+// appear, underscore placement, a boxed counter's increment as a value, and a
+// blank static final assigned in a static initializer.
+
+differential_test!(
+    diff_numeric_and_eval_edges,
+    "DiffNumericEdges",
+    r#"
+public class DiffNumericEdges {
+    static final int COMPUTED;
+    static final String NAME;
+    final int instanceFinal;
+    static {
+        COMPUTED = 6 * 7;
+        NAME = "n" + COMPUTED;
+    }
+    DiffNumericEdges() { instanceFinal = 5; }
+    public static void main(String[] args) {
+        System.out.println(COMPUTED + " " + NAME + " " + new DiffNumericEdges().instanceFinal);
+        System.out.println(-2147483648 + " " + (- -2147483648) + " " + Integer.MIN_VALUE);
+        System.out.println(-9223372036854775808L + " " + (-1.5) + " " + (-0.0));
+        int x = -5;
+        System.out.println(-x + " " + (- -x) + " " + (0 - 2147483647));
+        Integer i = 10;
+        int r = i++ + 1;
+        System.out.println(r + " " + i);
+        Integer j = 0;
+        while (j++ < 3) { }
+        System.out.println(j);
+        Integer k = 5;
+        System.out.println((k-- > 4) + " " + k + " " + (-k) + " " + ("v" + k++) + " " + k);
+        System.out.println(1_000 + " " + 0x1_F + " " + 0b1010_1010 + " " + 1_000_000L
+            + " " + 1.5_2 + " " + 1__0);
+    }
+}
+"#
+);
+
+// JLS §3.10.1: `2147483648` exists only as the DIRECT operand of unary minus.
+differential_reject!(
+    reject_parenthesized_min_value_literal,
+    "RejParenMin",
+    r"
+public class RejParenMin {
+    public static void main(String[] args) {
+        System.out.println(-(2147483648));
+    }
+}
+"
+);
+
+// An underscore may appear only between digits.
+differential_reject!(
+    reject_trailing_underscore_literal,
+    "RejUnderscoreTrail",
+    r"
+public class RejUnderscoreTrail {
+    public static void main(String[] args) {
+        int x = 1_;
+        System.out.println(x);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_underscore_after_radix_prefix,
+    "RejUnderscorePrefix",
+    r"
+public class RejUnderscorePrefix {
+    public static void main(String[] args) {
+        System.out.println(0x_FF);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_underscore_before_suffix,
+    "RejUnderscoreSuffix",
+    r"
+public class RejUnderscoreSuffix {
+    public static void main(String[] args) {
+        System.out.println(10_L);
+    }
+}
+"
+);

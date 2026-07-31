@@ -225,6 +225,7 @@ fn emit_clinit(
         current_class_id: class_id,
         in_static: true,
         in_constructor: false,
+        in_class_initializer: true,
         return_type: None,
         code: CodeBuilder::new(),
         scopes: vec![Vec::new()],
@@ -4914,6 +4915,7 @@ fn emit_method(
         current_class_id: class_id,
         in_static: decl.is_static,
         in_constructor: decl.is_constructor,
+        in_class_initializer: false,
         return_type,
         code: CodeBuilder::new(),
         scopes: vec![Vec::new()],
@@ -9647,6 +9649,10 @@ struct BodyGen<'a> {
     /// Whether the enclosing method is static (constructors are not).
     in_static: bool,
     in_constructor: bool,
+    /// Emitting a class's `<clinit>` — a STATIC initializer may assign a
+    /// blank `static final` exactly once (JLS §8.3.1.2), as a constructor
+    /// may assign a blank instance final.
+    in_class_initializer: bool,
     /// Declared return type; `None` is `void`.
     return_type: Option<JType>,
     code: CodeBuilder,
@@ -11581,6 +11587,21 @@ impl BodyGen<'_> {
         );
     }
 
+    /// Whether a `final` field may be assigned here: an instance final in
+    /// its own class's constructor, and a STATIC final in its own class's
+    /// static initializer (JLS §8.3.1.2) — the standard way to compute a
+    /// constant that a field initializer cannot express.
+    fn may_assign_final(&self, class_id: ClassId, field: &FieldSig) -> bool {
+        if class_id != self.current_class_id {
+            return false;
+        }
+        if field.is_static {
+            self.in_class_initializer
+        } else {
+            self.in_constructor
+        }
+    }
+
     /// Shared emission for plain/compound field assignment once the
     /// field and receiver kind are known.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -11594,7 +11615,7 @@ impl BodyGen<'_> {
         span: SourceSpan,
         keep: bool,
     ) {
-        if field.is_final && !(self.in_constructor && class_id == self.current_class_id) {
+        if field.is_final && !self.may_assign_final(class_id, field) {
             self.error(
                 span,
                 format!("cannot assign a value to final variable {}", field.name),
@@ -12153,7 +12174,7 @@ impl BodyGen<'_> {
             }
         };
 
-        if field.is_final && !(self.in_constructor && class_id == self.current_class_id) {
+        if field.is_final && !self.may_assign_final(class_id, &field) {
             self.error(
                 span,
                 format!("cannot assign a value to final variable {}", field.name),
@@ -18318,6 +18339,12 @@ impl BodyGen<'_> {
             Expr::Ternary { then, els, .. } => self.conditional_join(then, els),
             Expr::IncDec { target, .. } => match self.type_of(target) {
                 ty if ty.is_numeric() => ty,
+                // `i++` on a BOXED counter unboxes for the arithmetic (JLS
+                // §15.14.2/§5.6.2), so its value is the primitive — which is
+                // what makes `i++ + 1` and `i++ < n` legal. Typing it as an
+                // error made every binary use of the result "bad operand
+                // types", though the emitter handled the increment itself.
+                JType::Boxed(elem) => elem.base_type(),
                 _ => JType::Error,
             },
             Expr::SuperMethodCall { method, args, .. } => {

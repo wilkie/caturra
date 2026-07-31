@@ -474,6 +474,9 @@ impl Lexer<'_> {
                 {
                     digits.push(self.bump().expect("peeked"));
                 }
+                if !self.check_underscores(&digits, radix == 16, start) {
+                    return;
+                }
                 let mut cleaned = digits.replace('_', "");
                 let is_long = cleaned.ends_with('L') || cleaned.ends_with('l');
                 if is_long {
@@ -561,6 +564,9 @@ impl Lexer<'_> {
             }
             Some('f' | 'F') => {
                 self.bump();
+                if !self.check_underscores(&digits, false, start) {
+                    return;
+                }
                 let digits = digits.replace('_', "");
                 match digits.parse::<f32>() {
                     Ok(value) if self.float_in_range(f64::from(value), &digits, start) => {
@@ -574,6 +580,9 @@ impl Lexer<'_> {
                 return;
             }
             _ => {}
+        }
+        if !self.check_underscores(&digits, false, start) {
+            return;
         }
         let digits = digits.replace('_', "");
         if force_long {
@@ -714,6 +723,43 @@ impl Lexer<'_> {
         if self.float_in_range(value, &significand, start) {
             self.push(TokenKind::DoubleLiteral(value), start);
         }
+    }
+
+    /// JLS §3.10.1: an underscore may appear only BETWEEN digits — never at
+    /// either end of a run, and never touching a radix prefix, a decimal
+    /// point, an exponent marker or a type suffix. caturra stripped them
+    /// anywhere, so `1_`, `0x_FF` and `10_L` all compiled.
+    fn check_underscores(&mut self, text: &str, hex: bool, start: SourcePosition) -> bool {
+        let chars: Vec<char> = text.chars().collect();
+        let digit = |c: Option<&char>| {
+            c.is_some_and(|c| {
+                if hex {
+                    c.is_ascii_hexdigit()
+                } else {
+                    c.is_ascii_digit()
+                }
+            })
+        };
+        for (at, c) in chars.iter().enumerate() {
+            if *c != '_' {
+                continue;
+            }
+            // Runs of underscores are legal INSIDE a number (`1__0`), so
+            // look past them on both sides.
+            let mut before = at;
+            while before > 0 && chars[before - 1] == '_' {
+                before -= 1;
+            }
+            let mut after = at;
+            while chars.get(after + 1) == Some(&'_') {
+                after += 1;
+            }
+            if !(before > 0 && digit(chars.get(before - 1)) && digit(chars.get(after + 1))) {
+                self.error("illegal underscore", start);
+                return false;
+            }
+        }
+        true
     }
 
     fn escape(&mut self, start: SourcePosition) -> Option<char> {
