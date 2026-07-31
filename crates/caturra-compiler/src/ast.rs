@@ -148,6 +148,18 @@ pub struct MethodDecl {
     /// `java.io.IOException`). Recorded for JLS §11.2 checked-exception
     /// enforcement; empty when absent.
     pub throws: Vec<String>,
+    /// How many LEADING body statements a desugaring inserted to stand in for
+    /// what a superclass constructor does, and so must run BEFORE the class's
+    /// instance field initializers rather than after them (JLS §12.5 step 4).
+    /// Two things need this: an enum constructor's `__name`/`__ordinal` stores
+    /// (a real `java.lang.Enum` sets those in the super constructor, so a field
+    /// initializer calling `name()` sees the name), and an anonymous or local
+    /// class's captured-local stores (javac's `val$x = x`, which likewise
+    /// precede the initializers so `int w = captured;` can read one).
+    ///
+    /// A USER constructor's own `this.x = x;` must NOT be counted: Java runs it
+    /// after the initializers, so `int y = x;` in the same class reads 0.
+    pub pre_init: usize,
     pub span: SourceSpan,
 }
 

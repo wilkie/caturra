@@ -184,6 +184,7 @@ fn emit_class(
             throws: Vec::new(),
             is_protected: false,
             span: decl.span,
+            pre_init: 0,
         };
         let compiled = emit_method(
             path,
@@ -772,9 +773,13 @@ impl MethodTable {
 
                 for field in &class.fields {
                     let field_ty = table.resolve_type(&field.ty).unwrap_or(JType::Unsupported);
-                    // A `static final` field with a constant initializer is a
-                    // compile-time constant: its reads are inlined.
-                    let const_literal = (field.is_static && field.is_final)
+                    // A `final` field with a constant initializer is a
+                    // CONSTANT VARIABLE (JLS §4.12.4): its reads are inlined.
+                    // Instance ones count too, which is why `final int K = 5`
+                    // reads as 5 from a superclass constructor's virtual call,
+                    // before the field slot has been written.
+                    let const_literal = field
+                        .is_final
                         .then(|| {
                             field
                                 .init
@@ -4981,6 +4986,7 @@ fn emit_method(
         });
         if let Some((is_super, args, span)) = explicit {
             statements = &statements[1..];
+            body.check_no_this_in_chain_args(args);
             if is_super {
                 body.emit_constructor_call_on_this(
                     class_decl
@@ -4990,6 +4996,7 @@ fn emit_method(
                     args,
                     span,
                 );
+                statements = body.emit_pre_init(decl, statements);
                 body.emit_instance_field_initializers(class_decl);
             } else {
                 let current = class_decl.name.clone();
@@ -5009,6 +5016,7 @@ fn emit_method(
                     .unwrap_or("java/lang/Object")
             });
             body.emit_constructor_call_on_this(super_name, &[], decl.span);
+            statements = body.emit_pre_init(decl, statements);
             body.emit_instance_field_initializers(class_decl);
         }
     }
@@ -12086,6 +12094,110 @@ impl BodyGen<'_> {
         self.code.drop_stack(1 + args_width);
     }
 
+    /// JLS §8.8.7.1: the arguments of an explicit `super(...)`/`this(...)` may
+    /// not refer to `this`, whether written out or implied by a bare instance
+    /// field or instance method call. There is no instance to refer to yet —
+    /// `Sub() { super(compute()); }` where `compute()` reads a field ran with
+    /// the field still at its default, silently producing a different answer
+    /// from the one the source reads like.
+    fn check_no_this_in_chain_args(&mut self, args: &[Expr]) {
+        for arg in args {
+            if let Some(span) = self.first_this_reference(arg) {
+                self.error(
+                    span,
+                    "cannot reference this before supertype constructor has been called",
+                );
+                return;
+            }
+        }
+    }
+
+    /// Where this expression refers to `this`, explicitly or implicitly.
+    /// A STATIC member is fine, and so is a name bound to a local or parameter.
+    fn first_this_reference(&self, expr: &Expr) -> Option<SourceSpan> {
+        let in_scope = |name: &str| {
+            self.scopes
+                .iter()
+                .rev()
+                .flat_map(|scope| scope.iter())
+                .any(|(n, _)| n == name)
+        };
+        let implicit_instance_member = |name: &str| {
+            !in_scope(name)
+                && self
+                    .table
+                    .field(self.current_class, name)
+                    .is_some_and(|(_, field)| !field.is_static)
+        };
+        match expr {
+            Expr::This { span } | Expr::Super { span } => Some(*span),
+            Expr::Name { path, span } if path.len() == 1 && implicit_instance_member(&path[0]) => {
+                Some(*span)
+            }
+            // A bare call: an instance method of this class is `this.m(...)`.
+            Expr::Call {
+                receiver: None,
+                method,
+                args,
+                span,
+            } => {
+                let instance = self
+                    .table
+                    .classes
+                    .get(self.current_class)
+                    .is_some_and(|info| {
+                        info.methods
+                            .iter()
+                            .any(|m| &m.name == method && !m.is_static)
+                    });
+                if instance {
+                    return Some(*span);
+                }
+                args.iter().find_map(|a| self.first_this_reference(a))
+            }
+            Expr::Call {
+                receiver: Some(receiver),
+                args,
+                ..
+            } => self.first_this_reference(receiver).or_else(|| {
+                args.iter()
+                    .find_map(|a| -> Option<SourceSpan> { self.first_this_reference(a) })
+            }),
+            Expr::Field { object, .. } => self.first_this_reference(object),
+            Expr::Binary { lhs, rhs, .. } => self
+                .first_this_reference(lhs)
+                .or_else(|| self.first_this_reference(rhs)),
+            Expr::Unary { operand, .. } | Expr::Cast { operand, .. } => {
+                self.first_this_reference(operand)
+            }
+            Expr::Ternary {
+                cond, then, els, ..
+            } => self
+                .first_this_reference(cond)
+                .or_else(|| self.first_this_reference(then))
+                .or_else(|| self.first_this_reference(els)),
+            _ => None,
+        }
+    }
+
+    /// Emit the statements a desugaring inserted to stand in for what a
+    /// superclass constructor does (see `MethodDecl::pre_init`), returning the
+    /// rest of the body. They go between the super call and the instance field
+    /// initializers, which is where javac puts its `val$x = x` capture stores
+    /// and where `java.lang.Enum` sets an enum constant's name and ordinal —
+    /// so a field initializer can read a captured local, or call `name()`.
+    fn emit_pre_init<'stmt>(
+        &mut self,
+        decl: &MethodDecl,
+        statements: &'stmt [Stmt],
+    ) -> &'stmt [Stmt] {
+        let lifted = decl.pre_init.min(statements.len());
+        for stmt in &statements[..lifted] {
+            self.statement(stmt);
+        }
+        &statements[lifted..]
+    }
+
     /// The instance-field initializers, in declaration order.
     fn emit_instance_field_initializers(&mut self, class_decl: &ClassDecl) {
         // An inner class's `__caturraOuter` link must be set BEFORE the field
@@ -12155,12 +12267,19 @@ impl BodyGen<'_> {
                     }
                 }
                 Action::Block(block) => {
-                    // Each block is its own local scope.
+                    // Each block is its own local scope, and JLS §8.3.3's
+                    // forward-reference rule applies to it exactly as to a
+                    // field initializer at the same textual position: a
+                    // simple-name read of a field declared after this block is
+                    // illegal. Without the context here the whole block was
+                    // exempt, so `{ print(b); } int b = 5;` printed 0.
+                    self.forward_ref = Some((block.order, std::rc::Rc::clone(&orders)));
                     self.scopes.push(Vec::new());
                     for stmt in &block.body {
                         self.statement(stmt);
                     }
                     self.scopes.pop();
+                    self.forward_ref = None;
                 }
             }
         }
@@ -12447,12 +12566,18 @@ impl BodyGen<'_> {
     /// or explicit receiver already handled by the caller.
     fn emit_getfield(&mut self, class_id: ClassId, field: &FieldSig) -> JType {
         // A read of a compile-time constant is INLINED as its value (JLS
-        // §13.4.9) — no `getstatic`, so the value is right even before the
-        // field's initializer runs (an enum ctor reading a later static), and
-        // there is no dependency on the declaring class being initialized.
-        if field.is_static
-            && let Some(literal) = field.const_literal.clone()
-        {
+        // §13.1/§13.4.9) — no `getstatic`/`getfield`, so the value is right
+        // even before the field's initializer runs: an enum constructor
+        // reading a later static, or a `final int K = 5` read through a
+        // superclass constructor's virtual call while the slot still holds 0.
+        // There is no dependency on the declaring class being initialized
+        // either. An INSTANCE constant's receiver is already on the stack, and
+        // is evaluated then discarded exactly as javac leaves it.
+        if let Some(literal) = field.const_literal.clone() {
+            if !field.is_static {
+                self.code.push_op(op::POP, 0);
+                self.code.drop_stack(1);
+            }
             self.emit_const_literal(&literal);
             return field.ty;
         }
@@ -15384,130 +15509,60 @@ impl BodyGen<'_> {
     /// concatenation: objects go through their `toString()` (the VM
     /// supplies `ClassName@hex` when a class doesn't define one).
     #[allow(clippy::too_many_lines)] // one coercion per printable type
+    /// Emit `String.valueOf(ref)` for a reference already on the stack whose
+    /// text is its own `toString()`: call it, unless the reference is null, in
+    /// which case the value is the four characters `null`.
+    ///
+    /// EVERY caller needs this guard. Printing and concatenation are defined as
+    /// `String.valueOf(Object)` (JLS §5.1.11), which is null-safe, but a bare
+    /// `toString()` call is not — so an uninitialized `List`/`Map`/`Set`/`File`
+    /// field (one read from a superclass constructor, say, before the subclass
+    /// initializers have run) threw `NullPointerException` where a JDK prints
+    /// "null". Three of the six types here already had the guard inline; the
+    /// other three did not, which is exactly the kind of gap one shared helper
+    /// closes for good.
+    fn emit_string_value_of(&mut self, class: &str) {
+        let null_case = self.code.new_label();
+        let done = self.code.new_label();
+        self.code.push_op(op::DUP, 1);
+        self.code.branch(op::IFNULL, null_case, 1);
+        let method_ref = intern_method_ref(self.pool, class, "toString", "()Ljava/lang/String;");
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+        self.code.drop_stack(1);
+        self.code.branch(op::GOTO, done, 0);
+        self.code.bind(null_case);
+        self.code.push_op(op::POP, 0);
+        self.code.drop_stack(1);
+        let utf8 = self.pool.intern_utf8("null");
+        let index = self.pool.intern(Constant::String { string_index: utf8 });
+        self.code.push_ldc(index);
+        self.code.bind(done);
+    }
+
     fn coerce_to_string_for_output(&mut self, ty: JType) -> JType {
-        if let JType::Exception(id) = ty {
-            // String.valueOf semantics: a null throwable (a `getCause()` with
-            // no cause) prints as "null" rather than NPEing on toString.
-            let internal = exception_internal(id).to_owned();
-            let null_case = self.code.new_label();
-            let done = self.code.new_label();
-            self.code.push_op(op::DUP, 1);
-            self.code.branch(op::IFNULL, null_case, 1);
-            let method_ref =
-                intern_method_ref(self.pool, &internal, "toString", "()Ljava/lang/String;");
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-            self.code.drop_stack(1);
-            self.code.branch(op::GOTO, done, 0);
-            self.code.bind(null_case);
-            self.code.push_op(op::POP, 0);
-            self.code.drop_stack(1);
-            let utf8 = self.pool.intern_utf8("null");
-            let index = self.pool.intern(Constant::String { string_index: utf8 });
-            self.code.push_ldc(index);
-            self.code.bind(done);
-            return JType::Str;
-        }
-        if ty == JType::File {
-            let method_ref = intern_method_ref(
-                self.pool,
-                "java/io/File",
-                "toString",
-                "()Ljava/lang/String;",
-            );
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-            self.code.drop_stack(1);
-            return JType::Str;
-        }
-        if ty == JType::Path {
-            let method_ref = intern_method_ref(
-                self.pool,
-                "java/nio/file/Path",
-                "toString",
-                "()Ljava/lang/String;",
-            );
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-            self.code.drop_stack(1);
-            return JType::Str;
-        }
-        if ty == JType::StringBuilder {
-            // A StringBuilder prints via `println(Object)` -> `String.valueOf`,
-            // which is null-safe: a null builder is "null", not an NPE.
-            let null_case = self.code.new_label();
-            let done = self.code.new_label();
-            self.code.push_op(op::DUP, 1);
-            self.code.branch(op::IFNULL, null_case, 1);
-            let method_ref = intern_method_ref(
-                self.pool,
-                "java/lang/StringBuilder",
-                "toString",
-                "()Ljava/lang/String;",
-            );
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-            self.code.drop_stack(1);
-            self.code.branch(op::GOTO, done, 0);
-            self.code.bind(null_case);
-            self.code.push_op(op::POP, 0);
-            self.code.drop_stack(1);
-            let utf8 = self.pool.intern_utf8("null");
-            let index = self.pool.intern(Constant::String { string_index: utf8 });
-            self.code.push_ldc(index);
-            self.code.bind(done);
-            return JType::Str;
-        }
-        if let Some(class) = match ty {
-            JType::List(_) => Some("java/util/ArrayList"),
-            JType::Stack(_) => Some("java/util/Stack"),
-            _ => None,
-        } {
-            let method_ref =
-                intern_method_ref(self.pool, class, "toString", "()Ljava/lang/String;");
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-            self.code.drop_stack(1);
-            return JType::Str;
-        }
-        if let Some((class, _)) = builtin_instance_table(ty)
-            && matches!(
-                ty,
-                JType::Map { .. }
-                    | JType::Set(_)
-                    | JType::Collection(_)
-                    | JType::EntrySet { .. }
-                    | JType::MapEntry { .. }
-            )
-        {
-            let method_ref =
-                intern_method_ref(self.pool, class, "toString", "()Ljava/lang/String;");
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-            self.code.drop_stack(1);
-            return JType::Str;
-        }
         // A boxed wrapper is left alone: it may be null (`map.get(absent)`),
         // and printing/appending it as an Object renders "null" as Java does
         // rather than throwing on `Integer.toString()`.
-        if let JType::Object(class_id) = ty {
-            // String.valueOf semantics: null prints as "null" instead
-            // of throwing, so guard the toString call.
-            let class_name = self.table.class_name(class_id).to_owned();
-            let null_case = self.code.new_label();
-            let done = self.code.new_label();
-            self.code.push_op(op::DUP, 1);
-            self.code.branch(op::IFNULL, null_case, 1);
-            let method_ref =
-                intern_method_ref(self.pool, &class_name, "toString", "()Ljava/lang/String;");
-            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
-            self.code.drop_stack(1);
-            self.code.branch(op::GOTO, done, 0);
-            self.code.bind(null_case);
-            self.code.push_op(op::POP, 0);
-            self.code.drop_stack(1);
-            let utf8 = self.pool.intern_utf8("null");
-            let index = self.pool.intern(Constant::String { string_index: utf8 });
-            self.code.push_ldc(index);
-            self.code.bind(done);
-            JType::Str
-        } else {
-            ty
-        }
+        let class = match ty {
+            JType::Exception(id) => exception_internal(id).to_owned(),
+            JType::File => String::from("java/io/File"),
+            JType::Path => String::from("java/nio/file/Path"),
+            JType::StringBuilder => String::from("java/lang/StringBuilder"),
+            JType::List(_) => String::from("java/util/ArrayList"),
+            JType::Stack(_) => String::from("java/util/Stack"),
+            JType::Object(class_id) => self.table.class_name(class_id).to_owned(),
+            JType::Map { .. }
+            | JType::Set(_)
+            | JType::Collection(_)
+            | JType::EntrySet { .. }
+            | JType::MapEntry { .. } => match builtin_instance_table(ty) {
+                Some((class, _)) => class.to_owned(),
+                None => return ty,
+            },
+            _ => return ty,
+        };
+        self.emit_string_value_of(&class);
+        JType::Str
     }
 
     // ----- arrays -----

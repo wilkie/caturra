@@ -1292,6 +1292,7 @@ impl Parser<'_> {
                     start: start.start,
                     end: name_span.end,
                 },
+                pre_init: 0,
             }));
         }
 
@@ -1374,6 +1375,7 @@ impl Parser<'_> {
                 start: start.start,
                 end: name_span.end,
             },
+            pre_init: 0,
         }))
     }
 
@@ -4202,6 +4204,10 @@ fn desugar_enum(
                     let mut body = store_stmts();
                     body.append(&mut method.body);
                     method.body = body;
+                    // `java.lang.Enum`'s constructor sets the name and ordinal,
+                    // so they are in place before the enum's own field
+                    // initializers run — `String tag = name();` sees `RED`.
+                    method.pre_init = 2;
                 }
                 method.is_private = true;
             }
@@ -4224,6 +4230,9 @@ fn desugar_enum(
             throws: Vec::new(),
             is_protected: false,
             span: zero,
+            // See the note on the augmented constructors above: these two
+            // stores stand in for `java.lang.Enum`'s constructor.
+            pre_init: 2,
         });
     }
 
@@ -4288,6 +4297,7 @@ fn desugar_enum(
         throws: Vec::new(),
         is_protected: false,
         span: zero,
+        pre_init: 0,
     });
 
     // `int compareTo(E __other) { return __ordinal - __other.__ordinal; }` —
@@ -4329,6 +4339,7 @@ fn desugar_enum(
         throws: Vec::new(),
         is_protected: false,
         span: zero,
+        pre_init: 0,
     });
 
     // `static E[] values() { return new E[]{ A, B, ... }; }`
@@ -4360,6 +4371,7 @@ fn desugar_enum(
             throws: Vec::new(),
             is_protected: false,
             span: zero,
+            pre_init: 0,
         });
     }
 
@@ -4463,6 +4475,7 @@ fn desugar_enum(
             throws: Vec::new(),
             is_protected: false,
             span: zero,
+            pre_init: 0,
         });
     }
 
@@ -5440,6 +5453,7 @@ fn simple_return_method(
         throws: Vec::new(),
         is_protected: false,
         span,
+        pre_init: 0,
     }
 }
 

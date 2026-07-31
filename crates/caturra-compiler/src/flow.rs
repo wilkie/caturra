@@ -28,7 +28,123 @@ pub(crate) fn check(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnost
         // The body of a method is reachable (JLS §14.21).
         reachability(&method.body, &mut reporter);
     }
+    // An initializer block is a block like any other, and used to escape every
+    // check here — its unreachable code, its `return`, and (for an instance
+    // one) its inability to finish all went unreported.
+    for block in &decl.init_blocks {
+        let mut reporter = Reporter { path, diagnostics };
+        reachability(&block.body, &mut reporter);
+        // JLS §14.17: `return` belongs to a method or constructor. An
+        // initializer is neither, whether it is static or not.
+        if let Some(span) = first_return(&block.body) {
+            reporter.error(span, "return outside method");
+        }
+        // JLS §8.6: an INSTANCE initializer must be able to complete normally.
+        // A static one need not (§8.7 forbids only a checked exception), so
+        // `static { throw new RuntimeException(); }` stays legal.
+        if !block.is_static && !block_completes_normally(&block.body) {
+            reporter.error(block.span, "initializer must be able to complete normally");
+        }
+    }
     blank_finals(decl, path, diagnostics);
+    recursive_constructors(decl, path, diagnostics);
+}
+
+/// JLS §8.8.7.1: a constructor may not invoke itself, directly or around a
+/// chain of `this(...)` delegations. Left unchecked, `C() { this(1); }
+/// C(int a) { this(); }` compiled and blew the stack at run time.
+///
+/// The delegation target is matched by ARITY, which is all this pass can see
+/// (overload resolution lives in codegen), so the graph is ambiguous wherever
+/// two constructors share one. A constructor is therefore reported only when NO
+/// resolution can terminate: `terminates` is the least fixpoint over "declares
+/// no `this(...)`" and "some candidate terminates". A delegation that matches
+/// nothing counts as terminating too — the arity may simply be one this pass
+/// does not model (a varargs constructor, say).
+fn recursive_constructors(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
+    let ctors: Vec<&MethodDecl> = decl.methods.iter().filter(|m| m.is_constructor).collect();
+    let targets: Vec<Option<Vec<usize>>> = ctors
+        .iter()
+        .map(|ctor| {
+            ctor.body
+                .iter()
+                .find_map(|stmt| match stmt {
+                    Stmt::ThisCall { args, .. } => Some(args.len()),
+                    _ => None,
+                })
+                .map(|arity| {
+                    (0..ctors.len())
+                        .filter(|i| ctors[*i].params.len() == arity)
+                        .collect()
+                })
+        })
+        .collect();
+    let mut terminates: Vec<bool> = targets
+        .iter()
+        .map(|target| match target {
+            None => true,
+            Some(candidates) => candidates.is_empty(),
+        })
+        .collect();
+    loop {
+        let mut changed = false;
+        for (i, target) in targets.iter().enumerate() {
+            if terminates[i] {
+                continue;
+            }
+            if let Some(candidates) = target
+                && candidates.iter().any(|c| terminates[*c])
+            {
+                terminates[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (ctor, ok) in ctors.iter().zip(terminates) {
+        if !ok {
+            diagnostics.push(Diagnostic::error(
+                path,
+                "recursive constructor invocation",
+                ctor.span,
+            ));
+        }
+    }
+}
+
+/// The first `return` in this block, at any depth of nested STATEMENT. Lambda
+/// bodies and local classes are hoisted into classes of their own long before
+/// this runs, so a `return` reached here really does belong to the block.
+fn first_return(statements: &[Stmt]) -> Option<SourceSpan> {
+    statements.iter().find_map(return_span)
+}
+
+fn return_span(statement: &Stmt) -> Option<SourceSpan> {
+    match statement {
+        Stmt::Return { span, .. } => Some(*span),
+        Stmt::Block(body) => first_return(body),
+        Stmt::If { then, els, .. } => return_span(then).or_else(|| {
+            els.as_deref()
+                .and_then(|els| -> Option<SourceSpan> { return_span(els) })
+        }),
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForEach { body, .. }
+        | Stmt::Labeled { body, .. } => return_span(body),
+        Stmt::Switch { arms, .. } => arms.iter().find_map(|arm| first_return(&arm.body)),
+        Stmt::Try {
+            body,
+            catches,
+            finally_body,
+            ..
+        } => first_return(body)
+            .or_else(|| catches.iter().find_map(|c| first_return(&c.body)))
+            .or_else(|| finally_body.as_deref().and_then(first_return)),
+        _ => None,
+    }
 }
 
 struct Reporter<'a> {
@@ -323,10 +439,30 @@ fn stmt_span(statement: &Stmt) -> Option<SourceSpan> {
 /// Without this a blank final silently read its type's default, and `final`
 /// meant nothing for a field: it could be written twice in one constructor.
 fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
+    // A field a desugaring assigns in a constructor's PRE-INIT prologue (a
+    // captured local, an enum constant's name and ordinal) is definitely
+    // assigned before any initializer or constructor body runs, so it is not a
+    // blank final in the user's sense at all. Counting it as one made an
+    // anonymous class that reads a captured local from its instance
+    // initializer — legal Java — report the capture as uninitialized.
+    let assigned_by_prologue: Vec<&str> = decl
+        .methods
+        .iter()
+        .filter(|method| method.is_constructor)
+        .flat_map(|method| method.body.iter().take(method.pre_init))
+        .filter_map(|stmt| match stmt {
+            Stmt::Assign {
+                target: crate::ast::AssignTarget::Field { object, name },
+                ..
+            } if matches!(**object, Expr::This { .. }) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
     let blanks: Vec<&FieldDecl> = decl
         .fields
         .iter()
         .filter(|field| field.is_final && !field.is_static && field.init.is_none())
+        .filter(|field| !assigned_by_prologue.contains(&field.name.as_str()))
         .collect();
     if blanks.is_empty() {
         return;
@@ -347,6 +483,7 @@ fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>)
     let constructors: Vec<&MethodDecl> = decl.methods.iter().filter(|m| m.is_constructor).collect();
 
     for field in &blanks {
+        blank_final_in_initializers(decl, field, &constructors, path, diagnostics);
         if assigned_by_initializer.contains(&field.name.as_str()) {
             continue;
         }
@@ -404,6 +541,58 @@ fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>)
     }
 }
 
+/// A blank final in the INSTANCE INITIALIZERS: a read before the block assigns
+/// it, a second assignment within the block, and — once a block has assigned it
+/// — any assignment in a constructor, which is then the second one (JLS §16.9).
+/// Initializers used to be exempt from all three.
+fn blank_final_in_initializers(
+    decl: &ClassDecl,
+    field: &FieldDecl,
+    constructors: &[&MethodDecl],
+    path: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut assigned = false;
+    for block in decl.init_blocks.iter().filter(|b| !b.is_static) {
+        if let Some(span) = read_before_assignment(&block.body, &field.name) {
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("variable {} might not have been initialized", field.name),
+                span,
+            ));
+        }
+        if let Some(span) = assigns_twice(&block.body, &field.name) {
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("variable {} might already have been assigned", field.name),
+                span,
+            ));
+        }
+        assigned |= assigns_definitely_block(&block.body, &field.name);
+    }
+    if !assigned {
+        return;
+    }
+    // A delegating constructor is not checked here: the one it calls carries
+    // the rule, exactly as for the non-initializer case.
+    for constructor in constructors {
+        if constructor
+            .body
+            .iter()
+            .any(|s| matches!(s, Stmt::ThisCall { .. }))
+        {
+            continue;
+        }
+        if let Some(span) = first_assignment(&constructor.body, &field.name) {
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("variable {} might already have been assigned", field.name),
+                span,
+            ));
+        }
+    }
+}
+
 /// Whether `statement` definitely assigns the field named `name`.
 fn assigns_definitely(statement: &Stmt, name: &str) -> bool {
     match statement {
@@ -436,6 +625,18 @@ fn assigns_definitely_block(statements: &[Stmt], name: &str) -> bool {
 ///
 /// Only straight-line assignments count: two writes on opposite branches of an
 /// `if` are legal, and this must never invent an error.
+/// Where this block first assigns the field named `name`, at the top level or
+/// in a nested block. Used to place the "might already have been assigned"
+/// error on a constructor's assignment when an instance initializer already
+/// made it — the assignment is the SECOND one whether or not it is definite.
+fn first_assignment(statements: &[Stmt], name: &str) -> Option<SourceSpan> {
+    statements.iter().find_map(|statement| match statement {
+        Stmt::Assign { target, span, .. } if is_field_target(target, name) => Some(*span),
+        Stmt::Block(body) => first_assignment(body, name),
+        _ => None,
+    })
+}
+
 fn assigns_twice(statements: &[Stmt], name: &str) -> Option<SourceSpan> {
     let mut seen = false;
     for statement in statements {

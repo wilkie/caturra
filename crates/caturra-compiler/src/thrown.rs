@@ -98,23 +98,71 @@ pub(crate) fn check(
         }
         check_method(class, method, path, table, diagnostics);
     }
+    // JLS §11.2.3. A STATIC initializer can declare nothing, so every checked
+    // exception in one is unreported. An INSTANCE initializer — a block or a
+    // field's initializer expression — runs inside every constructor, so it may
+    // throw only what EVERY constructor declares. Both were exempt before, and
+    // an initializer was the one place a checked exception could hide.
+    let instance_declared = constructor_common_throws(class, table);
     for block in &class.init_blocks {
-        // A static initializer can declare nothing, so every checked
-        // exception in one is unreported (JLS §11.2.3). Instance initializers
-        // may throw what every constructor declares — rarer than this pass
-        // wants to model, so they are left unchecked (the safe direction).
-        if block.is_static {
-            let mut ctx = Ctx {
-                class,
-                path,
-                table,
-                diagnostics,
-                declared: Vec::new(),
-                locals: HashMap::new(),
-            };
-            thrown_of_block(&block.body, &mut Vec::new(), &mut ctx);
-        }
+        let declared = if block.is_static {
+            Vec::new()
+        } else {
+            instance_declared.clone()
+        };
+        let mut ctx = Ctx {
+            class,
+            path,
+            table,
+            diagnostics,
+            declared,
+            locals: HashMap::new(),
+        };
+        thrown_of_block(&block.body, &mut Vec::new(), &mut ctx);
     }
+    for field in &class.fields {
+        let Some(init) = &field.init else {
+            continue;
+        };
+        let declared = if field.is_static {
+            Vec::new()
+        } else {
+            instance_declared.clone()
+        };
+        let mut ctx = Ctx {
+            class,
+            path,
+            table,
+            diagnostics,
+            declared,
+            locals: HashMap::new(),
+        };
+        thrown_of_expr(init, &mut Vec::new(), &mut ctx);
+    }
+}
+
+/// What every constructor of the class declares it may throw — the set an
+/// instance initializer is allowed to throw (JLS §11.2.3). A class with no
+/// explicit constructor gets the default one, which declares nothing.
+fn constructor_common_throws(class: &ClassDecl, table: &MethodTable) -> Vec<Exc> {
+    let mut ctors = class.methods.iter().filter(|m| m.is_constructor);
+    let Some(first) = ctors.next() else {
+        return Vec::new();
+    };
+    let rest: Vec<&MethodDecl> = ctors.collect();
+    first
+        .throws
+        .iter()
+        .filter_map(|name| resolve_exc(name, table))
+        .filter(|exc| {
+            rest.iter().all(|ctor| {
+                ctor.throws
+                    .iter()
+                    .filter_map(|name| resolve_exc(name, table))
+                    .any(|declared| exc_covers(&declared, exc, table))
+            })
+        })
+        .collect()
 }
 
 fn check_method(

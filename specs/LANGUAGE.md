@@ -441,6 +441,50 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **What runs before what, when an object is built** (2026-07-31, round 8) —
+  the instance-init-order cluster: four wrong answers at run time, and eight
+  programs javac refuses that caturra ran:
+  - **A CONSTANT VARIABLE is inlined at its use site** (JLS §4.12.4/§13.1) —
+    and an INSTANCE one counts, not only a `static` one. caturra inlined
+    only statics, so `final int K = 5;` read through a superclass
+    constructor's virtual call printed 0 (the field slot is genuinely still
+    0 there; javac reads the constant instead). The receiver of an inlined
+    instance read is evaluated and discarded, as javac leaves it.
+  - **A null collection prints "null"**. Printing and concatenation are
+    `String.valueOf(Object)` (JLS §5.1.11), which is null-safe, but caturra
+    emitted a bare `toString()` call for a `List`/`Map`/`Set`/`File`/`Path`
+    receiver — so an uninitialized field read from a superclass constructor
+    threw NullPointerException. Three of the six types already guarded the
+    call inline; one shared `emit_string_value_of` now does it for all.
+  - **An enum constant's name and ordinal are set by the SUPER
+    constructor**, so the enum's own field initializers can call `name()`:
+    `String tag = name() + "-" + ordinal();` is `RED-0`, not `null-0`. The
+    desugaring's two hidden stores are lifted to where `java.lang.Enum`'s
+    constructor would have run them — a new `MethodDecl::pre_init` counts the
+    leading statements that stand in for a super constructor.
+  - **A field or instance initializer may read a CAPTURED LOCAL**, since
+    javac's `val$x = x` stores also precede the initializers. caturra's
+    capture pass looked only at an anonymous class's METHODS, so
+    `new Job() { int w = captured; { z = captured + 1; } }` — ordinary Java —
+    was rejected outright with "cannot find variable".
+  - **The eight compile-time rules an initializer used to escape**, all in
+    the accepts-invalid direction: `return` inside one (`return outside
+    method`, JLS §14.17), an INSTANCE initializer that cannot complete
+    normally (§8.6 — a static one may, and `static { throw ... }` stays
+    legal under §8.7), an illegal forward reference from a block (§8.3.3,
+    which only field initializers were checked for), a blank final read
+    before the block assigns it or assigned again by a constructor after it
+    (§16.9), a checked exception thrown by an instance initializer or field
+    initializer (§11.2.3 — permitted only when EVERY constructor declares
+    it), `this` (explicit, or implied by a bare instance field or method
+    call) in a `super(...)`/`this(...)` argument (§8.8.7.1), and a recursive
+    constructor invocation, which used to compile and blow the stack. The
+    recursion check matches delegation targets by arity and reports only a
+    constructor no resolution can terminate, so an ambiguous overload set
+    never produces a false error.
+  - Pinned by `diff_initialization_order`,
+    `diff_initializers_read_captured_locals` and eight
+    `reject_*` differential tests.
 - **A read-only view stays read-only THROUGH its cursor** (2026-07-31,
   round 8) — the collection-views cluster, and the round's most dangerous
   finding:

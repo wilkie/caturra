@@ -309,6 +309,10 @@ fn add_capture_members(class: &mut ClassDecl, caps: &[(String, TypeRef)], supers
         throws: Vec::new(),
         is_protected: false,
         span: zero,
+        // The capture stores are javac's `val$x = x`: they run BEFORE the
+        // class's field initializers, so one may read a captured local. (The
+        // leading `super(...)` is not counted — codegen strips it first.)
+        pre_init: caps.len(),
     });
 }
 
@@ -383,6 +387,9 @@ fn augment_local_ctors(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
             throws: Vec::new(),
             is_protected: false,
             span: zero,
+            // The capture stores are javac's `val$x = x`: they run BEFORE the
+            // class's field initializers, so one may read a captured local.
+            pre_init: caps.len(),
         });
         return;
     }
@@ -396,6 +403,7 @@ fn augment_local_ctors(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
         let mut rest = ctor.body.split_off(after);
         ctor.body.append(&mut stores());
         ctor.body.append(&mut rest);
+        ctor.pre_init = caps.len();
     }
 }
 
@@ -763,6 +771,21 @@ fn free_names(class: &ClassDecl) -> HashSet<String> {
             bound.insert(p.name.clone());
         }
         for stmt in &method.body {
+            free_in_stmt(stmt, &mut bound, &mut free);
+        }
+    }
+    // A FIELD INITIALIZER and an INSTANCE INITIALIZER BLOCK capture too —
+    // `new Runner() { int w = captured; { z = captured + 1; } }` is ordinary
+    // Java. Walking only the methods left both reading a name that no longer
+    // existed, so the class was rejected outright.
+    for field in &class.fields {
+        if let Some(init) = &field.init {
+            free_in_expr(init, &mut fields.clone(), &mut free);
+        }
+    }
+    for block in &class.init_blocks {
+        let mut bound = fields.clone();
+        for stmt in &block.body {
             free_in_stmt(stmt, &mut bound, &mut free);
         }
     }

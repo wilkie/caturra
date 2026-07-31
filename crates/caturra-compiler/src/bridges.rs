@@ -234,5 +234,6 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         throws: Vec::new(),
         is_protected: false,
         span: zero,
+        pre_init: 0,
     }
 }

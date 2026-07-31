@@ -18950,3 +18950,197 @@ public class DiffViewSurface {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Instance initialization order (audit round 8): what runs before what, and
+// the compile-time rules an initializer used to escape.
+// ---------------------------------------------------------------------------
+
+// The order JLS §12.5 fixes, and the three ways caturra used to read the wrong
+// value from it: a superclass constructor's virtual call sees the subclass's
+// fields at their DEFAULTS (so an uninitialized `List` prints "null" rather
+// than throwing), but a CONSTANT VARIABLE — a final field with a constant
+// initializer, instance or static — is inlined at its use site and reads its
+// value there (JLS §13.1). An enum's name and ordinal come from
+// `java.lang.Enum`'s constructor, so its own field initializers can call
+// `name()`.
+differential_test!(
+    diff_initialization_order,
+    "DiffInitOrder",
+    r#"
+import java.util.*;
+
+class BaseOrder {
+    BaseOrder() { setUp(); }
+    void setUp() { System.out.println("BaseOrder.setUp"); }
+}
+
+class SubOrder extends BaseOrder {
+    int value = 100;
+    List<String> list = new ArrayList<>();
+    final int K = 5;
+    final String S = "cv";
+    final double D = 1.5;
+    static final int STATIC_K = 9;
+
+    @Override void setUp() {
+        System.out.println("value=" + value + " list=" + list + " map=" + (Map<String, Integer>) null);
+        System.out.println("K=" + K + " S=" + S + " D=" + D + " STATIC_K=" + STATIC_K);
+        value = 55;
+        try { list.add("x"); } catch (NullPointerException e) { System.out.println("NPE"); }
+    }
+}
+
+enum Tagged {
+    RED, GREEN;
+    String tag = name() + "-" + ordinal();
+    Tagged() { System.out.println("ctor " + name() + " " + ordinal()); }
+}
+
+public class DiffInitOrder {
+    public static void main(String[] args) {
+        SubOrder s = new SubOrder();
+        s.setUp();
+        System.out.println(s.value + " " + s.list);
+        for (Tagged t : Tagged.values()) { System.out.println(t + " " + t.tag); }
+    }
+}
+"#
+);
+
+// A field initializer and an instance initializer block of an anonymous or
+// local class may read a CAPTURED LOCAL: javac's `val$x = x` stores run right
+// after the super call, before the initializers. caturra's capture pass looked
+// only at methods, so the class was rejected outright.
+differential_test!(
+    diff_initializers_read_captured_locals,
+    "DiffInitCapture",
+    r#"
+abstract class Job { abstract void run(); }
+
+public class DiffInitCapture {
+    public static void main(String[] args) {
+        int captured = 99;
+        String label = "job";
+        Job anon = new Job() {
+            int w = captured;
+            String name = label + w;
+            int z;
+            { z = captured + 1; }
+            void run() { System.out.println("anon " + w + " " + z + " " + name); }
+        };
+        anon.run();
+
+        class Local extends Job {
+            int a = captured * 2;
+            int b;
+            { b = a + captured; }
+            void run() { System.out.println("local " + a + " " + b); }
+        }
+        new Local().run();
+    }
+}
+"#
+);
+
+// The compile-time rules an initializer used to escape entirely. Each is a
+// program javac refuses, so caturra must refuse it too — the accepts-invalid
+// direction, where a program that cannot exist on a real JDK ran here.
+differential_reject!(
+    reject_return_in_instance_initializer,
+    "RejInitReturn",
+    r"
+public class RejInitReturn {
+    int a = 1;
+    { if (a == 1) return; }
+    public static void main(String[] args) { new RejInitReturn(); }
+}
+"
+);
+
+differential_reject!(
+    reject_initializer_that_cannot_complete,
+    "RejInitAbrupt",
+    r"
+public class RejInitAbrupt {
+    { throw new IllegalStateException(); }
+    public static void main(String[] args) { new RejInitAbrupt(); }
+}
+"
+);
+
+differential_reject!(
+    reject_forward_reference_in_initializer_block,
+    "RejInitForward",
+    r"
+public class RejInitForward {
+    { System.out.println(b); }
+    int b = 5;
+    public static void main(String[] args) { new RejInitForward(); }
+}
+"
+);
+
+differential_reject!(
+    reject_blank_final_assigned_by_initializer_and_constructor,
+    "RejInitBlankTwice",
+    r"
+public class RejInitBlankTwice {
+    final int x;
+    { x = 1; }
+    RejInitBlankTwice() { x = 2; }
+    public static void main(String[] args) { System.out.println(new RejInitBlankTwice().x); }
+}
+"
+);
+
+differential_reject!(
+    reject_blank_final_read_in_initializer,
+    "RejInitBlankRead",
+    r"
+public class RejInitBlankRead {
+    final int x;
+    { System.out.println(x); x = 1; }
+    public static void main(String[] args) { new RejInitBlankRead(); }
+}
+"
+);
+
+differential_reject!(
+    reject_checked_exception_in_instance_initializer,
+    "RejInitChecked",
+    r"
+public class RejInitChecked {
+    { if (true) throw new Exception(); }
+    RejInitChecked() {}
+    public static void main(String[] args) { new RejInitChecked(); }
+}
+"
+);
+
+differential_reject!(
+    reject_this_in_super_constructor_arguments,
+    "RejInitSuperThis",
+    r"
+class SupInit { SupInit(int v) {} }
+
+public class RejInitSuperThis extends SupInit {
+    int seed = 7;
+    RejInitSuperThis() { super(compute()); }
+    int compute() { return seed + 1; }
+    public static void main(String[] args) { new RejInitSuperThis(); }
+}
+"
+);
+
+differential_reject!(
+    reject_recursive_constructor_invocation,
+    "RejInitRecursiveCtor",
+    r"
+public class RejInitRecursiveCtor {
+    RejInitRecursiveCtor() { this(1); }
+    RejInitRecursiveCtor(int a) { this(); }
+    public static void main(String[] args) { new RejInitRecursiveCtor(); }
+}
+"
+);

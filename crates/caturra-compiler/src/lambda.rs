@@ -1324,6 +1324,7 @@ fn super_bridge(
         annotations: Vec::new(),
         throws: Vec::new(),
         span,
+        pre_init: 0,
     }
 }
 
@@ -2362,6 +2363,7 @@ fn build_erased_lambda(
             throws: Vec::new(),
             is_protected: false,
             span,
+            pre_init: 0,
         }],
         init_blocks: Vec::new(),
         nested: Vec::new(),
@@ -2443,6 +2445,7 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
         throws: Vec::new(),
         is_protected: false,
         span,
+        pre_init: 0,
     };
 
     // The target is known to be a functional interface (it is in `sams`),

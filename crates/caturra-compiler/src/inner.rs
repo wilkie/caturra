@@ -93,6 +93,7 @@ fn add_outer_binding(class: &mut ClassDecl, outer: &str) {
             throws: Vec::new(),
             is_protected: false,
             span: zero,
+            pre_init: 0,
         });
         return;
     }
