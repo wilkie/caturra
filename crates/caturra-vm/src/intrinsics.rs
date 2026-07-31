@@ -1286,22 +1286,20 @@ fn builder_method(
             let same = matches!(other, JValue::Ref(Some(r)) if *r == receiver);
             Ok(Some(JValue::Int(i32::from(same))))
         }
-        // `append(char[], offset, len)` — a sub-range of the array.
-        ("append", [array, JValue::Int(offset), JValue::Int(length)]) => {
-            let chars = char_array_units(heap, array)?;
-            let offset = usize::try_from(*offset).unwrap_or(usize::MAX);
-            let length = usize::try_from(*length).unwrap_or(usize::MAX);
-            let end = offset.checked_add(length);
-            let slice = end
-                .filter(|e| *e <= chars.len())
-                .map(|e| chars[offset..e].to_vec())
-                .ok_or_else(|| {
-                    throw(format!(
-                        "java.lang.ArrayIndexOutOfBoundsException: {offset}"
-                    ))
-                })?;
+        // `append(char[], offset, LEN)` and `append(CharSequence, start,
+        // END)` — sub-range appends, told apart by descriptor. Both check
+        // with the JDK's `checkRange`: a plain IndexOutOfBoundsException
+        // saying "start S, end E, length L", where the char[] form's end is
+        // offset + len (int addition, so it can wrap like Java's).
+        ("append", [source, JValue::Int(a), JValue::Int(b)]) => {
+            let (chars, start, end) = if params.starts_with("[C") {
+                (char_array_units(heap, source)?, *a, a.wrapping_add(*b))
+            } else {
+                (char_sequence_units(heap, source)?, *a, *b)
+            };
+            let (start, end) = check_subrange(start, end, chars.len(), false)?;
             let mut appended = units;
-            appended.extend(slice);
+            appended.extend_from_slice(&chars[start..end]);
             builder_store(heap, receiver, appended);
             Ok(Some(JValue::Ref(Some(receiver))))
         }
@@ -1311,10 +1309,17 @@ fn builder_method(
             builder_store(heap, receiver, appended);
             Ok(Some(JValue::Ref(Some(receiver))))
         }
-        ("appendCodePoint", [JValue::Int(code_point)]) => {
-            let mut appended = units;
-            appended.extend(code_point_units(*code_point)?);
-            builder_store(heap, receiver, appended);
+        // `insert(dst, CharSequence)` — JDK semantics: the destination offset
+        // is checked first, then the sequence (null inserts "null") copies IN
+        // PLACE after the shift, so inserting a builder into itself reads the
+        // already-shifted chars (`new StringBuilder("abab").insert(1, self)`
+        // is "aaaaabab", not the snapshot "aababbab").
+        ("insert", [JValue::Int(offset), value]) if params == "ILjava/lang/CharSequence;" => {
+            let at = check_offset(*offset, count)?;
+            let source = char_sequence_units(heap, value)?;
+            let end = source.len();
+            let inserted = insert_aliasing(units, at, value, receiver, &source, 0, end);
+            builder_store(heap, receiver, inserted);
             Ok(Some(JValue::Ref(Some(receiver))))
         }
         ("insert", [JValue::Int(offset), value]) => {
@@ -1325,6 +1330,30 @@ fn builder_method(
             let mut inserted = units;
             inserted.splice(at..at, value_units);
             builder_store(heap, receiver, inserted);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        // `insert(dst, char[], offset, LEN)` and `insert(dst, CharSequence,
+        // start, END)`. The destination check comes first (SIOOBE "offset
+        // D,length C"); the sub-range check is a StringIndexOutOfBounds for
+        // the char[] form and a plain IndexOutOfBounds for the CharSequence
+        // form, both saying "start S, end E, length L" — the JDK's split.
+        ("insert", [JValue::Int(offset), source, JValue::Int(a), JValue::Int(b)]) => {
+            let at = check_offset(*offset, count)?;
+            let is_chars = params.starts_with("I[C");
+            let (chars, start, end) = if is_chars {
+                (char_array_units(heap, source)?, *a, a.wrapping_add(*b))
+            } else {
+                (char_sequence_units(heap, source)?, *a, *b)
+            };
+            let (start, end) = check_subrange(start, end, chars.len(), is_chars)?;
+            let inserted = insert_aliasing(units, at, source, receiver, &chars, start, end);
+            builder_store(heap, receiver, inserted);
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
+        ("appendCodePoint", [JValue::Int(code_point)]) => {
+            let mut appended = units;
+            appended.extend(code_point_units(*code_point)?);
+            builder_store(heap, receiver, appended);
             Ok(Some(JValue::Ref(Some(receiver))))
         }
         ("delete", [JValue::Int(start), JValue::Int(end)]) => {
@@ -1451,6 +1480,80 @@ fn check_index(index: i32, count: usize) -> Result<usize, VmError> {
                 "java.lang.StringIndexOutOfBoundsException: index {index},length {count}"
             ))
         })
+}
+
+/// The JDK's `checkRange` for the sub-range append/insert overloads: no
+/// clamping, "start S, end E, length L". The char[] INSERT form throws
+/// `StringIndexOutOfBounds` where every other form throws the plain
+/// `IndexOutOfBounds` — the JDK's own split.
+fn check_subrange(
+    start: i32,
+    end: i32,
+    length: usize,
+    string_flavored: bool,
+) -> Result<(usize, usize), VmError> {
+    let fits = start >= 0 && start <= end && i32::try_from(length).is_ok_and(|len| end <= len);
+    if !fits {
+        let class = if string_flavored {
+            "java.lang.StringIndexOutOfBoundsException"
+        } else {
+            "java.lang.IndexOutOfBoundsException"
+        };
+        return Err(throw(format!(
+            "{class}: start {start}, end {end}, length {length}"
+        )));
+    }
+    Ok((
+        usize::try_from(start).unwrap_or_default(),
+        usize::try_from(end).unwrap_or_default(),
+    ))
+}
+
+/// The UTF-16 units of a `CharSequence` argument — a `String`, a
+/// `StringBuilder`, or null (which reads as the four characters of "null",
+/// as the JDK's sub-range overloads do).
+fn char_sequence_units(heap: &Heap, value: &JValue) -> Result<Vec<u16>, VmError> {
+    match value {
+        JValue::Ref(None) => Ok("null".encode_utf16().collect()),
+        JValue::Ref(Some(reference)) => match heap.get(*reference) {
+            Some(HeapObject::JavaString(source) | HeapObject::StringBuilder(source)) => {
+                Ok(source.clone())
+            }
+            _ => Err(VmError::UnknownIntrinsic(String::from(
+                "argument is not a CharSequence",
+            ))),
+        },
+        _ => Err(VmError::UnknownIntrinsic(String::from(
+            "argument is not a CharSequence",
+        ))),
+    }
+}
+
+/// The JDK's `CharSequence` insert: shift the tail, then copy `charAt` by
+/// `charAt` from the LIVE source — which, when the source IS the receiver,
+/// reads the already-shifted buffer (`new StringBuilder("abab").insert(1,
+/// self)` is "aaaaabab", not the snapshot's "aababbab"). Any other source
+/// is unaffected by the shift, so a plain copy is identical.
+fn insert_aliasing(
+    units: Vec<u16>,
+    at: usize,
+    source_value: &JValue,
+    receiver: HeapRef,
+    source_units: &[u16],
+    start: usize,
+    end: usize,
+) -> Vec<u16> {
+    let self_insert = matches!(source_value, JValue::Ref(Some(r)) if *r == receiver);
+    let mut buf = units;
+    buf.splice(at..at, std::iter::repeat_n(0u16, end - start));
+    if self_insert {
+        for (dst, i) in (at..).zip(start..end) {
+            buf[dst] = buf[i];
+        }
+    } else {
+        buf[at..at + (end - start)].copy_from_slice(&source_units[start..end]);
+    }
+    buf
 }
 
 /// A position between characters (`0 <= offset <= count`), as `insert` takes.

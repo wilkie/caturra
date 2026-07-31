@@ -5170,6 +5170,9 @@ enum BParam {
     Boolean,
     Char,
     Str,
+    /// `java.lang.CharSequence` — a `String`, `StringBuilder`, or
+    /// `CharSequence`-typed value (`append(CharSequence, int, int)`).
+    CharSeq,
     /// `char[]`.
     CharArray,
     /// The receiver's own list type (`addAll(otherList)`).
@@ -7927,6 +7930,14 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
         BRet::Builder,
         "([CII)Ljava/lang/StringBuilder;",
     ),
+    // `append(CharSequence, start, end)` — a sub-range of any CharSequence
+    // (null appends the sub-range of "null", as the JDK's does).
+    bm(
+        "append",
+        &[BParam::CharSeq, I, I],
+        BRet::Builder,
+        "(Ljava/lang/CharSequence;II)Ljava/lang/StringBuilder;",
+    ),
     bm(
         "append",
         &[S],
@@ -8034,6 +8045,30 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
         &[I, BParam::CharArray],
         BRet::Builder,
         "(I[C)Ljava/lang/StringBuilder;",
+    ),
+    // `insert(dst, CharSequence)` — unlike the Object overload (which
+    // snapshots via String.valueOf), the JDK's copies in place AFTER
+    // shifting, so a self-insert reads the already-shifted chars; the VM
+    // reproduces that aliasing.
+    bm(
+        "insert",
+        &[I, BParam::CharSeq],
+        BRet::Builder,
+        "(ILjava/lang/CharSequence;)Ljava/lang/StringBuilder;",
+    ),
+    // `insert(dst, char[], offset, LEN)` — note the char[] form takes a
+    // length where the CharSequence form takes an END index.
+    bm(
+        "insert",
+        &[I, BParam::CharArray, I, I],
+        BRet::Builder,
+        "(I[CII)Ljava/lang/StringBuilder;",
+    ),
+    bm(
+        "insert",
+        &[I, BParam::CharSeq, I, I],
+        BRet::Builder,
+        "(ILjava/lang/CharSequence;II)Ljava/lang/StringBuilder;",
     ),
     bm(
         "insert",
@@ -9031,6 +9066,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::Boolean => JType::Boolean,
         BParam::Char => JType::Char,
         BParam::Str => JType::Str,
+        BParam::CharSeq => JType::CharSequence,
         BParam::CharArray => JType::Array {
             elem: ElemType::Char,
             dims: 1,
@@ -12708,10 +12744,12 @@ impl BodyGen<'_> {
         let descriptor = match args {
             [] => "()V",
             [arg] => match self.expr(arg) {
-                // `new StringBuilder(otherBuilder)` — a StringBuilder is a
-                // CharSequence, seeded from its contents; emitted with the
-                // String descriptor, which the VM's seed arm accepts for both.
-                JType::Str | JType::StringBuilder | JType::Error => "(Ljava/lang/String;)V",
+                // `new StringBuilder(otherBuilder)` / `(CharSequence)` — both
+                // seed from the contents; emitted with the String descriptor,
+                // which the VM's seed arm accepts for any of them.
+                JType::Str | JType::StringBuilder | JType::CharSequence | JType::Error => {
+                    "(Ljava/lang/String;)V"
+                }
                 ty if widens(ty, JType::Int, self.table) => "(I)V",
                 _ => {
                     self.error(
@@ -18947,6 +18985,20 @@ impl BodyGen<'_> {
             }
             return JType::Str;
         }
+        // Cast to CharSequence — the overload-selection idiom
+        // (`sb.append((CharSequence) s, 1, 3)`): an upcast from
+        // String/StringBuilder needs no check; an erased Object downcasts
+        // with a runtime checkcast; null is a no-op.
+        if target == JType::CharSequence && source.is_reference() {
+            if !matches!(
+                source,
+                JType::Str | JType::StringBuilder | JType::CharSequence | JType::Null
+            ) {
+                let class_index = intern_class(self.pool, "java/lang/CharSequence");
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return JType::CharSequence;
+        }
         // Cast to StringBuilder — commonly `(StringBuilder) null` (to pick a
         // CharSequence overload) or an erased Object back down. A runtime
         // checkcast, no-op on null.
@@ -19196,10 +19248,11 @@ impl BodyGen<'_> {
             // `(String[]) obj`, `(int[][]) obj`. A runtime `checkcast` to the
             // array's class descriptor (`[I`, `[Ljava/lang/String;`, `[[I`),
             // which is the array's own name in the constant pool.
-            // `(Integer) null`, `(int[]) null` — a reference cast of null to
-            // any wrapper or array type (JLS §5.5). No code: null is every
+            // `(Integer) null`, `(int[]) null`, `(CharSequence) null` — a
+            // reference cast of null to ANY reference type (JLS §5.5),
+            // commonly written to pick an overload. No code: null is every
             // reference type; an unboxing USE later throws NPE at runtime.
-            (JType::Null, JType::Array { .. } | JType::Boxed(_)) => target,
+            (JType::Null, target) if target.is_reference() => target,
             (src, JType::Array { .. }) if src.is_reference() => {
                 let descriptor = target.descriptor(self.table);
                 let class_index = intern_class(self.pool, &descriptor);

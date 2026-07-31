@@ -16944,3 +16944,128 @@ public class RejSwitchDA {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Round-6 StringBuilder subranges: the CharSequence/char[] sub-range
+// overloads, the JDK's exact bounds exceptions, self-insert aliasing, and
+// null casts to interface types.
+
+// append(CharSequence,int,int), insert(int,CharSequence),
+// insert(int,char[],int,int), insert(int,CharSequence,int,int) — including
+// null (which reads as "null") and a plain String argument picking the
+// CharSequence overload.
+differential_test!(
+    diff_stringbuilder_subrange_overloads,
+    "DiffSbSubranges",
+    r#"
+public class DiffSbSubranges {
+    public static void main(String[] a) {
+        StringBuilder sb = new StringBuilder("x");
+        sb.append((CharSequence) "abcd", 1, 3);
+        System.out.println(sb);
+        sb.append((CharSequence) null, 1, 3);
+        System.out.println(sb);
+        sb.append("abcd", 0, 2);
+        System.out.println(sb);
+        StringBuilder v = new StringBuilder("xy");
+        v.insert(1, new char[] {'a', 'b', 'c', 'd'}, 1, 2);
+        System.out.println(v);
+        v.insert(0, (CharSequence) "hello", 1, 3);
+        System.out.println(v);
+        StringBuilder other = new StringBuilder("PQ");
+        v.insert(1, other);
+        System.out.println(v);
+        v.append(other, 0, 1);
+        System.out.println(v);
+        System.out.println(new StringBuilder((CharSequence) "seed"));
+    }
+}
+"#
+);
+
+// JDK 11's insert(int, CharSequence) copies in place AFTER shifting, so a
+// self-insert reads the already-shifted chars; the Object overload snapshots
+// via String.valueOf. Both directions pinned.
+differential_test!(
+    diff_stringbuilder_self_insert_aliasing,
+    "DiffSbSelfInsert",
+    r#"
+public class DiffSbSelfInsert {
+    public static void main(String[] a) {
+        StringBuilder sb = new StringBuilder("ab");
+        sb.append(sb);
+        System.out.println(sb);
+        sb.insert(1, sb);
+        System.out.println(sb + "|" + sb.length());
+        StringBuilder t = new StringBuilder("cd");
+        t.insert(0, (Object) t);
+        System.out.println(t);
+        StringBuilder u = new StringBuilder("ef");
+        u.append(u, 0, 2);
+        System.out.println(u);
+    }
+}
+"#
+);
+
+// The sub-range bounds failures: class AND message — checkRange's plain
+// IndexOutOfBoundsException ("start S, end E, length L", unclamped, end
+// computed with int addition) for append and the CharSequence insert, the
+// String-flavored one for the char[] insert, and the destination-offset
+// check firing first.
+differential_test!(
+    diff_stringbuilder_subrange_bounds,
+    "DiffSbBounds",
+    r#"
+public class DiffSbBounds {
+    static void show(Exception e) {
+        System.out.println(e.getClass().getName() + " | " + e.getMessage());
+    }
+    public static void main(String[] a) {
+        StringBuilder sb = new StringBuilder("hi");
+        char[] arr = {'x', 'y'};
+        try { sb.append(arr, 1, 2); } catch (Exception e) { show(e); }
+        try { sb.append(arr, -1, 1); } catch (Exception e) { show(e); }
+        try { sb.append(arr, 3, 0); } catch (Exception e) { show(e); }
+        try { sb.append((CharSequence) "abcd", 1, 5); } catch (Exception e) { show(e); }
+        try { sb.append((CharSequence) null, 1, 5); } catch (Exception e) { show(e); }
+        try { sb.append((CharSequence) "abcd", 3, 1); } catch (Exception e) { show(e); }
+        try { sb.insert(9, arr, 0, 1); } catch (Exception e) { show(e); }
+        try { sb.insert(1, arr, -1, 1); } catch (Exception e) { show(e); }
+        try { sb.insert(1, arr, 2, -1); } catch (Exception e) { show(e); }
+        try { sb.insert(9, (CharSequence) "abcd", 0, 1); } catch (Exception e) { show(e); }
+        try { sb.insert(1, (CharSequence) "abcd", 2, 9); } catch (Exception e) { show(e); }
+        try { sb.insert(1, (CharSequence) "abcd", 3, 2); } catch (Exception e) { show(e); }
+        try { sb.insert(-1, (CharSequence) "abcd"); } catch (Exception e) { show(e); }
+        System.out.println(sb);
+    }
+}
+"#
+);
+
+// JLS §5.5: null casts to ANY reference type — the overload-selection idiom
+// — and an interface downcast still checks at runtime.
+differential_test!(
+    diff_null_cast_to_interface,
+    "DiffNullCastIface",
+    r#"
+public class DiffNullCastIface {
+    public static void main(String[] a) {
+        CharSequence c = (CharSequence) null;
+        System.out.println(c == null);
+        Comparable<String> p = (Comparable<String>) null;
+        System.out.println(p == null);
+        Object o = "boxed";
+        CharSequence down = (CharSequence) o;
+        System.out.println(down.length() + " " + down.charAt(1));
+        Object plain = new Object();
+        try {
+            CharSequence bad = (CharSequence) plain;
+            System.out.println("no-throw " + bad);
+        } catch (ClassCastException e) {
+            System.out.println("CCE");
+        }
+    }
+}
+"#
+);

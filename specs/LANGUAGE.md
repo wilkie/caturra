@@ -231,6 +231,32 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **StringBuilder sub-ranges** (2026-07-30) — five round-6 findings:
+  - **The Java-5 sub-range overloads exist**: `append(CharSequence, start,
+    end)` (null appends the sub-range of "null"), `insert(dst, CharSequence)`,
+    `insert(dst, char[], offset, LEN)` and `insert(dst, CharSequence, start,
+    END)` — note the char[] form takes a length where the CharSequence form
+    takes an end index, as in the JDK. A plain String argument picks the
+    CharSequence overload (a new `BParam::CharSeq`, most-specific against
+    the Object overload), and `new StringBuilder((CharSequence) s)` seeds.
+  - **Bounds failures are the JDK's, class and message**: the sub-range
+    checks throw the plain `IndexOutOfBoundsException` saying "start S, end
+    E, length L" (unclamped; the char[] append's end is offset + len with
+    int wrap-around) — except the char[] INSERT form, which throws
+    `StringIndexOutOfBoundsException` with the same text, the JDK's own
+    split — and the destination-offset check ("offset D,length C") fires
+    before the sub-range check. `append(char[], -1, 1)` used to throw the
+    wrong class (ArrayIndexOutOfBounds) with a Rust usize underflow
+    (18446744073709551615) leaking into the message.
+  - **Self-insert aliases, as the JDK's does**: `insert(dst, CharSequence)`
+    copies in place AFTER shifting the tail, so inserting a builder into
+    itself reads the already-shifted chars (`new StringBuilder("abab")
+    .insert(1, self)` is "aaaaabab") — while the `insert(dst, Object)`
+    overload snapshots via `String.valueOf` ("cdcd"), both pinned.
+  - **`(CharSequence) null` — and null cast to ANY reference type — is
+    legal** (JLS §5.5): the overload-selection idiom compiles, interface
+    targets included (`(Comparable<String>) null`); a non-null Object
+    downcast to CharSequence still `checkcast`s at runtime.
 - **Switch labels and the switch scope** (2026-07-30) — four round-6 findings:
   - **Any constant expression is a case label** (JLS §15.29): arithmetic,
     shifts, char arithmetic (`case 'a' + 1:`), compile-time string
