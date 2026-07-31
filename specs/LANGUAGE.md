@@ -231,6 +231,33 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **`finally` runs, whatever discards what** (2026-07-30, round 7) — the
+  finally cluster, all silent-wrong: when an inner finally's `return` or
+  `break` discarded a pending return, every ENCLOSING finally was skipped —
+  including a try-with-resources `close()` — and an outer finally's
+  overriding `return` never executed. One mechanism bug:
+  `emit_pending_finallys` took the whole pending stack while emitting, so an
+  abrupt exit INSIDE a finally body saw no enclosing entries; it now pops
+  one entry at a time, leaving the outer entries visible (JLS §14.20.2).
+  Pinned alongside: return-value capture before the finally reassigns,
+  `continue` through nested finallys, and an exception thrown in a finally
+  replacing the original.
+- **Class initialization, four ways truer** (2026-07-30, round 7):
+  - **The entry class initializes at startup** (JVMS §5.5): its static
+    blocks and static field initializers (superclass first) run before
+    `main`'s first statement — they used to be skipped entirely.
+  - **A failed `<clinit>` poisons the class** on every later active use —
+    field read, static call, AND `new` (the pre-decoded `new` fast path
+    cached the site and re-ran constructors; it now honors the failure) —
+    with the JDK's `NoClassDefFoundError: Could not initialize class X`.
+  - **Superinterfaces that declare default methods initialize with their
+    implementor**, before it (JVMS §5.5); an interface without defaults
+    still waits for a direct use of its own non-constant field.
+  - **An escaping `<clinit>` exception is ExceptionInInitializerError**
+    even when UNCAUGHT — the wrap used to fire only on the caught path, so
+    the raw cause leaked to the top. The uncaught trace matches the JDK's:
+    EIIE at the triggering use site, `Caused by:` with the in-clinit frames
+    and `... N more` elision.
 - **The inheritance tail** (2026-07-30) — round 6's last two findings, and
   with them ROUND 6 FULLY CLOSED (71/71):
   - **Object methods resolve through an interface-typed reference** (JLS

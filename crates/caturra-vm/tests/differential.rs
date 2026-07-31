@@ -17267,3 +17267,143 @@ public class RejSuperAbstract {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-7 finally + static-init: a finally's own abrupt exit still runs the
+// ENCLOSING finallys; the entry class initializes at startup; a failed
+// <clinit> poisons the class; interfaces with defaults initialize with their
+// implementor; an escaping <clinit> exception wraps in EIIE.
+
+// JLS §14.20.2: when an inner finally's return/break discards a pending
+// return, every enclosing finally (and try-with-resources close) still runs
+// — and an outer finally's overriding return wins.
+differential_test!(
+    diff_finally_discards_pending_return,
+    "DiffFinallyDiscard",
+    r#"
+class Res7 implements AutoCloseable {
+    public void close() { System.out.println("close V"); }
+}
+public class DiffFinallyDiscard {
+    static int v = 0;
+    static int f1() {
+        try {
+            try { return 10; } finally { return 20; }
+        } finally { System.out.println("outer finally"); }
+    }
+    static int f2() {
+        try {
+            try { return 10; } finally { return 20; }
+        } finally { return 30; }
+    }
+    static int f3() {
+        int i = 0;
+        while (true) {
+            try {
+                try { return 1; } finally { System.out.println("inner fin"); break; }
+            } finally { System.out.println("outer fin"); }
+        }
+        return 42;
+    }
+    static int f4() {
+        try (Res7 r = new Res7()) {
+            try { return 1; } finally { return 2; }
+        }
+    }
+    static int f5() {
+        try {
+            try { throw new RuntimeException("x"); } finally { return 7; }
+        } finally { System.out.println("outer5"); }
+    }
+    static int f6() {
+        try { return v; } finally { v = 99; }
+    }
+    public static void main(String[] a) {
+        System.out.println(f1());
+        System.out.println(f2());
+        System.out.println(f3());
+        System.out.println(f4());
+        System.out.println(f5());
+        v = 41;
+        System.out.println(f6() + " " + v);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 3; i++) {
+            try {
+                try {
+                    if (i == 1) continue;
+                    sb.append("b").append(i);
+                } finally { sb.append("F").append(i); }
+            } finally { sb.append("G").append(i); }
+        }
+        System.out.println(sb);
+    }
+}
+"#
+);
+
+// JVMS §5.5: invoking main is an active use — the entry class's static
+// initializers (superclass first) run before main's first statement.
+differential_test!(
+    diff_main_class_static_init,
+    "DiffMainClinit",
+    r#"
+class SupInit { static { System.out.println("Sup static"); } }
+public class DiffMainClinit extends SupInit {
+    static { System.out.println("Main static"); }
+    static int seeded = seed();
+    static int seed() { System.out.println("field init"); return 7; }
+    public static void main(String[] args) {
+        System.out.println("main body " + seeded);
+    }
+}
+"#
+);
+
+// JLS §12.4.2: after a <clinit> failure the class is erroneous — every later
+// active use (field, static call, new) throws NoClassDefFoundError, and the
+// constructor must NOT run. The failure itself surfaces as
+// ExceptionInInitializerError.
+differential_test!(
+    diff_failed_init_poisons_class,
+    "DiffInitPoison",
+    r#"
+class BadInit {
+    static int x = boom();
+    static int boom() { throw new RuntimeException("kaboom"); }
+    static void go() { System.out.println("never"); }
+    BadInit() { System.out.println("ctor ran"); }
+}
+public class DiffInitPoison {
+    public static void main(String[] args) {
+        try { int q = BadInit.x; } catch (Throwable t) { System.out.println("1: " + t.getClass().getName()); }
+        try { int q = BadInit.x; } catch (Throwable t) { System.out.println("2: " + t.getClass().getName()); }
+        try { BadInit.go(); } catch (Throwable t) { System.out.println("3: " + t.getClass().getName() + " | " + t.getMessage()); }
+        try { new BadInit(); } catch (Throwable t) { System.out.println("4: " + t.getClass().getName()); }
+        System.out.println("end");
+    }
+}
+"#
+);
+
+// JVMS §5.5: initializing a class initializes its superinterfaces that
+// declare DEFAULT methods (before the class); an interface without defaults
+// waits for a direct use of its non-constant field.
+differential_test!(
+    diff_interface_default_init_order,
+    "DiffIfaceInitOrder",
+    r#"
+interface WithDefault { int K = DiffIfaceInitOrder.mark("DI"); default void d() {} }
+interface NoDefault { int K2 = DiffIfaceInitOrder.mark("Plain"); }
+class SupI implements NoDefault { static { System.out.println("Sup"); } }
+class ImplI extends SupI implements WithDefault { static { System.out.println("Impl"); } }
+public class DiffIfaceInitOrder {
+    static int mark(String s) { System.out.println(s + " init"); return 1; }
+    public static void main(String[] a) {
+        System.out.println("start");
+        new ImplI();
+        System.out.println("mid");
+        System.out.println(WithDefault.K + " " + NoDefault.K2);
+    }
+}
+"#
+);

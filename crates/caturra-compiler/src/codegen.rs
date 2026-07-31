@@ -10446,16 +10446,24 @@ impl BodyGen<'_> {
     /// run); `None` (a `return`) runs them all. Guards are disabled
     /// while emitting so a finally body's own exits cannot recurse.
     fn emit_pending_finallys(&mut self, down_to_loop: Option<usize>) {
-        if self.finally_stack.is_empty() {
-            return;
-        }
-        let saved = std::mem::take(&mut self.finally_stack);
-        for (statements, loop_len) in saved.iter().rev() {
-            if down_to_loop.is_none_or(|target| *loop_len > target) {
-                self.emit_block(statements);
+        // Innermost first — and while entry i's body is being emitted, the
+        // ENCLOSING entries stay on the stack, so a `return`/`break` inside
+        // that finally body still runs the outer finallys (JLS §14.20.2).
+        // The old version took the whole stack for the duration, which made
+        // an inner finally's overriding `return` silently skip every
+        // enclosing finally (including a try-with-resources close).
+        let mut popped: Vec<(Vec<Stmt>, usize)> = Vec::new();
+        while let Some((_, loop_len)) = self.finally_stack.last() {
+            if down_to_loop.is_some_and(|target| *loop_len <= target) {
+                break;
             }
+            let entry = self.finally_stack.pop().expect("checked non-empty");
+            self.emit_block(&entry.0);
+            popped.push(entry);
         }
-        self.finally_stack = saved;
+        while let Some(entry) = popped.pop() {
+            self.finally_stack.push(entry);
+        }
     }
 
     /// The resolved alternatives of a catch clause — one, or several for a

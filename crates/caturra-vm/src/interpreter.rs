@@ -277,8 +277,7 @@ impl<'run> Interpreter<'run> {
         locals: Vec<JValue>,
     ) -> Result<Option<JValue>, VmError> {
         debug_assert!(self.frames.is_empty(), "execute is not re-entrant");
-        let frame = self.make_frame(class, method, locals)?;
-        let result = self.run_loop(frame);
+        let result = self.execute_inner(class, method, locals);
         if let Err(VmError::UncaughtException(message)) = result {
             let message = self.attach_stack_trace(message);
             self.frames.clear();
@@ -286,6 +285,28 @@ impl<'run> Interpreter<'run> {
         }
         self.frames.clear();
         result
+    }
+
+    fn execute_inner(
+        &mut self,
+        class: &'run ClassFile,
+        method: &'run MethodInfo,
+        locals: Vec<JValue>,
+    ) -> Result<Option<JValue>, VmError> {
+        // JVMS §5.5: invoking `main` is an active use, so the ENTRY class —
+        // its superclasses and default-declaring superinterfaces included —
+        // initializes before main's first instruction. The static blocks of
+        // the main class used to be skipped entirely.
+        if let Some(name) = class.class_name() {
+            let name = name.to_owned();
+            if let Some(chain) = self.begin_initialization(&name)? {
+                for frame in chain {
+                    self.run_loop(frame)?;
+                }
+            }
+        }
+        let frame = self.make_frame(class, method, locals)?;
+        self.run_loop(frame)
     }
 
     /// Append a Java-style stack trace (`\tat Class.method(Class.java)`
@@ -1152,7 +1173,15 @@ impl<'run> Interpreter<'run> {
                         {
                             site.set(id);
                         }
-                        if site.get() != UNRESOLVED {
+                        // A site cached before its class's <clinit> FAILED
+                        // must fall to the byte path, which NCDFEs; the
+                        // is_empty check keeps the common case one branch.
+                        if site.get() != UNRESOLVED
+                            && (self.init_failed.is_empty()
+                                || !self
+                                    .init_failed
+                                    .contains(&*self.new_sites[site.get() as usize].0))
+                        {
                             let (name, layout, defaults) = &self.new_sites[site.get() as usize];
                             let object = crate::value::HeapObject::Instance {
                                 class_name: Rc::clone(name),
@@ -2379,6 +2408,7 @@ impl<'run> Interpreter<'run> {
     /// clear its operand stack, push the exception object, and point
     /// `frame.pc` at the handler. Returns whether a handler was found
     /// (`false` leaves non-Java errors untouched).
+    #[allow(clippy::too_many_lines)] // one unwinding walk, clearest linear
     fn unwind_to_handler(
         &mut self,
         frame: &mut Frame<'run>,
@@ -2408,6 +2438,10 @@ impl<'run> Interpreter<'run> {
         // previous catch consumed it, or names a different class — so it
         // re-materializes. The class filter guards against a stale reference.
         let candidate = self.last_thrown.take();
+        // Set when the search wraps the error in ExceptionInInitializerError:
+        // if NO handler is found either, the propagated error must be the
+        // WRAPPED one (it used to escape as the raw cause).
+        let mut rewrapped: Option<HeapRef> = None;
         let mut thrown_object = candidate.filter(|reference| match self.heap.get(*reference) {
             Some(crate::value::HeapObject::Exception { class_name, .. }) => *class_name == dotted,
             Some(crate::value::HeapObject::Instance { class_name, .. }) => {
@@ -2464,31 +2498,57 @@ impl<'run> Interpreter<'run> {
                         suppressed: Vec::new(),
                     })
                 });
+                // The cause keeps the original in-clinit frames even when it
+                // was thrown by VM code (no construction trace to fall on).
+                self.store_parsed_trace(cause, text);
                 let wrapper = self.heap.alloc(crate::value::HeapObject::Exception {
                     class_name: String::from("java.lang.ExceptionInInitializerError"),
                     message: None,
                     cause: Some(cause),
                     suppressed: Vec::new(),
                 });
+                // The EIIE's own trace is the frames BELOW the <clinit> —
+                // the use site that triggered initialization.
+                let below: Vec<String> = self
+                    .frames
+                    .iter()
+                    .rev()
+                    .map(|suspended| {
+                        let class_name = suspended.class.class_name().unwrap_or("<unknown>");
+                        match suspended.current_line {
+                            Some(line) => format!(
+                                "{class_name}.{}({}:{line})",
+                                suspended.method_name, suspended.code.source_file
+                            ),
+                            None => format!(
+                                "{class_name}.{}({})",
+                                suspended.method_name, suspended.code.source_file
+                            ),
+                        }
+                    })
+                    .collect();
+                self.exception_traces.insert(wrapper, below);
                 dotted = String::from("java.lang.ExceptionInInitializerError");
                 message = None;
                 thrown_object = Some(wrapper);
+                rewrapped = Some(wrapper);
             }
-            match self.frames.pop() {
-                Some(caller) => {
-                    // A caller's saved pc normally points just past its invoke
-                    // instruction, so step back inside it for the try-range
-                    // check. An init-chain caller's pc already points AT the
-                    // instruction it will re-run, so it is used as-is.
-                    search_pc = if caller.pc_reexecutes {
-                        caller.pc
-                    } else {
-                        caller.pc.saturating_sub(1)
-                    };
-                    *frame = caller;
+            let Some(caller) = self.frames.pop() else {
+                if let Some(wrapper) = rewrapped {
+                    return Err(VmError::UncaughtException(self.render_throwable(wrapper)));
                 }
-                None => return Ok(false),
-            }
+                return Ok(false);
+            };
+            // A caller's saved pc normally points just past its invoke
+            // instruction, so step back inside it for the try-range
+            // check. An init-chain caller's pc already points AT the
+            // instruction it will re-run, so it is used as-is.
+            search_pc = if caller.pc_reexecutes {
+                caller.pc
+            } else {
+                caller.pc.saturating_sub(1)
+            };
+            *frame = caller;
         }
     }
 
@@ -3015,54 +3075,128 @@ impl<'run> Interpreter<'run> {
             return Ok(None);
         }
 
-        // Collect the uninitialized chain, subclass → ancestor.
+        // Collect the uninitialized dependency order (JVMS §5.5): for a
+        // CLASS, its superclass first, then every superinterface that
+        // declares a default method, then the class itself. Initializing an
+        // INTERFACE directly does not initialize its superinterfaces.
         let classes: &'run HashMap<String, ClassFile> = self.classes;
-        let mut chain: Vec<&'run ClassFile> = Vec::new();
-        let mut current = classes.get(class_name);
-        while let Some(class) = current {
-            let name = class.class_name().unwrap_or_default();
-            if self.init_started.contains(name) {
-                break;
-            }
-            self.init_started.insert(name.to_owned());
-            chain.push(class);
+        let root = classes.get(class_name).expect("checked above");
+        let mut ordered: Vec<&'run ClassFile> = Vec::new();
+        self.collect_init_chain(root, &mut ordered, 0);
 
-            let mut fields = HashMap::new();
-            for field in &class.fields {
-                if !field
-                    .access_flags
-                    .contains(caturra_classfile::FieldAccessFlags::STATIC)
-                {
-                    continue;
-                }
-                let field_name = class
-                    .constant_pool
-                    .get_utf8(field.name_index)
-                    .unwrap_or_default()
-                    .to_owned();
-                let descriptor = class
-                    .constant_pool
-                    .get_utf8(field.descriptor_index)
-                    .unwrap_or_default();
-                fields.insert(field_name, default_for_descriptor(descriptor));
-            }
-            self.statics.insert(name.to_owned(), fields);
-
-            current = class
-                .constant_pool
-                .get_class_name(class.super_class)
-                .filter(|s| *s != "java/lang/Object")
-                .and_then(|super_name| classes.get(super_name));
-        }
-
-        // <clinit> frames in execution order: ancestor-most first.
+        // <clinit> frames in execution order (already ancestor-most first).
         let mut frames = Vec::new();
-        for class in chain.into_iter().rev() {
+        for class in ordered {
             if let Some(clinit) = find_static_method(class, "<clinit>", "()V") {
                 frames.push(self.make_frame(class, clinit, Vec::new())?);
             }
         }
         Ok(Some(frames))
+    }
+
+    /// Mark a class started and give its static fields their defaults.
+    fn register_statics(&mut self, class: &ClassFile, name: &str) {
+        self.init_started.insert(name.to_owned());
+        let mut fields = HashMap::new();
+        for field in &class.fields {
+            if !field
+                .access_flags
+                .contains(caturra_classfile::FieldAccessFlags::STATIC)
+            {
+                continue;
+            }
+            let field_name = class
+                .constant_pool
+                .get_utf8(field.name_index)
+                .unwrap_or_default()
+                .to_owned();
+            let descriptor = class
+                .constant_pool
+                .get_utf8(field.descriptor_index)
+                .unwrap_or_default();
+            fields.insert(field_name, default_for_descriptor(descriptor));
+        }
+        self.statics.insert(name.to_owned(), fields);
+    }
+
+    fn collect_init_chain(
+        &mut self,
+        class: &'run ClassFile,
+        out: &mut Vec<&'run ClassFile>,
+        depth: usize,
+    ) {
+        if depth > self.classes.len() + 2 {
+            return;
+        }
+        let Some(name) = class.class_name() else {
+            return;
+        };
+        if self.init_started.contains(name) {
+            return;
+        }
+        let name = name.to_owned();
+        self.register_statics(class, &name);
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        if let Some(parent) = class
+            .constant_pool
+            .get_class_name(class.super_class)
+            .filter(|s| *s != "java/lang/Object")
+            .and_then(|super_name| classes.get(super_name))
+        {
+            self.collect_init_chain(parent, out, depth + 1);
+        }
+        // JVMS §5.5: a CLASS also initializes its superinterfaces that
+        // declare default methods (JLS §12.4.1 — the probe-visible order is
+        // interface before implementor); an interface does not.
+        if !class
+            .access_flags
+            .contains(caturra_classfile::ClassAccessFlags::INTERFACE)
+        {
+            self.collect_default_interfaces(class, out, depth);
+        }
+        out.push(class);
+    }
+
+    fn collect_default_interfaces(
+        &mut self,
+        class: &'run ClassFile,
+        out: &mut Vec<&'run ClassFile>,
+        depth: usize,
+    ) {
+        if depth > self.classes.len() + 2 {
+            return;
+        }
+        let classes: &'run HashMap<String, ClassFile> = self.classes;
+        for index in &class.interfaces {
+            let Some(iface) = class
+                .constant_pool
+                .get_class_name(*index)
+                .and_then(|name| classes.get(name))
+            else {
+                continue;
+            };
+            // Ancestors of this interface first.
+            self.collect_default_interfaces(iface, out, depth + 1);
+            let Some(name) = iface.class_name() else {
+                continue;
+            };
+            if self.init_started.contains(name) {
+                continue;
+            }
+            let declares_default = iface.methods.iter().any(|m| {
+                !m.access_flags
+                    .contains(caturra_classfile::MethodAccessFlags::STATIC)
+                    && !m
+                        .access_flags
+                        .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
+                    && iface.constant_pool.get_utf8(m.name_index) != Some("<clinit>")
+            });
+            if declares_default {
+                let name = name.to_owned();
+                self.register_statics(iface, &name);
+                out.push(iface);
+            }
+        }
     }
 
     /// Allocate an instance of a user class with defaulted fields,
@@ -8326,8 +8460,8 @@ impl<'run> Interpreter<'run> {
         if !self.classes.contains_key(target) {
             return None; // an intrinsic to instantiate; the byte path knows how
         }
-        if !self.init_started.contains(target) {
-            return None; // <clinit> has not run yet
+        if !self.init_started.contains(target) || self.init_failed.contains(target) {
+            return None; // <clinit> has not run yet — or failed (byte path NCDFEs)
         }
         let template = if let Some(template) = self.field_templates.get(target) {
             template.clone()
@@ -8847,7 +8981,13 @@ impl<'run> Interpreter<'run> {
                     {
                         site.set(id);
                     }
-                    if site.get() != UNRESOLVED && sp < FRAMELESS_SLOTS {
+                    if site.get() != UNRESOLVED
+                        && sp < FRAMELESS_SLOTS
+                        && (self.init_failed.is_empty()
+                            || !self
+                                .init_failed
+                                .contains(&*self.new_sites[site.get() as usize].0))
+                    {
                         let (name, layout, defaults) = &self.new_sites[site.get() as usize];
                         let object = crate::value::HeapObject::Instance {
                             class_name: Rc::clone(name),
