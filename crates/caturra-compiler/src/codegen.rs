@@ -2135,6 +2135,20 @@ impl MethodTable {
                 }
             }
         }
+        // JLS §9.2: an interface with no direct superinterfaces implicitly
+        // declares a public abstract member for each PUBLIC method of
+        // `Object`, so `i.toString()` / `i.equals(x)` / `i.hashCode()` /
+        // `i.getClass()` resolve through an interface-typed reference —
+        // the interface walk above never reaches Object on its own.
+        if named.is_empty()
+            && self
+                .classes
+                .get(class)
+                .is_some_and(|info| info.is_interface)
+            && let Some(object) = self.classes.get("java/lang/Object")
+        {
+            named.extend(object.methods.iter().filter(|m| m.name == name));
+        }
         if named.is_empty() {
             return Resolution::UnknownName;
         }
@@ -18273,10 +18287,16 @@ impl BodyGen<'_> {
             );
             return None;
         };
-        if sig.is_static || sig.is_abstract {
+        // `super.m()` naming a HIDDEN static method is legal (JLS §15.12):
+        // it resolves statically to the superclass's method — `super` here
+        // is a type qualifier, not a receiver.
+        if sig.is_static {
+            return self.static_call(&super_name, method, args, span);
+        }
+        if sig.is_abstract {
             self.error(
                 span,
-                format!("cannot call {method}() via super (it has no body there)"),
+                format!("abstract method {method}() cannot be accessed directly"),
             );
             return None;
         }

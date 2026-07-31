@@ -17191,3 +17191,79 @@ public class DiffSuppressedTyped {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-6 inheritance tail: Object methods through interface-typed
+// references (JLS §9.2), and super.m() to a hidden static (JLS §15.12).
+
+// Every interface implicitly declares the public Object methods, so
+// toString/equals/hashCode/getClass all resolve through an interface-typed
+// reference — variable, parameter, or collection element.
+differential_test!(
+    diff_interface_object_methods,
+    "DiffIfaceObjMethods",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+interface Tagged { String tag(); }
+class Card implements Tagged {
+    public String tag() { return "c"; }
+    @Override public String toString() { return "Card!"; }
+}
+public class DiffIfaceObjMethods {
+    static String describe(Tagged t) { return t.toString() + "/" + t.getClass().getSimpleName(); }
+    public static void main(String[] args) {
+        Tagged i = new Card();
+        System.out.println(i.toString());
+        System.out.println(i.equals(i) + " " + i.equals(new Card()));
+        System.out.println(i.hashCode() == i.hashCode());
+        System.out.println(i.getClass().getName());
+        System.out.println(describe(i));
+        List<Tagged> all = new ArrayList<>();
+        all.add(i);
+        for (Tagged t : all) {
+            System.out.println(t.toString());
+        }
+    }
+}
+"#
+);
+
+// `super.m()` naming a HIDDEN static resolves statically to the
+// superclass's method — including one the superclass itself inherited —
+// while instance super calls beside it behave as ever.
+differential_test!(
+    diff_super_hidden_static,
+    "DiffSuperStatic",
+    r#"
+class Grand { static String s() { return "grand"; } String v() { return "gv"; } }
+class Parent extends Grand { }
+class Child extends Parent {
+    static String s() { return "child"; }
+    String call() { return super.s() + "/" + super.v() + "/" + s(); }
+}
+public class DiffSuperStatic {
+    public static void main(String[] args) {
+        System.out.println(new Child().call());
+    }
+}
+"#
+);
+
+// ...but `super.m()` to an ABSTRACT method stays an error on both engines.
+differential_reject!(
+    reject_super_abstract_method,
+    "RejSuperAbstract",
+    r#"
+abstract class Abs { abstract String m(); }
+class Impl extends Abs {
+    String m() { return "b"; }
+    String call() { return super.m(); }
+}
+public class RejSuperAbstract {
+    public static void main(String[] args) {
+        System.out.println(new Impl().call());
+    }
+}
+"#
+);

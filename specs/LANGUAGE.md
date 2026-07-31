@@ -231,6 +231,23 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   internal "unknown native member". (4) an inner-class FIELD initializer reading
   an enclosing instance field NPE'd — the `__caturraOuter` link is now stored
   before the field initializers, not after.
+- **The inheritance tail** (2026-07-30) — round 6's last two findings, and
+  with them ROUND 6 FULLY CLOSED (71/71):
+  - **Object methods resolve through an interface-typed reference** (JLS
+    §9.2): every interface implicitly declares a public abstract member for
+    each public `Object` method, so `i.toString()`, `i.equals(x)`,
+    `i.hashCode()`, and `i.getClass()` all compile on a variable,
+    parameter, or collection element typed by a user interface. The method
+    walk simply never reached `Object` from an interface (interfaces have
+    no superclass chain); resolution now falls back to the synthetic
+    Object entry when an interface walk comes up empty.
+  - **`super.m()` naming a HIDDEN static method is legal** (JLS §15.12):
+    it resolves statically to the superclass's method — including one the
+    superclass inherited — and emits a plain static call; `super` there is
+    a type qualifier, not a receiver. The old refusal ("it has no body
+    there") was factually wrong. `super.m()` to an ABSTRACT method still
+    errors, now with javac's wording ("abstract method m() cannot be
+    accessed directly").
 - **Exception traces, filled at construction** (2026-07-30) — the round-6
   trace cluster:
   - **A throwable's stack trace is captured when it is CONSTRUCTED** (as
