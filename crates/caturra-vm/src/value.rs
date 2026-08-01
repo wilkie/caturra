@@ -79,6 +79,11 @@ pub enum StreamOp {
     Skip(usize),
     /// `distinct()` — pass an element only the first time it is seen.
     Distinct,
+    /// `boxed()` — the primitive pipeline becomes an OBJECT one, so each
+    /// element becomes its wrapper. Not a retyping: a collection stores boxed
+    /// references at rest, so a raw `int` reaching one is a `VerifyError` at the
+    /// next reference use.
+    Box,
 }
 
 /// What a `Stream.collect(Collectors.…())` gathers its elements into.

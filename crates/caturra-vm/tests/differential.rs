@@ -19805,3 +19805,224 @@ public class RejPrivateInherited {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Boxing identity, operators and flow (audit round 8): the small clusters —
+// `valueOf` answers an OBJECT, `Math`'s missing overloads, and the definite
+// assignment that short-circuiting and labels decide.
+// ---------------------------------------------------------------------------
+
+// `Wrapper.valueOf(...)` answers the wrapper OBJECT, so `==` on two of them is
+// identity — false above the JDK's small-value cache and true inside it, which
+// is also what `IntStream.boxed()` must produce. And `++` on a boxed
+// `Character`/`Short`/`Byte` unboxes, adds, NARROWS and reboxes (JLS §15.14.2),
+// unlike `+= 1`, which cannot narrow through a boxing conversion.
+differential_test!(
+    diff_boxed_identity,
+    "DiffBoxedIdentity",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class DiffBoxedIdentity {
+    public static void main(String[] args) {
+        System.out.println(Long.valueOf(1000L) == Long.valueOf(1000L));
+        System.out.println(Double.valueOf(1.0) == Double.valueOf(1.0));
+        System.out.println(Integer.valueOf("1000") == Integer.valueOf("1000"));
+        System.out.println(Integer.valueOf(100) == Integer.valueOf(100));
+        Object held = Long.valueOf(1000L);
+        System.out.println(Long.valueOf(1000L) == held);
+        System.out.println(Boolean.valueOf(true) == Boolean.valueOf(true));
+
+        List<Integer> boxed = IntStream.range(1, 3).boxed().collect(Collectors.toList());
+        Integer one = 1;
+        System.out.println(boxed.get(0) == one);
+        System.out.println(boxed);
+
+        Character c = 'a';
+        c++;
+        Short s = 5;
+        s++;
+        Byte b = 5;
+        b++;
+        System.out.println(c + " " + s + " " + b);
+
+        Number n = Integer.valueOf(3);
+        System.out.println((int) n);
+        Comparable<Integer> cmp = Integer.valueOf(4);
+        System.out.println((int) cmp);
+
+        Object o = "hi";
+        o += "x";
+        CharSequence cs = "q";
+        cs += "r";
+        System.out.println(o + " " + cs);
+    }
+}
+"#
+);
+
+// The `Math` surface: the `float` overloads that must not widen to `double`,
+// `floorMod(long, int)`'s `int` result, `IEEEremainder`'s signed zero, the
+// unsigned long division message the JDK inherits from `BigInteger`, and a
+// statically imported constant.
+differential_test!(
+    diff_math_overloads,
+    "DiffMathOverloads",
+    r#"
+import static java.lang.Math.PI;
+
+public class DiffMathOverloads {
+    public static void main(String[] args) {
+        System.out.println(PI);
+        System.out.println(Math.copySign(1.0f, -2.0f));
+        System.out.println(Math.fma(1.0f, 2.0f, 3.0f));
+        System.out.println(Math.getExponent(1.0f) + " " + Math.getExponent(0.0f)
+            + " " + Math.getExponent(Float.NaN) + " " + Math.getExponent(1.0));
+        System.out.println(Math.floorMod(-7L, 3) + " " + Math.floorMod(7L, 3));
+        System.out.println(Math.IEEEremainder(-4.0, 2.0));
+        System.out.println(1.0 / Math.IEEEremainder(-4.0, 2.0));
+        System.out.println(Math.IEEEremainder(6.0, 3.0));
+        try {
+            Long.divideUnsigned(-1L, 0L);
+        } catch (ArithmeticException e) {
+            System.out.println(e.getMessage());
+        }
+        try {
+            Long.remainderUnsigned(-1L, 0L);
+        } catch (ArithmeticException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// Flow: a labeled BLOCK runs at most once (so a blank final may be assigned in
+// one), an empty statement may carry a label, and an assignment or a lambda is
+// a legal operand of `?:`.
+differential_test!(
+    diff_labels_and_conditional_operands,
+    "DiffLabelFlow",
+    r#"
+import java.util.function.Supplier;
+
+public class DiffLabelFlow {
+    public static void main(String[] args) {
+        final int x;
+        blk: {
+            x = 1;
+        }
+        System.out.println("x=" + x);
+
+        lab: ;
+        System.out.println("after empty label");
+
+        int y = 1;
+        int z = true ? y = 2 : 3;
+        System.out.println(y + "," + z);
+
+        boolean c = true;
+        Supplier<String> s = c ? () -> "a" : () -> "b";
+        System.out.println(s.get());
+
+        outer: for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                if (j == 1) { continue outer; }
+                if (i == 2) { break outer; }
+                System.out.println(i + ":" + j);
+            }
+        }
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_assignment_hidden_by_short_circuit,
+    "RejShortCircuitDA",
+    r"
+public class RejShortCircuitDA {
+    public static void main(String[] args) {
+        int x;
+        boolean r = true || (x = 1) > 0;
+        System.out.println(r);
+        System.out.println(x);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_assignment_hidden_by_labeled_break,
+    "RejLabeledBreakDA",
+    r"
+public class RejLabeledBreakDA {
+    public static void main(String[] args) {
+        int x;
+        blk: {
+            if (args.length == 0) break blk;
+            x = 1;
+        }
+        System.out.println(x);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_constant_condition_unreachable,
+    "RejConstantLoop",
+    r"
+public class RejConstantLoop {
+    static final boolean FLAG = true;
+    public static void main(String[] args) {
+        int i = 0;
+        while (FLAG) {
+            i++;
+        }
+        System.out.println(i);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_labeled_local_declaration,
+    "RejLabeledDecl",
+    r"
+public class RejLabeledDecl {
+    public static void main(String[] args) {
+        lab: int x = 5;
+        System.out.println(x);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_assignment_to_math_constant,
+    "RejMathConstant",
+    r"
+public class RejMathConstant {
+    public static void main(String[] args) {
+        Math.PI = 3.0;
+        System.out.println(Math.PI);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_increment_on_a_string,
+    "RejStringIncrement",
+    r#"
+public class RejStringIncrement {
+    public static void main(String[] args) {
+        String s = "x";
+        s++;
+        System.out.println(s);
+    }
+}
+"#
+);

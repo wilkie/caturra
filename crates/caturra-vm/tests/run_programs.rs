@@ -5228,8 +5228,11 @@ fn while_and_do_while_semantics() {
                     System.out.println(n);
                     n--;
                 }
-                // The while body never runs; the do-while body runs once.
-                while (false == true) System.out.println(-1);
+                // A do-while body runs once whatever the condition says. (A
+                // `while (false == true) S;` beside it would be a compile
+                // error: the folded constant makes S unreachable, exactly as
+                // `while (false) S;` does — see `reject_constant_condition_
+                // unreachable` in the differential suite.)
                 do System.out.println(99); while (false);
             }
         }

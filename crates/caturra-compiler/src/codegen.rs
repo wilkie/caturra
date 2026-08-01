@@ -7594,6 +7594,8 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("toDegrees", &[D], BRet::Double, "(D)D"),
     bm("toRadians", &[D], BRet::Double, "(D)D"),
     bm("copySign", &[D, D], BRet::Double, "(DD)D"),
+    // The `float` overloads answer a `float`, not a widened `double`.
+    bm("copySign", &[F, F], BRet::Float, "(FF)F"),
     bm("ulp", &[D], BRet::Double, "(D)D"),
     bm("nextUp", &[D], BRet::Double, "(D)D"),
     bm("nextDown", &[D], BRet::Double, "(D)D"),
@@ -7608,12 +7610,18 @@ const MATH_METHODS: &[BuiltinMethod] = &[
     bm("ulp", &[F], BRet::Float, "(F)F"),
     bm("nextAfter", &[F, D], BRet::Float, "(FD)F"),
     bm("fma", &[D, D, D], BRet::Double, "(DDD)D"),
+    bm("fma", &[F, F, F], BRet::Float, "(FFF)F"),
     bm("IEEEremainder", &[D, D], BRet::Double, "(DD)D"),
     bm("getExponent", &[D], BRet::Int, "(D)I"),
+    // A `float`'s exponent is read from its own 8-bit field, so widening to
+    // the double overload gave a different (double-biased) answer.
+    bm("getExponent", &[F], BRet::Int, "(F)I"),
     bm("floorDiv", &[I, I], BRet::Int, "(II)I"),
     bm("floorDiv", &[L, L], BRet::Long, "(JJ)J"),
     bm("floorMod", &[I, I], BRet::Int, "(II)I"),
     bm("floorMod", &[L, L], BRet::Long, "(JJ)J"),
+    // `floorMod(long, int)` answers an INT (JDK 9), not a long.
+    bm("floorMod", &[L, I], BRet::Int, "(JI)I"),
     bm("addExact", &[I, I], BRet::Int, "(II)I"),
     bm("subtractExact", &[I, I], BRet::Int, "(II)I"),
     bm("multiplyExact", &[I, I], BRet::Int, "(II)I"),
@@ -7676,7 +7684,7 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     bm(
         "valueOf",
         &[S],
-        BRet::Int,
+        BRet::Wrapper(ElemType::Int),
         "(Ljava/lang/String;)Ljava/lang/Integer;",
     ),
     bm("compare", &[I, I], BRet::Int, "(II)I"),
@@ -7707,13 +7715,13 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
     bm(
         "valueOf",
         &[S, I],
-        BRet::Int,
+        BRet::Wrapper(ElemType::Int),
         "(Ljava/lang/String;I)Ljava/lang/Integer;",
     ),
     bm(
         "decode",
         &[S],
-        BRet::Int,
+        BRet::Wrapper(ElemType::Int),
         "(Ljava/lang/String;)Ljava/lang/Integer;",
     ),
     bm("toUnsignedString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
@@ -7741,11 +7749,16 @@ const DOUBLE_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Str,
         descriptor: "(D)Ljava/lang/String;",
     },
-    bm("valueOf", &[D], BRet::Double, "(D)D"),
+    bm(
+        "valueOf",
+        &[D],
+        BRet::Wrapper(ElemType::Double),
+        "(D)Ljava/lang/Double;",
+    ),
     bm(
         "valueOf",
         &[S],
-        BRet::Double,
+        BRet::Wrapper(ElemType::Double),
         "(Ljava/lang/String;)Ljava/lang/Double;",
     ),
     bm("isNaN", &[D], BRet::Boolean, "(D)Z"),
@@ -7837,7 +7850,12 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     // `Character.toString(int codePoint)` — the code point's string (one char
     // in the BMP, a surrogate pair above it).
     bm("toString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
-    bm("valueOf", &[C], BRet::Char, "(C)C"),
+    bm(
+        "valueOf",
+        &[C],
+        BRet::Wrapper(ElemType::Char),
+        "(C)Ljava/lang/Character;",
+    ),
     bm("isHighSurrogate", &[C], BRet::Boolean, "(C)Z"),
     bm("isLowSurrogate", &[C], BRet::Boolean, "(C)Z"),
     bm("isSurrogate", &[C], BRet::Boolean, "(C)Z"),
@@ -7872,7 +7890,7 @@ const SHORT_METHODS: &[BuiltinMethod] = &[
     bm(
         "valueOf",
         &[S],
-        BRet::Short,
+        BRet::Wrapper(ElemType::Short),
         "(Ljava/lang/String;)Ljava/lang/Short;",
     ),
     bm(
@@ -7905,7 +7923,7 @@ const BYTE_METHODS: &[BuiltinMethod] = &[
     bm(
         "valueOf",
         &[S],
-        BRet::Byte,
+        BRet::Wrapper(ElemType::Byte),
         "(Ljava/lang/String;)Ljava/lang/Byte;",
     ),
     bm("compare", &[BParam::Byte, BParam::Byte], BRet::Int, "(BB)I"),
@@ -7915,11 +7933,16 @@ const BYTE_METHODS: &[BuiltinMethod] = &[
 const FLOAT_METHODS: &[BuiltinMethod] = &[
     bm("parseFloat", &[S], BRet::Float, "(Ljava/lang/String;)F"),
     bm("toString", &[F], BRet::Str, "(F)Ljava/lang/String;"),
-    bm("valueOf", &[F], BRet::Float, "(F)F"),
+    bm(
+        "valueOf",
+        &[F],
+        BRet::Wrapper(ElemType::Float),
+        "(F)Ljava/lang/Float;",
+    ),
     bm(
         "valueOf",
         &[S],
-        BRet::Float,
+        BRet::Wrapper(ElemType::Float),
         "(Ljava/lang/String;)Ljava/lang/Float;",
     ),
     bm("isNaN", &[F], BRet::Boolean, "(F)Z"),
@@ -7953,13 +7976,13 @@ const LONG_METHODS: &[BuiltinMethod] = &[
     bm(
         "valueOf",
         &[S, I],
-        BRet::Long,
+        BRet::Wrapper(ElemType::Long),
         "(Ljava/lang/String;I)Ljava/lang/Long;",
     ),
     bm(
         "decode",
         &[S],
-        BRet::Long,
+        BRet::Wrapper(ElemType::Long),
         "(Ljava/lang/String;)Ljava/lang/Long;",
     ),
     bm("toString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
@@ -7967,11 +7990,16 @@ const LONG_METHODS: &[BuiltinMethod] = &[
     bm("toBinaryString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
     bm("toOctalString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
     bm("toHexString", &[L], BRet::Str, "(J)Ljava/lang/String;"),
-    bm("valueOf", &[L], BRet::Long, "(J)J"),
+    bm(
+        "valueOf",
+        &[L],
+        BRet::Wrapper(ElemType::Long),
+        "(J)Ljava/lang/Long;",
+    ),
     bm(
         "valueOf",
         &[S],
-        BRet::Long,
+        BRet::Wrapper(ElemType::Long),
         "(Ljava/lang/String;)Ljava/lang/Long;",
     ),
     bm("compare", &[L, L], BRet::Int, "(JJ)I"),
@@ -8106,10 +8134,20 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[
     bm("parseBoolean", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
     bm("toString", &[Z], BRet::Str, "(Z)Ljava/lang/String;"),
-    bm("valueOf", &[Z], BRet::Boolean, "(Z)Z"),
+    bm(
+        "valueOf",
+        &[Z],
+        BRet::Wrapper(ElemType::Boolean),
+        "(Z)Ljava/lang/Boolean;",
+    ),
     // `Boolean.valueOf(String)` — `parseBoolean`'s answer, boxed on a JDK
     // and a plain boolean here.
-    bm("valueOf", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
+    bm(
+        "valueOf",
+        &[S],
+        BRet::Wrapper(ElemType::Boolean),
+        "(Ljava/lang/String;)Ljava/lang/Boolean;",
+    ),
     bm("compare", &[Z, Z], BRet::Int, "(ZZ)I"),
     bm("hashCode", &[Z], BRet::Int, "(Z)I"),
     bm("logicalAnd", &[Z, Z], BRet::Boolean, "(ZZ)Z"),
@@ -10586,8 +10624,17 @@ impl BodyGen<'_> {
             break_flags: Vec::new(),
         });
         self.statement(body);
-        self.loop_stack.pop();
+        let frame = self.loop_stack.pop();
         self.code.bind(end);
+        // After a labeled block, a variable is definitely assigned only if it
+        // is assigned on the fall-through path AND on every `break label` that
+        // left early (JLS §16.2.6). Ignoring the breaks let
+        // `blk: { if (c) break blk; x = 1; }` treat `x` as assigned.
+        if let Some(frame) = frame {
+            for flags in &frame.break_flags {
+                self.intersect_assigned(flags);
+            }
+        }
     }
 
     /// A `case` label's constant int value: a literal, or a `static final`
@@ -11739,7 +11786,11 @@ impl BodyGen<'_> {
             None => {
                 if is_final && assigned {
                     self.error(span, format!("cannot assign to final variable '{name}'"));
-                } else if is_final && !self.loop_stack.is_empty() {
+                // A LABELED BLOCK is on the same stack as the loops (it needs a
+                // break target), but it runs at most once — so a blank final
+                // assigned inside one is assigned exactly once, and refusing it
+                // rejected ordinary Java.
+                } else if is_final && self.loop_stack.iter().any(|entry| entry.is_loop) {
                     self.error(
                         span,
                         format!("final variable '{name}' might be assigned in a loop"),
@@ -11762,6 +11813,27 @@ impl BodyGen<'_> {
                         span,
                         format!("variable '{name}' might not have been initialized"),
                     );
+                }
+                // `o += "x"` where `o` is declared `Object`, `CharSequence` or
+                // any other type a `String` assigns to (JLS §15.26.2 makes the
+                // implicit cast `(T)(o + "x")`, and a String IS a T). The
+                // concat result stores straight back.
+                if op == BinaryOp::Add
+                    && var_ty != JType::Str
+                    && var_ty.is_reference()
+                    && !matches!(var_ty, JType::Boxed(_))
+                    && widens(JType::Str, var_ty, self.table)
+                {
+                    self.emit_load(slot, var_ty);
+                    self.begin_concat_with_value_on_stack(var_ty);
+                    let part_ty = self.expr(value);
+                    self.append_part(part_ty, value.span());
+                    self.finish_concat();
+                    self.emit_store(slot, var_ty);
+                    if let Some(var) = self.lookup(name) {
+                        var.assigned = true;
+                    }
+                    return;
                 }
                 // `s += x` is string concatenation when s is a String.
                 if var_ty == JType::Str {
@@ -11960,6 +12032,23 @@ impl BodyGen<'_> {
         span: SourceSpan,
         keep: bool,
     ) {
+        // `Math.PI = 3.0` and every other intrinsic constant: these are
+        // `static final` in the JDK, so the assignment is a compile error. They
+        // are folded at their READ sites, so caturra had nothing to assign to
+        // and silently discarded the write — the program then printed the real
+        // value, disagreeing with source that a JDK refuses outright.
+        if let Expr::Name { path, .. } = object
+            && path.len() == 1
+            && self.lookup(&path[0]).is_none()
+            && !self.table.has_class(&path[0])
+            && builtin_static_constant(&path[0], name).is_some()
+        {
+            self.error(
+                span,
+                format!("cannot assign a value to final variable {name}"),
+            );
+            return;
+        }
         // `ClassName.field = v` — a static target.
         if let Expr::Name { path, .. } = object
             && path.len() == 1
@@ -12696,6 +12785,59 @@ impl BodyGen<'_> {
                 }
             }
         }
+    }
+
+    /// Emit an intrinsic constant's value (`Math.PI`, `Integer.MAX_VALUE`,
+    /// `Boolean.TRUE`), leaving it on the stack and answering its type. Shared
+    /// by the qualified `Class.NAME` read and the bare name a static import
+    /// brings into scope.
+    fn emit_builtin_constant(&mut self, value: BuiltinConstant) -> JType {
+        match value {
+            BuiltinConstant::Int(value) => {
+                self.push_int(value);
+                JType::Int
+            }
+            BuiltinConstant::Double(value) => {
+                let index = self.pool.intern(Constant::Double(value));
+                self.code.push_op_u16(op::LDC2_W, index, 2);
+                JType::Double
+            }
+            BuiltinConstant::Char(value) => {
+                self.push_int(i32::from(value));
+                JType::Char
+            }
+            BuiltinConstant::Bool(value) => {
+                // `Boolean.TRUE`/`FALSE` are the CACHED Boolean objects,
+                // not primitives: `Boolean.TRUE == Boolean.TRUE` is true
+                // (one singleton), `new Boolean(true) == Boolean.TRUE` is
+                // false (a fresh object). Emitting a bare `true` erased
+                // the identity — the reference came back true for BOTH.
+                self.push_int(i32::from(value));
+                self.emit_box(ElemType::Boolean);
+                JType::Boxed(ElemType::Boolean)
+            }
+            BuiltinConstant::Long(value) => {
+                let index = self.pool.intern(Constant::Long(value));
+                self.code.push_op_u16(op::LDC2_W, index, 2);
+                JType::Long
+            }
+            BuiltinConstant::Float(value) => {
+                let index = self.pool.intern(Constant::Float(value));
+                self.code.push_ldc(index);
+                JType::Float
+            }
+        }
+    }
+
+    /// The intrinsic constant a bare name denotes through a static import
+    /// (`import static java.lang.Math.PI` / `.*`), if any.
+    fn imported_constant(&self, name: &str) -> Option<BuiltinConstant> {
+        self.table
+            .static_imports
+            .iter()
+            .filter(|import| import.member.as_deref().is_none_or(|member| member == name))
+            .filter(|import| !self.table.has_class(&import.class))
+            .find_map(|import| builtin_static_constant(&import.class, name))
     }
 
     /// Look up a field of `class_id`, with a javac-style private-access
@@ -20066,41 +20208,7 @@ impl BodyGen<'_> {
             && self.lookup(&path[0]).is_none()
             && let Some(value) = builtin_static_constant(&path[0], &path[1])
         {
-            match value {
-                BuiltinConstant::Int(value) => {
-                    self.push_int(value);
-                    return JType::Int;
-                }
-                BuiltinConstant::Double(value) => {
-                    let index = self.pool.intern(Constant::Double(value));
-                    self.code.push_op_u16(op::LDC2_W, index, 2);
-                    return JType::Double;
-                }
-                BuiltinConstant::Char(value) => {
-                    self.push_int(i32::from(value));
-                    return JType::Char;
-                }
-                BuiltinConstant::Bool(value) => {
-                    // `Boolean.TRUE`/`FALSE` are the CACHED Boolean objects,
-                    // not primitives: `Boolean.TRUE == Boolean.TRUE` is true
-                    // (one singleton), `new Boolean(true) == Boolean.TRUE` is
-                    // false (a fresh object). Emitting a bare `true` erased
-                    // the identity — the reference came back true for BOTH.
-                    self.push_int(i32::from(value));
-                    self.emit_box(ElemType::Boolean);
-                    return JType::Boxed(ElemType::Boolean);
-                }
-                BuiltinConstant::Long(value) => {
-                    let index = self.pool.intern(Constant::Long(value));
-                    self.code.push_op_u16(op::LDC2_W, index, 2);
-                    return JType::Long;
-                }
-                BuiltinConstant::Float(value) => {
-                    let index = self.pool.intern(Constant::Float(value));
-                    self.code.push_ldc(index);
-                    return JType::Float;
-                }
-            }
+            return self.emit_builtin_constant(value);
         }
         // `x.field` on a local object, or `Class.staticField`.
         if path.len() == 2 {
@@ -20215,6 +20323,13 @@ impl BodyGen<'_> {
             }
         }
         let Some(var) = self.lookup(name) else {
+            // A statically-imported CONSTANT (`import static java.lang.Math.PI`
+            // then a bare `PI`). Static-imported METHODS already resolved; the
+            // fields beside them did not, so the import compiled and the use it
+            // enabled did not.
+            if let Some(constant) = self.imported_constant(name) {
+                return self.emit_builtin_constant(constant);
+            }
             // A STATIC nested class sees the enclosing class's members, but
             // has no instance to read an instance field through — javac's
             // complaint is the static context, not a missing name.
@@ -20541,6 +20656,19 @@ impl BodyGen<'_> {
                 }
             }
         }
+        // A cast from a wrapper SUPERTYPE (`Number`, `Comparable`, an
+        // interface) to a primitive is a checked cast to the wrapper followed
+        // by an unboxing conversion (JLS §5.5): `(int) someNumber` is legal
+        // Java and was refused as "cannot cast Number to int".
+        if let Some(elem) = elem_type_of(target).filter(|elem| Prim::of(*elem).is_some())
+            && matches!(source, JType::Object(_))
+            && !target.is_reference()
+        {
+            let class_index = intern_class(self.pool, wrapper_internal(elem));
+            self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            self.emit_unbox(elem);
+            return target;
+        }
         // Unbox a reference to a primitive (JLS §5.5): an erased `Object`
         // (e.g. from `Field.get`) or a wrapper, cast to `int`/`double`/…
         // `checkcast Wrapper` + `Wrapper.xxxValue()` — caturra's boxed values
@@ -20852,14 +20980,22 @@ impl BodyGen<'_> {
         let else_label = self.code.new_label();
         let end = self.code.new_label();
         self.code.branch(op::IFEQ, else_label, 1);
+        // Exactly ONE branch runs, so a variable is definitely assigned after
+        // the conditional only if BOTH branches assign it (JLS §16.1.4).
+        // Letting each branch's assignments stand made
+        // `int x; int y = c ? (x = 1) : 0;` accept a later read of `x`.
+        let before_branches = self.assigned_flags();
         let actual = self.expr(then);
         coerce(self, actual);
+        let after_then = self.assigned_flags();
         self.code.branch(op::GOTO, end, 0);
         // The stack model tracks a single path; rewind for the else.
         self.code.drop_stack(target.width());
         self.code.bind(else_label);
+        self.restore_assigned(&before_branches);
         let actual = self.expr(els);
         coerce(self, actual);
+        self.intersect_assigned(&after_then);
         self.code.bind(end);
         target
     }
@@ -20935,9 +21071,34 @@ impl BodyGen<'_> {
                 self.increment_field(&FieldTarget::Path(path), prefix, increment, span)
             }
             Expr::Name { path, .. } if path.len() == 1 => {
+                // Not a local: a bare `counter++` on a FIELD. Of this class,
+                // or — from inside a hoisted lambda/anonymous class, which lost
+                // the bare name — of the class it came from, named explicitly.
+                if self.lookup(&path[0]).is_none() {
+                    let target = if self.table.field(self.current_class, &path[0]).is_some() {
+                        None
+                    } else {
+                        self.enclosing_static_field(&path[0])
+                            .map(|(owner, _)| self.table.class_name(owner).to_owned())
+                    };
+                    if let Some(owner) = target {
+                        let qualified = [owner, path[0].clone()];
+                        return self.increment_field(
+                            &FieldTarget::Path(&qualified),
+                            prefix,
+                            increment,
+                            span,
+                        );
+                    }
+                    return self.increment_field(
+                        &FieldTarget::Implicit(path[0].clone()),
+                        prefix,
+                        increment,
+                        span,
+                    );
+                }
                 let Some(var) = self.lookup(&path[0]) else {
-                    self.error(span, format!("cannot find variable '{}'", path[0]));
-                    return JType::Error;
+                    unreachable!("checked above");
                 };
                 let (slot, ty) = (var.slot, var.ty);
                 // `Integer i; i++` unboxes, increments, and reboxes via
@@ -21269,8 +21430,14 @@ impl BodyGen<'_> {
             (op::IFNE, op::ICONST_1)
         };
         self.code.branch(jump, short, 1);
+        // The right operand SHORT-CIRCUITS: an assignment inside it does not
+        // definitely assign afterwards (JLS §16.1.1/§16.1.2), so
+        // `boolean r = true || (x = 1) > 0;` leaves `x` unassigned. Emitting
+        // it left the flag set and let a later read of `x` compile.
+        let before_rhs = self.assigned_flags();
         let rt = self.expr(rhs);
         let rt = self.unbox_wrapper(rt);
+        self.restore_assigned(&before_rhs);
         if rt != JType::Boolean && rt != JType::Error {
             self.error(
                 span,

@@ -15,7 +15,7 @@
 //! boolean DEBUG = false` is accepted where javac reports the body
 //! unreachable. That is the safe direction, and the narrowing is deliberate.
 
-use crate::ast::{ClassDecl, Expr, FieldDecl, Literal, MethodDecl, Stmt};
+use crate::ast::{BinaryOp, ClassDecl, Expr, FieldDecl, Literal, MethodDecl, Stmt};
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
 /// Report unreachable statements and blank-final violations in `decl`.
@@ -24,7 +24,11 @@ pub(crate) fn check(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnost
         if method.is_abstract {
             continue;
         }
-        let mut reporter = Reporter { path, diagnostics };
+        let mut reporter = Reporter {
+            path,
+            diagnostics,
+            constants: boolean_constants(decl),
+        };
         // The body of a method is reachable (JLS §14.21).
         reachability(&method.body, &mut reporter);
     }
@@ -32,7 +36,11 @@ pub(crate) fn check(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnost
     // check here — its unreachable code, its `return`, and (for an instance
     // one) its inability to finish all went unreported.
     for block in &decl.init_blocks {
-        let mut reporter = Reporter { path, diagnostics };
+        let mut reporter = Reporter {
+            path,
+            diagnostics,
+            constants: boolean_constants(decl),
+        };
         reachability(&block.body, &mut reporter);
         // JLS §14.17: `return` belongs to a method or constructor. An
         // initializer is neither, whether it is static or not.
@@ -150,6 +158,10 @@ fn return_span(statement: &Stmt) -> Option<SourceSpan> {
 struct Reporter<'a> {
     path: &'a str,
     diagnostics: &'a mut Vec<Diagnostic>,
+    /// The class's own `static final boolean` CONSTANT VARIABLES with a
+    /// literal initializer — `while (FLAG)` is as constant as `while (true)`
+    /// when `FLAG` is one (JLS §15.28), so what follows is unreachable.
+    constants: std::collections::HashMap<String, bool>,
 }
 
 impl Reporter<'_> {
@@ -178,7 +190,19 @@ fn reachability(statements: &[Stmt], reporter: &mut Reporter) {
         // Reachability RESTARTS after a reported statement: everything below
         // it is unreachable for the same already-reported reason, and javac
         // reports only the first.
-        reachable = completes_normally(statement);
+        //
+        // A loop whose condition is a constant VARIABLE (`while (FLAG)`) is
+        // recognized here, where the enclosing class's constants are in hand;
+        // `completes_normally` itself folds only the literal forms, since
+        // codegen calls it without a class.
+        reachable = match statement {
+            Stmt::While { cond, body, .. }
+                if constant_bool_in(cond, &reporter.constants) == Some(true) =>
+            {
+                has_escaping_break(body, None)
+            }
+            other => completes_normally(other),
+        };
     }
 }
 
@@ -198,7 +222,7 @@ fn descend(statement: &Stmt, reporter: &mut Reporter) {
             }
         }
         Stmt::While { cond, body, .. } => {
-            if constant_bool(cond) == Some(false)
+            if constant_bool_in(cond, &reporter.constants) == Some(false)
                 && let Some(span) = stmt_span(body)
             {
                 reporter.error(span, "unreachable statement");
@@ -208,7 +232,7 @@ fn descend(statement: &Stmt, reporter: &mut Reporter) {
         Stmt::For { cond, body, .. } => {
             if cond
                 .as_ref()
-                .is_some_and(|c| constant_bool(c) == Some(false))
+                .is_some_and(|c| constant_bool_in(c, &reporter.constants) == Some(false))
                 && let Some(span) = stmt_span(body)
             {
                 reporter.error(span, "unreachable statement");
@@ -394,12 +418,98 @@ fn has_escaping_break(statement: &Stmt, label: Option<&str>) -> bool {
 /// Literals only — see the module note. Recognising more would be *correct*
 /// per JLS §15.28 but risks rejecting a valid program if the folding is ever
 /// wrong, and a missed unreachable-statement error costs nothing but strictness.
+/// The class's `static final boolean` constant variables with a literal
+/// initializer, by name.
+fn boolean_constants(decl: &ClassDecl) -> std::collections::HashMap<String, bool> {
+    decl.fields
+        .iter()
+        .filter(|field| field.is_static && field.is_final)
+        .filter_map(|field| match field.init.as_ref()? {
+            Expr::Literal {
+                value: Literal::Bool(value),
+                ..
+            } => Some((field.name.clone(), *value)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether this condition is a compile-time CONSTANT EXPRESSION with a known
+/// value (JLS §15.28). Reachability turns on it: `while (1 == 1) { }` makes
+/// what follows unreachable exactly as `while (true)` does, and caturra saw
+/// only the bare literal — so a folded condition ran forever where javac
+/// refuses the program.
+///
+/// The folding here is deliberately narrow: literals, parentheses, `!`, the
+/// comparisons and the boolean operators over INT/boolean literals. A constant
+/// VARIABLE (`static final boolean FLAG = true`) is resolved by the caller,
+/// which has the class in hand.
 fn constant_bool(expr: &Expr) -> Option<bool> {
+    constant_bool_in(expr, &std::collections::HashMap::new())
+}
+
+fn constant_bool_in(
+    expr: &Expr,
+    constants: &std::collections::HashMap<String, bool>,
+) -> Option<bool> {
     match expr {
         Expr::Literal {
             value: Literal::Bool(value),
             ..
         } => Some(*value),
+        // A constant VARIABLE of the enclosing class.
+        Expr::Name { path, .. } if path.len() == 1 => constants.get(&path[0]).copied(),
+        Expr::Unary {
+            op: crate::ast::UnaryOp::Not,
+            operand,
+            ..
+        } => constant_bool_in(operand, constants).map(|value| !value),
+        Expr::Binary { op, lhs, rhs, .. } => match op {
+            BinaryOp::And => {
+                Some(constant_bool_in(lhs, constants)? && constant_bool_in(rhs, constants)?)
+            }
+            BinaryOp::Or => {
+                Some(constant_bool_in(lhs, constants)? || constant_bool_in(rhs, constants)?)
+            }
+            BinaryOp::Eq | BinaryOp::Ne => {
+                let (a, b) = (constant_int(lhs), constant_int(rhs));
+                let equal = match (a, b) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => constant_bool_in(lhs, constants)? == constant_bool_in(rhs, constants)?,
+                };
+                Some(if *op == BinaryOp::Eq { equal } else { !equal })
+            }
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                let (a, b) = (constant_int(lhs)?, constant_int(rhs)?);
+                Some(match op {
+                    BinaryOp::Lt => a < b,
+                    BinaryOp::Le => a <= b,
+                    BinaryOp::Gt => a > b,
+                    _ => a >= b,
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// A constant integral value, for the comparison folding above.
+fn constant_int(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::Literal {
+            value: Literal::Int(value) | Literal::Long(value),
+            ..
+        } => Some(*value),
+        Expr::Literal {
+            value: Literal::Char(value),
+            ..
+        } => Some(i64::from(u32::from(*value))),
+        Expr::Unary {
+            op: crate::ast::UnaryOp::Neg,
+            operand,
+            ..
+        } => constant_int(operand).map(|value| -value),
         _ => None,
     }
 }

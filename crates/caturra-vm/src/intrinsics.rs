@@ -4767,6 +4767,9 @@ fn math_static(
         ("toDegrees", [JValue::Double(v)]) => d(v.to_degrees()),
         ("toRadians", [JValue::Double(v)]) => d(v.to_radians()),
         ("copySign", [JValue::Double(a), JValue::Double(b)]) => d(a.copysign(*b)),
+        ("copySign", [JValue::Float(a), JValue::Float(b)]) => {
+            Ok(Some(JValue::Float(a.copysign(*b))))
+        }
         ("ulp", [JValue::Double(v)]) => {
             let v = v.abs();
             d(if v.is_nan() {
@@ -4824,6 +4827,9 @@ fn math_static(
             })
         }
         ("fma", [JValue::Double(a), JValue::Double(b), JValue::Double(c)]) => d(a.mul_add(*b, *c)),
+        ("fma", [JValue::Float(a), JValue::Float(b), JValue::Float(c)]) => {
+            Ok(Some(JValue::Float(a.mul_add(*b, *c))))
+        }
         ("IEEEremainder", [JValue::Double(a), JValue::Double(b)]) => {
             // Per the spec's infinity cases: a NaN operand, an infinite
             // dividend, or a zero divisor gives NaN; a finite dividend with an
@@ -4836,7 +4842,16 @@ fn math_static(
                     *a
                 } else {
                     let quotient = (a / b).round_ties_even();
-                    a - quotient * b
+                    let remainder = a - quotient * b;
+                    // IEEE 754: a ZERO result carries the DIVIDEND's sign, and
+                    // `a - quotient * b` computes `+0.0` for every one of them.
+                    // Losing that made `1.0 / IEEEremainder(-4.0, 2.0)` answer
+                    // `Infinity` where a JDK answers `-Infinity`.
+                    if remainder == 0.0 {
+                        (0.0f64).copysign(*a)
+                    } else {
+                        remainder
+                    }
                 },
             )
         }
@@ -4848,6 +4863,17 @@ fn math_static(
                 -1023 // zero and subnormals
             } else {
                 i32::try_from(bits).unwrap_or(0) - 1023
+            })
+        }
+        // A `float`'s exponent lives in its own 8-bit field with bias 127.
+        ("getExponent", [JValue::Float(v)]) => {
+            let bits = (v.to_bits() >> 23) & 0xFF;
+            i(if v.is_nan() || v.is_infinite() {
+                128
+            } else if bits == 0 {
+                -127 // zero and subnormals
+            } else {
+                i32::try_from(bits).unwrap_or(0) - 127
             })
         }
         ("floorDiv", [JValue::Int(a), JValue::Int(b)]) => java_floor_div(*a, *b).and_then(i),
@@ -4863,6 +4889,13 @@ fn math_static(
             Ok(Some(JValue::Long(
                 a.wrapping_sub(quotient.wrapping_mul(*b)),
             )))
+        }
+        // `floorMod(long, int)` answers an INT: the result of a floor-mod by
+        // an int always fits one.
+        ("floorMod", [JValue::Long(a), JValue::Int(b)]) => {
+            let quotient = java_floor_div_long(*a, i64::from(*b))?;
+            let modulus = a.wrapping_sub(quotient.wrapping_mul(i64::from(*b)));
+            i(i32::try_from(modulus).unwrap_or(0))
         }
         ("addExact", [JValue::Int(a), JValue::Int(b)]) => {
             a.checked_add(*b).map_or_else(|| Err(overflow()), i)
@@ -5057,13 +5090,37 @@ fn integer_static(
     };
     match (method, args) {
         ("parseInt" | "valueOf", [text @ JValue::Ref(_)]) => {
-            let text = parse_int_text(heap, text)?;
-            text.parse().map_or_else(|_| Err(number_format(&text)), i)
+            // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
+            // primitive. Returning the primitive for both made two `valueOf`
+            // results compare `==` by value.
+            let parsed = (|| -> Result<Option<JValue>, VmError> {
+                let text = parse_int_text(heap, text)?;
+                text.parse().map_or_else(|_| Err(number_format(&text)), i)
+            })()?;
+            if method == "valueOf"
+                && let Some(value) = parsed
+            {
+                let reference = heap.box_wrapper("java/lang/Integer", value);
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
+            Ok(parsed)
         }
         ("parseInt" | "valueOf", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
-            let text = parse_int_text(heap, text)?;
-            let radix = checked_radix(*radix)?;
-            i32::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), i)
+            // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
+            // primitive. Returning the primitive for both made two `valueOf`
+            // results compare `==` by value.
+            let parsed = (|| -> Result<Option<JValue>, VmError> {
+                let text = parse_int_text(heap, text)?;
+                let radix = checked_radix(*radix)?;
+                i32::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), i)
+            })()?;
+            if method == "valueOf"
+                && let Some(value) = parsed
+            {
+                let reference = heap.box_wrapper("java/lang/Integer", value);
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
+            Ok(parsed)
         }
         ("decode", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
@@ -5321,17 +5378,29 @@ fn double_static(
     let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     match (method, args) {
         ("parseDouble" | "valueOf", [text @ JValue::Ref(_)]) => {
-            // JDK 11 `parseDouble(null)` is a NullPointerException (it reads
-            // the null string's length), not a NumberFormatException.
-            if matches!(text, JValue::Ref(None)) {
-                return Err(throw("java.lang.NullPointerException"));
+            // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
+            // primitive. Returning the primitive for both made two `valueOf`
+            // results compare `==` by value.
+            let parsed = (|| -> Result<Option<JValue>, VmError> {
+                // JDK 11 `parseDouble(null)` is a NullPointerException (it reads
+                // the null string's length), not a NumberFormatException.
+                if matches!(text, JValue::Ref(None)) {
+                    return Err(throw("java.lang.NullPointerException"));
+                }
+                let text = parse_int_text(heap, text)?;
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    return Err(throw("java.lang.NumberFormatException: empty String"));
+                }
+                parse_java_double(trimmed).map_or_else(|| Err(number_format(&text)), d)
+            })()?;
+            if method == "valueOf"
+                && let Some(value) = parsed
+            {
+                let reference = heap.box_wrapper("java/lang/Double", value);
+                return Ok(Some(JValue::Ref(Some(reference))));
             }
-            let text = parse_int_text(heap, text)?;
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return Err(throw("java.lang.NumberFormatException: empty String"));
-            }
-            parse_java_double(trimmed).map_or_else(|| Err(number_format(&text)), d)
+            Ok(parsed)
         }
         ("toString", [JValue::Double(v)]) => {
             let reference = heap.alloc_string(&java_double_to_string(*v));
@@ -5341,7 +5410,14 @@ fn double_static(
             let reference = heap.alloc_string(&java_double_to_hex(*v));
             Ok(Some(JValue::Ref(Some(reference))))
         }
-        ("valueOf", [JValue::Double(v)]) => d(*v),
+        // `valueOf` answers the WRAPPER OBJECT — a boxed value with its own
+        // identity — not the bare primitive. Returning the primitive made
+        // `Double.valueOf(1.0) == Double.valueOf(1.0)` compare by value and
+        // answer true, where a JDK's two distinct objects answer false.
+        ("valueOf", [JValue::Double(v)]) => {
+            let reference = heap.box_wrapper("java/lang/Double", JValue::Double(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("isNaN", [JValue::Double(v)]) => z(v.is_nan()),
         ("isInfinite", [JValue::Double(v)]) => z(v.is_infinite()),
         ("isFinite", [JValue::Double(v)]) => z(v.is_finite()),
@@ -5780,7 +5856,11 @@ fn character_static(
             let reference = heap.alloc_string(&c_of(v).to_string());
             Ok(Some(JValue::Ref(Some(reference))))
         }
-        ("valueOf" | "hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),
+        ("hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),
+        ("valueOf", [JValue::Int(v)]) => {
+            let reference = heap.box_wrapper("java/lang/Character", JValue::Int(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("isHighSurrogate", [JValue::Int(v)]) => z((0xD800..0xDC00).contains(v)),
         ("isLowSurrogate", [JValue::Int(v)]) => z((0xDC00..0xE000).contains(v)),
         ("isSurrogate", [JValue::Int(v)]) => z((0xD800..0xE000).contains(v)),
@@ -5813,14 +5893,31 @@ fn boolean_static(
         // `valueOf(String)` is `parseBoolean`'s answer (boxed on a JDK, a
         // plain boolean here) — anything but "true", in any case, is false.
         ("parseBoolean" | "valueOf", [text @ JValue::Ref(_)]) => {
-            let text = parse_int_text(heap, text)?;
-            z(text.eq_ignore_ascii_case("true"))
+            // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
+            // primitive. Returning the primitive for both made two `valueOf`
+            // results compare `==` by value.
+            let parsed = (|| -> Result<Option<JValue>, VmError> {
+                let text = parse_int_text(heap, text)?;
+                z(text.eq_ignore_ascii_case("true"))
+            })()?;
+            if method == "valueOf"
+                && let Some(value) = parsed
+            {
+                let reference = heap.box_wrapper("java/lang/Boolean", value);
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
+            Ok(parsed)
         }
         ("toString", [JValue::Int(v)]) => {
             let reference = heap.alloc_string(if *v != 0 { "true" } else { "false" });
             Ok(Some(JValue::Ref(Some(reference))))
         }
-        ("valueOf", [JValue::Int(v)]) => z(*v != 0),
+        ("valueOf", [JValue::Int(v)]) => {
+            // `Boolean.valueOf` answers one of the two CACHED objects, so two
+            // calls with the same value really are identical.
+            let reference = heap.box_wrapper("java/lang/Boolean", JValue::Int(i32::from(*v != 0)));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("compare", [JValue::Int(a), JValue::Int(b)]) => {
             Ok(Some(JValue::Int(if (*a != 0) == (*b != 0) {
                 0
@@ -5849,13 +5946,37 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
     };
     match (method, args) {
         ("parseLong" | "valueOf", [text @ JValue::Ref(_)]) => {
-            let text = parse_int_text(heap, text)?;
-            text.parse().map_or_else(|_| Err(number_format(&text)), l)
+            // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
+            // primitive. Returning the primitive for both made two `valueOf`
+            // results compare `==` by value.
+            let parsed = (|| -> Result<Option<JValue>, VmError> {
+                let text = parse_int_text(heap, text)?;
+                text.parse().map_or_else(|_| Err(number_format(&text)), l)
+            })()?;
+            if method == "valueOf"
+                && let Some(value) = parsed
+            {
+                let reference = heap.box_wrapper("java/lang/Long", value);
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
+            Ok(parsed)
         }
         ("parseLong" | "valueOf", [text @ JValue::Ref(_), JValue::Int(radix)]) => {
-            let text = parse_int_text(heap, text)?;
-            let radix = checked_radix(*radix)?;
-            i64::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), l)
+            // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
+            // primitive. Returning the primitive for both made two `valueOf`
+            // results compare `==` by value.
+            let parsed = (|| -> Result<Option<JValue>, VmError> {
+                let text = parse_int_text(heap, text)?;
+                let radix = checked_radix(*radix)?;
+                i64::from_str_radix(&text, radix).map_or_else(|_| Err(number_format(&text)), l)
+            })()?;
+            if method == "valueOf"
+                && let Some(value) = parsed
+            {
+                let reference = heap.box_wrapper("java/lang/Long", value);
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
+            Ok(parsed)
         }
         ("parseUnsignedLong", [text @ JValue::Ref(_)]) => {
             let text = parse_int_text(heap, text)?;
@@ -5870,7 +5991,10 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
             let text = parse_int_text(heap, text)?;
             l(decode_integer(&text)?)
         }
-        ("valueOf", [JValue::Long(v)]) => l(*v),
+        ("valueOf", [JValue::Long(v)]) => {
+            let reference = heap.box_wrapper("java/lang/Long", JValue::Long(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("toString", [JValue::Long(v)]) => s(heap, v.to_string()),
         ("toString", [JValue::Long(v), JValue::Int(radix)]) => {
             s(heap, long_to_string_radix(*v, *radix))
@@ -5912,15 +6036,22 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
         ("rotateRight", [JValue::Long(v), JValue::Int(d)]) => {
             l(v.rotate_right((d & 63).cast_unsigned()))
         }
+        // The JDK implements the LONG unsigned pair through `BigInteger`, so a
+        // zero divisor carries its message, not the `/ by zero` of the int
+        // forms beside it.
         ("divideUnsigned", [JValue::Long(a), JValue::Long(b)]) => {
             if *b == 0 {
-                return Err(throw("java.lang.ArithmeticException: / by zero"));
+                return Err(throw(
+                    "java.lang.ArithmeticException: BigInteger divide by zero",
+                ));
             }
             l((a.cast_unsigned() / b.cast_unsigned()).cast_signed())
         }
         ("remainderUnsigned", [JValue::Long(a), JValue::Long(b)]) => {
             if *b == 0 {
-                return Err(throw("java.lang.ArithmeticException: / by zero"));
+                return Err(throw(
+                    "java.lang.ArithmeticException: BigInteger divide by zero",
+                ));
             }
             l((a.cast_unsigned() % b.cast_unsigned()).cast_signed())
         }
@@ -5972,9 +6103,29 @@ fn small_int_static(
             if value < lo || value > hi {
                 return Err(number_format_range(&text));
             }
+            if method == "valueOf" {
+                let wrapper = if class == "Short" {
+                    "java/lang/Short"
+                } else {
+                    "java/lang/Byte"
+                };
+                let reference = heap.box_wrapper(wrapper, JValue::Int(value));
+                return Ok(Some(JValue::Ref(Some(reference))));
+            }
             Ok(Some(JValue::Int(value)))
         }
-        ("valueOf" | "hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),
+        ("hashCode", [JValue::Int(v)]) => Ok(Some(JValue::Int(*v))),
+        ("valueOf", [JValue::Int(v)]) => {
+            let reference = heap.box_wrapper(
+                if class == "Short" {
+                    "java/lang/Short"
+                } else {
+                    "java/lang/Byte"
+                },
+                JValue::Int(*v),
+            );
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("toString", [JValue::Int(v)]) => {
             let reference = heap.alloc_string(&v.to_string());
             Ok(Some(JValue::Ref(Some(reference))))
@@ -6016,18 +6167,33 @@ fn float_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option
     let b = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     match (method, args) {
         ("parseFloat" | "valueOf", [text @ JValue::Ref(_)]) => {
-            // Like Double: null NPEs, an empty/blank string is "empty String".
-            if matches!(text, JValue::Ref(None)) {
-                return Err(throw("java.lang.NullPointerException"));
+            // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
+            // primitive. Returning the primitive for both made two `valueOf`
+            // results compare `==` by value.
+            let parsed = (|| -> Result<Option<JValue>, VmError> {
+                // Like Double: null NPEs, an empty/blank string is "empty String".
+                if matches!(text, JValue::Ref(None)) {
+                    return Err(throw("java.lang.NullPointerException"));
+                }
+                let text = parse_int_text(heap, text)?;
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    return Err(throw("java.lang.NumberFormatException: empty String"));
+                }
+                parse_java_float(trimmed).map_or_else(|| Err(number_format(&text)), f)
+            })()?;
+            if method == "valueOf"
+                && let Some(value) = parsed
+            {
+                let reference = heap.box_wrapper("java/lang/Float", value);
+                return Ok(Some(JValue::Ref(Some(reference))));
             }
-            let text = parse_int_text(heap, text)?;
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return Err(throw("java.lang.NumberFormatException: empty String"));
-            }
-            parse_java_float(trimmed).map_or_else(|| Err(number_format(&text)), f)
+            Ok(parsed)
         }
-        ("valueOf", [JValue::Float(v)]) => f(*v),
+        ("valueOf", [JValue::Float(v)]) => {
+            let reference = heap.box_wrapper("java/lang/Float", JValue::Float(*v));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("toString", [JValue::Float(v)]) => {
             let reference = heap.alloc_string(&java_float_to_string(*v));
             Ok(Some(JValue::Ref(Some(reference))))

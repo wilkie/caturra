@@ -296,26 +296,25 @@ fn statement_start_error(keyword: Keyword) -> Option<&'static str> {
 }
 
 /// Lower `x++` / `x--` (and `a[i]++`) to `+= 1` / `-= 1`.
+/// A statement-form `x++` / `--x`. It stays an `IncDec` rather than lowering to
+/// `x += 1`, because the two are DIFFERENT rules for a wrapper target: `++`
+/// unboxes, adds and NARROWS before boxing back (JLS §15.14.2), so
+/// `Character c = 'a'; c++;` is legal, while `c += 1` is the compile error
+/// §15.26.2 makes it (boxing cannot narrow). Lowering conflated them and
+/// refused both.
 fn increment_statement(
-    target: AssignTarget,
+    target: Expr,
     increment: bool,
     start: SourcePosition,
     end: SourcePosition,
 ) -> Stmt {
     let span = SourceSpan { start, end };
-    Stmt::Assign {
-        target,
-        op: Some(if increment {
-            BinaryOp::Add
-        } else {
-            BinaryOp::Sub
-        }),
-        value: Expr::Literal {
-            value: Literal::Int(1),
-            span,
-        },
+    Stmt::Expr(Expr::IncDec {
+        target: Box::new(target),
+        increment,
+        prefix: false,
         span,
-    }
+    })
 }
 
 /// Convert an expression to an assignment target, if it has the right
@@ -1909,9 +1908,20 @@ impl Parser<'_> {
             let label = name.clone();
             let start = self.here();
             self.pos += 2; // identifier + ':'
+            // A local variable declaration is NOT a Statement (JLS §14.7 takes
+            // a `Statement`, and a declaration is a `BlockStatement`), so
+            // `lab: int x = 5;` is a compile error — it used to run.
+            if self.at_declaration_start() {
+                let span = self.here();
+                self.error_at(span, "variable declaration not allowed here");
+                self.recover_to_statement_boundary();
+                return Ok(None);
+            }
+            // `lab: ;` — the EMPTY statement is a statement, and a label on one
+            // is legal (if pointless). It parses to nothing, which read as a
+            // missing statement.
             let Some(body) = self.statement()? else {
-                self.error_here("a label must be followed by a statement");
-                return Err(Abort);
+                return Ok(Some(Stmt::Block(Vec::new())));
             };
             let span = SourceSpan {
                 start: start.start,
@@ -2002,16 +2012,12 @@ impl Parser<'_> {
             let increment = self.at_symbol("++");
             self.pos += 1;
             let operand = self.postfix_expression()?;
-            let Some(target) = assignment_target(&operand) else {
+            if assignment_target(&operand).is_none() {
                 self.error_at(operand.span(), "++/-- can only be applied to a variable");
                 return Err(Abort);
-            };
-            return Ok(increment_statement(
-                target,
-                increment,
-                start.start,
-                operand.span().end,
-            ));
+            }
+            let end = operand.span().end;
+            return Ok(increment_statement(operand, increment, start.start, end));
         }
 
         let expr = self.expression()?;
@@ -2046,9 +2052,9 @@ impl Parser<'_> {
             ..
         } = &expr
         {
-            if let Some(assign_target) = assignment_target(target) {
+            if assignment_target(target).is_some() {
                 return Ok(increment_statement(
-                    assign_target,
+                    (**target).clone(),
                     *increment,
                     span.start,
                     span.end,
@@ -2064,19 +2070,15 @@ impl Parser<'_> {
         if self.at_symbol("++") || self.at_symbol("--") {
             let increment = self.at_symbol("++");
             self.pos += 1;
-            let Some(target) = assignment_target(&expr) else {
+            if assignment_target(&expr).is_none() {
                 self.error_at(
                     expr.span(),
                     "++/-- can only be applied to a variable or array element",
                 );
                 return Err(Abort);
-            };
-            return Ok(increment_statement(
-                target,
-                increment,
-                expr.span().start,
-                expr.span().end,
-            ));
+            }
+            let (start, end) = (expr.span().start, expr.span().end);
+            return Ok(increment_statement(expr, increment, start, end));
         }
 
         // JLS §14.8 statement expressions: calls, and class instance creation
@@ -2916,11 +2918,12 @@ impl Parser<'_> {
             let increment = self.at_symbol("++");
             self.pos += 1;
             let operand = self.postfix_expression()?;
-            let Some(target) = assignment_target(&operand) else {
+            if assignment_target(&operand).is_none() {
                 self.error_at(operand.span(), "++/-- can only be applied to a variable");
                 return Err(Abort);
-            };
-            let stmt = increment_statement(target, increment, start.start, operand.span().end);
+            }
+            let end = operand.span().end;
+            let stmt = increment_statement(operand, increment, start.start, end);
             return Ok(LambdaBody::Block(vec![stmt]));
         }
 
@@ -2933,9 +2936,9 @@ impl Parser<'_> {
             span,
             ..
         } = &expr
-            && let Some(assign_target) = assignment_target(target)
+            && assignment_target(target).is_some()
         {
-            let stmt = increment_statement(assign_target, *increment, span.start, span.end);
+            let stmt = increment_statement((**target).clone(), *increment, span.start, span.end);
             return Ok(LambdaBody::Block(vec![stmt]));
         }
 
@@ -2966,9 +2969,16 @@ impl Parser<'_> {
         if !self.eat_symbol("?") {
             return Ok(cond);
         }
-        let then = self.ternary()?;
+        // JLS §15.25: the MIDDLE operand is a full `Expression` — an
+        // assignment or a lambda may sit there (`true ? x = 2 : 3`), and the
+        // third operand is a `ConditionalExpression` OR a lambda. Parsing both
+        // at `ternary` level refused each of those outright.
+        let then = self.expression()?;
         self.expect_symbol(":", "in the conditional expression")?;
-        let els = self.ternary()?;
+        let els = match self.try_lambda()? {
+            Some(lambda) => lambda,
+            None => self.ternary()?,
+        };
         let span = SourceSpan {
             start: cond.span().start,
             end: els.span().end,
@@ -5948,28 +5958,23 @@ mod tests {
         else {
             panic!("expected compound assignment");
         };
-        // x++ and --x both lower to compound assignments by 1.
-        let Stmt::Assign {
-            op: Some(BinaryOp::Add),
-            value,
+        // `x++` and `--x` stay INCREMENTS rather than lowering to `x += 1`:
+        // the two differ for a wrapper target, where `++` may narrow and `+=`
+        // may not (JLS §15.14.2 vs §15.26.2).
+        let Stmt::Expr(Expr::IncDec {
+            increment: true,
+            target,
             ..
-        } = &body[3]
+        }) = &body[3]
         else {
-            panic!("expected x++ lowering");
+            panic!("expected x++ to stay an increment");
         };
-        assert!(matches!(
-            value,
-            Expr::Literal {
-                value: Literal::Int(1),
-                ..
-            }
-        ));
-        let Stmt::Assign {
-            op: Some(BinaryOp::Sub),
-            ..
-        } = &body[4]
+        assert!(matches!(target.as_ref(), Expr::Name { path, .. } if path == &["x"]));
+        let Stmt::Expr(Expr::IncDec {
+            increment: false, ..
+        }) = &body[4]
         else {
-            panic!("expected --x lowering");
+            panic!("expected --x to stay a decrement");
         };
     }
 

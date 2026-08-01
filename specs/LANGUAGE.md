@@ -441,6 +441,59 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **Boxing identity, `Math`'s overloads, and the flow that decides definite
+  assignment** (2026-07-31, round 8) — the boxing-identity (6),
+  operator-order (5), compound-assignment (2), math-deep (8 of 10) and
+  labeled-flow (7 of 8) clusters:
+  - **`Wrapper.valueOf(...)` answers the wrapper OBJECT**, not the bare
+    primitive — every one of them typed and returned the primitive, so
+    `Long.valueOf(1000L) == Long.valueOf(1000L)` compared by VALUE and
+    answered true where a JDK's two distinct objects answer false, and
+    `valueOf(x) == someObject` was refused as "long and Object". The
+    small-value CACHE now applies wherever caturra boxes, so
+    `IntStream.boxed()` yields the very object a literal `Integer y = 1`
+    holds. `boxed()` also had to genuinely BOX: it was a retyping, and a raw
+    `int` reaching a collection is a VerifyError at the next reference use.
+  - **`++` on a boxed `Character`/`Short`/`Byte` is legal** (JLS §15.14.2:
+    unbox, add, NARROW, box) while `+= 1` on one is not (§15.26.2: boxing
+    cannot narrow). A statement-form `x++` used to LOWER to `x += 1`, which
+    conflated the two and refused both.
+  - **`(int) someNumber`** — a cast from a wrapper supertype (`Number`,
+    `Comparable`) to a primitive is a checked cast plus an unboxing
+    conversion, and was "cannot cast Number to int".
+  - **`o += "x"` on an `Object`- or `CharSequence`-typed variable** holding a
+    String: §15.26.2's implicit cast makes it legal, since a String IS a T.
+  - **The `Math` surface**: the `float` overloads of
+    `copySign`/`fma`/`getExponent` (which had widened to `double`, and read a
+    `float`'s exponent from the wrong bias), `floorMod(long, int)`'s `int`
+    result, `IEEEremainder`'s SIGNED ZERO (it carries the dividend's sign, so
+    `1.0 / IEEEremainder(-4.0, 2.0)` is `-Infinity`), the
+    `BigInteger divide by zero` message the JDK's unsigned LONG division
+    inherits, a statically imported `Math.PI`, and `Math.PI = 3.0` — which
+    compiled and was silently discarded, since the constant is folded at its
+    reads and there was nothing to assign to.
+  - **Definite assignment now follows the control flow**: an assignment in
+    the short-circuited operand of `||`/`&&`, in one branch of `?:`, or on
+    the non-`break` path out of a labeled block does NOT definitely assign
+    (JLS §16.1.1/§16.1.4/§16.2.6) — each used to leave the flag set and let a
+    later read compile. A labeled BLOCK is no longer treated as a loop, so a
+    blank final may be assigned in one.
+  - **A constant CONDITION is recognized**: `while (1 == 1)` and
+    `while (FLAG)` for a `static final boolean` make what follows unreachable,
+    exactly as `while (true)` does — both used to loop forever. The folding
+    covers the literal forms and, at statement level, the enclosing class's
+    own constant variables.
+  - **The parser**: `?:`'s middle operand is a full `Expression` and its third
+    may be a lambda (`true ? x = 2 : 3`, `c ? () -> "a" : () -> "b"`), a label
+    may sit on the empty statement, and `lab: int x = 5;` is the error JLS
+    §14.7 makes it.
+  - **Three left open**: the transcendentals differ from the JDK by one ULP
+    (matching `StrictMath`'s fdlibm results bit-for-bit is its own project),
+    `new Math()` reports the unresolved TYPE rather than the private
+    constructor, and a blank final assigned once inside `while (true)` before
+    a `break` is still refused.
+  - Pinned by `diff_boxed_identity`, `diff_math_overloads`,
+    `diff_labels_and_conditional_operands` and six `reject_*` tests.
 - **What a nested class can see, and what it may not** (2026-07-31, round 8)
   — the local-scoping and field-hiding clusters, 18 of their 21 findings:
   - **`Outer.this` works from an anonymous OR a local class** (JLS §15.8.4).

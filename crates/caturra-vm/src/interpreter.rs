@@ -7339,6 +7339,13 @@ impl<'run> Interpreter<'run> {
                     self.stream_feed(ops, states, sink, i + 1, value)
                 }
             }
+            StreamOp::Box => {
+                let boxed = match value {
+                    JValue::Ref(_) => value,
+                    primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                };
+                self.stream_feed(ops, states, sink, i + 1, boxed)
+            }
             StreamOp::Distinct => {
                 // Take the seen set out so the borrow does not span the
                 // `java_equals` calls (which need `&mut self`).
@@ -7780,9 +7787,18 @@ impl<'run> Interpreter<'run> {
                     self.stream_with_op(receiver, StreamOp::Distinct),
                 ));
             }
-            // `boxed`/`asLongStream`/`asDoubleStream` are retypings — no
-            // element change, so the pipeline passes through unchanged.
-            ("boxed" | "asLongStream" | "asDoubleStream", []) => {
+            // `boxed()` turns a primitive pipeline into an OBJECT one, so each
+            // element really does become its wrapper — a collection stores
+            // boxed references at rest, and a raw `int` reaching one was a
+            // VerifyError at the next reference use.
+            ("boxed", []) => {
+                return Ok(Answered::Value(
+                    self.stream_with_op(receiver, StreamOp::Box),
+                ));
+            }
+            // `asLongStream`/`asDoubleStream` ARE retypings — no element
+            // change, so the pipeline passes through unchanged.
+            ("asLongStream" | "asDoubleStream", []) => {
                 let (source, ops) = self.stream_pipeline(receiver);
                 return Ok(Answered::Value(JValue::Ref(Some(
                     self.heap
@@ -10720,10 +10736,11 @@ impl<'run> Interpreter<'run> {
             JValue::Float(_) => "java/lang/Float",
             _ => "java/lang/Integer",
         };
-        self.heap.alloc(crate::value::HeapObject::Boxed {
-            class_name: Rc::from(class_name),
-            value,
-        })
+        // Through `box_wrapper`, so the JDK's small-value CACHE applies:
+        // `IntStream.of(1).boxed()` yields `Integer.valueOf(1)`, the very same
+        // object a literal `Integer y = 1` holds, and `x == y` is true.
+        // Allocating directly minted a fresh one and answered false.
+        self.heap.box_wrapper(class_name, value)
     }
 
     /// A stable merge sort, as `Collections.sort` is. It cannot use
