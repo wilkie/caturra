@@ -19601,3 +19601,207 @@ public class RejImpossibleInstanceof {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Local and anonymous class scoping (audit round 8): what a nested class can
+// see, and what it may not.
+// ---------------------------------------------------------------------------
+
+// `Outer.this` (JLS §15.8.4) reaches the enclosing instance from an anonymous
+// OR a local class, including through a shadowing field of the same name. The
+// capture pass did not recognize a qualified `this` as needing the outer link,
+// so every one of these was "non-static variable this cannot be referenced
+// from a static context".
+differential_test!(
+    diff_qualified_this_in_nested_classes,
+    "DiffQualifiedThis",
+    r#"
+interface Job { String run(); }
+
+public class DiffQualifiedThis {
+    private String tag = "outer";
+    int x = 1;
+
+    Job anonymous() {
+        return new Job() {
+            int x = 5;
+            public String run() {
+                return DiffQualifiedThis.this.tag + " " + x + " " + DiffQualifiedThis.this.x;
+            }
+        };
+    }
+
+    String local() {
+        class L {
+            String tag = "inner";
+            String read() { return tag + "/" + DiffQualifiedThis.this.tag; }
+        }
+        return new L().read();
+    }
+
+    String viaMethod() {
+        return new Job() {
+            public String run() { return DiffQualifiedThis.this.hi(); }
+        }.run();
+    }
+
+    String hi() { return tag + "!"; }
+
+    public static void main(String[] args) {
+        DiffQualifiedThis o = new DiffQualifiedThis();
+        System.out.println(o.anonymous().run());
+        System.out.println(o.local());
+        System.out.println(o.viaMethod());
+    }
+}
+"#
+);
+
+// A local class keeps its own constructors: the captured values are threaded
+// through a `this(...)` delegation (which used to match the constructor's own
+// new signature and recurse until the stack blew), an anonymous class can
+// extend a local one, and a local class in a nested block can extend a local
+// class from the enclosing block. `getSimpleName()` is the name the source
+// wrote, not caturra's hoisted `Name$LocalN`.
+differential_test!(
+    diff_local_class_shapes,
+    "DiffLocalClasses",
+    r#"
+public class DiffLocalClasses {
+    public static void main(String[] args) {
+        int n = 3;
+        class C {
+            int m;
+            C() { this(6); }
+            C(int m) { this.m = m; }
+            int v() { return m + n; }
+        }
+        System.out.println(new C().v());
+        System.out.println(new C(1).v());
+
+        class Base { String tag() { return "base"; } }
+        Base b = new Base() { String tag() { return "anon-of-local:" + super.tag(); } };
+        System.out.println(b.tag());
+
+        {
+            class D extends Base { String tag() { return super.tag() + "+d"; } }
+            System.out.println(new D().tag());
+            System.out.println(new D().getClass().getSimpleName());
+        }
+
+        class WithConstant { static final int F = 3; }
+        System.out.println(WithConstant.F);
+    }
+}
+"#
+);
+
+// A field initializer and an instance initializer block are NOT in the
+// constructor's scope, even though they run inside it (JLS §8.3.1): the
+// parameters are invisible, so the initializer reads the FIELD's default.
+differential_test!(
+    diff_initializer_scope,
+    "DiffInitScope",
+    r#"
+import java.util.*;
+
+class Holder {
+    private List<String> items = new ArrayList<>();
+    int size;
+    int copy;
+    { size = items.size(); copy = size + 1; System.out.println("block: size=" + size + " copy=" + copy); }
+
+    Holder(List<String> items) {
+        System.out.println("ctor: param=" + items.size() + " field=" + this.items.size());
+    }
+    Holder() { System.out.println("noarg: field=" + items.size()); }
+}
+
+public class DiffInitScope {
+    public static void main(String[] args) {
+        List<String> given = new ArrayList<>();
+        given.add("a");
+        new Holder(given);
+        new Holder();
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_duplicate_local_class,
+    "RejDuplicateLocal",
+    r"
+public class RejDuplicateLocal {
+    public static void main(String[] args) {
+        class C { int v() { return 1; } }
+        class C { int v() { return 2; } }
+        System.out.println(new C().v());
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_capturing_reassigned_foreach_variable,
+    "RejForEachCapture",
+    r#"
+public class RejForEachCapture {
+    public static void main(String[] args) {
+        for (String s : new String[]{"a", "b"}) {
+            s = s + "!";
+            class C { String v() { return s; } }
+            System.out.println(new C().v());
+        }
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_static_field_in_local_class,
+    "RejLocalStatic",
+    r"
+public class RejLocalStatic {
+    public static void main(String[] args) {
+        class C { static int f = 1; }
+        System.out.println(C.f);
+    }
+}
+"
+);
+
+differential_reject!(
+    reject_constructor_parameter_in_field_initializer,
+    "RejParamInInitializer",
+    r"
+class Zz {
+    int a = q;
+    Zz(int q) {}
+}
+
+public class RejParamInInitializer {
+    public static void main(String[] args) { System.out.println(new Zz(5).a); }
+}
+"
+);
+
+differential_reject!(
+    reject_private_superclass_field_by_simple_name,
+    "RejPrivateInherited",
+    r"
+class Hidden {
+    private int secret = 1;
+}
+
+class Seeker extends Hidden {
+    int read() { return secret; }
+}
+
+public class RejPrivateInherited {
+    public static void main(String[] args) {
+        System.out.println(new Seeker().read());
+    }
+}
+"
+);

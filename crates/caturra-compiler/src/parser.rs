@@ -1756,8 +1756,9 @@ impl Parser<'_> {
     fn block_body(&mut self) -> Vec<Stmt> {
         let mut statements = Vec::new();
         // Local classes declared in this block: (index in `statements` where
-        // the declaration sat, its source name, its mangled hoisted decl).
-        let mut locals: Vec<(usize, String, ClassDecl)> = Vec::new();
+        // the declaration sat, how many classes were already hoisted at that
+        // point, its source name, its mangled hoisted decl).
+        let mut locals: Vec<(usize, usize, String, ClassDecl)> = Vec::new();
         while !self.at_symbol("}") {
             if self.peek().is_none() {
                 self.error_here("expected '}' to close the block");
@@ -1768,7 +1769,22 @@ impl Parser<'_> {
             // references to it in the rest of this block are rewritten below.
             if self.at_local_class_start() {
                 match self.local_class_decl() {
-                    Ok((name, decl)) => locals.push((statements.len(), name, decl)),
+                    Ok((name, decl)) => {
+                        // Two local classes of one name in the same block are a
+                        // redeclaration (JLS §6.4): mangling them apart made
+                        // both compile, and the second silently won.
+                        if locals.iter().any(|(_, _, seen, _)| *seen == name) {
+                            self.error_at(
+                                decl.span,
+                                format!("class {name} is already defined in this block"),
+                            );
+                        }
+                        // Also record how many hoisted classes exist NOW: any
+                        // anonymous or nested-block local class parsed after
+                        // this point may name it, and those are already out of
+                        // `statements` by the time the rename below runs.
+                        locals.push((statements.len(), self.anon_classes.len(), name, decl));
+                    }
                     Err(Abort) => self.recover_to_statement_boundary(),
                 }
                 continue;
@@ -1790,13 +1806,25 @@ impl Parser<'_> {
         // the statements that follow it, in its own body (recursion), and in
         // any later local class's body — then hoist it to the top level.
         for k in 0..locals.len() {
-            let (at, name, mangled) = (locals[k].0, locals[k].1.clone(), locals[k].2.name.clone());
+            let (at, hoisted_from, name, mangled) = (
+                locals[k].0,
+                locals[k].1,
+                locals[k].2.clone(),
+                locals[k].3.name.clone(),
+            );
             rename_class_in_stmts(&mut statements[at..], &name, &mangled);
             for later in &mut locals[k..] {
-                rename_class_in_class(&mut later.2, &name, &mangled);
+                rename_class_in_class(&mut later.3, &name, &mangled);
+            }
+            // An ANONYMOUS class written after the declaration
+            // (`new Base() { … }`), and a local class in a nested block, are
+            // already hoisted out of `statements` — so rename in them too, or
+            // extending a local class is "cannot find symbol".
+            for hoisted in &mut self.anon_classes[hoisted_from..] {
+                rename_class_in_class(hoisted, &name, &mangled);
             }
         }
-        for (_, _, decl) in locals {
+        for (_, _, _, decl) in locals {
             self.anon_classes.push(decl);
         }
         statements
@@ -1833,6 +1861,34 @@ impl Parser<'_> {
             self.pos += 1;
         }
         let mut decl = self.type_after_modifiers(start, is_abstract, false, false)?;
+        // JLS §8.1.3: a local class is an inner class, so it may declare a
+        // `static` member only when that member is a CONSTANT VARIABLE —
+        // `static final int F = 3;` is fine, `static int f = 1;` is not, and
+        // neither is a static method. Both used to compile.
+        for field in &decl.fields {
+            if field.is_static && !(field.is_final && field.init.is_some()) {
+                self.error_at(
+                    field.span,
+                    format!(
+                        "Illegal static declaration in inner class {}: modifier 'static' is \
+                         only allowed in constant variable declarations",
+                        decl.name
+                    ),
+                );
+            }
+        }
+        for method in &decl.methods {
+            if method.is_static {
+                self.error_at(
+                    method.span,
+                    format!(
+                        "Illegal static declaration in inner class {}: modifier 'static' is \
+                         only allowed in constant variable declarations",
+                        decl.name
+                    ),
+                );
+            }
+        }
         let name = decl.name.clone();
         self.local_counter += 1;
         decl.name = format!("{name}$Local{}", self.local_counter);
@@ -5339,6 +5395,14 @@ fn rename_class_in_expr(expr: &mut Expr, from: &str, to: &str) {
                 rename_class_in_expr(a, from, to);
             }
         }
+        // A NAME PATH whose first segment is the class: `C.F` (a static
+        // constant) and `C.this`. Without this the mangled class was invisible
+        // to every qualified reference, so `C.F` was "cannot find symbol".
+        Expr::Name { path, .. } => {
+            if path.len() > 1 && path[0] == from {
+                to.clone_into(&mut path[0]);
+            }
+        }
         Expr::Binary { lhs, rhs, .. } => {
             rename_class_in_expr(lhs, from, to);
             rename_class_in_expr(rhs, from, to);
@@ -5389,7 +5453,7 @@ fn rename_class_in_expr(expr: &mut Expr, from: &str, to: &str) {
             }
             rename_class_in_expr(value, from, to);
         }
-        Expr::Literal { .. } | Expr::Name { .. } | Expr::This { .. } | Expr::Super { .. } => {}
+        Expr::Literal { .. } | Expr::This { .. } | Expr::Super { .. } => {}
     }
 }
 

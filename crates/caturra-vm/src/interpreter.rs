@@ -11325,6 +11325,13 @@ impl<'run> Interpreter<'run> {
                             };
                             return Ok(Some(JValue::Ref(Some(self.heap.alloc_string(&simple)))));
                         }
+                        // A LOCAL class is hoisted under `Name$LocalN`; its
+                        // simple name is what the source called it.
+                        let unmangled = name
+                            .split_once("$Local")
+                            .filter(|(_, suffix)| suffix.chars().all(|c| c.is_ascii_digit()))
+                            .map_or(name.as_str(), |(base, _)| base);
+                        let name = unmangled.to_owned();
                         let simple = if is_synthesized_anonymous(&name) {
                             ""
                         } else {

@@ -395,11 +395,21 @@ fn augment_local_ctors(class: &mut ClassDecl, caps: &[(String, TypeRef)]) {
     }
     for ctor in ctors {
         ctor.params.extend(cap_params.iter().cloned());
-        // `super(...)`/`this(...)` must stay first; the stores follow it.
-        let after = usize::from(matches!(
-            ctor.body.first(),
-            Some(Stmt::SuperCall { .. } | Stmt::ThisCall { .. })
-        ));
+        // A constructor that DELEGATES (`C() { this(6); }`) threads the
+        // captured values through to the one it calls, and does not store them
+        // itself — the delegate does. Without the extra arguments the
+        // delegation matched the constructor's OWN new signature and recursed
+        // until the stack blew.
+        if let Some(Stmt::ThisCall { args, span }) = ctor.body.first_mut() {
+            let span = *span;
+            args.extend(caps.iter().map(|(name, _)| Expr::Name {
+                path: vec![name.clone()],
+                span,
+            }));
+            continue;
+        }
+        // `super(...)` must stay first; the stores follow it.
+        let after = usize::from(matches!(ctor.body.first(), Some(Stmt::SuperCall { .. })));
         let mut rest = ctor.body.split_off(after);
         ctor.body.append(&mut stores());
         ctor.body.append(&mut rest);
@@ -1298,7 +1308,17 @@ fn mutations_in_stmt(stmt: &Stmt, out: &mut Mutations) {
             }
             mutations_in_stmt(body, out);
         }
-        Stmt::ForEach { iterable, body, .. } => {
+        Stmt::ForEach {
+            name,
+            iterable,
+            body,
+            ..
+        } => {
+            // The loop variable arrives INITIALIZED on every pass, exactly
+            // like a parameter, so an assignment to it costs it its effective
+            // finality and a class capturing it is a compile error. Without
+            // this the write looked like the variable's own initializer.
+            out.initialized.insert(name.clone());
             mutations_in_expr(iterable, out);
             mutations_in_stmt(body, out);
         }
@@ -1528,6 +1548,18 @@ fn expr_uses_outer(expr: &Expr, methods: &HashSet<String>, this_counts: bool) ->
     if this_counts && matches!(expr, Expr::This { .. }) {
         return true;
     }
+    // `Outer.this` (JLS §15.8.4) parses as a name path with `this` in it —
+    // `Outer.this.field` continues into `["Outer", "this", "field"]`, so the
+    // segment is not always last. It can only mean the enclosing instance, so
+    // the class needs the outer link
+    // whatever else it references. Missing this is why `Outer.this.field`
+    // inside an anonymous or local class was reported as a static context: the
+    // `__caturraOuter` chain the walk follows had never been built.
+    if let Expr::Name { path, .. } = expr
+        && path.iter().skip(1).any(|segment| segment == "this")
+    {
+        return true;
+    }
     if let Expr::Call {
         receiver: None,
         method,
@@ -1605,4 +1637,15 @@ fn class_needs_outer(
     body.methods
         .iter()
         .any(|m| stmts_use_outer_methods(&m.body, &reachable))
+        // A field initializer and an instance initializer block reach the
+        // enclosing instance exactly as a method body does.
+        || body
+            .fields
+            .iter()
+            .filter_map(|f| f.init.as_ref())
+            .any(|init| expr_uses_outer(init, &reachable, false))
+        || body
+            .init_blocks
+            .iter()
+            .any(|block| stmts_use_outer_methods(&block.body, &reachable))
 }

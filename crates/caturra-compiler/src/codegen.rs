@@ -5135,7 +5135,7 @@ fn emit_method(
                     span,
                 );
                 statements = body.emit_pre_init(decl, statements);
-                body.emit_instance_field_initializers(class_decl);
+                body.without_constructor_scope(|b| b.emit_instance_field_initializers(class_decl));
             } else {
                 let current = class_decl.name.clone();
                 body.emit_constructor_call_on_this(&current, args, span);
@@ -5155,7 +5155,7 @@ fn emit_method(
             });
             body.emit_constructor_call_on_this(super_name, &[], decl.span);
             statements = body.emit_pre_init(decl, statements);
-            body.emit_instance_field_initializers(class_decl);
+            body.without_constructor_scope(|b| b.emit_instance_field_initializers(class_decl));
         }
     }
 
@@ -11656,6 +11656,21 @@ impl BodyGen<'_> {
             // Implicit field of the current class.
             if let Some((owner, field)) = self.table.field(self.current_class, name) {
                 let field = field.clone();
+                // A PRIVATE field of an ancestor is not inherited (JLS §8.2):
+                // reading it by simple name from a subclass is an error, not a
+                // read of the hidden slot. The qualified `obj.f` path checked
+                // this; the bare-name path did not, so `secret` inside a
+                // subclass silently read the superclass's private field.
+                if field.is_private && !self.table.shares_top_level(owner, self.current_class_id) {
+                    self.error(
+                        span,
+                        format!(
+                            "{name} has private access in {}",
+                            self.table.class_name(owner)
+                        ),
+                    );
+                    return;
+                }
                 if self.ambiguous_field_reference(self.current_class_id, name, span) {
                     return;
                 }
@@ -12566,6 +12581,19 @@ impl BodyGen<'_> {
     }
 
     /// The instance-field initializers, in declaration order.
+    /// A field initializer and an instance initializer block are NOT in the
+    /// constructor's scope, even though they run inside it (JLS §8.3.1): a
+    /// constructor's parameters and locals are invisible to them. caturra
+    /// emitted them with the constructor's scope still open, so `int a = q;`
+    /// silently read the parameter `q` — and a field initializer naming a
+    /// parameter that does not exist in some OTHER constructor compiled too.
+    fn without_constructor_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        let hidden = std::mem::replace(&mut self.scopes, vec![Vec::new()]);
+        let result = body(self);
+        self.scopes = hidden;
+        result
+    }
+
     fn emit_instance_field_initializers(&mut self, class_decl: &ClassDecl) {
         // An inner class's `__caturraOuter` link must be set BEFORE the field
         // initializers, because a field initializer may read an enclosing
@@ -12616,11 +12644,29 @@ impl BodyGen<'_> {
         // Every field of this static-ness, by declaration order, for the
         // forward-reference check (a simple-name read of a field declared at
         // or after the one being initialized is illegal — JLS §8.3.3).
+        // A field a constructor's PRE-INIT prologue assigns (a captured local,
+        // an enum constant's name/ordinal) is definitely set before any
+        // initializer runs, so reading it is never a forward reference — and
+        // leaving it in would make `new Job() { int w = captured; }` report one.
+        let prologue_assigned: Vec<&str> = class_decl
+            .methods
+            .iter()
+            .filter(|method| method.is_constructor)
+            .flat_map(|method| method.body.iter().take(method.pre_init))
+            .filter_map(|stmt| match stmt {
+                Stmt::Assign {
+                    target: AssignTarget::Field { object, name },
+                    ..
+                } if matches!(**object, Expr::This { .. }) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
         let orders: std::rc::Rc<std::collections::HashMap<String, usize>> = std::rc::Rc::new(
             class_decl
                 .fields
                 .iter()
                 .filter(|f| f.is_static == is_static)
+                .filter(|f| !prologue_assigned.contains(&f.name.as_str()))
                 .map(|f| (f.name.clone(), f.order))
                 .collect(),
         );
@@ -20122,6 +20168,21 @@ impl BodyGen<'_> {
             // Implicit field of the current class.
             if let Some((owner, field)) = self.table.field(self.current_class, name) {
                 let field = field.clone();
+                // A PRIVATE field of an ancestor is not inherited (JLS §8.2):
+                // reading it by simple name from a subclass is an error, not a
+                // read of the hidden slot. The qualified `obj.f` path checked
+                // this; the bare-name path did not, so `secret` inside a
+                // subclass silently read the superclass's private field.
+                if field.is_private && !self.table.shares_top_level(owner, self.current_class_id) {
+                    self.error(
+                        span,
+                        format!(
+                            "{name} has private access in {}",
+                            self.table.class_name(owner)
+                        ),
+                    );
+                    return JType::Error;
+                }
                 if self.ambiguous_field_reference(self.current_class_id, name, span) {
                     return JType::Error;
                 }

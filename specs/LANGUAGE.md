@@ -441,6 +441,47 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **What a nested class can see, and what it may not** (2026-07-31, round 8)
+  — the local-scoping and field-hiding clusters, 18 of their 21 findings:
+  - **`Outer.this` works from an anonymous OR a local class** (JLS §15.8.4).
+    The capture pass did not recognize a qualified `this` as needing the
+    `__caturraOuter` link, so all four spellings were reported as a static
+    context. It parses as a NAME PATH containing `this`, and
+    `Outer.this.field` continues into `["Outer", "this", "field"]` — so the
+    segment is not always last, which is why matching only the end fixed the
+    method call and not the field read.
+  - **A local class threads its captures through a `this(...)` delegation.**
+    Without them the delegation matched the constructor's own newly-extended
+    signature and recursed until the stack blew.
+  - **An anonymous class can extend a local class, and a local class in a
+    nested block can extend one from the enclosing block.** Both were "cannot
+    find symbol": the renaming that hoists a local class covered the
+    statements of its own block, but those bodies had already been hoisted out
+    of it. A qualified reference (`C.F`) was invisible to the rename too.
+  - **A field initializer is NOT in the constructor's scope** (JLS §8.3.1),
+    though it runs inside it: `int a = q;` silently read the constructor's
+    parameter `q` instead of the field's default — and a field initializer
+    naming a parameter that exists in only ONE constructor compiled.
+  - **A private field of an ancestor is not inherited** (JLS §8.2): reading
+    one by simple name from a subclass is an error, which the qualified
+    `obj.f` path already checked and the bare-name path did not.
+  - **Three more programs javac refuses**: two local classes of one name in a
+    block; capturing a for-each variable that the body reassigns (the loop
+    variable arrives INITIALIZED on every pass, so a write costs it its
+    effective finality); and a `static` member of a local class that is not a
+    constant variable (JLS §8.1.3) — while `static final int F = 3;` now
+    compiles and is readable as `C.F`.
+  - `getSimpleName()` on a local class is the name the source wrote, not
+    caturra's hoisted `Name$LocalN`.
+  - **Three left open**, all about a local class's DECLARATION-POINT scope:
+    a local class may still reference a local declared after it (caturra
+    computes captures at the `new` site, not at the declaration), a local
+    class inside a `switch` case is refused (local classes are hoisted from
+    block bodies, and a switch arm is not one), and a local class nested
+    inside another cannot capture the outer method's locals.
+  - Pinned by `diff_qualified_this_in_nested_classes`,
+    `diff_local_class_shapes`, `diff_initializer_scope` and five `reject_*`
+    tests.
 - **The `Object` contract, on both sides** (2026-07-31, round 8) — the
   object-contract cluster:
   - **`getClass()` belongs to every reference** — a `String`, a collection, a
