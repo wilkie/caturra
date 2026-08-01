@@ -4020,10 +4020,34 @@ impl<'run> Interpreter<'run> {
                 let elements = self.array_elements(*elements).ok_or_else(|| {
                     VmError::UnknownIntrinsic(String::from("addAll needs an array"))
                 })?;
-                let changed = !elements.is_empty();
-                if let Some(slot) = self.heap.list_values_mut(reference) {
-                    slot.extend(elements);
-                }
+                let changed = if self.heap.list_values(reference).is_some() {
+                    let changed = !elements.is_empty();
+                    if let Some(slot) = self.heap.list_values_mut(reference) {
+                        slot.extend(elements);
+                    }
+                    changed
+                } else {
+                    // `addAll` is declared over `Collection<? super T>`, so the
+                    // receiver may be a Set, a Deque or a PriorityQueue. Each
+                    // element goes through the collection's OWN `add`, which
+                    // dedups a set and sifts a heap — and boxes it, as every
+                    // non-list collection stores its elements.
+                    let mut changed = false;
+                    for element in elements {
+                        let element = match element {
+                            JValue::Ref(_) => element,
+                            primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+                        };
+                        let answered = self.map_intrinsic(
+                            reference,
+                            "add",
+                            "(Ljava/lang/Object;)Z",
+                            &[element],
+                        )?;
+                        changed |= matches!(answered, Answered::Value(JValue::Int(1)));
+                    }
+                    changed
+                };
                 frame.stack.push(JValue::Int(i32::from(changed)));
             }
             // reverse/swap/shuffle are bundled Java, and mutate through
@@ -4289,6 +4313,16 @@ impl<'run> Interpreter<'run> {
                 *values = sorted;
             }
             return Ok(true);
+        }
+        // `Arrays.asList((String[]) null)` — the JDK's `Arrays$ArrayList`
+        // constructor is `Objects.requireNonNull(array)`, so this is a plain
+        // NPE. Falling through instead looked for an `asList` overload on the
+        // bundled `Arrays` class and aborted the whole run with "malformed
+        // class" when it found none.
+        if let ("asList", [JValue::Ref(None)]) = (method_name, args) {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
         }
         if let ("asList", [JValue::Ref(Some(elements))]) = (method_name, args) {
             let elements = *elements;

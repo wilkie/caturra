@@ -1021,6 +1021,7 @@ fn general_digits(value: f64, precision: usize) -> String {
 /// characters after the leading format-string parameter tag each
 /// argument (`I`, `D`, `C`, `Z`, or a string reference).
 pub fn args_from_descriptor(
+    heap: &Heap,
     descriptor: &str,
     values: &[JValue],
 ) -> Result<Vec<FormatArg>, VmError> {
@@ -1042,11 +1043,47 @@ pub fn args_from_descriptor(
                 }
                 tags.push('L');
             }
+            // A FORWARDED varargs array — `printf(fmt, parts)` inside a
+            // `void log(String fmt, Object... parts)`. Its ELEMENTS are the
+            // format arguments, so this one tag stands for all of them.
+            '[' => {
+                for inner_char in chars.by_ref() {
+                    if inner_char == ';' {
+                        break;
+                    }
+                }
+                tags.push('[');
+            }
             _ => {}
         }
     }
     let mut args = Vec::with_capacity(tags.len());
     for (tag, value) in tags.iter().zip(values) {
+        if *tag == '[' {
+            let elements = match value {
+                JValue::Ref(Some(array)) => match heap.get(*array) {
+                    Some(HeapObject::RefArray(_, elements)) => elements.clone(),
+                    _ => {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.lang.VerifyError: malformed format call",
+                        )));
+                    }
+                },
+                // `format(fmt, (Object[]) null)`: the JDK reads the null array
+                // as a single null argument.
+                _ => vec![JValue::NULL],
+            };
+            for element in elements {
+                args.push(match element {
+                    JValue::Ref(reference) => FormatArg::Str(reference),
+                    JValue::Int(v) => FormatArg::Int(v),
+                    JValue::Long(v) => FormatArg::Long(v),
+                    JValue::Double(v) => FormatArg::Double(v),
+                    JValue::Float(v) => FormatArg::Float(v),
+                });
+            }
+            continue;
+        }
         args.push(match (tag, value) {
             ('I', JValue::Int(v)) => FormatArg::Int(*v),
             ('C', JValue::Int(v)) => FormatArg::Char(u16::try_from(*v).unwrap_or(0)),

@@ -525,7 +525,7 @@ pub fn invoke_virtual(
                 }
                 _ => String::new(),
             };
-            let format_args = crate::format::args_from_descriptor(descriptor, &args[1..])?;
+            let format_args = crate::format::args_from_descriptor(heap, descriptor, &args[1..])?;
             // The JDK's Formatter writes to its destination as it goes, so a
             // specifier that throws leaves everything before it PRINTED —
             // `printf("a%dz%s", 5)` shows "a5z" and then throws.
@@ -3712,7 +3712,7 @@ fn writer_method(
                 }
                 _ => String::new(),
             };
-            let format_args = crate::format::args_from_descriptor(descriptor, &args[1..])?;
+            let format_args = crate::format::args_from_descriptor(heap, descriptor, &args[1..])?;
             let text = crate::format::java_format(heap, &template, &format_args)?;
             vfs.append_file(&path, text.as_bytes())
                 .map_err(|e| throw(format!("java.io.IOException: {e}")))?;
@@ -6061,7 +6061,7 @@ fn string_static(
             }
             _ => String::new(),
         };
-        let format_args = crate::format::args_from_descriptor(descriptor, &args[1..])?;
+        let format_args = crate::format::args_from_descriptor(heap, descriptor, &args[1..])?;
         let text = crate::format::java_format(heap, &template, &format_args)?;
         let reference = heap.alloc_string(&text);
         return Ok(Some(JValue::Ref(Some(reference))));

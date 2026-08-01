@@ -247,8 +247,20 @@ struct MethodShape {
     name: String,
     is_static: bool,
     arity: usize,
+    /// Declared with a trailing `T...`. A varargs method applies at EVERY
+    /// arity from `arity - 1` upward (JLS §15.12.2.4), so a reference to one
+    /// fits a functional interface of any matching shape — checking `arity`
+    /// alone rejected `Q::pack` for a two-argument SAM.
+    is_varargs: bool,
     /// The checked exceptions the method declares, as written.
     throws: Vec<String>,
+}
+
+impl MethodShape {
+    /// Whether the method can be called with exactly `count` arguments.
+    fn takes(&self, count: usize) -> bool {
+        self.arity == count || (self.is_varargs && count + 1 >= self.arity)
+    }
 }
 
 /// Every class's declared methods, for the JLS §15.13.1 checks a method
@@ -267,6 +279,7 @@ fn method_shapes(units: &[(String, CompilationUnit)]) -> HashMap<String, Vec<Met
                     name: method.name.clone(),
                     is_static: method.is_static,
                     arity: method.params.len(),
+                    is_varargs: method.params.last().is_some_and(|p| p.is_varargs),
                     throws: method.throws.clone(),
                 });
             }
@@ -1211,11 +1224,11 @@ fn validate_method_ref(expr: &Expr, sam: &Sam, ctx: &mut Ctx) {
         // takes the receiver FIRST, so it fits one argument fewer.
         let statics: Vec<&&MethodShape> = named
             .iter()
-            .filter(|m| m.is_static && m.arity == arity)
+            .filter(|m| m.is_static && m.takes(arity))
             .collect();
         let unbound: Vec<&&MethodShape> = named
             .iter()
-            .filter(|m| !m.is_static && arity > 0 && m.arity == arity - 1)
+            .filter(|m| !m.is_static && arity > 0 && m.takes(arity - 1))
             .collect();
         if !statics.is_empty() && !unbound.is_empty() {
             ctx.diags.push(crate::diagnostics::Diagnostic::error(
@@ -1259,7 +1272,7 @@ fn validate_method_ref(expr: &Expr, sam: &Sam, ctx: &mut Ctx) {
         ));
         return;
     }
-    let chosen = named.iter().find(|m| !m.is_static && m.arity == arity);
+    let chosen = named.iter().find(|m| !m.is_static && m.takes(arity));
     check_thrown(chosen.copied(), ctx, *span);
 }
 

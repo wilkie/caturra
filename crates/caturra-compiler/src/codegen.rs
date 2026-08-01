@@ -2327,9 +2327,9 @@ impl MethodTable {
                         .iter()
                         .copied()
                         .filter(|m| {
-                            varargs_applicable
-                                .iter()
-                                .all(|other| self.varargs_at_least_as_specific(m, other))
+                            varargs_applicable.iter().all(|other| {
+                                self.varargs_at_least_as_specific(m, other, args.len())
+                            })
                         })
                         .collect();
                     if most_specific.len() == 1 {
@@ -2376,31 +2376,25 @@ impl MethodTable {
         }
     }
 
-    /// Whether varargs method `m` is at least as specific as `other`
-    /// (JLS §15.12.2.5): each fixed parameter widens to the other's, and `m`'s
-    /// varargs ELEMENT widens to `other`'s — with `Object...` treated as the
-    /// least specific, so any element beats it.
-    fn varargs_at_least_as_specific(&self, m: &MethodSig, other: &MethodSig) -> bool {
-        if m.params.len() != other.params.len() {
-            return false;
-        }
-        let last = m.params.len() - 1;
-        for (index, (mp, op)) in m.params.iter().zip(&other.params).enumerate() {
-            let ok = if index == last {
-                match (mp.element_type(), op.element_type()) {
-                    (Some(me), Some(oe)) => {
-                        widens(me, oe, self) || oe == JType::Object(self.object_id)
-                    }
-                    _ => mp == op,
-                }
-            } else {
-                widens(*mp, *op, self)
-            };
-            if !ok {
-                return false;
+    /// Whether varargs method `m` is at least as specific as `other` for a call
+    /// of `arity` arguments (JLS §15.12.2.5). A method's type at an argument
+    /// position is its declared parameter inside the fixed prefix and its
+    /// varargs ELEMENT at or beyond it — which is what lets two methods of
+    /// DIFFERENT arity be compared, so `s(String, Object...)` beats
+    /// `s(Object...)` instead of being reported ambiguous against it.
+    ///
+    /// Specificity is SUBTYPING, not method-invocation conversion: `int` is not
+    /// a subtype of `Object`, so `b(int...)` and `b(Object...)` really are
+    /// ambiguous for `b(1, 2)` — javac says so, and caturra used to silently
+    /// pick the primitive one.
+    fn varargs_at_least_as_specific(&self, m: &MethodSig, other: &MethodSig, arity: usize) -> bool {
+        let positions = m.params.len().max(other.params.len()).max(arity);
+        (0..positions).all(|index| {
+            match (varargs_param_at(m, index), varargs_param_at(other, index)) {
+                (Some(mine), Some(theirs)) => subtypes(mine, theirs, self),
+                _ => false,
             }
-        }
-        true
+        })
     }
 
     /// Whether a varargs method accepts `args` in spread or array form:
@@ -3022,6 +3016,15 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
     }
 }
 
+/// The element of any `Collection` face, including a `Stack` — what a method
+/// declared over `Collection<E>` accepts.
+fn any_collection_elem(ty: JType) -> Option<ElemType> {
+    match ty {
+        JType::Stack(elem) => Some(elem),
+        other => collection_element_type(other),
+    }
+}
+
 /// The element type of any single-element collection type (a `List`, `Set`,
 /// `TreeSet`, `Collection`, or `LinkedList`/`Queue`/`Deque`), for a constructor
 /// that copies one.
@@ -3109,6 +3112,26 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
 /// beats one that needs a boxing conversion, which is why `m(Integer)` wins
 /// for an `Integer` argument even though `m(int)` would also accept it, and
 /// why `f(long)` wins over `f(Integer)` for an `int`.
+/// JLS §4.10 subtyping, which is what method SPECIFICITY compares (§15.12.2.5)
+/// — unlike applicability, which also allows boxing. A widening primitive
+/// conversion is a subtype relation; a boxing one is not, so `int` is not a
+/// subtype of `Object` and `b(int...)`/`b(Object...)` are genuinely ambiguous
+/// for `b(1, 2)`.
+fn subtypes(from: JType, to: JType, table: &MethodTable) -> bool {
+    from.is_reference() == to.is_reference() && widens(from, to, table)
+}
+
+/// The type a varargs method accepts at argument position `index`: its declared
+/// parameter while inside the fixed prefix, its varargs ELEMENT at or beyond it.
+fn varargs_param_at(m: &MethodSig, index: usize) -> Option<JType> {
+    let last = m.params.len().checked_sub(1)?;
+    if index < last {
+        m.params.get(index).copied()
+    } else {
+        m.params[last].element_type()
+    }
+}
+
 fn widens_strictly(from: JType, to: JType, table: &MethodTable) -> bool {
     // These are exactly the boxing/unboxing arms of `widens`; identical types
     // still pass, since that is not a conversion at all.
@@ -14913,6 +14936,7 @@ impl BodyGen<'_> {
         object_ty
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per formattable type
     fn emit_format_varargs(&mut self, args: &[Expr], span: SourceSpan) -> Option<(String, u16)> {
         let [template, rest @ ..] = args else {
             self.error(span, "format needs a format string");
@@ -14930,6 +14954,17 @@ impl BodyGen<'_> {
         }
         let mut tags = String::new();
         let mut width: u16 = 1;
+        // A lone REFERENCE-array argument IS the varargs array, forwarded
+        // (`void log(String fmt, Object... parts) { printf(fmt, parts); }`).
+        // Its elements are the format arguments; the VM spreads them, which
+        // it can only know from the descriptor.
+        if let [single] = rest
+            && let JType::Array { elem, dims } = self.type_of(single)
+            && (dims >= 2 || elem.base_type().is_reference())
+        {
+            self.expr(single);
+            return Some((String::from("[Ljava/lang/Object;"), width + 1));
+        }
         for arg in rest {
             let ty = self.expr(arg);
             // A boxed primitive passes through AS THE REFERENCE: the
@@ -16774,11 +16809,7 @@ impl BodyGen<'_> {
                 return None;
             };
             let collection_ty = self.expr(collection);
-            let elem = match collection_ty {
-                JType::Stack(elem) => Some(elem),
-                other => collection_element_type(other),
-            };
-            let Some(elem) = elem else {
+            let Some(elem) = any_collection_elem(collection_ty) else {
                 self.error(
                     collection.span(),
                     String::from("Collections.unmodifiableCollection takes a Collection"),
@@ -16795,6 +16826,34 @@ impl BodyGen<'_> {
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             self.code.drop_stack(1);
             return Some(Some(JType::Collection(elem)));
+        }
+        // `Collections.addAll(Collection<? super T> c, T... elements)` takes
+        // ANY collection — caturra required a `List` and refused a `Set`
+        // outright, though a set is the commonest receiver for it.
+        if method == "addAll"
+            && let Some(collection) = args.first()
+            && let Some(elem) = any_collection_elem(self.type_of(collection))
+            && !matches!(self.type_of(collection), JType::List(_))
+        {
+            self.expr(collection);
+            let elements = JType::Array { elem, dims: 1 };
+            // A lone `T[]` already IS the varargs array, for a reference `T`.
+            if let [single] = &args[1..]
+                && elem.base_type().is_reference()
+                && self.type_of(single) == elements
+            {
+                self.expr(single);
+            } else {
+                self.emit_array_literal(&args[1..], elements, span);
+            }
+            let descriptor = format!(
+                "(Ljava/util/Collection;{})Z",
+                elements.descriptor(self.table)
+            );
+            let method_ref = intern_method_ref(self.pool, "Collections", "addAll", &descriptor);
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(2);
+            return Some(Some(JType::Boolean));
         }
         // `unmodifiableSet(set)` / `unmodifiableMap(map)` — an immutable view of
         // the argument, keeping its own set/map type.
@@ -17384,10 +17443,31 @@ impl BodyGen<'_> {
         // into its wrapper (`Arrays.asList(1, 2)` is a `List<Integer>` of
         // boxed references — collections store boxed at rest).
         let elem = if let [single] = args {
-            if let JType::Array { elem, dims: 1 } = self.type_of(single) {
-                // The lone array argument *is* the varargs array.
+            // A lone REFERENCE array *is* the varargs array (`T` infers as the
+            // element type). A PRIMITIVE one is not: `T` cannot be `int`, so it
+            // infers as `int[]` and the call is a ONE-element `List<int[]>` —
+            // the most famous varargs gotcha, and caturra used to spread it and
+            // answer 3 where a JDK answers 1.
+            let lone_array = match self.type_of(single) {
+                JType::Array { elem, dims: 1 } if elem.base_type().is_reference() => Some(elem),
+                _ => None,
+            };
+            if let Some(elem) = lone_array {
                 self.expr(single);
                 elem
+            } else if let array @ JType::Array { .. } = self.type_of(single) {
+                self.emit_array_literal(
+                    args,
+                    JType::Array {
+                        elem: object_elem,
+                        dims: 1,
+                    },
+                    span,
+                );
+                ElemType::Nested {
+                    inner: self.table.intern_nested(array),
+                    read: self.table.object_id,
+                }
             } else {
                 let scalar = collection_elem_of(self.type_of(single)).unwrap_or(object_elem);
                 self.emit_array_literal(

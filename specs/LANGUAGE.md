@@ -441,6 +441,37 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **Varargs: the lone array, the forwarded one, and which overload wins**
+  (2026-07-31, round 8) — the varargs-deep cluster:
+  - **A lone REFERENCE array IS the varargs array; a PRIMITIVE one is not.**
+    `T` cannot be `int`, so it infers as `int[]` and `Arrays.asList(int[])`
+    is a ONE-element `List<int[]>` — the most famous varargs gotcha, which
+    caturra spread, answering 3 where a JDK answers 1. `Arrays.asList((String[])
+    null)` used to abort the whole run with an internal "malformed class
+    Arrays" instead of throwing the JDK's plain NullPointerException.
+  - **`Collections.addAll` takes any `Collection`**, not only a `List` —
+    a `Set` receiver, its commonest use, was refused outright. Each element
+    now goes through the collection's own `add`, which dedups a set and sifts
+    a heap.
+  - **A varargs parameter can be FORWARDED**: `printf(fmt, parts)` inside a
+    `void log(String fmt, Object... parts)` passes the array, whose elements
+    are the format arguments. caturra reported "cannot format Object[]"; the
+    descriptor now carries a `[` tag and the VM spreads it, with a null array
+    reading as one null argument as the JDK does.
+  - **A method reference to a varargs method fits ANY arity**, not only its
+    declared one (JLS §15.12.2.4): `Q::pack` for a two-argument functional
+    interface was "unexpected static method pack(1 args)".
+  - **Variable-arity SPECIFICITY** (JLS §15.12.2.5) now compares each
+    method's declared parameter inside its fixed prefix and its varargs
+    ELEMENT beyond it, so overloads of DIFFERENT arity are comparable and
+    `s(String, Object...)` beats `s(Object...)` rather than clashing with it.
+    And specificity is SUBTYPING, not method-invocation conversion: `int` is
+    not a subtype of `Object`, so `b(int...)` and `b(Object...)` really are
+    ambiguous for `b(1, 2)` — caturra had an "`Object...` always loses"
+    shortcut that silently picked the primitive one.
+  - Pinned by `diff_varargs_array_arguments`, `diff_varargs_forwarding`,
+    `diff_varargs_specificity_across_arities` and
+    `reject_ambiguous_primitive_and_reference_varargs`.
 - **What runs before what, when an object is built** (2026-07-31, round 8) —
   the instance-init-order cluster: four wrong answers at run time, and eight
   programs javac refuses that caturra ran:

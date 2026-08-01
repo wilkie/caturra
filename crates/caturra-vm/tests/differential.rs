@@ -19144,3 +19144,128 @@ public class RejInitRecursiveCtor {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Varargs (audit round 8): what a lone array argument means, forwarding one,
+// and which of several variable-arity overloads wins.
+// ---------------------------------------------------------------------------
+
+// The most famous varargs gotcha: a lone REFERENCE array IS the varargs array,
+// but a PRIMITIVE one is not — `T` cannot be `int`, so it infers as `int[]` and
+// `Arrays.asList(int[])` is a ONE-element `List<int[]>`. Plus a null array
+// (NullPointerException, not an aborted run) and `Collections.addAll` over the
+// collections other than `List`.
+differential_test!(
+    diff_varargs_array_arguments,
+    "DiffVarargsArrays",
+    r#"
+import java.util.*;
+
+public class DiffVarargsArrays {
+    public static void main(String[] args) {
+        String[] refs = {"a", "b", "c"};
+        System.out.println(Arrays.asList(refs) + " " + Arrays.asList(refs).size());
+
+        int[] prims = {1, 2, 3};
+        List<int[]> wrapped = Arrays.asList(prims);
+        System.out.println(wrapped.size() + " " + (wrapped.get(0) == prims) + " " + wrapped.get(0)[2]);
+
+        double[] ds = {1.5, 2.5};
+        System.out.println(Arrays.asList(ds).size());
+
+        Integer[] boxed = {1, 2, 3};
+        System.out.println(Arrays.asList(boxed).size());
+
+        String[] missing = null;
+        try { Arrays.asList(missing); } catch (NullPointerException e) { System.out.println("NPE"); }
+
+        Set<String> set = new HashSet<>();
+        System.out.println(Collections.addAll(set, "a", "b", "a") + " " + set.size());
+        TreeSet<Integer> sorted = new TreeSet<>();
+        System.out.println(Collections.addAll(sorted, 3, 1, 2) + " " + sorted);
+        Deque<String> deque = new ArrayDeque<>();
+        Collections.addAll(deque, "p", "q");
+        System.out.println(deque + " " + Collections.addAll(set));
+    }
+}
+"#
+);
+
+// Forwarding a varargs parameter: `printf(fmt, parts)` inside a
+// `void log(String fmt, Object... parts)` passes the ARRAY, whose elements are
+// the format arguments. And a method reference to a varargs method fits a
+// functional interface of ANY arity, not only the declared one.
+differential_test!(
+    diff_varargs_forwarding,
+    "DiffVarargsForward",
+    r#"
+import java.util.*;
+
+interface Take3 { String of(String a, String b, String c); }
+interface Take0 { String of(); }
+
+public class DiffVarargsForward {
+    static void log(String fmt, Object... parts) { System.out.printf(fmt, parts); }
+    static String render(String fmt, Object... parts) { return String.format(fmt, parts); }
+    static String pack(String... parts) { return parts.length + Arrays.toString(parts); }
+
+    public static void main(String[] args) {
+        log("%s=%d%n", "n", 3);
+        log("none%n");
+        System.out.print(render("%s/%s%n", "a", "b"));
+        Object[] direct = {"z", 9};
+        System.out.printf("%s-%d%n", direct);
+        System.out.printf("%b%n", (Object[]) null);
+
+        Take3 three = DiffVarargsForward::pack;
+        System.out.println(three.of("a", "b", "c"));
+        Take0 none = DiffVarargsForward::pack;
+        System.out.println(none.of());
+    }
+}
+"#
+);
+
+// Which variable-arity overload wins (JLS §15.12.2.5). Specificity compares
+// each method's declared parameter inside its fixed prefix and its varargs
+// ELEMENT beyond it, so overloads of DIFFERENT arity are comparable and
+// `s(String, Object...)` beats `s(Object...)`.
+differential_test!(
+    diff_varargs_specificity_across_arities,
+    "DiffVarargsSpecific",
+    r#"
+public class DiffVarargsSpecific {
+    static String f(Integer... a) { return "I" + a.length; }
+    static String f(Object... a) { return "O" + a.length; }
+    static String g(String x, Object... a) { return "G" + a.length; }
+    static String g(Object... a) { return "H" + a.length; }
+    static String h(String x, String y, Object... a) { return "2" + a.length; }
+    static String h(String x, Object... a) { return "1" + a.length; }
+
+    public static void main(String[] args) {
+        System.out.println(f(1, 2));
+        System.out.println(g("a", "b"));
+        System.out.println(g(1, 2));
+        System.out.println(h("a", "b", "c"));
+        System.out.println(h("a", 1));
+    }
+}
+"#
+);
+
+// Specificity is SUBTYPING, not method-invocation conversion: `int` is not a
+// subtype of `Object`, so neither variable-arity method is more specific and
+// javac calls the call ambiguous. caturra silently preferred the primitive one.
+differential_reject!(
+    reject_ambiguous_primitive_and_reference_varargs,
+    "RejVarargsAmbiguous",
+    r#"
+public class RejVarargsAmbiguous {
+    static String b(int... x) { return "iv" + x.length; }
+    static String b(Object... x) { return "ov" + x.length; }
+    public static void main(String[] args) {
+        System.out.println(b(1, 2));
+    }
+}
+"#
+);
