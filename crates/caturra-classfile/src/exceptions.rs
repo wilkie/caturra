@@ -49,6 +49,13 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/lang/reflect/InvocationTargetException",
         "java/lang/ReflectiveOperationException",
     ),
+    // `Object.clone()` throws this when the class does not implement the
+    // `Cloneable` marker — a CHECKED exception, which is why the copy idiom
+    // has to declare or catch it.
+    (
+        "java/lang/CloneNotSupportedException",
+        "java/lang/Exception",
+    ),
     // Linkage errors are Errors, not Exceptions: `catch (Exception)` must not
     // take a VerifyError, but `catch (Throwable)` must.
     ("java/lang/LinkageError", "java/lang/Error"),

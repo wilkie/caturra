@@ -567,10 +567,28 @@ impl MethodTable {
                         is_varargs: false,
                         ret_infer: None,
                     },
+                    // NOT flagged `is_final` here: the dedicated check for
+                    // Object's four final methods reports all of them alike
+                    // (`notify`/`wait` are not in this table at all), and
+                    // marking it would report `getClass` twice.
                     MethodSig {
                         name: String::from("getClass"),
                         params: Vec::new(),
                         ret: Some(JType::Class),
+                        is_static: false,
+                        is_private: false,
+                        is_final: false,
+                        is_abstract: false,
+                        is_varargs: false,
+                        ret_infer: None,
+                    },
+                    // `protected Object clone() throws CloneNotSupportedException`
+                    // — reachable as `this.clone()` inside the class itself,
+                    // where the field-by-field copy idiom writes it.
+                    MethodSig {
+                        name: String::from("clone"),
+                        params: Vec::new(),
+                        ret: Some(JType::Object(object_id)),
                         is_static: false,
                         is_private: false,
                         is_final: false,
@@ -643,7 +661,14 @@ impl MethodTable {
         // `implements AutoCloseable` resolve (and, being an interface, a variable
         // of the type widen). `Closeable` IS-A `AutoCloseable`, but caturra does
         // not need the inheritance edge for either to work here.
-        for (offset, name) in ["AutoCloseable", "Closeable"].into_iter().enumerate() {
+        // `Cloneable` is a MARKER interface — no methods at all. Its only job
+        // is to make `implements Cloneable` compile and to be visible at run
+        // time, where `Object.clone()` consults it: without the marker, the
+        // JDK's `clone` throws `CloneNotSupportedException`.
+        for (offset, name) in ["AutoCloseable", "Closeable", "Cloneable"]
+            .into_iter()
+            .enumerate()
+        {
             let id = ClassId(2 + u16::try_from(offset).unwrap_or(0));
             table.class_names.push(String::from(name));
             table.classes.insert(
@@ -660,17 +685,21 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 0,
                     supertype_args: Vec::new(),
-                    methods: vec![MethodSig {
-                        name: String::from("close"),
-                        params: Vec::new(),
-                        ret: None,
-                        is_static: false,
-                        is_private: false,
-                        is_final: false,
-                        is_abstract: true,
-                        is_varargs: false,
-                        ret_infer: None,
-                    }],
+                    methods: if name == "Cloneable" {
+                        Vec::new()
+                    } else {
+                        vec![MethodSig {
+                            name: String::from("close"),
+                            params: Vec::new(),
+                            ret: None,
+                            is_static: false,
+                            is_private: false,
+                            is_final: false,
+                            is_abstract: true,
+                            is_varargs: false,
+                            ret_infer: None,
+                        }]
+                    },
                     fields: Vec::new(),
                 },
             );
@@ -1290,6 +1319,31 @@ impl MethodTable {
                     }
                     exempt
                 };
+                // JLS §8.4.3.3: `Object`'s `getClass`/`notify`/`notifyAll`/
+                // `wait` are FINAL, so no class may declare one. They are not
+                // in the table's `Object` (caturra models only the overridable
+                // four), so the general final-override check above never saw
+                // them and a class could shadow `getClass()` outright.
+                for method in &class.methods {
+                    if method.is_constructor || method.is_static {
+                        continue;
+                    }
+                    let final_in_object = matches!(
+                        (method.name.as_str(), method.params.len()),
+                        ("getClass" | "notify" | "notifyAll", 0) | ("wait", 0..=2)
+                    );
+                    if final_in_object {
+                        diagnostics.push(Diagnostic::error(
+                            path,
+                            format!(
+                                "{}() in {} cannot override {}() in java.lang.Object: \
+                                 overridden method is final",
+                                method.name, class.name, method.name,
+                            ),
+                            method.span,
+                        ));
+                    }
+                }
                 for method in &class.methods {
                     if library_parented
                         || method.is_constructor
@@ -1415,12 +1469,21 @@ impl MethodTable {
     /// overrides — with erasure-tolerant parameters (an ancestor `Object` or
     /// type-variable parameter accepts anything, as the erasure bridge does).
     fn overrides_something(&self, class: ClassId, name: &str, params: &[JType]) -> bool {
-        let compatible = |sup_params: &[JType]| {
+        let compatible = |owner: ClassId, sup_params: &[JType]| {
+            // The match is erasure-TOLERANT — an ancestor's `Object` parameter
+            // stands for an erased type variable, so `compare(Card, Card)`
+            // implements `__Comparator.compare(Object, Object)`. But
+            // `java.lang.Object`'s OWN parameters are genuinely `Object`, and
+            // tolerating those made `@Override boolean equals(Bad o)` — the
+            // classic bug `@Override` exists to catch — compile, and then hide
+            // the real `equals` at run time.
+            let erasure_tolerant = owner != self.object_id;
             sup_params.len() == params.len()
                 && sup_params.iter().zip(params).all(|(sup, sub)| {
                     sup == sub
                         || *sup == JType::TypeVar
-                        || matches!(sup, JType::Object(id) if *id == self.object_id)
+                        || (erasure_tolerant
+                            && matches!(sup, JType::Object(id) if *id == self.object_id))
                 })
         };
         let mut stack: Vec<ClassId> = Vec::new();
@@ -1439,11 +1502,9 @@ impl MethodTable {
             let Some(info) = self.info_by_id(id) else {
                 continue;
             };
-            if info
-                .methods
-                .iter()
-                .any(|m| m.name == name && !m.is_static && !m.is_private && compatible(&m.params))
-            {
+            if info.methods.iter().any(|m| {
+                m.name == name && !m.is_static && !m.is_private && compatible(id, &m.params)
+            }) {
                 return true;
             }
             stack.extend(info.superclass);
@@ -5149,6 +5210,9 @@ fn emit_method(
 /// mirroring `boxed_instance_call` for `type_of`.
 fn boxed_method_return(method: &str) -> Option<JType> {
     Some(match method {
+        // Every reference has `getClass()`, a wrapper included — without it
+        // `i.getClass() == Integer.class` was "bad operand types".
+        "getClass" => JType::Class,
         "intValue" | "hashCode" | "compareTo" => JType::Int,
         "shortValue" => JType::Short,
         "byteValue" => JType::Byte,
@@ -5614,6 +5678,7 @@ const Z: BParam = BParam::Boolean;
 const S: BParam = BParam::Str;
 
 const STRING_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     BuiltinMethod {
         name: "length",
         params: &[],
@@ -6169,6 +6234,7 @@ const PATH_METHODS: &[BuiltinMethod] = &[
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm(
@@ -6332,6 +6398,7 @@ const LIST_METHODS: &[BuiltinMethod] = &[
 /// the five LIFO operations. `push`/`pop`/`peek` act on the top (the end);
 /// `empty` mirrors `isEmpty`; `search` is a 1-based distance from the top.
 const STACK_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm(
@@ -6468,6 +6535,7 @@ const STACK_METHODS: &[BuiltinMethod] = &[
 /// `poll`/`peek` return the boxed element so their empty-collection `null` is
 /// representable; `remove()`/`element()` throw on empty instead.
 const QUEUE_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
@@ -6531,6 +6599,7 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 /// `java.util.Deque<E>` — everything a `Queue` has, plus the two-ended and
 /// stack (`push`/`pop`) operations.
 const DEQUE_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
@@ -6625,6 +6694,7 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
@@ -6762,6 +6832,7 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
 /// the element to `Object` (its output type is not tracked); `collect` returns
 /// a `null`-typed result that adopts the assignment context, like a diamond.
 const STREAM_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "filter",
         &[BParam::Predicate],
@@ -6901,6 +6972,7 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
 /// interfaces serve). `sum`/`toArray` are the numeric terminals `Stream` lacks;
 /// `average`/`min`/`max` return `Optional…`, which caturra does not model.
 const INTSTREAM_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm(
         "filter",
         &[BParam::Predicate],
@@ -7046,6 +7118,7 @@ const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
 /// `StringBuilder`. The VM dispatches on the actual heap object, so these
 /// resolve against whichever the reference holds.
 const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("length", &[], BRet::Int, "()I"),
     bm("charAt", &[I], BRet::Char, "(I)C"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -7058,6 +7131,7 @@ const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
 ];
 
 const ITERATOR_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     // `forEachRemaining(Consumer)` — the JDK 8 default that drains the cursor.
     bm(
@@ -7078,6 +7152,7 @@ const ITERATOR_METHODS: &[BuiltinMethod] = &[
 /// return the boxed element (like `Iterator.next`), so a `List<Integer>` hands
 /// back an `Integer` either way.
 const LIST_ITERATOR_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     bm(
         "forEachRemaining",
@@ -7096,6 +7171,7 @@ const LIST_ITERATOR_METHODS: &[BuiltinMethod] = &[
 ];
 
 const OPTIONAL_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("isPresent", &[], BRet::Boolean, "()Z"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
     bm("get", &[], BRet::Elem, "()Ljava/lang/Object;"),
@@ -7347,6 +7423,7 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
 ];
 
 const EXCEPTION_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `e.getClass()` — every object has it, and a validator reporting which
     // exception it caught needs it.
     BuiltinMethod {
@@ -8042,6 +8119,9 @@ const BOOLEAN_METHODS: &[BuiltinMethod] = &[
 
 /// `java.lang.Class` reflection methods (structural, read-only).
 const CLASS_METHODS: &[BuiltinMethod] = &[
+    // `Class` overrides `toString` as `"class " + getName()` (or
+    // `"interface " + …`), which `println(someClass)` reaches.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getSimpleName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("isArray", &[], BRet::Boolean, "()Z"),
@@ -8279,6 +8359,7 @@ const METHOD_METHODS: &[BuiltinMethod] = &[
 /// `java.lang.StringBuilder` methods (`append` returns the builder for
 /// chaining; the VM stores UTF-16 units).
 const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `equals` is Object identity (StringBuilder does NOT override it) — the
     // classic trap where two builders with equal contents are not equal.
     bm(
@@ -8501,6 +8582,7 @@ const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
 /// in the descriptors, as javac erases them; the compiler autoboxes at the
 /// boundary so that a missing key can hand back a real `null`.
 const MAP_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("size", &[], BRet::Int, "()I"),
     // `forEach(BiConsumer)`: the VM walks the entries in iteration order and
     // calls the lambda class's `accept` on each.
@@ -8630,6 +8712,7 @@ const MAP_METHODS: &[BuiltinMethod] = &[
 /// an empty map; the `floorKey`/`ceilingKey`/`lowerKey`/`higherKey` return the
 /// boxed key so an absent result is `null`. Keys iterate in sorted order.
 const TREEMAP_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("size", &[], BRet::Int, "()I"),
     bm(
         "forEach",
@@ -8777,6 +8860,7 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
 /// `values()` views. `__get` is caturra's own indexed accessor, standing in
 /// for the iterator the enhanced-for loop would otherwise need.
 const VIEW_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
@@ -8868,6 +8952,7 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
 /// `remove`/`clear`, exactly as Java's does. `__get` (the enhanced-for
 /// accessor) is synthesized by `for_each`, not listed here.
 const SET_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
@@ -8942,6 +9027,7 @@ const SET_METHODS: &[BuiltinMethod] = &[
 /// empty set; the `floor`/`ceiling`/`lower`/`higher` and `pollFirst`/`pollLast`
 /// return the boxed element so an absent/empty result is `null`.
 const TREESET_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
@@ -9041,6 +9127,7 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
 
 /// `Set<Map.Entry<K, V>>` — a map's `entrySet()` view.
 const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // The element of an `entrySet().stream()` is a whole `Map.Entry`.
     bm(
         "stream",
@@ -9107,6 +9194,7 @@ const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.Map.Entry<K, V>` — a live view onto one mapping.
 const ENTRY_METHODS: &[BuiltinMethod] = &[
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("getKey", &[], BRet::Key, "()Ljava/lang/Object;"),
     bm("getValue", &[], BRet::Val, "()Ljava/lang/Object;"),
     bm(
@@ -19182,6 +19270,7 @@ impl BodyGen<'_> {
     }
 
     /// `value instanceof Type` (reference types only).
+    #[allow(clippy::too_many_lines)] // one arm per testable type shape
     fn instance_of(&mut self, value: &Expr, ty: &TypeRef, span: SourceSpan) -> JType {
         // `o instanceof List<String>` is illegal (JLS §15.20.2): erasure leaves
         // nothing to test at runtime, so javac refuses the type argument rather
@@ -19287,6 +19376,23 @@ impl BodyGen<'_> {
                 format!(
                     "unexpected type: {} cannot be tested with instanceof",
                     value_ty.describe(self.table)
+                ),
+            );
+            return JType::Error;
+        }
+        // JLS §15.20.2: the test must be POSSIBLE — a cast from the operand's
+        // type to the target has to be legal. Two unrelated FINAL types can
+        // never be one another, so `"x" instanceof Integer` is a compile error,
+        // not an answer of `false`. Only the closed kinds are judged: a user
+        // class may be related through a subclass this pass cannot see.
+        let closed = |ty: JType| matches!(ty, JType::Str | JType::Boxed(_));
+        if closed(value_ty) && closed(target) && value_ty != target {
+            self.error(
+                span,
+                format!(
+                    "incompatible types: {} cannot be converted to {}",
+                    value_ty.describe(self.table),
+                    target.describe(self.table)
                 ),
             );
             return JType::Error;

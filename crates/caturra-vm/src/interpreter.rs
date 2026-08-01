@@ -3073,6 +3073,23 @@ impl<'run> Interpreter<'run> {
             // return opcodes when the pushed frame pops.
             return Ok(Some(self.make_frame(target, ctor, locals)?));
         }
+        // `super.hashCode()` / `super.toString()` / `super.equals(o)` from a
+        // class that overrides one of them: the target is `java.lang.Object`,
+        // which has no class file here, so the call used to abort the run with
+        // "unknown native member". These ARE the Object defaults, and
+        // `user_virtual_dispatch` already knows them — reached with the
+        // receiver's own class so `toString`'s hash is the object's.
+        if target_class == "java/lang/Object"
+            && matches!(method_name, "hashCode" | "toString" | "equals")
+            && let Some(crate::value::HeapObject::Instance { class_name, .. }) =
+                self.heap.get(receiver)
+        {
+            let class_name = class_name.clone();
+            let value = self.object_default(receiver, &class_name, method_name, &args);
+            self.recycle_vec(args);
+            frame.stack.push(value);
+            return Ok(None);
+        }
         intrinsics::invoke_special(
             &mut self.heap,
             self.vfs,
@@ -3083,6 +3100,61 @@ impl<'run> Interpreter<'run> {
             &args,
         )?;
         Ok(None)
+    }
+
+    /// `Object`'s own `hashCode`/`toString`/`equals` for an instance, whatever
+    /// the class overrides — what a `super.hashCode()` means.
+    /// Whether this class (or an ancestor) declares `interface_name` among its
+    /// implemented interfaces — how `Object.clone()` asks about `Cloneable`.
+    fn class_implements(&self, class_name: &str, interface_name: &str) -> bool {
+        let mut current = Some(class_name.to_owned());
+        let mut steps = 0usize;
+        while let Some(name) = current {
+            steps += 1;
+            if steps > self.classes.len() + 1 {
+                return false;
+            }
+            let Some(class) = self.classes.get(&name) else {
+                return false;
+            };
+            if class.interfaces.iter().any(|index| {
+                class
+                    .constant_pool
+                    .get_class_name(*index)
+                    .is_some_and(|iface| simple_class_name(iface) == interface_name)
+            }) {
+                return true;
+            }
+            current = class
+                .constant_pool
+                .get_class_name(class.super_class)
+                .map(str::to_owned);
+        }
+        false
+    }
+
+    fn object_default(
+        &mut self,
+        receiver: HeapRef,
+        class_name: &str,
+        method_name: &str,
+        args: &[JValue],
+    ) -> JValue {
+        match method_name {
+            "hashCode" => JValue::Int(i32::from_ne_bytes(receiver.to_ne_bytes())),
+            "equals" => JValue::Int(i32::from(
+                matches!(args.first(), Some(JValue::Ref(Some(r))) if *r == receiver),
+            )),
+            _ => {
+                let hash = i32::from_ne_bytes(receiver.to_ne_bytes());
+                let text = format!(
+                    "{}@{:x}",
+                    class_name.replace('/', "."),
+                    hash.cast_unsigned()
+                );
+                JValue::Ref(Some(self.heap.alloc_string(&text)))
+            }
+        }
     }
 
     /// Begin a user class's static initialization on first use
@@ -8773,11 +8845,39 @@ impl<'run> Interpreter<'run> {
                 ));
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(array)))));
             }
-            // Object.toString() default: getName() + "@" + hex — the binary
-            // name is DOTTED (`java.lang.Object@...`, not `java/lang/Object`).
+            // Object.toString() default: getName() + "@" +
+            // Integer.toHexString(hashCode()) — the binary name is DOTTED, and
+            // the hash is the object's OWN, so a class that overrides
+            // `hashCode` and not `toString` prints the overridden value.
+            // Using the identity hash here made `f.toString()` disagree with
+            // the very expression the JDK documents it as.
             if method_name == "toString" && descriptor == "()Ljava/lang/String;" {
-                let text = format!("{}@{receiver:x}", instance_class.replace('/', "."));
+                let hash = self.java_hash_code(JValue::Ref(Some(receiver)))?;
+                let text = format!(
+                    "{}@{:x}",
+                    instance_class.replace('/', "."),
+                    hash.cast_unsigned()
+                );
                 let reference = self.heap.alloc_string(&text);
+                return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
+            }
+            // Object.clone(): a field-by-field copy, but ONLY for a class that
+            // implements `Cloneable` — the marker interface exists precisely so
+            // that everything else gets a CloneNotSupportedException, named
+            // after the class that asked.
+            if method_name == "clone" && descriptor == "()Ljava/lang/Object;" {
+                if !self.class_implements(instance_class, "Cloneable") {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.CloneNotSupportedException: {}",
+                        instance_class.replace('/', ".")
+                    )));
+                }
+                let Some(copy) = self.heap.get(receiver).cloned() else {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                };
+                let reference = self.heap.alloc(copy);
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
             }
             // Object.getClass(): a reflection `Class` handle.
@@ -11284,8 +11384,13 @@ impl<'run> Interpreter<'run> {
                         });
                         match super_name {
                             Some(super_name) => {
-                                let simple = simple_class_name(&super_name).to_owned();
-                                let reference = self.intern_class(simple);
+                                // The FULL internal name, not the simple one:
+                                // `Object.class` is interned as
+                                // `java/lang/Object`, so shortening it here
+                                // minted a SECOND class object named "Object"
+                                // — `getSuperclass() == Object.class` was
+                                // false and `getName()` said "Object".
+                                let reference = self.intern_class(super_name);
                                 Ok(Some(JValue::Ref(Some(reference))))
                             }
                             // `Object` (or an unloaded root) has no super.

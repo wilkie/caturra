@@ -441,6 +441,41 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **The `Object` contract, on both sides** (2026-07-31, round 8) — the
+  object-contract cluster:
+  - **`getClass()` belongs to every reference** — a `String`, a collection, a
+    `StringBuilder`, a boxed wrapper — and was missing from all of them.
+  - **A `Class` handle is INTERNED, so identity is meaningful**, and
+    `getSuperclass()` interned the SIMPLE name: that minted a second class
+    object called "Object", so `getSuperclass() == Object.class` was false and
+    `getName()` answered "Object" rather than `java.lang.Object`.
+    `Class.toString()` (`class java.lang.Object`) was missing too.
+  - **`Object.toString()` uses the object's OWN hash**: it is
+    `getName() + "@" + Integer.toHexString(hashCode())`, so a class that
+    overrides `hashCode` and not `toString` prints the overridden value.
+    caturra used the identity hash, which made `f.toString()` disagree with
+    the very expression the JDK documents it as.
+  - **`super.hashCode()`/`super.toString()`/`super.equals(o)` reach `Object`'s
+    own**, where they used to abort the run with "unknown native member" —
+    `java.lang.Object` has no class file here, so the call found nothing.
+  - **`Cloneable` exists, and `Object.clone()` consults it**: a class that
+    implements the marker gets a field-by-field copy, and one that does not
+    gets the checked `CloneNotSupportedException` named after itself.
+  - **Three programs javac refuses** now stop here too: declaring one of
+    `Object`'s FINAL methods (`getClass`/`notify`/`notifyAll`/`wait`, JLS
+    §8.4.3.3); `@Override` on an `equals(SubType)` overload — the classic bug
+    the annotation exists to catch, which caturra's erasure-tolerant matcher
+    let through because `Object.equals`'s parameter really IS `Object` (the
+    tolerance is for erased type VARIABLES, so it now stops at `Object`
+    itself); and an `instanceof` between two unrelated FINAL types, which can
+    never be true (JLS §15.20.2) and so is an error rather than a `false`.
+  - **One gap left open**: a nested class's `getClass().getName()` is `Inner`,
+    not `Outer$Inner`. caturra hoists nested classes to flat top-level names,
+    so the enclosing prefix is gone by the time the VM sees one; restoring it
+    means renaming them at the hoist, which reaches the class table,
+    diagnostics and stack traces alike. Recorded since round 6.
+  - Pinned by `diff_object_class_handles`, `diff_object_defaults`,
+    `diff_object_clone` and three `reject_*` tests.
 - **A stream is a TYPE and a value, not only a chained expression**
   (2026-07-31, round 8) — the stream-deep cluster, 23 findings and the round's
   largest structural gap:

@@ -19442,3 +19442,162 @@ public class DiffStreamRules {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// The Object contract (audit round 8): what every reference inherits, and the
+// rules `Object`'s own methods impose on a class that touches them.
+// ---------------------------------------------------------------------------
+
+// `getClass()` belongs to every reference — a `String`, a collection, a boxed
+// wrapper — and the `Class` it answers is INTERNED, so `getSuperclass()` is
+// `Object.class` itself and `Class.toString()` reads `class java.lang.Object`.
+differential_test!(
+    diff_object_class_handles,
+    "DiffObjectClass",
+    r#"
+import java.util.*;
+
+class Plain {}
+
+public class DiffObjectClass {
+    public static void main(String[] args) {
+        System.out.println("hi".getClass().getName());
+        System.out.println(new ArrayList<String>().getClass().getName());
+        System.out.println(new StringBuilder().getClass().getName());
+        Integer boxed = 5;
+        System.out.println(boxed.getClass() == Integer.class);
+        System.out.println(boxed.getClass().getName());
+
+        Class<?> c = new Plain().getClass();
+        System.out.println(c.getSuperclass().getName());
+        System.out.println(c.getSuperclass() == Object.class);
+        System.out.println(c.getSuperclass().equals(Object.class));
+        System.out.println(Object.class.toString());
+        System.out.println(String.class);
+        System.out.println(c.getSuperclass().getSuperclass());
+    }
+}
+"#
+);
+
+// `Object`'s defaults, reached from a class that overrides one of them:
+// `toString()` is `getName() + "@" + Integer.toHexString(hashCode())` with the
+// object's OWN hash, and `super.hashCode()`/`super.toString()`/`super.equals()`
+// reach Object's — which used to abort the run outright.
+differential_test!(
+    diff_object_defaults,
+    "DiffObjectDefaults",
+    r#"
+class FixedHash {
+    @Override public int hashCode() { return 255; }
+}
+
+class ViaSuper {
+    @Override public int hashCode() { return super.hashCode(); }
+    @Override public boolean equals(Object o) { return super.equals(o); }
+    String parentToString() { return super.toString(); }
+}
+
+public class DiffObjectDefaults {
+    public static void main(String[] args) {
+        FixedHash f = new FixedHash();
+        System.out.println(f.hashCode());
+        System.out.println(f.toString().equals("FixedHash@ff"));
+        System.out.println(f.toString().equals(
+            f.getClass().getName() + "@" + Integer.toHexString(f.hashCode())));
+
+        ViaSuper v = new ViaSuper();
+        System.out.println(v.hashCode() == v.hashCode());
+        System.out.println(v.equals(v));
+        System.out.println(v.equals(new ViaSuper()));
+        System.out.println(v.parentToString().equals(v.toString()));
+    }
+}
+"#
+);
+
+// `Cloneable` is a marker interface, and `Object.clone()` consults it: a class
+// that implements it gets a field-by-field copy, and one that does not gets a
+// `CloneNotSupportedException` named after itself.
+differential_test!(
+    diff_object_clone,
+    "DiffObjectClone",
+    r#"
+class Copyable implements Cloneable {
+    int x = 5;
+    String name = "c";
+    Object copy() throws CloneNotSupportedException { return this.clone(); }
+}
+
+class NotCopyable {
+    int x = 7;
+    Object copy() throws CloneNotSupportedException { return this.clone(); }
+}
+
+public class DiffObjectClone {
+    public static void main(String[] args) throws Exception {
+        Copyable original = new Copyable();
+        Copyable copy = (Copyable) original.copy();
+        System.out.println(copy.x + " " + copy.name + " " + (copy == original));
+        copy.x = 9;
+        System.out.println(original.x + " " + copy.x);
+
+        try {
+            new NotCopyable().copy();
+            System.out.println("cloned");
+        } catch (CloneNotSupportedException e) {
+            System.out.println(e.getMessage() + " / " + e.getClass().getName());
+        }
+    }
+}
+"#
+);
+
+// `Object`'s four FINAL methods may not be declared by any class (JLS §8.4.3.3).
+differential_reject!(
+    reject_overriding_final_object_method,
+    "RejFinalObjectMethod",
+    r"
+public class RejFinalObjectMethod {
+    static class Bad {
+        public final Class<?> getClass() { return null; }
+    }
+    public static void main(String[] args) {
+        System.out.println(new Bad().getClass());
+    }
+}
+"
+);
+
+// `@Override equals(SubType)` overrides nothing — the classic bug the
+// annotation exists to catch, which caturra's erasure-tolerant matcher let
+// through because `Object.equals`'s parameter really is `Object`.
+differential_reject!(
+    reject_override_annotation_on_equals_overload,
+    "RejEqualsOverload",
+    r"
+public class RejEqualsOverload {
+    static class Bad {
+        @Override public boolean equals(Bad o) { return true; }
+    }
+    public static void main(String[] args) {
+        System.out.println(new Bad().equals(new Bad()));
+    }
+}
+"
+);
+
+// JLS §15.20.2: `instanceof` between two unrelated FINAL types can never be
+// true, so it is a compile error rather than an answer of `false`.
+differential_reject!(
+    reject_impossible_instanceof,
+    "RejImpossibleInstanceof",
+    r#"
+public class RejImpossibleInstanceof {
+    public static void main(String[] args) {
+        String s = "x";
+        System.out.println(s instanceof Integer);
+    }
+}
+"#
+);
