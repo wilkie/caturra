@@ -1844,6 +1844,12 @@ impl MethodTable {
                         Some(JType::Reader)
                     }
                     "Path" => Some(JType::Path),
+                    // The primitive-specialized pipeline names a type too, so
+                    // one can be held in a variable rather than only chained.
+                    "IntStream" if !self.has_class(simple) => Some(JType::IntStream),
+                    "IntSummaryStatistics" if !self.has_class(simple) => {
+                        Some(JType::IntSummaryStats)
+                    }
                     "OptionalInt" if !self.has_class(simple) => Some(JType::OptionalInt),
                     "OptionalDouble" if !self.has_class(simple) => Some(JType::OptionalDouble),
                     "Class" => Some(JType::Class),
@@ -1933,6 +1939,11 @@ impl MethodTable {
                     }
                 } else if simple == "Optional" && args.len() == 1 && !self.has_class(simple) {
                     elem_from_type_arg(&args[0], self).map(JType::Optional)
+                } else if simple == "Stream" && args.len() == 1 && !self.has_class(simple) {
+                    // `Stream<T>` names a pipeline, so one can be held in a
+                    // variable, a field, or a parameter — before this a stream
+                    // existed only as a chained expression.
+                    elem_from_type_arg(&args[0], self).map(JType::Stream)
                 } else if matches!(
                     simple,
                     "LinkedList" | "ArrayDeque" | "Queue" | "Deque" | "PriorityQueue"
@@ -3016,6 +3027,34 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
     }
 }
 
+/// A `DoubleStream`/`LongStream` shares the `IntStream` method table, so its
+/// numeric terminals carry `int` descriptors. Substitute the receiver's own
+/// width, since the descriptor is what tells the VM whether `sum()` adds ints
+/// or doubles and whether `toArray()` builds an `int[]` or a `double[]`.
+fn prim_stream_descriptor(
+    receiver: JType,
+    descriptor: &'static str,
+) -> std::borrow::Cow<'static, str> {
+    let letter = match receiver {
+        JType::DoubleStream => 'D',
+        JType::LongStream => 'J',
+        _ => return std::borrow::Cow::Borrowed(descriptor),
+    };
+    std::borrow::Cow::Owned(descriptor.replace('I', &letter.to_string()))
+}
+
+/// The element a `collection.stream()` yields: the collection's own element,
+/// or a whole `Map.Entry` for an `entrySet()`.
+fn stream_element_of(ty: JType, table: &MethodTable) -> Option<ElemType> {
+    if let JType::EntrySet { key, value } = ty {
+        return Some(ElemType::Nested {
+            inner: table.intern_nested(JType::MapEntry { key, value }),
+            read: table.object_id,
+        });
+    }
+    TypeArgs::of(ty).first
+}
+
 /// The element of any `Collection` face, including a `Stack` — what a method
 /// declared over `Collection<E>` accepts.
 fn any_collection_elem(ty: JType) -> Option<ElemType> {
@@ -3660,6 +3699,15 @@ enum JType {
     /// models it as a `Stream` of unboxed ints). Adds numeric terminals
     /// (`sum`/`toArray`) the object `Stream` lacks.
     IntStream,
+    /// `java.util.IntSummaryStatistics` — the count/sum/min/max/average an
+    /// `IntStream.summaryStatistics()` gathers in one pass.
+    IntSummaryStats,
+    /// `java.util.stream.DoubleStream` / `LongStream` — the same pipeline over
+    /// unboxed `double`s / `long`s. Only the numeric terminals differ
+    /// (`sum()` is a `double` / a `long`), so they share `IntStream`'s surface
+    /// with those returns substituted.
+    DoubleStream,
+    LongStream,
     /// `java.lang.CharSequence` — the read-only text interface `String` and
     /// `StringBuilder` both implement. A variable of the type holds either;
     /// the VM dispatches `length`/`charAt` on the actual heap object.
@@ -3816,6 +3864,9 @@ impl JType {
             JType::Stream(elem) => format!("Stream<{}>", elem.base_type().describe(table)),
             JType::Collector => String::from("Collector"),
             JType::IntStream => String::from("IntStream"),
+            JType::IntSummaryStats => String::from("IntSummaryStatistics"),
+            JType::DoubleStream => String::from("DoubleStream"),
+            JType::LongStream => String::from("LongStream"),
             JType::Iterator(elem) => format!("Iterator<{}>", elem.base_type().describe(table)),
             JType::ListIterator(elem) => {
                 format!("ListIterator<{}>", elem.base_type().describe(table))
@@ -3997,6 +4048,9 @@ impl JType {
             JType::CharSequence => String::from("Ljava/lang/CharSequence;"),
             JType::Collector => String::from("Ljava/util/stream/Collector;"),
             JType::IntStream => String::from("Ljava/util/stream/IntStream;"),
+            JType::IntSummaryStats => String::from("Ljava/util/IntSummaryStatistics;"),
+            JType::DoubleStream => String::from("Ljava/util/stream/DoubleStream;"),
+            JType::LongStream => String::from("Ljava/util/stream/LongStream;"),
             JType::Iterator(_) | JType::ListIterator(_) | JType::EntryIterator { .. } => {
                 String::from("Ljava/util/Iterator;")
             }
@@ -5428,14 +5482,26 @@ enum BRet {
     EntryIterator,
     /// `Map.Entry<K, V>` of the receiver's key/value (`entryIterator.next()`).
     Entry,
+    /// `Stream<Map.Entry<K, V>>` — what `entrySet().stream()` yields.
+    EntryStream,
+    /// `IntSummaryStatistics` — `IntStream.summaryStatistics()`.
+    IntSummaryStats,
+    /// `DoubleStream` / `LongStream` — primitive pipelines that share the
+    /// `IntStream` surface here; only their numeric terminals differ.
+    DoubleStream,
+    LongStream,
     /// `Stream<Object>` — an op (`map`) whose element type is erased.
     StreamErased,
     /// `IntStream` (`mapToInt`, and the `IntStream` intermediate ops).
     IntStream,
     /// `Stream<String>` — `String.lines()`.
     StreamString,
-    /// `Stream<Integer>` — `IntStream.boxed()`.
-    StreamInteger,
+    /// An array of the receiver's element (`IntStream.toArray()` is `int[]`,
+    /// a `DoubleStream`'s is `double[]`).
+    ElemArray,
+    /// `Stream<E>` of the receiver's element BOXED — `IntStream.boxed()` is a
+    /// `Stream<Integer>`, a `DoubleStream`'s a `Stream<Double>`.
+    StreamBoxedElem,
     /// `int[]` — `IntStream.toArray()`.
     IntArray,
     /// `double[]` — the samples of a preloaded sound.
@@ -6103,6 +6169,7 @@ const PATH_METHODS: &[BuiltinMethod] = &[
 ];
 
 const LIST_METHODS: &[BuiltinMethod] = &[
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm(
         "listIterator",
@@ -6265,6 +6332,7 @@ const LIST_METHODS: &[BuiltinMethod] = &[
 /// the five LIFO operations. `push`/`pop`/`peek` act on the top (the end);
 /// `empty` mirrors `isEmpty`; `search` is a 1-based distance from the top.
 const STACK_METHODS: &[BuiltinMethod] = &[
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm(
         "push",
@@ -6400,6 +6468,7 @@ const STACK_METHODS: &[BuiltinMethod] = &[
 /// `poll`/`peek` return the boxed element so their empty-collection `null` is
 /// representable; `remove()`/`element()` throw on empty instead.
 const QUEUE_METHODS: &[BuiltinMethod] = &[
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -6462,6 +6531,7 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 /// `java.util.Deque<E>` — everything a `Queue` has, plus the two-ended and
 /// stack (`push`/`pop`) operations.
 const DEQUE_METHODS: &[BuiltinMethod] = &[
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -6555,6 +6625,7 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
@@ -6709,6 +6780,43 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
         BRet::IntStream,
         "(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;",
     ),
+    // The VM stores stream elements unboxed, so a `double`/`long` pipeline is
+    // the same machinery as an int one; only the numeric terminals differ,
+    // which the descriptor tells the VM.
+    bm(
+        "mapToDouble",
+        &[BParam::UnaryOperator],
+        BRet::DoubleStream,
+        "(Ljava/util/function/ToDoubleFunction;)Ljava/util/stream/DoubleStream;",
+    ),
+    bm(
+        "mapToLong",
+        &[BParam::UnaryOperator],
+        BRet::LongStream,
+        "(Ljava/util/function/ToLongFunction;)Ljava/util/stream/LongStream;",
+    ),
+    // `flatMap(f)` — each element's own stream is spliced into this one.
+    bm(
+        "flatMap",
+        &[BParam::UnaryOperator],
+        BRet::StreamErased,
+        "(Ljava/util/function/Function;)Ljava/util/stream/Stream;",
+    ),
+    // `reduce(identity, accumulator)` folds to a value of the identity's type;
+    // the one-argument form answers an `Optional`.
+    bm(
+        "reduce",
+        &[BParam::Elem, BParam::BiFunction],
+        BRet::Elem,
+        "(Ljava/lang/Object;Ljava/util/function/BinaryOperator;)Ljava/lang/Object;",
+    ),
+    bm(
+        "reduce",
+        &[BParam::BiFunction],
+        BRet::Optional,
+        "(Ljava/util/function/BinaryOperator;)Ljava/util/Optional;",
+    ),
+    bm("toArray", &[], BRet::ObjectArray, "()[Ljava/lang/Object;"),
     bm("sorted", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm(
         "sorted",
@@ -6814,7 +6922,7 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm(
         "boxed",
         &[],
-        BRet::StreamInteger,
+        BRet::StreamBoxedElem,
         "()Ljava/util/stream/Stream;",
     ),
     bm(
@@ -6847,11 +6955,24 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/util/function/IntConsumer;)V",
     ),
-    bm("sum", &[], BRet::Int, "()I"),
+    // Element-driven: a `DoubleStream`'s `sum()` is a `double`.
+    bm("sum", &[], BRet::Elem, "()I"),
     bm("count", &[], BRet::Long, "()J"),
-    bm("toArray", &[], BRet::IntArray, "()[I"),
+    bm("toArray", &[], BRet::ElemArray, "()[I"),
+    bm(
+        "reduce",
+        &[BParam::Elem, BParam::BiFunction],
+        BRet::Elem,
+        "(ILjava/util/function/IntBinaryOperator;)I",
+    ),
     bm("max", &[], BRet::OptionalInt, "()Ljava/util/OptionalInt;"),
     bm("min", &[], BRet::OptionalInt, "()Ljava/util/OptionalInt;"),
+    bm(
+        "summaryStatistics",
+        &[],
+        BRet::IntSummaryStats,
+        "()Ljava/util/IntSummaryStatistics;",
+    ),
     bm(
         "average",
         &[],
@@ -8747,6 +8868,7 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
 /// `remove`/`clear`, exactly as Java's does. `__get` (the enhanced-for
 /// accessor) is synthesized by `for_each`, not listed here.
 const SET_METHODS: &[BuiltinMethod] = &[
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
@@ -8820,6 +8942,7 @@ const SET_METHODS: &[BuiltinMethod] = &[
 /// empty set; the `floor`/`ceiling`/`lower`/`higher` and `pollFirst`/`pollLast`
 /// return the boxed element so an absent/empty result is `null`.
 const TREESET_METHODS: &[BuiltinMethod] = &[
+    bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
     bm("size", &[], BRet::Int, "()I"),
     bm("isEmpty", &[], BRet::Boolean, "()Z"),
@@ -8918,6 +9041,13 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
 
 /// `Set<Map.Entry<K, V>>` — a map's `entrySet()` view.
 const ENTRY_SET_METHODS: &[BuiltinMethod] = &[
+    // The element of an `entrySet().stream()` is a whole `Map.Entry`.
+    bm(
+        "stream",
+        &[],
+        BRet::EntryStream,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm(
         "iterator",
         &[],
@@ -9049,6 +9179,11 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Stack(_) => Some(("java/util/Stack", STACK_METHODS)),
         JType::Stream(_) => Some(("java/util/stream/Stream", STREAM_METHODS)),
         JType::IntStream => Some(("java/util/stream/IntStream", INTSTREAM_METHODS)),
+        // A double/long pipeline shares the int surface; only the numeric
+        // terminals differ, and `bret_type` substitutes those per receiver.
+        JType::IntSummaryStats => Some(("java/util/IntSummaryStatistics", SUMMARY_STATS_METHODS)),
+        JType::DoubleStream => Some(("java/util/stream/DoubleStream", INTSTREAM_METHODS)),
+        JType::LongStream => Some(("java/util/stream/LongStream", INTSTREAM_METHODS)),
         JType::Iterator(_) => Some(("java/util/Iterator", ITERATOR_METHODS)),
         JType::EntryIterator { .. } => Some(("java/util/Iterator", ENTRY_ITERATOR_METHODS)),
         JType::Optional(_) => Some(("java/util/Optional", OPTIONAL_METHODS)),
@@ -9081,6 +9216,17 @@ const CLASS_STATIC_METHODS: &[BuiltinMethod] = &[bm(
 
 /// `java.util.stream.Collectors` factories — each returns a `Collector` the VM
 /// recognizes in `Stream.collect`.
+/// `java.util.IntSummaryStatistics` — the read-only summary an
+/// `IntStream.summaryStatistics()` answers in one pass.
+const SUMMARY_STATS_METHODS: &[BuiltinMethod] = &[
+    bm("getCount", &[], BRet::Long, "()J"),
+    bm("getSum", &[], BRet::Long, "()J"),
+    bm("getMin", &[], BRet::Int, "()I"),
+    bm("getMax", &[], BRet::Int, "()I"),
+    bm("getAverage", &[], BRet::Double, "()D"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+];
+
 const COLLECTORS_METHODS: &[BuiltinMethod] = &[
     bm(
         "toList",
@@ -9123,6 +9269,84 @@ const COLLECTORS_METHODS: &[BuiltinMethod] = &[
         &[BParam::Str, BParam::Str, BParam::Str],
         BRet::Collector,
         "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "counting",
+        &[],
+        BRet::Collector,
+        "()Ljava/util/stream/Collector;",
+    ),
+    // Each of these takes a function or a predicate, which the lambda pass has
+    // already erased to a bundled interface by the time it is resolved.
+    bm(
+        "groupingBy",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/Function;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "groupingBy",
+        &[BParam::UnaryOperator, BParam::Collector],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/stream/Collector;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "partitioningBy",
+        &[BParam::Predicate],
+        BRet::Collector,
+        "(Ljava/util/function/Predicate;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "toMap",
+        &[BParam::UnaryOperator, BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "toMap",
+        &[
+            BParam::UnaryOperator,
+            BParam::UnaryOperator,
+            BParam::BiFunction,
+        ],
+        BRet::Collector,
+        "(Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "summingInt",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToIntFunction;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "summingLong",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToLongFunction;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "summingDouble",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToDoubleFunction;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "averagingInt",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToIntFunction;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "averagingLong",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToLongFunction;)Ljava/util/stream/Collector;",
+    ),
+    bm(
+        "averagingDouble",
+        &[BParam::UnaryOperator],
+        BRet::Collector,
+        "(Ljava/util/function/ToDoubleFunction;)Ljava/util/stream/Collector;",
     ),
 ];
 
@@ -9196,6 +9420,10 @@ fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinM
         "Collectors" => Some(("java/util/stream/Collectors", COLLECTORS_METHODS)),
         "Comparator" => Some(("java/util/Comparator", COMPARATOR_STATIC_METHODS)),
         "IntStream" => Some(("java/util/stream/IntStream", INTSTREAM_STATIC_METHODS)),
+        // `Stream`'s statics are all variadic or array-taking, so none fits a
+        // fixed table; the entry exists so the NAME resolves as a static-call
+        // target, and `emit_stream_source` answers each one.
+        "Stream" => Some(("java/util/stream/Stream", &[])),
         "Class" => Some(("java/lang/Class", CLASS_STATIC_METHODS)),
         "Integer" => Some(("java/lang/Integer", INTEGER_METHODS)),
         "Double" => Some(("java/lang/Double", DOUBLE_METHODS)),
@@ -9298,9 +9526,18 @@ impl TypeArgs {
                 first: Some(elem),
                 second: None,
             },
-            // An IntStream's element is a primitive `int`.
+            // A primitive pipeline's element is that primitive, which is what
+            // gives `sum()`/`toArray()` their width.
             JType::IntStream => Self {
                 first: Some(ElemType::Int),
+                second: None,
+            },
+            JType::DoubleStream => Self {
+                first: Some(ElemType::Double),
+                second: None,
+            },
+            JType::LongStream => Self {
+                first: Some(ElemType::Long),
                 second: None,
             },
             JType::Map { key, value }
@@ -9608,9 +9845,32 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
             (Some(key), Some(value)) => JType::MapEntry { key, value },
             _ => JType::Error,
         }),
+        BRet::EntryStream => Some(match (args.first, args.second) {
+            (Some(key), Some(value)) => JType::Stream(ElemType::Nested {
+                inner: table.intern_nested(JType::MapEntry { key, value }),
+                read: table.object_id,
+            }),
+            _ => JType::Error,
+        }),
+        BRet::ObjectArray => Some(JType::Array {
+            elem: ElemType::Object(table.object_id),
+            dims: 1,
+        }),
+        BRet::IntSummaryStats => Some(JType::IntSummaryStats),
+        BRet::DoubleStream => Some(JType::DoubleStream),
+        BRet::LongStream => Some(JType::LongStream),
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
         BRet::IntStream => Some(JType::IntStream),
-        BRet::StreamInteger => Some(JType::Stream(ElemType::Wrapper(Prim::Int))),
+        BRet::ElemArray => Some(
+            args.first
+                .map_or(JType::Error, |elem| JType::Array { elem, dims: 1 }),
+        ),
+        BRet::StreamBoxedElem => Some(args.first.map_or(JType::Error, |elem| {
+            JType::Stream(match Prim::of(elem) {
+                Some(prim) => ElemType::Wrapper(prim),
+                None => elem,
+            })
+        })),
         BRet::StreamString => Some(JType::Stream(ElemType::Str)),
         BRet::IntArray => Some(JType::Array {
             elem: ElemType::Int,
@@ -9665,10 +9925,6 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::Field => Some(JType::Field),
         BRet::Method => Some(JType::Method),
         BRet::Type => Some(JType::Type),
-        BRet::ObjectArray => Some(JType::Array {
-            elem: ElemType::Object(table.object_id),
-            dims: 1,
-        }),
         BRet::ThrowableArray => Some(JType::Array {
             elem: ElemType::Throwable(0),
             dims: 1,
@@ -14379,6 +14635,9 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::IntSummaryStats
+            | JType::DoubleStream
+            | JType::LongStream
             | JType::Iterator(_)
             | JType::ListIterator(_)
             | JType::EntryIterator { .. }
@@ -14630,8 +14889,9 @@ impl BodyGen<'_> {
                     | JType::Set(_)
                     | JType::TreeSet(_)
                     | JType::Collection(_)
+                    | JType::EntrySet { .. }
             )
-            && let Some(elem) = TypeArgs::of(receiver_ty).first
+            && let Some(elem) = stream_element_of(receiver_ty, self.table)
         {
             let (class, _) = builtin_instance_table(receiver_ty).expect("collection has a table");
             let method_ref =
@@ -14792,7 +15052,8 @@ impl BodyGen<'_> {
             }
             args_width += param_ty.width();
         }
-        let method_ref = intern_method_ref(self.pool, class, chosen.name, chosen.descriptor);
+        let descriptor = prim_stream_descriptor(receiver_ty, chosen.descriptor);
+        let method_ref = intern_method_ref(self.pool, class, chosen.name, &descriptor);
         let ret = bret_type(chosen.ret, elem, self.table);
         let ret_width = ret.map_or(0, JType::width);
         self.code
@@ -15590,7 +15851,8 @@ impl BodyGen<'_> {
             | JType::Set(_)
             | JType::Collection(_)
             | JType::EntrySet { .. }
-            | JType::MapEntry { .. } => match builtin_instance_table(ty) {
+            | JType::MapEntry { .. }
+            | JType::IntSummaryStats => match builtin_instance_table(ty) {
                 Some((class, _)) => class.to_owned(),
                 None => return ty,
             },
@@ -16405,6 +16667,17 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        // The stream SOURCES. Each is variadic or array-taking, so none fits a
+        // fixed method table: `Stream.of(...)`, `IntStream.of(...)` and
+        // `Arrays.stream(array)` all lower to one array plus a call.
+        let stream_source = match (class, method) {
+            ("Stream" | "IntStream", "of" | "empty" | "concat") => !self.table.has_class(class),
+            ("Arrays", "stream") => true,
+            _ => false,
+        };
+        if stream_source {
+            return self.emit_stream_source(class, method, args, span);
+        }
         if !self.table.has_class(class) && builtin_static_table(class).is_some() {
             return self.builtin_static_call(class, method, args, span);
         }
@@ -17507,6 +17780,115 @@ impl BodyGen<'_> {
         Some(Some(JType::List(elem)))
     }
 
+    /// The stream sources: `Stream.of(...)`, `Stream.empty()`,
+    /// `Stream.concat(a, b)`, `IntStream.of(...)` and `Arrays.stream(array)`.
+    /// Each packs its elements into ONE array (a lone array argument already is
+    /// that array) and calls the VM, which builds the pipeline — so a stream
+    /// can start from something other than a collection.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_stream_source(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let object_elem = ElemType::Object(self.table.object_id);
+        let internal = if class == "IntStream" {
+            "java/util/stream/IntStream"
+        } else {
+            "java/util/stream/Stream"
+        };
+        if method == "empty" {
+            if !args.is_empty() {
+                self.no_suitable_library_method(class, method, args, span);
+                return None;
+            }
+            let method_ref =
+                intern_method_ref(self.pool, internal, "empty", "()Ljava/util/stream/Stream;");
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            return Some(Some(if class == "IntStream" {
+                JType::IntStream
+            } else {
+                JType::Stream(object_elem)
+            }));
+        }
+        if method == "concat" {
+            let [first, second] = args else {
+                self.no_suitable_library_method(class, method, args, span);
+                return None;
+            };
+            let first_ty = self.expr(first);
+            let second_ty = self.expr(second);
+            let method_ref = intern_method_ref(
+                self.pool,
+                internal,
+                "concat",
+                "(Ljava/util/stream/Stream;Ljava/util/stream/Stream;)Ljava/util/stream/Stream;",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(2);
+            // Two streams of the same element keep it; anything else erases,
+            // as javac's inference would settle on the join.
+            let elem = match (first_ty, second_ty) {
+                (JType::Stream(a), JType::Stream(b)) if a == b => a,
+                _ => object_elem,
+            };
+            return Some(Some(if class == "IntStream" {
+                JType::IntStream
+            } else {
+                JType::Stream(elem)
+            }));
+        }
+        // `of` / `Arrays.stream`: a lone array argument IS the source;
+        // otherwise the arguments pack into one, exactly as varargs do.
+        let elem = if let [single] = args
+            && let JType::Array { elem, dims: 1 } = self.type_of(single)
+        {
+            self.expr(single);
+            elem
+        } else if method == "stream" {
+            // `Arrays.stream` takes an array and nothing else.
+            self.no_suitable_library_method(class, method, args, span);
+            return None;
+        } else {
+            // `IntStream.of(...)` packs a genuine `int[]`: its pipeline stores
+            // elements UNBOXED, and a boxed source made `sum()` answer 0.
+            let scalar = if class == "IntStream" {
+                ElemType::Int
+            } else {
+                args.first()
+                    .and_then(|a| collection_elem_of(self.type_of(a)))
+                    .unwrap_or(object_elem)
+            };
+            self.emit_array_literal(
+                args,
+                JType::Array {
+                    elem: scalar,
+                    dims: 1,
+                },
+                span,
+            );
+            scalar
+        };
+        let descriptor = format!(
+            "({})Ljava/util/stream/Stream;",
+            JType::Array { elem, dims: 1 }.descriptor(self.table)
+        );
+        let name = if method == "stream" { "of" } else { method };
+        let method_ref = intern_method_ref(self.pool, internal, name, &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(1);
+        // A primitive element means a primitive pipeline: `Arrays.stream(int[])`
+        // is an `IntStream`, as is `IntStream.of(...)`.
+        let primitive = !elem.base_type().is_reference();
+        Some(Some(if class == "IntStream" || primitive {
+            JType::IntStream
+        } else {
+            JType::Stream(elem)
+        }))
+    }
+
     /// `Arrays.deepToString(a)` / `deepEquals(a, b)` / `deepHashCode(a)`.
     /// Each takes a reference array — `int[][]` is one, `int[]` is not, which
     /// is exactly what javac accepts for an `Object[]` parameter.
@@ -17717,6 +18099,7 @@ impl BodyGen<'_> {
     }
 
     /// `System.out.println(...)` and friends.
+    #[allow(clippy::too_many_lines)] // one arm per PrintStream method shape
     fn print_call(&mut self, stream: &'static str, method: &str, args: &[Expr], span: SourceSpan) {
         if method == "printf" {
             let field = intern_field_ref(
@@ -17811,6 +18194,23 @@ impl BodyGen<'_> {
             }
             [arg] => {
                 let arg_ty = self.expr(arg);
+                // A value the compiler types as `null` because its element is
+                // context-dependent — `stream.map(f).collect(toList())` — is a
+                // real object at run time, and `println` renders it. Only the
+                // LITERAL `null` is the ambiguous overload javac complains
+                // about, so only that one is refused.
+                let arg_ty = if arg_ty == JType::Null
+                    && !matches!(
+                        arg,
+                        Expr::Literal {
+                            value: Literal::Null,
+                            ..
+                        }
+                    ) {
+                    JType::Object(self.table.object_id)
+                } else {
+                    arg_ty
+                };
                 let arg_ty = self.coerce_to_string_for_output(arg_ty);
                 match self.print_descriptor(arg_ty, arg.span()) {
                     Some(descriptor) => descriptor,
@@ -17852,6 +18252,9 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::IntSummaryStats
+            | JType::DoubleStream
+            | JType::LongStream
             | JType::Iterator(_)
             | JType::ListIterator(_)
             | JType::EntryIterator { .. }
@@ -21069,6 +21472,9 @@ impl BodyGen<'_> {
             | JType::Stream(_)
             | JType::Collector
             | JType::IntStream
+            | JType::IntSummaryStats
+            | JType::DoubleStream
+            | JType::LongStream
             | JType::Iterator(_)
             | JType::ListIterator(_)
             | JType::EntryIterator { .. }

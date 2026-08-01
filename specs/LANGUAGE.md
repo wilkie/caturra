@@ -441,6 +441,52 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **A stream is a TYPE and a value, not only a chained expression**
+  (2026-07-31, round 8) — the stream-deep cluster, 23 findings and the round's
+  largest structural gap:
+  - **`Stream<T>` and `IntStream` name types**, so a pipeline can be held in a
+    variable, a field or a parameter, and `var` infers one. Before this a
+    stream existed only inside one chained expression.
+  - **A stream can start somewhere other than a collection**: `Stream.of`,
+    `Stream.empty`, `Stream.concat`, `IntStream.of` and `Arrays.stream` (over
+    a reference array and over a primitive one, which yields an `IntStream`).
+    Each is variadic or array-taking, so none fits a fixed method table; they
+    lower to one array plus a call, as `Arrays.asList` does.
+    `entrySet().stream()` streams whole `Map.Entry`s — it used to hand out
+    KEYS, so the pipeline's lambda died on a cast.
+  - **The operations refused with a FALSE reason** — "a lambda is only allowed
+    where a functional-interface type is expected", said of methods that have
+    taken one since Java 8 — now work: `flatMap`, all three `reduce` forms,
+    `toArray`, `mapToDouble`/`mapToLong` (whose `sum()`/`toArray()` carry
+    their own numeric width) and `summaryStatistics()`, with
+    `IntSummaryStatistics` a nameable type.
+  - **The collectors beyond `toList`/`toSet`/`joining`**: `counting`,
+    `groupingBy` (with an optional downstream), `partitioningBy` (whose map
+    always holds both keys), `toMap` (with a merge function, and the JDK's
+    `Duplicate key` IllegalStateException without one), and the
+    `summing*`/`averaging*` family. Their lambdas take the STREAM's element —
+    a target type that comes from TWO levels up, through the enclosing
+    `collect`, which is the only such case in caturra.
+  - **A `char` or a `boolean` result stays its own wrapper.** Lambda results
+    were unboxed on the way back into the pipeline, and a bare `Int` cannot
+    say which of `Integer`/`Character`/`Boolean` it is — so
+    `map(s -> s.charAt(0))` was a stream of 97s and `map(String::isEmpty)` a
+    stream of 0s. The numeric wrappers still unbox: the primitive pipelines
+    are built on that representation.
+  - **The rules a stream obeys**: `limit`/`skip` reject a negative count
+    (IllegalArgumentException naming it) rather than reading it as an empty or
+    a full stream; a pipeline is **single-use**, so a second operation on one
+    is "stream has already been operated upon or closed"; and a terminal
+    **fails fast** when the collection it was opened over is modified while it
+    runs — the check sits AFTER the traversal, exactly where
+    `ArrayList$ArrayListSpliterator.forEachRemaining` checks its modCount, so
+    every original element is still seen before the throw.
+  - Also: `sorted(Comparator.comparing(s -> s.length()))` types its key
+    extractor from the stream's element, and `println(...collect(toList()))`
+    no longer reads as the ambiguous `println(null)` — only the LITERAL `null`
+    is that overload.
+  - Pinned by `diff_stream_types_and_sources`, `diff_stream_operations`,
+    `diff_stream_collectors` and `diff_stream_rules`.
 - **Varargs: the lone array, the forwarded one, and which overload wins**
   (2026-07-31, round 8) — the varargs-deep cluster:
   - **A lone REFERENCE array IS the varargs array; a PRIMITIVE one is not.**

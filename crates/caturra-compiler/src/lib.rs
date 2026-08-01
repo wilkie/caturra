@@ -534,6 +534,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             // A stream pipeline's `filter`/`map`/… lambdas desugar to the
             // bundled functional interfaces.
             || s.text.contains(".stream(")
+            || s.text.contains("Stream")
             // A user `Comparator` aliases the bundled `__Comparator` interface;
             // `Collections.reverseOrder()` also yields one without naming it.
             || s.text.contains("Comparator")

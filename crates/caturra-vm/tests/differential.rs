@@ -19269,3 +19269,176 @@ public class RejVarargsAmbiguous {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Streams (audit round 8): a pipeline is a TYPE and a value, not only a chained
+// expression — sources, operations, collectors, and the rules a stream obeys.
+// ---------------------------------------------------------------------------
+
+// `Stream<T>` and `IntStream` name types, so a pipeline can be held in a
+// variable; and a stream can start somewhere other than a collection —
+// `Stream.of`, `Stream.empty`, `Stream.concat`, `IntStream.of`,
+// `Arrays.stream` (over a reference array and over a primitive one), and
+// `entrySet().stream()`, whose elements are whole `Map.Entry`s.
+differential_test!(
+    diff_stream_types_and_sources,
+    "DiffStreamSources",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class DiffStreamSources {
+    public static void main(String[] args) {
+        List<Integer> ns = new ArrayList<>(Arrays.asList(1, 2, 3));
+        Stream<Integer> held = ns.stream();
+        System.out.println(held.count());
+        var inferred = ns.stream();
+        System.out.println(inferred.count());
+        IntStream ints = IntStream.range(0, 4);
+        System.out.println(ints.sum());
+
+        System.out.println(Stream.of("a", "b", "c").collect(Collectors.toList()));
+        System.out.println(Stream.empty().count());
+        System.out.println(Stream.concat(Stream.of("a"), Stream.of("b")).collect(Collectors.toList()));
+        System.out.println(IntStream.of(1, 2, 3).sum());
+
+        String[] words = {"x", "y", "z"};
+        System.out.println(Arrays.stream(words).collect(Collectors.toList()));
+        int[] values = {4, 5, 6};
+        System.out.println(Arrays.stream(values).sum());
+
+        Map<String, Integer> m = new TreeMap<>();
+        m.put("one", 1);
+        m.put("two", 2);
+        System.out.println(m.entrySet().stream()
+            .map(e -> e.getKey() + "=" + e.getValue())
+            .collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// The operations that used to be refused with a FALSE reason about
+// functional-interface types: `flatMap`, all of `reduce`, `toArray`,
+// `mapToDouble`/`mapToLong` (whose `sum()` has its own numeric width), and
+// `summaryStatistics()`. Plus a key extractor typed from the stream's element,
+// and a `char`/`boolean` result that must stay its own wrapper — a bare int
+// cannot say which of the three it is, and `map(s -> s.charAt(0))` was a
+// stream of 97s.
+differential_test!(
+    diff_stream_operations,
+    "DiffStreamOps",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class DiffStreamOps {
+    public static void main(String[] args) {
+        List<List<String>> nested = new ArrayList<>();
+        nested.add(new ArrayList<>(Arrays.asList("a", "b")));
+        nested.add(new ArrayList<>(Arrays.asList("c")));
+        System.out.println(nested.stream().flatMap(l -> l.stream()).collect(Collectors.toList()));
+
+        List<Integer> ns = new ArrayList<>(Arrays.asList(1, 2, 3, 4));
+        System.out.println(ns.stream().reduce(0, (a, b) -> a + b));
+        System.out.println(ns.stream().reduce((a, b) -> a + b).get());
+        System.out.println(new ArrayList<Integer>().stream().reduce((a, b) -> a + b).isPresent());
+        System.out.println(Arrays.toString(ns.stream().toArray()));
+        System.out.println(ns.stream().mapToDouble(x -> x).sum());
+        System.out.println(ns.stream().mapToLong(x -> x).sum());
+        System.out.println(Arrays.toString(ns.stream().mapToInt(x -> x).toArray()));
+        System.out.println(ns.stream().mapToInt(x -> x).boxed().collect(Collectors.toList()));
+
+        IntSummaryStatistics stats = IntStream.of(3, 1, 4, 1, 5).summaryStatistics();
+        System.out.println(stats.getCount() + " " + stats.getSum() + " " + stats.getMin()
+            + " " + stats.getMax() + " " + stats.getAverage());
+        System.out.println(stats);
+
+        List<String> ws = new ArrayList<>(Arrays.asList("bb", "a", "ccc", "dd"));
+        System.out.println(ws.stream().sorted(Comparator.comparing(s -> s.length()))
+            .collect(Collectors.toList()));
+        System.out.println(ws.stream().map(s -> s.charAt(0)).collect(Collectors.toList()));
+        System.out.println(ws.stream().map(s -> s.isEmpty()).collect(Collectors.toList()));
+    }
+}
+"#
+);
+
+// The collectors beyond `toList`/`toSet`/`joining`: `counting`, `groupingBy`
+// (with and without a downstream), `partitioningBy` (whose map always holds
+// both keys), `toMap` (with a merge function), and the summing/averaging
+// family. Each takes a lambda whose parameter is the STREAM's element — a
+// target type that comes from two levels up.
+differential_test!(
+    diff_stream_collectors,
+    "DiffStreamCollectors",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class DiffStreamCollectors {
+    public static void main(String[] args) {
+        List<String> ws = new ArrayList<>(Arrays.asList("apple", "avocado", "banana", "blue"));
+        System.out.println(ws.stream().collect(Collectors.counting()));
+        Map<Character, List<String>> byLetter = ws.stream()
+            .collect(Collectors.groupingBy(w -> w.charAt(0)));
+        System.out.println(byLetter);
+        Map<Character, Long> counts = ws.stream()
+            .collect(Collectors.groupingBy(w -> w.charAt(0), Collectors.counting()));
+        System.out.println(counts);
+        System.out.println(ws.stream()
+            .collect(Collectors.partitioningBy(w -> w.length() > 4)));
+        Map<String, Integer> lengths = ws.stream()
+            .collect(Collectors.toMap(w -> w, w -> w.length()));
+        System.out.println(lengths);
+        Map<Character, String> firsts = ws.stream()
+            .collect(Collectors.toMap(w -> w.charAt(0), w -> w, (a, b) -> a));
+        System.out.println(firsts);
+        System.out.println(ws.stream().collect(Collectors.summingInt(w -> w.length())));
+        System.out.println(ws.stream().collect(Collectors.averagingInt(w -> w.length())));
+        System.out.println(new ArrayList<String>().stream()
+            .collect(Collectors.averagingInt(w -> w.length())));
+    }
+}
+"#
+);
+
+// The rules a stream obeys: `limit`/`skip` reject a negative count outright, a
+// pipeline is SINGLE-USE, and a terminal fails fast when the collection it was
+// opened over is modified while it runs — after the traversal, exactly where
+// `ArrayList`'s spliterator checks its modCount, so every original element is
+// still seen.
+differential_test!(
+    diff_stream_rules,
+    "DiffStreamRules",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class DiffStreamRules {
+    public static void main(String[] args) {
+        List<String> ws = new ArrayList<>(Arrays.asList("a", "b", "c"));
+        try { ws.stream().limit(-1).count(); }
+        catch (IllegalArgumentException e) { System.out.println("limit " + e.getMessage()); }
+        try { ws.stream().skip(-2).count(); }
+        catch (IllegalArgumentException e) { System.out.println("skip " + e.getMessage()); }
+        System.out.println(ws.stream().limit(2).collect(Collectors.toList()));
+        System.out.println(ws.stream().skip(2).collect(Collectors.toList()));
+
+        Stream<String> once = ws.stream();
+        System.out.println(once.count());
+        try { once.count(); }
+        catch (IllegalStateException e) { System.out.println("ISE " + e.getMessage()); }
+
+        List<String> seen = new ArrayList<>();
+        try {
+            ws.stream().forEach(s -> { if (s.equals("a")) { ws.add("d"); } seen.add(s); });
+            System.out.println("no CME");
+        } catch (ConcurrentModificationException e) {
+            System.out.println("CME");
+        }
+        System.out.println(seen);
+    }
+}
+"#
+);

@@ -589,6 +589,50 @@ pub fn invoke_virtual(
             }
             Ok(None)
         }
+        // `IntSummaryStatistics` — five stored numbers, read back.
+        (
+            HeapObject::SummaryStats {
+                count,
+                sum,
+                min,
+                max,
+            },
+            _,
+        ) => {
+            let (count, sum, min, max) = (*count, *sum, *min, *max);
+            Ok(Some(match method {
+                "getCount" => JValue::Long(count),
+                "getSum" => JValue::Long(sum),
+                "getMin" => JValue::Int(min),
+                "getMax" => JValue::Int(max),
+                #[allow(clippy::cast_precision_loss)] // the JDK divides in double too
+                "getAverage" => JValue::Double(if count == 0 {
+                    0.0
+                } else {
+                    sum as f64 / count as f64
+                }),
+                "toString" => {
+                    #[allow(clippy::cast_precision_loss)]
+                    let average = if count == 0 {
+                        0.0
+                    } else {
+                        sum as f64 / count as f64
+                    };
+                    // The JDK formats this line with `%f` (six decimals) and
+                    // the identity min/max of an empty summary.
+                    let text = format!(
+                        "IntSummaryStatistics{{count={count}, sum={sum}, min={min}, \
+                         average={average:.6}, max={max}}}"
+                    );
+                    JValue::Ref(Some(heap.alloc_string(&text)))
+                }
+                other => {
+                    return Err(VmError::UnknownIntrinsic(format!(
+                        "IntSummaryStatistics.{other}"
+                    )));
+                }
+            }))
+        }
         (HeapObject::Iterator { .. }, _) => iterator_method(heap, receiver, method, args),
         (HeapObject::StringBuilder(_), _) => {
             builder_method(heap, receiver, method, descriptor, args)

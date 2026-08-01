@@ -95,6 +95,39 @@ pub enum CollectorKind {
         prefix: String,
         suffix: String,
     },
+    /// `Collectors.counting()` — a `Long` of how many elements arrived.
+    Counting,
+    /// `Collectors.groupingBy(classifier)` — a `HashMap` from each element's
+    /// key to the `List` of elements that produced it, in encounter order.
+    /// `downstream` gathers each group when one was given (`groupingBy(f, g)`).
+    GroupingBy {
+        classifier: HeapRef,
+        downstream: Option<HeapRef>,
+    },
+    /// `Collectors.partitioningBy(predicate)` — a two-entry map, `false` then
+    /// `true`, each holding the `List` of elements on that side.
+    PartitioningBy(HeapRef),
+    /// `Collectors.toMap(keyFn, valueFn)` — a `HashMap` built from the two
+    /// functions. A duplicate key with no merge function is an
+    /// `IllegalStateException`, as the JDK's is.
+    ToMap {
+        key: HeapRef,
+        value: HeapRef,
+        merge: Option<HeapRef>,
+    },
+    /// `Collectors.summingInt(f)` / `summingLong` / `summingDouble` — the sum
+    /// of the mapped values, and `averagingInt`/… their mean (always a
+    /// `Double`, and 0.0 over no elements).
+    Summing { mapper: HeapRef, kind: SumKind },
+}
+
+/// Which numeric summary a [`CollectorKind::Summing`] produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SumKind {
+    Int,
+    Long,
+    Double,
+    Averaging,
 }
 
 /// Which flavour of `Optional` a [`HeapObject::Optional`] is — only its
@@ -362,6 +395,15 @@ pub enum HeapObject {
     /// (`comparing`/`naturalOrder`/`reversed`/`thenComparing`) rather than a
     /// user class. The interpreter evaluates it natively (see [`ComparatorSpec`]).
     Comparator(ComparatorSpec),
+    /// A `java.util.IntSummaryStatistics` — what one pass of an `IntStream`
+    /// gathered. Held as the five numbers so the accessors and `toString`
+    /// answer without re-walking anything.
+    SummaryStats {
+        count: i64,
+        sum: i64,
+        min: i32,
+        max: i32,
+    },
     /// A `java.util.Optional` / `OptionalInt` / `OptionalDouble`: a value that
     /// is present or absent. `kind` is only for `toString` (`Optional[x]` vs
     /// `OptionalInt[x]`); the accessors (`get`/`getAsInt`/`getAsDouble`) are the

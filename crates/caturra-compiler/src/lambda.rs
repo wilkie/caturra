@@ -932,6 +932,19 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // `stream.collect(Collectors.groupingBy(e -> ...))` — a collector's
+            // own lambdas see the STREAM's element, which only the enclosing
+            // `collect` knows. This is the one place in caturra where a
+            // lambda's target type comes from two levels up.
+            if method == "collect"
+                && args.len() == 1
+                && let Some(stream_receiver) = receiver.as_deref()
+                && let Some(elem) = stream_elem_type(stream_receiver, ctx)
+                && is_collectors_call(&args[0])
+            {
+                desugar_collector(&mut args[0], &elem, ctx);
+                return;
+            }
             // A stream op with a lambda: the parameter type is the stream's
             // current element, walked back through the pipeline to `.stream()`.
             // (After a `map` the element is erased to `Object`.)
@@ -943,14 +956,37 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     "filter" | "anyMatch" | "allMatch" | "noneMatch" => {
                         Some(("__Predicate", "test", TypeRef::Boolean))
                     }
-                    "map" | "mapToObj" | "mapToInt" | "mapToLong" | "mapToDouble" => {
-                        Some(("__UnaryOperator", "apply", object))
-                    }
+                    "map" | "mapToObj" | "mapToInt" | "mapToLong" | "mapToDouble"
+                    // `flatMap(f)` returns a STREAM per element, which the
+                    // pipeline splices in; the SAM shape is `map`'s.
+                    | "flatMap" => Some(("__UnaryOperator", "apply", object.clone())),
                     "forEach" | "forEachOrdered" | "peek" => {
                         Some(("__Consumer", "accept", TypeRef::Void))
                     }
                     _ => None,
                 };
+                // `reduce(identity, (a, b) -> ...)` / `reduce((a, b) -> ...)`:
+                // a two-parameter fold over the stream's own element type,
+                // erased to the bundled `__BiFunction` like a map remapper.
+                if method == "reduce"
+                    && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
+                {
+                    let last = args.len() - 1;
+                    let (leading, tail) = args.split_at_mut(last);
+                    for arg in leading {
+                        desugar_expr(arg, None, ctx);
+                    }
+                    tail[0] = build_erased_lambda(
+                        &mut tail[0],
+                        "__BiFunction",
+                        "apply",
+                        &object,
+                        &[elem.clone(), elem],
+                        None,
+                        ctx,
+                    );
+                    return;
+                }
                 // The argument is either a single-parameter lambda or a method
                 // reference (`map(String::toUpperCase)`). A reference first
                 // becomes the equivalent one-parameter lambda — its SAM element
@@ -987,6 +1023,18 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         None,
                         ctx,
                     );
+                    return;
+                }
+                // `sorted(Comparator.comparing(s -> s.length()))` — the key
+                // extractor's parameter is the STREAM's element, which only
+                // this op knows. Without it the lambda parameter typed as
+                // `Object` and `s.length()` was "cannot find symbol".
+                if matches!(method.as_str(), "sorted" | "max" | "min") && args.len() == 1 {
+                    let target = TypeRef::Generic {
+                        base: String::from("Comparator"),
+                        args: vec![elem],
+                    };
+                    desugar_expr(&mut args[0], Some(&target), ctx);
                     return;
                 }
             }
@@ -1995,17 +2043,39 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     if matches!(method.as_str(), "chars" | "codePoints") && args.is_empty() {
         return Some(TypeRef::Int);
     }
-    // `IntStream.range(a, b)` / `rangeClosed(a, b)` — a source of `int`s.
-    if matches!(method.as_str(), "range" | "rangeClosed")
+    // `IntStream.range(a, b)` / `rangeClosed(a, b)` / `IntStream.of(...)` —
+    // sources of `int`s.
+    if matches!(method.as_str(), "range" | "rangeClosed" | "of")
         && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "IntStream")
     {
         return Some(TypeRef::Int);
     }
+    // `Stream.of(...)` — the element is what the arguments agree on, which is
+    // all this syntactic pass can see; a mixed or computed list erases to
+    // `Object`, as it does after `map`.
+    if method == "of"
+        && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "Stream")
+    {
+        return Some(literal_element_type(args));
+    }
+    // `Arrays.stream(array)` — the array's element type.
+    if method == "stream"
+        && args.len() == 1
+        && matches!(prev.as_ref(), Expr::Name { path, .. } if path.len() == 1 && path[0] == "Arrays")
+    {
+        return array_elem_type(&args[0], ctx);
+    }
     match method.as_str() {
-        "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" => stream_elem_type(prev, ctx),
+        // `boxed` retypes without changing what the element IS here (the VM
+        // stores it unboxed either way), so it passes the element through too.
+        "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "boxed" => {
+            stream_elem_type(prev, ctx)
+        }
         // `mapToInt` produces an int stream; `map`/`mapToObj` an erased one.
         "mapToInt" => Some(TypeRef::Int),
-        "map" | "mapToObj" => Some(TypeRef::Named(String::from("Object"))),
+        "map" | "mapToObj" | "flatMap" => Some(TypeRef::Named(String::from("Object"))),
+        "mapToDouble" => Some(TypeRef::Double),
+        "mapToLong" => Some(TypeRef::Long),
         _ => None,
     }
 }
@@ -2013,6 +2083,120 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 /// The declared element type of a `List`/`ArrayList`/`Set`/`Collection`
 /// receiver, read syntactically from the local, parameter, or field it names
 /// — the same shape as `map_type_args`, for a single type argument.
+/// Whether this expression is a `Collectors.xxx(...)` factory call.
+fn is_collectors_call(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call {
+            receiver: Some(owner),
+            ..
+        } if matches!(owner.as_ref(), Expr::Name { path, .. }
+            if path.len() == 1 && path[0] == "Collectors")
+    )
+}
+
+/// Target-type the lambdas inside a `Collectors.xxx(...)` factory against the
+/// stream element they will be handed. Each factory says which of its arguments
+/// is a function of the element, which is a predicate, and which is a nested
+/// collector to recurse into.
+fn desugar_collector(expr: &mut Expr, elem: &TypeRef, ctx: &mut Ctx) {
+    let Expr::Call { method, args, .. } = expr else {
+        return;
+    };
+    let object = TypeRef::Named(String::from("Object"));
+    // How many leading arguments are one-parameter functions OF THE ELEMENT.
+    let element_functions = match method.as_str() {
+        "groupingBy" | "mapping" | "summingInt" | "summingLong" | "summingDouble"
+        | "averagingInt" | "averagingLong" | "averagingDouble" => 1,
+        "toMap" => 2,
+        _ => 0,
+    };
+    #[allow(clippy::needless_range_loop)] // each arm REPLACES args[index]
+    for index in 0..args.len() {
+        let is_lambda = matches!(&args[index], Expr::Lambda { .. } | Expr::MethodRef { .. });
+        if index < element_functions && is_lambda {
+            if matches!(&args[index], Expr::MethodRef { .. }) {
+                let synth = Sam {
+                    method: String::from("apply"),
+                    params: vec![elem.clone()],
+                    ret: object.clone(),
+                };
+                args[index] = method_ref_to_lambda(&args[index], &synth, ctx);
+            }
+            args[index] = build_erased_lambda(
+                &mut args[index],
+                "__UnaryOperator",
+                "apply",
+                &object,
+                std::slice::from_ref(elem),
+                None,
+                ctx,
+            );
+            continue;
+        }
+        if method == "partitioningBy" && index == 0 && is_lambda {
+            args[index] = build_erased_lambda(
+                &mut args[index],
+                "__Predicate",
+                "test",
+                &TypeRef::Boolean,
+                std::slice::from_ref(elem),
+                None,
+                ctx,
+            );
+            continue;
+        }
+        // `toMap`'s third argument merges two VALUES, whose type this pass
+        // cannot see, so both parameters erase to `Object`.
+        if method == "toMap" && index == 2 && is_lambda {
+            args[index] = build_erased_lambda(
+                &mut args[index],
+                "__BiFunction",
+                "apply",
+                &object,
+                &[object.clone(), object.clone()],
+                None,
+                ctx,
+            );
+            continue;
+        }
+        // A nested collector (`groupingBy(f, counting())`) sees the same
+        // element as the outer one.
+        if is_collectors_call(&args[index]) {
+            desugar_collector(&mut args[index], elem, ctx);
+            continue;
+        }
+        desugar_expr(&mut args[index], None, ctx);
+    }
+}
+
+/// What `Stream.of(...)`'s arguments agree on, read from their literal forms —
+/// the only inference available to a syntactic pass. Anything mixed or computed
+/// erases to `Object`, exactly as a stream's element does after `map`.
+fn literal_element_type(args: &[Expr]) -> TypeRef {
+    let object = TypeRef::Named(String::from("Object"));
+    let mut kind: Option<TypeRef> = None;
+    for arg in args {
+        let Expr::Literal { value, .. } = arg else {
+            return object;
+        };
+        let this = match value {
+            crate::ast::Literal::Int(_) => TypeRef::Named(String::from("Integer")),
+            crate::ast::Literal::Str(_) => TypeRef::Named(String::from("String")),
+            crate::ast::Literal::Double(_) => TypeRef::Named(String::from("Double")),
+            crate::ast::Literal::Long(_) => TypeRef::Named(String::from("Long")),
+            crate::ast::Literal::Char(_) => TypeRef::Named(String::from("Character")),
+            crate::ast::Literal::Bool(_) => TypeRef::Named(String::from("Boolean")),
+            crate::ast::Literal::Null | crate::ast::Literal::Float(_) => return object,
+        };
+        match &kind {
+            Some(seen) if *seen != this => return object,
+            _ => kind = Some(this),
+        }
+    }
+    kind.unwrap_or(object)
+}
+
 /// The element type of a receiver declared as an array (`int[]` → `int`,
 /// `String[]` → `String`) — for typing the generator of `Arrays.setAll`.
 fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {

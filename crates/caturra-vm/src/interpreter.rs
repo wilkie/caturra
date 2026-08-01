@@ -150,6 +150,15 @@ pub(crate) struct Interpreter<'run> {
     /// `UnsupportedOperationException`. Held aside rather than in the wrapper
     /// because it changes nothing else about the collection.
     checked_cursor_views: std::collections::HashSet<HeapRef>,
+    /// Streams whose pipeline has already been used — a stream is SINGLE-USE
+    /// (JDK: "stream has already been operated upon or closed"), and both a
+    /// terminal and an intermediate op spend it. Held aside rather than in the
+    /// heap object so the twelve places that build one stay unchanged.
+    spent_streams: std::collections::HashSet<HeapRef>,
+    /// The collection a stream was opened over, with its length at that moment
+    /// — what makes a terminal FAIL FAST when the source is modified while it
+    /// runs, as a JDK's spliterator does.
+    stream_origins: HashMap<HeapRef, (HeapRef, usize)>,
 }
 
 /// Where the active frame is, for stack traces and snapshots.
@@ -235,6 +244,8 @@ impl<'run> Interpreter<'run> {
             exception_traces: HashMap::new(),
             map_views: HashMap::new(),
             checked_cursor_views: std::collections::HashSet::new(),
+            spent_streams: std::collections::HashSet::new(),
+            stream_origins: HashMap::new(),
         }
     }
 
@@ -4165,6 +4176,54 @@ impl<'run> Interpreter<'run> {
                 prefix: text(self, prefix),
                 suffix: text(self, suffix),
             },
+            ("counting", []) => CollectorKind::Counting,
+            ("groupingBy", [JValue::Ref(Some(classifier))]) => CollectorKind::GroupingBy {
+                classifier: *classifier,
+                downstream: None,
+            },
+            ("groupingBy", [JValue::Ref(Some(classifier)), JValue::Ref(Some(downstream))]) => {
+                CollectorKind::GroupingBy {
+                    classifier: *classifier,
+                    downstream: Some(*downstream),
+                }
+            }
+            ("partitioningBy", [JValue::Ref(Some(predicate))]) => {
+                CollectorKind::PartitioningBy(*predicate)
+            }
+            ("toMap", [JValue::Ref(Some(key)), JValue::Ref(Some(value))]) => CollectorKind::ToMap {
+                key: *key,
+                value: *value,
+                merge: None,
+            },
+            (
+                "toMap",
+                [
+                    JValue::Ref(Some(key)),
+                    JValue::Ref(Some(value)),
+                    JValue::Ref(Some(merge)),
+                ],
+            ) => CollectorKind::ToMap {
+                key: *key,
+                value: *value,
+                merge: Some(*merge),
+            },
+            ("summingInt" | "summingLong" | "summingDouble", [JValue::Ref(Some(mapper))]) => {
+                use crate::value::SumKind;
+                CollectorKind::Summing {
+                    mapper: *mapper,
+                    kind: match method_name {
+                        "summingLong" => SumKind::Long,
+                        "summingDouble" => SumKind::Double,
+                        _ => SumKind::Int,
+                    },
+                }
+            }
+            ("averagingInt" | "averagingLong" | "averagingDouble", [JValue::Ref(Some(mapper))]) => {
+                CollectorKind::Summing {
+                    mapper: *mapper,
+                    kind: crate::value::SumKind::Averaging,
+                }
+            }
             _ => return Ok(false),
         };
         let collector = self.heap.alloc(HeapObject::Collector(kind));
@@ -6964,11 +7023,31 @@ impl<'run> Interpreter<'run> {
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
         if method == "stream" && args.is_empty() && self.is_streamable(receiver) {
-            let elements = self.collection_elements(receiver);
+            // An `entrySet()` streams whole ENTRIES. `collection_elements`
+            // cannot build them (it does not allocate), so it hands back the
+            // keys — and the pipeline's lambda got a String where it expected
+            // a `Map.Entry`, and died on the cast.
+            let elements = if let Some(map) = self.entry_set_map(receiver) {
+                let entries = self.map_entries(map);
+                entries
+                    .into_iter()
+                    .map(|(key, _)| {
+                        JValue::Ref(Some(self.heap.alloc(HeapObject::MapEntry {
+                            map,
+                            key,
+                            read_only: self.is_read_only_view(receiver),
+                        })))
+                    })
+                    .collect()
+            } else {
+                self.collection_elements(receiver)
+            };
+            let length = iterated_len_of(&self.heap, receiver);
             let stream = self.heap.alloc(HeapObject::Stream {
                 source: elements,
                 ops: Vec::new(),
             });
+            self.stream_origins.insert(stream, (receiver, length));
             return Ok(Answered::Value(JValue::Ref(Some(stream))));
         }
         if matches!(self.heap.get(receiver), Some(HeapObject::Stream { .. })) {
@@ -7025,14 +7104,33 @@ impl<'run> Interpreter<'run> {
     fn stream_with_op(&mut self, stream: HeapRef, op: crate::value::StreamOp) -> JValue {
         let (source, mut ops) = self.stream_pipeline(stream);
         ops.push(op);
-        JValue::Ref(Some(
+        let derived = JValue::Ref(Some(
             self.heap
                 .alloc(crate::value::HeapObject::Stream { source, ops }),
-        ))
+        ));
+        self.inherit_stream_origin(stream, derived)
     }
 
     /// A fresh stream over already-computed elements (for `sorted`, which is a
     /// materializing barrier, and for the numeric-range factories).
+    fn is_stream(&self, reference: HeapRef) -> bool {
+        matches!(
+            self.heap.get(reference),
+            Some(crate::value::HeapObject::Stream { .. })
+        )
+    }
+
+    /// Carry a stream's source collection (and the length it had) to the
+    /// pipeline derived from it, so a terminal several ops downstream still
+    /// fails fast when that collection is modified underneath it.
+    fn inherit_stream_origin(&mut self, from: HeapRef, to: JValue) -> JValue {
+        if let (Some(origin), JValue::Ref(Some(derived))) = (self.stream_origins.get(&from), to) {
+            let origin = *origin;
+            self.stream_origins.insert(derived, origin);
+        }
+        to
+    }
+
     fn alloc_stream(&mut self, elements: Vec<JValue>) -> JValue {
         JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::Stream {
             source: elements,
@@ -7061,6 +7159,16 @@ impl<'run> Interpreter<'run> {
         ops: &[crate::value::StreamOp],
         sink: &mut StreamSink,
     ) -> Result<(), VmError> {
+        self.stream_drive_from(None, source, ops, sink)
+    }
+
+    fn stream_drive_from(
+        &mut self,
+        origin: Option<(HeapRef, usize)>,
+        source: &[JValue],
+        ops: &[crate::value::StreamOp],
+        sink: &mut StreamSink,
+    ) -> Result<(), VmError> {
         let mut states: Vec<StreamOpState> = ops
             .iter()
             .map(|op| match op {
@@ -7076,7 +7184,28 @@ impl<'run> Interpreter<'run> {
                 break;
             }
         }
+        // FAIL FAST — but AFTER the traversal, exactly where
+        // `ArrayList$ArrayListSpliterator.forEachRemaining` checks its
+        // modCount. So a lambda that adds to the very collection being streamed
+        // still sees every original element, and only then throws; checking per
+        // element would cut the traversal short of what a JDK does.
+        self.check_stream_source(origin)?;
         Ok(())
+    }
+
+    /// Throw `ConcurrentModificationException` if the collection a stream was
+    /// opened over has changed length since. `None` for a stream with no
+    /// collection behind it (a range, `Stream.of`, a `sorted` barrier).
+    fn check_stream_source(&self, origin: Option<(HeapRef, usize)>) -> Result<(), VmError> {
+        let Some((collection, length)) = origin else {
+            return Ok(());
+        };
+        if iterated_len_of(&self.heap, collection) == length {
+            return Ok(());
+        }
+        Err(VmError::UncaughtException(String::from(
+            "java.util.ConcurrentModificationException",
+        )))
     }
 
     /// Feed one `value` into `ops[i..]`; on reaching the end it goes to `sink`.
@@ -7454,6 +7583,18 @@ impl<'run> Interpreter<'run> {
     fn unbox_functional_result(&self, result: Option<JValue>) -> JValue {
         match result {
             Some(JValue::Ref(Some(r))) => match self.heap.get(r) {
+                // A `Character` or a `Boolean` must stay a REFERENCE: a bare
+                // `Int` cannot say which of the three int-width wrappers it is,
+                // so unboxing one turned `map(s -> s.charAt(0))` into a stream
+                // of 97s and `map(String::isEmpty)` into a stream of 0s. The
+                // numeric wrappers unbox as before — the primitive pipelines
+                // (`mapToInt`, `sum`) are built on that representation.
+                Some(crate::value::HeapObject::Boxed { class_name, .. })
+                    if &**class_name == "java/lang/Character"
+                        || &**class_name == "java/lang/Boolean" =>
+                {
+                    JValue::Ref(Some(r))
+                }
                 Some(crate::value::HeapObject::Boxed { value, .. }) => *value,
                 _ => JValue::Ref(Some(r)),
             },
@@ -7465,6 +7606,43 @@ impl<'run> Interpreter<'run> {
     /// `java.util.stream.Stream` operations. Element comparison/transformation
     /// may run user lambdas, so this lives in the interpreter.
     #[allow(clippy::too_many_lines)] // one method table
+    /// A stream element as a `double` / a `long`. The pipeline stores whatever
+    /// the mapper produced (an `int` from `x -> x` over `Integer`s, say), and
+    /// the numeric terminal decides the width.
+    fn numeric_as_double(&self, value: JValue) -> f64 {
+        match value {
+            JValue::Double(v) => v,
+            JValue::Float(v) => f64::from(v),
+            JValue::Int(v) => f64::from(v),
+            #[allow(clippy::cast_precision_loss)] // widening, as `l2d` does
+            JValue::Long(v) => v as f64,
+            JValue::Ref(Some(reference)) => match self.heap.get(reference) {
+                Some(crate::value::HeapObject::Boxed { value, .. }) => {
+                    self.numeric_as_double(*value)
+                }
+                _ => 0.0,
+            },
+            JValue::Ref(None) => 0.0,
+        }
+    }
+
+    fn numeric_as_long(&self, value: JValue) -> i64 {
+        match value {
+            JValue::Long(v) => v,
+            JValue::Int(v) => i64::from(v),
+            #[allow(clippy::cast_possible_truncation)] // narrowing, as `d2l` does
+            JValue::Double(v) => v as i64,
+            #[allow(clippy::cast_possible_truncation)]
+            JValue::Float(v) => v as i64,
+            JValue::Ref(Some(reference)) => match self.heap.get(reference) {
+                Some(crate::value::HeapObject::Boxed { value, .. }) => self.numeric_as_long(*value),
+                _ => 0,
+            },
+            JValue::Ref(None) => 0,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per stream operation
     fn stream_intrinsic(
         &mut self,
         receiver: HeapRef,
@@ -7473,6 +7651,14 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Answered, VmError> {
         use crate::value::{OptionalKind, StreamOp};
+        // A stream is SINGLE-USE: once an op has consumed this pipeline, every
+        // later one on the same object is an error rather than a second run
+        // over the same elements.
+        if !self.spent_streams.insert(receiver) {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.IllegalStateException: stream has already been operated upon or closed",
+            )));
+        }
         // INTERMEDIATE operations just append to the pending-op list; nothing
         // is evaluated until a terminal pulls. `sorted` is the exception — it
         // is a barrier, so it materializes and re-sources.
@@ -7495,17 +7681,27 @@ impl<'run> Interpreter<'run> {
                     self.stream_with_op(receiver, StreamOp::Peek(*consumer)),
                 ));
             }
-            ("limit", [count]) => {
+            ("limit" | "skip", [count]) => {
+                // A negative count is rejected outright (JDK: `limit`/`skip`
+                // both `throw new IllegalArgumentException(Long.toString(n))`),
+                // not silently read as an empty or a full stream.
+                let raw = match count {
+                    JValue::Long(n) => *n,
+                    JValue::Int(n) => i64::from(*n),
+                    _ => 0,
+                };
+                if raw < 0 {
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IllegalArgumentException: {raw}"
+                    )));
+                }
                 let n = stream_count_arg(*count);
-                return Ok(Answered::Value(
-                    self.stream_with_op(receiver, StreamOp::Limit(n)),
-                ));
-            }
-            ("skip", [count]) => {
-                let n = stream_count_arg(*count);
-                return Ok(Answered::Value(
-                    self.stream_with_op(receiver, StreamOp::Skip(n)),
-                ));
+                let op = if method == "limit" {
+                    StreamOp::Limit(n)
+                } else {
+                    StreamOp::Skip(n)
+                };
+                return Ok(Answered::Value(self.stream_with_op(receiver, op)));
             }
             ("distinct", []) => {
                 return Ok(Answered::Value(
@@ -7520,6 +7716,53 @@ impl<'run> Interpreter<'run> {
                     self.heap
                         .alloc(crate::value::HeapObject::Stream { source, ops }),
                 ))));
+            }
+            // `flatMap(f)` is a barrier here: each element's own stream is
+            // materialized and spliced in. A JDK's is lazy per element; the
+            // difference is only WHEN a downstream side effect runs relative to
+            // an upstream one within the same element's sub-stream.
+            ("flatMap", [JValue::Ref(Some(function))]) => {
+                let function = *function;
+                let elements = self.stream_materialize(receiver)?;
+                let mut flat = Vec::new();
+                for element in elements {
+                    let produced = self.call_apply(function, element)?;
+                    match produced {
+                        JValue::Ref(Some(inner)) if self.is_stream(inner) => {
+                            flat.extend(self.stream_materialize(inner)?);
+                        }
+                        // A `null` sub-stream contributes nothing, as the JDK
+                        // documents; anything else is the element itself.
+                        JValue::Ref(None) => {}
+                        other => flat.push(other),
+                    }
+                }
+                return Ok(Answered::Value(self.alloc_stream(flat)));
+            }
+            // `reduce(identity, accumulator)` folds left to a value;
+            // `reduce(accumulator)` answers an `Optional` (empty on no input).
+            ("reduce", [identity, JValue::Ref(Some(accumulator))]) => {
+                let (identity, accumulator) = (*identity, *accumulator);
+                let elements = self.stream_materialize(receiver)?;
+                let mut total = identity;
+                for element in elements {
+                    total = self.call_apply_two(accumulator, total, element)?;
+                }
+                return Ok(Answered::Value(total));
+            }
+            ("reduce", [JValue::Ref(Some(accumulator))]) => {
+                let accumulator = *accumulator;
+                let elements = self.stream_materialize(receiver)?;
+                let mut folded: Option<JValue> = None;
+                for element in elements {
+                    folded = Some(match folded {
+                        None => element,
+                        Some(total) => self.call_apply_two(accumulator, total, element)?,
+                    });
+                }
+                return Ok(Answered::Value(
+                    self.alloc_optional(folded, OptionalKind::Ref),
+                ));
             }
             // `sorted` is a stateful BARRIER: it consumes the whole upstream
             // (running its side effects in order) before emitting anything, so
@@ -7543,7 +7786,8 @@ impl<'run> Interpreter<'run> {
             ("findFirst" | "findAny", []) => {
                 let (source, ops) = self.stream_pipeline(receiver);
                 let mut sink = StreamSink::FindFirst(None);
-                self.stream_drive(&source, &ops, &mut sink)?;
+                let origin = self.stream_origins.get(&receiver).copied();
+                self.stream_drive_from(origin, &source, &ops, &mut sink)?;
                 let StreamSink::FindFirst(found) = sink else {
                     unreachable!("FindFirst sink");
                 };
@@ -7565,7 +7809,8 @@ impl<'run> Interpreter<'run> {
                     pred: *pred,
                     matched: false,
                 };
-                self.stream_drive(&source, &ops, &mut sink)?;
+                let origin = self.stream_origins.get(&receiver).copied();
+                self.stream_drive_from(origin, &source, &ops, &mut sink)?;
                 let StreamSink::AnyMatch { matched, .. } = sink else {
                     unreachable!()
                 };
@@ -7577,7 +7822,8 @@ impl<'run> Interpreter<'run> {
                     pred: *pred,
                     matched: true,
                 };
-                self.stream_drive(&source, &ops, &mut sink)?;
+                let origin = self.stream_origins.get(&receiver).copied();
+                self.stream_drive_from(origin, &source, &ops, &mut sink)?;
                 let StreamSink::AllMatch { matched, .. } = sink else {
                     unreachable!()
                 };
@@ -7589,7 +7835,8 @@ impl<'run> Interpreter<'run> {
                     pred: *pred,
                     matched: true,
                 };
-                self.stream_drive(&source, &ops, &mut sink)?;
+                let origin = self.stream_origins.get(&receiver).copied();
+                self.stream_drive_from(origin, &source, &ops, &mut sink)?;
                 let StreamSink::NoneMatch { matched, .. } = sink else {
                     unreachable!()
                 };
@@ -7598,7 +7845,8 @@ impl<'run> Interpreter<'run> {
             ("forEach" | "forEachOrdered", [JValue::Ref(Some(consumer))]) => {
                 let (source, ops) = self.stream_pipeline(receiver);
                 let mut sink = StreamSink::ForEach(*consumer);
-                self.stream_drive(&source, &ops, &mut sink)?;
+                let origin = self.stream_origins.get(&receiver).copied();
+                self.stream_drive_from(origin, &source, &ops, &mut sink)?;
                 return Ok(Answered::Void);
             }
             _ => {}
@@ -7608,14 +7856,63 @@ impl<'run> Interpreter<'run> {
         // whole pipeline (peeks and all) and post-process.
         let elements = self.stream_materialize(receiver)?;
         let result = match (method, args) {
+            // `sum()` adds in the pipeline's own numeric width — a
+            // `DoubleStream`'s is a `double`, and the descriptor is the only
+            // thing that still says which.
             ("sum", []) => {
-                let mut total = 0i32;
-                for element in &elements {
-                    if let JValue::Int(n) = element {
-                        total = total.wrapping_add(*n);
+                if descriptor.ends_with(")D") {
+                    let mut total = 0f64;
+                    for element in &elements {
+                        total += self.numeric_as_double(*element);
                     }
+                    JValue::Double(total)
+                } else if descriptor.ends_with(")J") {
+                    let mut total = 0i64;
+                    for element in &elements {
+                        total = total.wrapping_add(self.numeric_as_long(*element));
+                    }
+                    JValue::Long(total)
+                } else {
+                    let mut total = 0i32;
+                    for element in &elements {
+                        if let JValue::Int(n) = element {
+                            total = total.wrapping_add(*n);
+                        }
+                    }
+                    JValue::Int(total)
                 }
-                JValue::Int(total)
+            }
+            ("toArray", []) if descriptor.ends_with(")[D") => {
+                let values: Vec<f64> = elements
+                    .iter()
+                    .map(|e| self.numeric_as_double(*e))
+                    .collect();
+                JValue::Ref(Some(
+                    self.heap
+                        .alloc(crate::value::HeapObject::DoubleArray(values)),
+                ))
+            }
+            ("toArray", []) if descriptor.ends_with(")[J") => {
+                let values: Vec<i64> = elements.iter().map(|e| self.numeric_as_long(*e)).collect();
+                JValue::Ref(Some(
+                    self.heap.alloc(crate::value::HeapObject::LongArray(values)),
+                ))
+            }
+            // An object `Stream.toArray()` answers an `Object[]` of the
+            // elements, boxing any primitive as a collection would.
+            ("toArray", []) if descriptor.ends_with(")[Ljava/lang/Object;") => {
+                let object = String::from("java/lang/Object");
+                let values: Vec<JValue> = elements
+                    .iter()
+                    .map(|element| match element {
+                        JValue::Ref(_) => *element,
+                        primitive => JValue::Ref(Some(self.box_primitive_value(*primitive))),
+                    })
+                    .collect();
+                JValue::Ref(Some(
+                    self.heap
+                        .alloc(crate::value::HeapObject::RefArray(object, values)),
+                ))
             }
             ("toArray", []) => {
                 let ints: Vec<i32> = elements
@@ -7628,6 +7925,28 @@ impl<'run> Interpreter<'run> {
                 ))))
             }
             ("count", []) => JValue::Long(i64::try_from(elements.len()).unwrap_or(i64::MAX)),
+            // One pass gathering all five numbers. An EMPTY stream reports
+            // `Integer.MAX_VALUE` as its minimum and `MIN_VALUE` as its
+            // maximum, which is what the JDK's identity values leave behind.
+            ("summaryStatistics", []) => {
+                let mut sum = 0i64;
+                let mut min = i32::MAX;
+                let mut max = i32::MIN;
+                for element in &elements {
+                    let value = i32::try_from(self.numeric_as_long(*element)).unwrap_or(0);
+                    sum += i64::from(value);
+                    min = min.min(value);
+                    max = max.max(value);
+                }
+                JValue::Ref(Some(self.heap.alloc(
+                    crate::value::HeapObject::SummaryStats {
+                        count: i64::try_from(elements.len()).unwrap_or(i64::MAX),
+                        sum,
+                        min,
+                        max,
+                    },
+                )))
+            }
             ("max" | "min", [JValue::Ref(Some(comparator))]) => {
                 let want_max = method == "max";
                 let mut best: Option<JValue> = None;
@@ -7691,6 +8010,7 @@ impl<'run> Interpreter<'run> {
     }
 
     /// `stream.collect(collector)`: gather the elements per the collector recipe.
+    #[allow(clippy::too_many_lines)] // one arm per collector kind
     fn stream_collect(
         &mut self,
         elements: Vec<JValue>,
@@ -7726,6 +8046,125 @@ impl<'run> Interpreter<'run> {
                 }
                 let text = format!("{prefix}{}{suffix}", parts.join(&delimiter));
                 Ok(JValue::Ref(Some(self.heap.alloc_string(&text))))
+            }
+            CollectorKind::Counting => Ok(JValue::Ref(Some(self.box_primitive_value(
+                JValue::Long(i64::try_from(elements.len()).unwrap_or(i64::MAX)),
+            )))),
+            // `groupingBy`/`partitioningBy` gather each group into a List (or
+            // into the DOWNSTREAM collector, when one was given) and key the
+            // result map by the classifier's answer. Encounter order is kept
+            // inside every group, as the JDK keeps it.
+            CollectorKind::GroupingBy {
+                classifier,
+                downstream,
+            } => {
+                let map = self
+                    .heap
+                    .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+                let mut groups: Vec<(JValue, Vec<JValue>)> = Vec::new();
+                for element in elements {
+                    let key = self.call_apply(classifier, element)?;
+                    let mut found = None;
+                    for (index, (seen, _)) in groups.iter().enumerate() {
+                        if self.java_equals(*seen, key)? {
+                            found = Some(index);
+                            break;
+                        }
+                    }
+                    match found {
+                        Some(index) => groups[index].1.push(element),
+                        None => groups.push((key, vec![element])),
+                    }
+                }
+                for (key, members) in groups {
+                    let value = match downstream {
+                        Some(inner) => self.stream_collect(members, inner)?,
+                        None => JValue::Ref(Some(self.heap.alloc(HeapObject::ArrayList(members)))),
+                    };
+                    self.map_put(map, key, value)?;
+                }
+                Ok(JValue::Ref(Some(map)))
+            }
+            CollectorKind::PartitioningBy(predicate) => {
+                let map = self
+                    .heap
+                    .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+                let (mut no, mut yes) = (Vec::new(), Vec::new());
+                for element in elements {
+                    if self.call_test(predicate, element)? {
+                        yes.push(element);
+                    } else {
+                        no.push(element);
+                    }
+                }
+                // The JDK's partition map always holds BOTH keys, `false` then
+                // `true`, even when a side is empty.
+                for (flag, members) in [(false, no), (true, yes)] {
+                    let key = self.box_if_primitive(JValue::Int(i32::from(flag)), "Z");
+                    let value = JValue::Ref(Some(self.heap.alloc(HeapObject::ArrayList(members))));
+                    self.map_put(map, key, value)?;
+                }
+                Ok(JValue::Ref(Some(map)))
+            }
+            CollectorKind::ToMap { key, value, merge } => {
+                let map = self
+                    .heap
+                    .alloc(HeapObject::HashMap(crate::map::JavaHashMap::new()));
+                for element in elements {
+                    let k = self.call_apply(key, element)?;
+                    let v = self.call_apply(value, element)?;
+                    let existing = self.map_find(map, k)?;
+                    let v = match (existing, merge) {
+                        (Some(at), Some(merge)) => {
+                            let held = self.map_value_at(map, at);
+                            self.call_apply_two(merge, held, v)?
+                        }
+                        // `toMap` with no merge function refuses a duplicate
+                        // key, naming the value it already held.
+                        (Some(at), None) => {
+                            let held = self.map_value_at(map, at);
+                            let text = self.string_value_of(held, 0)?;
+                            return Err(VmError::UncaughtException(format!(
+                                "java.lang.IllegalStateException: Duplicate key {} (attempted \
+                                 merging values {} and {})",
+                                self.string_value_of(k, 0)?,
+                                text,
+                                self.string_value_of(v, 0)?
+                            )));
+                        }
+                        _ => v,
+                    };
+                    self.map_put(map, k, v)?;
+                }
+                Ok(JValue::Ref(Some(map)))
+            }
+            CollectorKind::Summing { mapper, kind } => {
+                use crate::value::SumKind;
+                let count = elements.len();
+                let mut int_total = 0i64;
+                let mut double_total = 0f64;
+                for element in elements {
+                    let mapped = self.call_apply(mapper, element)?;
+                    match kind {
+                        SumKind::Double | SumKind::Averaging => {
+                            double_total += self.numeric_as_double(mapped);
+                        }
+                        _ => int_total = int_total.wrapping_add(self.numeric_as_long(mapped)),
+                    }
+                }
+                let value = match kind {
+                    #[allow(clippy::cast_possible_truncation)] // `summingInt` is an `int`
+                    SumKind::Int => JValue::Int(int_total as i32),
+                    SumKind::Long => JValue::Long(int_total),
+                    SumKind::Double => JValue::Double(double_total),
+                    #[allow(clippy::cast_precision_loss)] // the JDK divides in double too
+                    SumKind::Averaging => JValue::Double(if count == 0 {
+                        0.0
+                    } else {
+                        double_total / count as f64
+                    }),
+                };
+                Ok(JValue::Ref(Some(self.box_primitive_value(value))))
             }
         }
     }
@@ -8562,6 +9001,38 @@ impl<'run> Interpreter<'run> {
             });
             frame.stack.push(JValue::Ref(Some(stream)));
             return Ok(None);
+        }
+        // The stream SOURCES the compiler lowers to an array plus a call:
+        // `Stream.of(...)`, `IntStream.of(...)` and `Arrays.stream(array)` all
+        // arrive as one array; `Stream.empty()` as none; `Stream.concat(a, b)`
+        // as two streams to run one after the other.
+        if matches!(
+            class_name,
+            "Stream" | "java/util/stream/Stream" | "IntStream" | "java/util/stream/IntStream"
+        ) {
+            let source = match (method_name, args) {
+                ("empty", []) => Some(Vec::new()),
+                ("of", [JValue::Ref(Some(array))]) => Some(
+                    self.array_elements(*array)
+                        .ok_or_else(|| VmError::UnknownIntrinsic(String::from("Stream.of")))?,
+                ),
+                // `Stream.concat` PULLS both pipelines to completion first —
+                // caturra's lazy model has no way to chain two sources.
+                ("concat", [JValue::Ref(Some(first)), JValue::Ref(Some(second))]) => {
+                    let mut all = self.stream_materialize(*first)?;
+                    all.extend(self.stream_materialize(*second)?);
+                    Some(all)
+                }
+                _ => None,
+            };
+            if let Some(source) = source {
+                let stream = self.heap.alloc(crate::value::HeapObject::Stream {
+                    source,
+                    ops: Vec::new(),
+                });
+                frame.stack.push(JValue::Ref(Some(stream)));
+                return Ok(None);
+            }
         }
         // `Optional.of(x)` / `empty()` / `ofNullable(x)`.
         if class_name == "Optional" || class_name == "java/util/Optional" {
