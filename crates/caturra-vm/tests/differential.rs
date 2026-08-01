@@ -20026,3 +20026,82 @@ public class RejStringIncrement {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// The String tail (audit round 8): identity, surrogates, and the API corners.
+// ---------------------------------------------------------------------------
+
+// The JDK returns THIS string when a range covers all of it, and `repeat(0)`
+// answers the `""` literal — so each identity holds rather than allocating a
+// copy. And a `char[]` round-trip must keep SURROGATE PAIRS: rendering unit by
+// unit through a code point turned every non-BMP character into two U+FFFDs,
+// and `indexOf(0xD83D)` (a real code unit of the string) answered -1.
+differential_test!(
+    diff_string_identity_and_surrogates,
+    "DiffStringTail",
+    r#"
+public class DiffStringTail {
+    public static void main(String[] args) {
+        String s = "abcdef";
+        System.out.println((s.substring(0) == s) + " " + (s.substring(0, s.length()) == s)
+            + " " + (s.subSequence(0, s.length()) == s));
+        System.out.println(("ab".repeat(1) == "ab") + " " + ("ab".repeat(0) == ""));
+        System.out.println(s.substring(2) + " " + s.substring(1, 3) + " " + "ab".repeat(3));
+
+        String emoji = "" + (char) 0xD83D + (char) 0xDE00 + "x";
+        System.out.println(emoji.indexOf(0xD83D) + " " + emoji.lastIndexOf(0xDE00)
+            + " " + emoji.indexOf('x'));
+        String pair = "" + (char) 0xD83D + (char) 0xDE00;
+        String back = String.valueOf(pair.toCharArray());
+        System.out.println(back.codePointAt(0) + " " + pair.equals(back));
+        char[] none = null;
+        try { String.valueOf(none); } catch (NullPointerException e) { System.out.println("NPE"); }
+    }
+}
+"#
+);
+
+// The API corners: `regionMatches` in both forms, `contentEquals` over the
+// JDK's real `CharSequence` parameter (so a `CharSequence` variable, a
+// `StringBuilder` and `null` all fit), `CASE_INSENSITIVE_ORDER`, the
+// `subSequence` result's inherited `Object` methods, `join` over any
+// `Iterable` and with a `StringBuilder` delimiter, and the bare
+// NullPointerExceptions its null checks really throw.
+differential_test!(
+    diff_string_api_corners,
+    "DiffStringCorners",
+    r#"
+import java.util.*;
+
+public class DiffStringCorners {
+    public static void main(String[] args) {
+        String s = "Hello World";
+        System.out.println(s.regionMatches(6, "World", 0, 5));
+        System.out.println(s.regionMatches(true, 6, "WORLD", 0, 5));
+        System.out.println(s.regionMatches(6, "WORLD", 0, 5));
+        System.out.println(s.regionMatches(-1, "World", 0, 5) + " " + s.regionMatches(6, "World", 0, 99));
+
+        CharSequence cs = "hey";
+        System.out.println("hey".contentEquals(cs));
+        System.out.println("hey".contentEquals(new StringBuilder("hey")));
+        try { "x".contentEquals(null); } catch (NullPointerException e) { System.out.println("NPE"); }
+
+        String[] names = {"Banana", "apple", "Cherry"};
+        Arrays.sort(names, String.CASE_INSENSITIVE_ORDER);
+        System.out.println(Arrays.toString(names));
+        System.out.println(String.CASE_INSENSITIVE_ORDER.compare("apple", "Banana"));
+
+        CharSequence sub = "abcdef".subSequence(1, 4);
+        System.out.println(sub.equals("bcd") + " " + sub.hashCode());
+
+        Set<String> set = new TreeSet<>(Arrays.asList("b", "a"));
+        System.out.println(String.join("-", set));
+        System.out.println(String.join(new StringBuilder("-"), "a", "b"));
+        try { String.join(null, "a", "b"); } catch (NullPointerException e) {
+            System.out.println("join " + e.getMessage());
+        }
+        System.out.println("ss".compareToIgnoreCase("SS") + " " + "ß".compareToIgnoreCase("SS"));
+    }
+}
+"#
+);

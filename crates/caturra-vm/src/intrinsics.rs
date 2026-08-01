@@ -877,6 +877,13 @@ fn string_method(
                 })?;
             Ok(Some(JValue::Int(i32::from(*unit))))
         }
+        // The JDK returns THIS string when the range is the whole of it —
+        // `s.substring(0) == s` is true, and so is `s.subSequence(0, s.length())
+        // == s`. Allocating a copy made every such identity false.
+        ("substring", [JValue::Int(begin)]) if *begin == 0 => Ok(Some(JValue::Ref(Some(receiver)))),
+        ("substring" | "subSequence", [JValue::Int(0), JValue::Int(end)]) if *end == len => {
+            Ok(Some(JValue::Ref(Some(receiver))))
+        }
         ("substring", [JValue::Int(begin)]) => substring(heap, &units, *begin, len),
         // subSequence is substring by another name (CharSequence view).
         ("substring" | "subSequence", [JValue::Int(begin), JValue::Int(end)]) => {
@@ -1103,6 +1110,20 @@ fn string_method(
                     "java.lang.IllegalArgumentException: count is negative: {count}"
                 )));
             }
+            // `repeat(1)` answers THIS string and `repeat(0)` the empty one
+            // (the JDK returns `this` and `""` respectively), so both identities
+            // hold rather than each allocating a copy.
+            if *count == 1 {
+                return Ok(Some(JValue::Ref(Some(receiver))));
+            }
+            if *count == 0 || units.is_empty() {
+                // The JDK answers the `""` LITERAL, so `s.repeat(0) == ""` is
+                // true — reuse the pooled empty string rather than mint one.
+                let empty = heap
+                    .find_string(&[])
+                    .unwrap_or_else(|| heap.alloc_string(""));
+                return Ok(Some(JValue::Ref(Some(empty))));
+            }
             let mut repeated =
                 Vec::with_capacity(units.len() * usize::try_from(*count).unwrap_or(0));
             for _ in 0..*count {
@@ -1126,15 +1147,8 @@ fn string_method(
         }
         ("compareToIgnoreCase", [other]) => {
             let other = arg_units(other)?;
-            let fold = |unit: u16| -> u16 {
-                char::from_u32(u32::from(unit)).map_or(unit, |c| {
-                    let upper = c.to_uppercase().next().unwrap_or(c);
-                    let lower = upper.to_lowercase().next().unwrap_or(upper);
-                    u16::try_from(u32::from(lower) & 0xFFFF).unwrap_or(unit)
-                })
-            };
-            let folded_self: Vec<u16> = units.iter().map(|u| fold(*u)).collect();
-            let folded_other: Vec<u16> = other.iter().map(|u| fold(*u)).collect();
+            let folded_self: Vec<u16> = units.iter().map(|u| java_fold_unit(*u)).collect();
+            let folded_other: Vec<u16> = other.iter().map(|u| java_fold_unit(*u)).collect();
             Ok(Some(JValue::Int(compare_utf16(
                 &folded_self,
                 &folded_other,
@@ -1143,6 +1157,43 @@ fn string_method(
         ("contentEquals", [other]) => {
             let other = arg_units(other)?;
             Ok(Some(JValue::Int(i32::from(units == other))))
+        }
+        // `regionMatches(toffset, other, ooffset, len)` and its
+        // case-insensitive form. A negative offset or an over-long region is
+        // `false`, never an exception.
+        (
+            "regionMatches",
+            [
+                JValue::Int(toffset),
+                other,
+                JValue::Int(ooffset),
+                JValue::Int(count),
+            ],
+        ) => {
+            let other = arg_units(other)?;
+            Ok(Some(JValue::Int(i32::from(region_matches(
+                &units, *toffset, &other, *ooffset, *count, false,
+            )))))
+        }
+        (
+            "regionMatches",
+            [
+                JValue::Int(ignore_case),
+                JValue::Int(toffset),
+                other,
+                JValue::Int(ooffset),
+                JValue::Int(count),
+            ],
+        ) => {
+            let other = arg_units(other)?;
+            Ok(Some(JValue::Int(i32::from(region_matches(
+                &units,
+                *toffset,
+                &other,
+                *ooffset,
+                *count,
+                *ignore_case != 0,
+            )))))
         }
         ("hashCode", []) => {
             let mut hash: i32 = 0;
@@ -1784,6 +1835,80 @@ fn code_point_at(units: &[u16], index: i32) -> Result<i32, VmError> {
 }
 
 /// `indexOf(int ch, int from)` — the char as its UTF-16 encoding.
+/// `String.regionMatches` — do the two regions hold the same characters? A
+/// negative offset or a region running past either end answers `false` rather
+/// than throwing, as the JDK's does. The case-insensitive form compares each
+/// unit by its uppercase AND then its lowercase form, exactly as
+/// `String.regionMatches(true, …)` documents.
+/// One UTF-16 unit uppercased, then lowercased, the way
+/// `String.compareToIgnoreCase` and `regionMatches(true, …)` fold — per UNIT,
+/// with a mapping that grows to more than one character left alone (the JDK
+/// folds `Character.toUpperCase`, which is the SIMPLE mapping).
+/// `String.CASE_INSENSITIVE_ORDER.compare` — the same per-unit fold
+/// `compareToIgnoreCase` uses.
+pub(crate) fn compare_ignore_case(left: &str, right: &str) -> i32 {
+    let fold = |text: &str| -> Vec<u16> { text.encode_utf16().map(java_fold_unit).collect() };
+    compare_utf16(&fold(left), &fold(right))
+}
+
+fn java_fold_unit(unit: u16) -> u16 {
+    java_lower_unit(java_upper_unit(unit))
+}
+
+/// `Character.toUpperCase` on one unit: the SIMPLE mapping, so a character
+/// whose uppercase form is several characters (`ß` → `SS`) is unchanged. Using
+/// Rust's full mapping made `compareToIgnoreCase` call equal strings unequal.
+fn java_upper_unit(unit: u16) -> u16 {
+    let Some(c) = char::from_u32(u32::from(unit)) else {
+        return unit;
+    };
+    let mut upper = c.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(single), None) => u16::try_from(u32::from(single)).unwrap_or(unit),
+        _ => unit,
+    }
+}
+
+fn java_lower_unit(unit: u16) -> u16 {
+    let Some(c) = char::from_u32(u32::from(unit)) else {
+        return unit;
+    };
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) {
+        (Some(single), None) => u16::try_from(u32::from(single)).unwrap_or(unit),
+        _ => unit,
+    }
+}
+
+fn region_matches(
+    units: &[u16],
+    toffset: i32,
+    other: &[u16],
+    ooffset: i32,
+    count: i32,
+    ignore_case: bool,
+) -> bool {
+    let (Ok(here), Ok(there), Ok(count)) = (
+        usize::try_from(toffset),
+        usize::try_from(ooffset),
+        usize::try_from(count),
+    ) else {
+        return false;
+    };
+    if here + count > units.len() || there + count > other.len() {
+        return false;
+    }
+    (0..count).all(|i| {
+        let (mine, theirs) = (units[here + i], other[there + i]);
+        if mine == theirs {
+            return true;
+        }
+        ignore_case
+            && (java_upper_unit(mine) == java_upper_unit(theirs)
+                || java_lower_unit(mine) == java_lower_unit(theirs))
+    })
+}
+
 fn index_of_char(haystack: &[u16], ch: i32, from: i32) -> i32 {
     let Some(encoded) = encode_char(ch) else {
         return -1;
@@ -1800,6 +1925,12 @@ fn last_index_of_char(haystack: &[u16], ch: i32, from: i32) -> i32 {
 
 fn encode_char(ch: i32) -> Option<Vec<u16>> {
     let ch = u32::try_from(ch).ok()?;
+    // A lone SURROGATE is a perfectly findable code unit — `indexOf(0xD83D)`
+    // asks about the high half of an emoji, which the string really contains.
+    // `char::from_u32` rejects one, so every such search answered -1.
+    if (0xD800..0xE000).contains(&ch) {
+        return Some(vec![u16::try_from(ch).ok()?]);
+    }
     let c = char::from_u32(ch)?;
     let mut buffer = [0u16; 2];
     Some(c.encode_utf16(&mut buffer).to_vec())
@@ -6312,6 +6443,16 @@ fn string_static(
             let reference = heap.alloc_string(&text);
             Ok(Some(JValue::Ref(Some(reference))))
         }
+        // `String.valueOf(char[])` / `copyValueOf(char[])` copy the UNITS
+        // verbatim. Rendering each through `char::from_u32` destroyed every
+        // surrogate PAIR — a non-BMP character came back as two U+FFFDs — and
+        // a null array must throw, not print "null" (that is the `Object`
+        // overload, which a `char[]` never takes).
+        ("valueOf" | "copyValueOf", [value]) if descriptor.starts_with("([C)") => {
+            let units = char_array_units(heap, value)?;
+            let reference = heap.alloc(HeapObject::JavaString(units));
+            Ok(Some(JValue::Ref(Some(reference))))
+        }
         ("valueOf" | "copyValueOf", [value]) => {
             // The descriptor disambiguates int/char/boolean, which all
             // arrive as JValue::Int.
@@ -6351,6 +6492,21 @@ fn string_static(
 /// shaped: a `String[]`, a `List`, or the first of individual `CharSequence`
 /// arguments. A null delimiter or a null array/iterable throws; a null element
 /// joins as the text `null`, as `StringJoiner` produces.
+/// The elements of a set-like collection, in iteration order — what
+/// `String.join(delimiter, Iterable)` walks when the argument is not a list.
+fn set_like_elements(heap: &Heap, reference: HeapRef) -> Option<Vec<JValue>> {
+    Some(match heap.get(reference)? {
+        HeapObject::HashSet(entries) => entries
+            .entries_in_order()
+            .into_iter()
+            .map(|(element, _)| element)
+            .collect(),
+        HeapObject::TreeSet { values, .. } => values.clone(),
+        HeapObject::UnmodifiableSet(inner) => set_like_elements(heap, *inner)?,
+        _ => return None,
+    })
+}
+
 fn string_join(
     heap: &mut Heap,
     descriptor: &str,
@@ -6359,7 +6515,8 @@ fn string_join(
     let delimiter = match args.first() {
         Some(JValue::Ref(Some(reference))) => heap.string_text(*reference).unwrap_or_default(),
         Some(JValue::Ref(None)) => {
-            return Err(throw("java.lang.NullPointerException: delimiter is null"));
+            // `Objects.requireNonNull(delimiter)` throws bare.
+            return Err(throw("java.lang.NullPointerException"));
         }
         _ => String::new(),
     };
@@ -6373,15 +6530,18 @@ fn string_join(
                 Some(HeapObject::RefArray(_, values)) => values.clone(),
                 _ => return Err(throw("java.lang.NullPointerException")),
             },
-            _ => return Err(throw("java.lang.NullPointerException: elements are null")),
+            _ => return Err(throw("java.lang.NullPointerException")),
         }
     } else if shape.starts_with("Ljava/util/List;") {
+        // `join(delimiter, Iterable)` takes ANY collection, so a Set or a
+        // Deque reaches here too — `list_values` sees only the sequence kinds.
         match args.get(1) {
-            Some(JValue::Ref(Some(reference))) => heap
-                .list_values(*reference)
-                .cloned()
-                .ok_or_else(|| throw("java.lang.NullPointerException"))?,
-            _ => return Err(throw("java.lang.NullPointerException: elements are null")),
+            Some(JValue::Ref(Some(reference))) => match heap.list_values(*reference) {
+                Some(values) => values.clone(),
+                None => set_like_elements(heap, *reference)
+                    .ok_or_else(|| throw("java.lang.NullPointerException"))?,
+            },
+            _ => return Err(throw("java.lang.NullPointerException")),
         }
     } else {
         args.get(1..).unwrap_or(&[]).to_vec()

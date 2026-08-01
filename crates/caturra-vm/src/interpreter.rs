@@ -9150,6 +9150,15 @@ impl<'run> Interpreter<'run> {
                 return Ok(None);
             }
         }
+        // `String.CASE_INSENSITIVE_ORDER` (compiler-lowered): the shared
+        // case-folding comparator.
+        if class_name == "java/lang/String" && method_name == "__caseInsensitiveOrder" {
+            let comparator = self.heap.alloc(crate::value::HeapObject::Comparator(
+                crate::value::ComparatorSpec::CaseInsensitive,
+            ));
+            frame.stack.push(JValue::Ref(Some(comparator)));
+            return Ok(None);
+        }
         // `Optional.of(x)` / `empty()` / `ofNullable(x)`.
         if class_name == "Optional" || class_name == "java/util/Optional" {
             let value = match (method_name, args) {
@@ -10467,6 +10476,20 @@ impl<'run> Interpreter<'run> {
         // own copy (it is allocated before its `ldc`'d argument, so it has the
         // lower index `find_string` picks), making `new String("x").intern() ==
         // "x"` wrongly false.
+        // `"ab".repeat(0)` answers the `""` LITERAL, so `== ""` is true. Only
+        // the interpreter holds the string pool `ldc` fills, and the literal
+        // may not have been loaded yet when the call runs.
+        if method_name == "repeat"
+            && matches!(args.first(), Some(JValue::Int(0)))
+            && matches!(
+                self.heap.get(receiver),
+                Some(crate::value::HeapObject::JavaString(_))
+            )
+        {
+            let empty = self.intern_string("");
+            frame.stack.push(JValue::Ref(Some(empty)));
+            return Ok(None);
+        }
         if method_name == "intern"
             && args.is_empty()
             && let Some(crate::value::HeapObject::JavaString(units)) = self.heap.get(receiver)
@@ -10864,6 +10887,11 @@ impl<'run> Interpreter<'run> {
         };
         match spec {
             ComparatorSpec::Natural => self.compare_for_sort(a, b),
+            // `String.CASE_INSENSITIVE_ORDER`: unit-by-unit on the folded text.
+            ComparatorSpec::CaseInsensitive => {
+                let (left, right) = (self.string_value_of(a, 0)?, self.string_value_of(b, 0)?);
+                Ok(intrinsics::compare_ignore_case(&left, &right))
+            }
             ComparatorSpec::ByKey(extractor) => {
                 let key_a = self.call_apply(extractor, a)?;
                 let key_b = self.call_apply(extractor, b)?;

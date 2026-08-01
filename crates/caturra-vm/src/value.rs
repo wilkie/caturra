@@ -51,6 +51,9 @@ pub enum ComparatorSpec {
     /// `Comparator.comparing(keyExtractor, keyComparator)` — extract the key,
     /// then order the KEYS by a comparator of their own rather than naturally.
     ByKeyWith(HeapRef, HeapRef),
+    /// `String.CASE_INSENSITIVE_ORDER` — compares two strings by their
+    /// case-folded code units.
+    CaseInsensitive,
     /// `Comparator.nullsFirst(inner)` / `nullsLast(inner)` — `null` sorts
     /// before (or after) everything, two nulls are equal, and anything else is
     /// left to `inner`. `first` selects which end the nulls go to.

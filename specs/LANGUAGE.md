@@ -441,6 +441,32 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **The String tail: identity, surrogates, and the API corners**
+  (2026-07-31, round 8) — the string-tail-2 cluster, all 15:
+  - **The JDK returns THIS string** when a range covers all of it, so
+    `s.substring(0) == s`, `s.substring(0, s.length()) == s` and
+    `s.subSequence(0, s.length()) == s` are all true, `repeat(1)` answers the
+    receiver and `repeat(0)` the `""` LITERAL (interned, so `== ""` holds).
+    Each allocated a copy and answered false.
+  - **A `char[]` round-trip keeps SURROGATE PAIRS.** `String.valueOf(char[])`
+    and `copyValueOf` rendered unit by unit through a code point, so every
+    non-BMP character came back as two U+FFFDs and the string no longer
+    equalled itself. `String.valueOf((char[]) null)` throws — it is not the
+    `Object` overload, which a `char[]` never takes. And `indexOf(int)` on a
+    lone SURROGATE now finds it: `char::from_u32` rejects one, so every search
+    for a real code unit of the string answered -1.
+  - **Case folding is per UNIT with the SIMPLE mapping**, as
+    `Character.toUpperCase` is: Rust's full mapping expands `ß` to `SS`, which
+    made `compareToIgnoreCase` call equal strings unequal.
+  - **The missing API**: `regionMatches` (both forms), `contentEquals` over
+    the JDK's real `CharSequence` parameter — two narrower overloads made a
+    `CharSequence`-typed argument "no suitable method" and a `null` ambiguous
+    between overloads Java does not have — `String.CASE_INSENSITIVE_ORDER`,
+    the `Object` methods on a `subSequence` result, `join` over any `Iterable`
+    (a `Set` was refused) and with a `StringBuilder` or `null` delimiter, and
+    the BARE NullPointerExceptions `join`'s null checks really throw.
+  - Pinned by `diff_string_identity_and_surrogates` and
+    `diff_string_api_corners`.
 - **Boxing identity, `Math`'s overloads, and the flow that decides definite
   assignment** (2026-07-31, round 8) — the boxing-identity (6),
   operator-order (5), compound-assignment (2), math-deep (8 of 10) and

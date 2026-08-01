@@ -5679,6 +5679,25 @@ const S: BParam = BParam::Str;
 
 const STRING_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `regionMatches` — the case-sensitive and case-insensitive forms.
+    bm(
+        "regionMatches",
+        &[BParam::Int, BParam::Str, BParam::Int, BParam::Int],
+        BRet::Boolean,
+        "(ILjava/lang/String;II)Z",
+    ),
+    bm(
+        "regionMatches",
+        &[
+            BParam::Boolean,
+            BParam::Int,
+            BParam::Str,
+            BParam::Int,
+            BParam::Int,
+        ],
+        BRet::Boolean,
+        "(ZILjava/lang/String;II)Z",
+    ),
     BuiltinMethod {
         name: "length",
         params: &[],
@@ -5869,16 +5888,13 @@ const STRING_METHODS: &[BuiltinMethod] = &[
         ret: BRet::Int,
         descriptor: "(Ljava/lang/String;)I",
     },
+    // ONE overload, over the JDK's actual parameter type: a `String`, a
+    // `StringBuilder`, a `CharSequence`-typed value and `null` all fit. Two
+    // narrower entries made `contentEquals(cs)` "no suitable method" and
+    // `contentEquals(null)` ambiguous between overloads Java does not have.
     BuiltinMethod {
         name: "contentEquals",
-        params: &[BParam::Str],
-        ret: BRet::Boolean,
-        descriptor: "(Ljava/lang/CharSequence;)Z",
-    },
-    // `contentEquals(CharSequence)` also takes a StringBuilder.
-    BuiltinMethod {
-        name: "contentEquals",
-        params: &[BParam::Builder],
+        params: &[BParam::CharSeq],
         ret: BRet::Boolean,
         descriptor: "(Ljava/lang/CharSequence;)Z",
     },
@@ -7119,6 +7135,15 @@ const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
 /// resolve against whichever the reference holds.
 const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // Every reference has these; a `CharSequence`-typed value is a String or a
+    // StringBuilder at runtime, and the VM dispatches on the actual object.
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm("hashCode", &[], BRet::Int, "()I"),
     bm("length", &[], BRet::Int, "()I"),
     bm("charAt", &[I], BRet::Char, "(I)C"),
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
@@ -15600,13 +15625,29 @@ impl BodyGen<'_> {
     /// correctly (a null element and a null array are indistinguishable at
     /// runtime otherwise).
     #[allow(clippy::option_option)] // matches builtin_static_call's return shape
+    /// Render a `CharSequence`-typed value on the stack as a `String` (its own
+    /// `toString`), so a `StringBuilder` delimiter or element reaches the VM as
+    /// text. A `null` rides through untouched — the JDK throws at run time.
+    fn coerce_char_sequence(&mut self, ty: JType) -> JType {
+        match ty {
+            JType::StringBuilder | JType::CharSequence => self.coerce_to_string_for_output(ty),
+            other => other,
+        }
+    }
+
+    #[allow(clippy::option_option)] // matches builtin_static_call's return shape
     fn emit_string_join(&mut self, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
         let [delimiter, rest @ ..] = args else {
             self.error(span, "no suitable method found for join() in class String");
             return None;
         };
+        // The delimiter is a `CharSequence`: a String, a StringBuilder, or the
+        // null literal (which throws at run time, not compile time).
         let delim_ty = self.expr(delimiter);
-        if delim_ty != JType::Str && delim_ty != JType::Error {
+        if !matches!(
+            delim_ty,
+            JType::Str | JType::StringBuilder | JType::CharSequence | JType::Null | JType::Error
+        ) {
             self.error(
                 delimiter.span(),
                 format!(
@@ -15614,6 +15655,10 @@ impl BodyGen<'_> {
                     delim_ty.describe(self.table)
                 ),
             );
+        }
+        if delim_ty != JType::Str {
+            let rendered = self.coerce_char_sequence(delim_ty);
+            self.numeric_conversion(rendered, JType::Str);
         }
         let mut width: u16 = 1;
         // A single array/list argument is the elements themselves; anything else
@@ -15626,6 +15671,12 @@ impl BodyGen<'_> {
                     dims: 1
                 } | JType::List(_)
                     | JType::Collection(_)
+                    // `join(delimiter, Iterable)` takes ANY collection, which is
+                    // how a Set reaches it.
+                    | JType::Set(_)
+                    | JType::TreeSet(_)
+                    | JType::Stack(_)
+                    | JType::LinkedList { .. }
             ) {
             let ty = self.expr(single);
             width += 1;
@@ -18686,6 +18737,19 @@ impl BodyGen<'_> {
             {
                 JType::Int
             }
+            // `String.CASE_INSENSITIVE_ORDER` is a `Comparator<String>`, not a
+            // scalar constant — mirrored here or `Arrays.sort(a, it)` could not
+            // type its argument.
+            Expr::Name { path, .. }
+                if path.len() == 2
+                    && path[0] == "String"
+                    && path[1] == "CASE_INSENSITIVE_ORDER"
+                    && !self.table.has_class("String") =>
+            {
+                self.table
+                    .class_id("__Comparator")
+                    .map_or(JType::Error, JType::Object)
+            }
             Expr::Name { path, .. }
                 if path.len() == 2
                     && !self.table.has_class(&path[0])
@@ -20201,6 +20265,25 @@ impl BodyGen<'_> {
             self.code.push_op(op::ARRAYLENGTH, 1);
             self.code.drop_stack(1);
             return JType::Int;
+        }
+        // `String.CASE_INSENSITIVE_ORDER` — a `Comparator<String>` constant,
+        // which the VM builds as a factory comparator.
+        if path.len() == 2
+            && path[0] == "String"
+            && path[1] == "CASE_INSENSITIVE_ORDER"
+            && !self.table.has_class("String")
+        {
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/lang/String",
+                "__caseInsensitiveOrder",
+                "()Ljava/util/Comparator;",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            return self
+                .table
+                .class_id("__Comparator")
+                .map_or(JType::Error, JType::Object);
         }
         // Intrinsic constants: Integer.MAX_VALUE / MIN_VALUE.
         if path.len() == 2
