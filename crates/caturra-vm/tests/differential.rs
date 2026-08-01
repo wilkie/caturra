@@ -20105,3 +20105,75 @@ public class DiffStringCorners {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// The regex engine (audit round 8): what a pattern means, and where it errors.
+// ---------------------------------------------------------------------------
+
+// What a pattern MEANS: a quantifier after `\Q…\E` binds only the last quoted
+// character, a `&&` intersection binds tighter than the class's negation, `$`
+// does not fire between a final CR and LF, `[a-[b]]` is a union (not a range),
+// a backreference to a group that does not exist simply never matches, and an
+// ordinary alternation over a thousand characters must not exhaust the
+// backtracking budget and report "no match".
+differential_test!(
+    diff_regex_semantics,
+    "DiffRegexSemantics",
+    r#"
+import java.util.Arrays;
+
+public class DiffRegexSemantics {
+    public static void main(String[] args) {
+        System.out.println("abb".matches("\\Qab\\E+") + " " + "abab".matches("\\Qab\\E+"));
+        System.out.println("b".matches("[^a-c&&[^b]]") + " " + "a".matches("[^ab&&b-d]"));
+        System.out.println("b".matches("[a-c&&[^b]]") + " " + "a".matches("[a-c&&[ab]]"));
+
+        String out = "a\r\n".replaceAll("$", "X");
+        System.out.println(out.length() + " " + out.replace("\r", "<CR>").replace("\n", "<LF>"));
+
+        System.out.println("a".matches("[a-[b]]") + " " + "b".matches("[a-[b]]"));
+        System.out.println("A".matches("\\1") + " " + "A".matches("(a)\\2"));
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 1000; i++) { sb.append('a'); }
+        sb.append('c');
+        System.out.println(sb.toString().replaceAll("a*b|c", "X").endsWith("X"));
+
+        System.out.println(Arrays.toString("one\ntwo\r\nthree".split("\\R")));
+        System.out.println("A".matches("\\x{41}") + " " + "é".matches("\\x{e9}"));
+    }
+}
+"#
+);
+
+// Where a pattern ERRORS, and with which index: the JDK reports the cursor its
+// parse stopped at, not where the construct began. Plus the replacement-string
+// checks — a lone trailing backslash and a bare trailing `$` each have their
+// own IllegalArgumentException.
+differential_test!(
+    diff_regex_errors,
+    "DiffRegexErrors",
+    r#"
+public class DiffRegexErrors {
+    static void pattern(String p) {
+        try { "x".matches(p); System.out.println("ok"); }
+        catch (RuntimeException e) { System.out.println(e.getMessage().split("\n")[0]); }
+    }
+    static void replace(String r) {
+        try { System.out.println("abc".replaceAll("b", r)); }
+        catch (RuntimeException e) { System.out.println(e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        pattern("a{2,1}");
+        pattern("\\q");
+        pattern("a)");
+        pattern("(ab");
+        pattern("a{x");
+        pattern("[a-&&b]");
+        replace("x\\");
+        replace("x$");
+        replace("x$1");
+    }
+}
+"#
+);

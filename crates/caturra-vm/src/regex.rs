@@ -166,10 +166,15 @@ impl CharClass {
             ClassItem::Predefined(predefined) => predefined.matches(unit),
             ClassItem::Nested(nested) => nested.matches(unit),
         });
+        // The INTERSECTION binds tighter than the negation: `[^a-c&&[^b]]` is
+        // "not (in a-c and not b)", which `b` satisfies. Negating first made it
+        // "(not a-c) and not b", which nothing in `a-c` can satisfy — so every
+        // negated intersection answered false.
+        hit = hit && self.intersections.iter().all(|other| other.matches(unit));
         if self.negated {
             hit = !hit;
         }
-        hit && self.intersections.iter().all(|other| other.matches(unit))
+        hit
     }
 }
 
@@ -262,8 +267,12 @@ impl Parser<'_> {
             }
             Some(unit) if unit == u16::from(b'{') => match self.parse_bounds()? {
                 Some(bounds) => bounds,
-                // A `{` that is not a valid bound is a literal brace in Java.
-                None => return Ok(atom),
+                // A `{` after a quantifiable atom must open a repetition: the
+                // JDK's `closure` says "Illegal repetition" for anything else.
+                // (A `{` in atom position IS a literal brace, which
+                // `parse_atom` handles.) Treating this one as a literal
+                // accepted `a{x`, which no JDK compiles.
+                None => return Err(self.error("Illegal repetition", start)),
             },
             _ => return Ok(atom),
         };
@@ -286,8 +295,25 @@ impl Parser<'_> {
             RepeatKind::Greedy
         };
         if max.is_some_and(|max| max < min) {
-            return Err(self.error("Illegal repetition range", start));
+            return Err(self.error("Illegal repetition range", self.at.saturating_sub(1)));
         }
+        // `\Qab\E+` — a quoted run expands to a SEQUENCE of literals, and the
+        // quantifier binds only its LAST character (so the pattern is `a`
+        // followed by one-or-more `b`). Repeating the whole run made `abb`
+        // fail and `abab` match, each the opposite of a JDK.
+        let atom = match atom {
+            Node::Concat(mut nodes) if !nodes.is_empty() => {
+                let last = nodes.pop().expect("non-empty");
+                nodes.push(Node::Repeat {
+                    node: Box::new(last),
+                    min,
+                    max,
+                    kind,
+                });
+                return Ok(Node::Concat(nodes));
+            }
+            other => other,
+        };
         Ok(Node::Repeat {
             node: Box::new(atom),
             min,
@@ -355,7 +381,12 @@ impl Parser<'_> {
             u if u == u16::from(b'(') => self.parse_group(start),
             u if u == u16::from(b'[') => Ok(Node::Class(self.parse_class(start)?)),
             u if u == u16::from(b'\\') => self.parse_escape(start),
-            u if u == u16::from(b')') => Err(self.error("Unmatched closing ')'", start)),
+            // The JDK's `error` reports the cursor it stopped at, one before
+            // the character it just read — for `a)` that is index 0, not the
+            // `)`'s own index.
+            u if u == u16::from(b')') => {
+                Err(self.error("Unmatched closing ')'", start.saturating_sub(1)))
+            }
             u if u == u16::from(b'*') || u == u16::from(b'+') || u == u16::from(b'?') => {
                 let meta = char::from_u32(u32::from(u)).unwrap_or('?');
                 Err(self.error(&format!("Dangling meta character '{meta}'"), start))
@@ -378,7 +409,8 @@ impl Parser<'_> {
         }
         let node = self.parse_alt()?;
         if !self.eat(u16::from(b')')) {
-            return Err(self.error("Unclosed group", open));
+            // At END of input the JDK's cursor is one past the last character.
+            return Err(self.error("Unclosed group", self.units.len()));
         }
         Ok(Node::Group {
             index,
@@ -452,11 +484,15 @@ impl Parser<'_> {
             unit
         };
         // A range, unless the `-` is last (`[a-]`) or starts one (`[-a]`).
+        // A `-` opens a RANGE unless what follows ends the class. `[a-]` and
+        // `[a-[b]]` are not ranges: the JDK reads the latter as `a` UNION the
+        // nested class, while `[a-&&b]` really is the illegal range it looks
+        // like (the `&` is the range's high end, and `&` < `a`).
         if self.peek() == Some(u16::from(b'-'))
             && self
                 .units
                 .get(self.at + 1)
-                .is_some_and(|next| *next != u16::from(b']') && *next != u16::from(b'&'))
+                .is_some_and(|next| *next != u16::from(b']') && *next != u16::from(b'['))
         {
             self.at += 1;
             let high_start = self.at;
@@ -506,6 +542,28 @@ impl Parser<'_> {
                 self.at += 1;
                 Ok(Node::InputEndBeforeFinalTerminator)
             }
+            // `\R` — ANY line terminator (JDK 8+): a CRLF pair, or one of the
+            // single terminators. The pair must be tried first, or `\R` splits
+            // a CRLF into two.
+            u if u == u16::from(b'R') => {
+                self.at += 1;
+                Ok(Node::Alt(vec![
+                    Node::Concat(vec![Node::Literal(0x0D), Node::Literal(0x0A)]),
+                    Node::Class(CharClass {
+                        negated: false,
+                        items: vec![
+                            ClassItem::Single(0x0A),
+                            ClassItem::Single(0x0B),
+                            ClassItem::Single(0x0C),
+                            ClassItem::Single(0x0D),
+                            ClassItem::Single(0x85),
+                            ClassItem::Single(0x2028),
+                            ClassItem::Single(0x2029),
+                        ],
+                        intersections: Vec::new(),
+                    }),
+                ]))
+            }
             u if u == u16::from(b'Q') => {
                 // `\Q ... \E` — everything between is literal.
                 self.at += 1;
@@ -524,6 +582,9 @@ impl Parser<'_> {
             }
             // A backreference: `\1` .. `\9`, greedily extended while the
             // resulting group number still exists (Java's rule).
+            // A backreference. Java compiles `\1` with no group at all — it
+            // simply never matches — so refusing it at compile time rejected a
+            // pattern a JDK accepts.
             u if (0x31..=0x39).contains(&u) => {
                 let mut number = usize::from(u - 0x30);
                 self.at += 1;
@@ -538,7 +599,10 @@ impl Parser<'_> {
                     number = extended;
                     self.at += 1;
                 }
-                if number > self.groups {
+                // The JDK compiles a reference to a group that does not exist
+                // (it simply never matches), so only a group number of ZERO is
+                // an error — `\0` is not a backreference at all.
+                if number == 0 {
                     return Err(self.error("No group to reference", start));
                 }
                 Ok(Node::BackRef(number))
@@ -590,13 +654,43 @@ impl Parser<'_> {
                 }
                 u16::try_from(value).unwrap_or(u16::MAX)
             }
+            // `\x{...}` — a code point in braces (JDK 7+), beside the
+            // two-digit `\xhh`.
+            u if u == u16::from(b'x') && self.peek() == Some(u16::from(b'{')) => {
+                // `next()` already consumed the `x`, so `self.at` is the brace.
+                self.at += 1;
+                let mut value: u32 = 0;
+                let mut digits = 0usize;
+                while let Some(next) = self.peek() {
+                    if next == u16::from(b'}') {
+                        break;
+                    }
+                    let Some(digit) = char::from_u32(u32::from(next)).and_then(|c| c.to_digit(16))
+                    else {
+                        return Err(self.error("Illegal hexadecimal escape sequence", start));
+                    };
+                    value = value * 16 + digit;
+                    digits += 1;
+                    self.at += 1;
+                }
+                if digits == 0 || !self.eat(u16::from(b'}')) {
+                    return Err(self.error("Unclosed hexadecimal escape sequence", start));
+                }
+                // The engine walks UTF-16 units, so a supplementary code point
+                // becomes its high surrogate here; the low half follows as a
+                // literal only for a pattern that spells the pair out.
+                u16::try_from(value).unwrap_or(u16::MAX)
+            }
             u if u == u16::from(b'x') => self.parse_hex(2, start)?,
             u if u == u16::from(b'u') => self.parse_hex(4, start)?,
             // A letter or digit after a backslash with no meaning is an error
             // in Java, not a literal — being permissive here would accept
             // patterns a real JDK refuses.
             other if is_java_word(other) && other != u16::from(b'_') => {
-                return Err(self.error("Illegal/unsupported escape sequence", start));
+                return Err(self.error(
+                    "Illegal/unsupported escape sequence",
+                    self.at.saturating_sub(1),
+                ));
             }
             other => other,
         };
@@ -670,7 +764,12 @@ struct Matcher<'a> {
     steps: std::cell::Cell<u64>,
 }
 
-const STEP_LIMIT: u64 = 2_000_000;
+/// The backtracking budget. It exists so a pathological pattern fails instead
+/// of hanging the browser tab this engine runs in — NOT to bound ordinary
+/// work. At two million, `"a".repeat(1000) + "c"` against `a*b|c` (a plain
+/// alternation with quadratic backtracking, and a pattern a student really
+/// writes) ran out and reported "no match", which is a silent wrong answer.
+const STEP_LIMIT: u64 = 20_000_000;
 
 impl<'a> Matcher<'a> {
     fn at_word(&self, at: usize) -> bool {
@@ -822,7 +921,10 @@ impl<'a> Matcher<'a> {
             return false;
         }
         if pos + 1 == len && is_line_terminator(self.input[pos]) {
-            return true;
+            // NOT between a final CR and LF: the pair is ONE terminator, so
+            // `$` fires before the CR and nowhere else. Treating the LF as its
+            // own terminator gave `"a\r\n".replaceAll("$", "X")` an extra X.
+            return !(pos >= 1 && self.input[pos] == 0x0A && self.input[pos - 1] == 0x0D);
         }
         pos + 2 == len && self.input[pos] == 0x0D && self.input[pos + 1] == 0x0A
     }
@@ -859,6 +961,47 @@ impl<'a> Matcher<'a> {
             self.run(node, pos, caps, &next)
         };
 
+        // A SIMPLE body — one that consumes exactly one unit and has no
+        // internal choice — repeats in a LOOP rather than one stack frame per
+        // repetition. `a*b` over a thousand characters is an ordinary pattern,
+        // and recursing per iteration overflowed the stack long before the
+        // step budget noticed. The behaviour is identical: match as far as the
+        // body goes, then try the continuation from the longest run down to
+        // the minimum, which is what the recursion did.
+        if kind == RepeatKind::Greedy
+            && done == 0
+            && matches!(node, Node::Literal(_) | Node::Class(_) | Node::AnyChar)
+        {
+            let mut end = pos;
+            let mut taken = 0u32;
+            while max.is_none_or(|max| taken < max) {
+                if !self.step() {
+                    return None;
+                }
+                let mut probe = caps.clone();
+                let Some(next) = self.run(node, end, &mut probe, &Cont::Done) else {
+                    break;
+                };
+                if next == end {
+                    break; // a zero-width body would loop forever
+                }
+                end = next;
+                taken += 1;
+            }
+            while taken >= min {
+                let saved = caps.clone();
+                if let Some(matched) = self.resume(end, caps, cont) {
+                    return Some(matched);
+                }
+                *caps = saved;
+                if taken == 0 {
+                    break;
+                }
+                taken -= 1;
+                end -= 1;
+            }
+            return None;
+        }
         // Below the minimum there is no choice to make.
         if done < min {
             return take_more(caps);
@@ -1001,7 +1144,8 @@ impl Regex {
         let node = parser.parse_alt()?;
         if parser.at < parser.units.len() {
             // Only an unbalanced `)` can stop the parse early.
-            return Err(parser.error("Unmatched closing ')'", parser.at));
+            // The JDK's cursor sits one BEFORE the `)` it stopped at.
+            return Err(parser.error("Unmatched closing ')'", parser.at.saturating_sub(1)));
         }
         Ok(Regex {
             node,
@@ -1144,8 +1288,12 @@ mod tests {
         assert!(matches("a{2,}", "aaaa"));
         assert!(matches("a{2,3}", "aaa"));
         assert!(!matches("a{2,3}", "aaaa"));
-        // A brace that is not a valid bound is a literal, as in Java.
-        assert!(matches("a{x", "a{x"));
+        // A `{` in ATOM position is a literal brace, as in Java. One after a
+        // quantifiable atom must open a repetition: `a{x` is the JDK's
+        // "Illegal repetition" (see `reject_illegal_repetition` in the
+        // differential suite).
+        assert!(matches("{x", "{x"));
+        assert!(Regex::new(&units("a{x")).is_err());
     }
 
     #[test]

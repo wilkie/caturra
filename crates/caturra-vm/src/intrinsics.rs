@@ -2210,10 +2210,17 @@ fn expand_replacement(
         let unit = replacement[at];
         if unit == u16::from(b'\\') {
             at += 1;
-            if at < replacement.len() {
-                out.push(replacement[at]);
-                at += 1;
+            // A replacement ending in a LONE backslash is an error: the JDK's
+            // `appendExpandedReplacement` says "character to be escaped is
+            // missing". Silently dropping it accepted a replacement a JDK
+            // refuses.
+            if at >= replacement.len() {
+                return Err(throw(String::from(
+                    "java.lang.IllegalArgumentException: character to be escaped is missing",
+                )));
             }
+            out.push(replacement[at]);
+            at += 1;
             continue;
         }
         if unit != u16::from(b'$') {
@@ -2242,9 +2249,14 @@ fn expand_replacement(
             at += 1;
         }
         let Some(group) = group else {
-            return Err(throw(String::from(
-                "java.lang.IllegalArgumentException: Illegal group reference",
-            )));
+            // A bare `$` at the very END has its own JDK message; a `$`
+            // followed by something that is not a digit or `{` is the generic
+            // one.
+            return Err(throw(String::from(if at >= replacement.len() {
+                "java.lang.IllegalArgumentException: Illegal group reference: group index is missing"
+            } else {
+                "java.lang.IllegalArgumentException: Illegal group reference"
+            })));
         };
         if group > regex.group_count() {
             return Err(throw(format!(

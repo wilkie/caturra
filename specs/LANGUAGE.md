@@ -441,6 +441,41 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     NPEs at the first call rather than at creation. Both need the receiver
     hoisted out of the synthesized class's body, which is a statement-level
     rewrite this pass does not do yet.
+- **The regex engine: what a pattern means, and where it errors**
+  (2026-07-31, round 8) — the regex-deep cluster, 12 of 13:
+  - **A quantifier after `\Q…\E` binds the LAST quoted character.** A quoted
+    run expands to a sequence of literals, so `\Qab\E+` is `a` then one-or-
+    more `b` — caturra repeated the whole run, making `abb` fail and `abab`
+    match, each the opposite of a JDK.
+  - **A `&&` intersection binds tighter than the class's negation**:
+    `[^a-c&&[^b]]` is "not (in a-c and not b)", which `b` satisfies. Negating
+    first made every negated intersection answer false.
+  - **`$` does not fire between a final CR and LF** — the pair is ONE line
+    terminator, so `"a\r\n".replaceAll("$", "X")` gets one X, not two.
+  - **`[a-[b]]` is a UNION, not a range** (a `-` before `[` does not open one),
+    while `[a-&&b]` really is the illegal range it looks like.
+  - **A backreference to a group that does not exist compiles** and simply
+    never matches; only `\0` is an error.
+  - **`\R` and `\x{…}`** are legal JDK-11 escapes and were refused.
+  - **A `{` after a quantifiable atom must open a repetition**: `a{x` is the
+    JDK's "Illegal repetition", not a literal brace (a `{` in ATOM position
+    still is one).
+  - **The replacement string is checked**: a lone trailing backslash is
+    "character to be escaped is missing", and a bare trailing `$` has its own
+    "group index is missing" wording.
+  - **The error INDEX is where the parse stopped**, as the JDK's cursor
+    reports it — not where the construct began, which put the caret under the
+    wrong character in four different messages.
+  - **A simple greedy repeat runs in a LOOP**, not one stack frame per
+    repetition: `a*b` over a thousand characters is an ordinary pattern, and
+    recursing per iteration exhausted the backtracking budget (silently
+    reporting "no match") long before it finished. The budget is raised to
+    match, and the behaviour is unchanged — match as far as the body goes,
+    then try the continuation from the longest run down.
+  - **One left open**: matching walks UTF-16 CODE UNITS, so `.` and `[^…]`
+    treat a supplementary character as two. Fixing it means the matcher
+    stepping by code point throughout.
+  - Pinned by `diff_regex_semantics` and `diff_regex_errors`.
 - **The String tail: identity, surrogates, and the API corners**
   (2026-07-31, round 8) — the string-tail-2 cluster, all 15:
   - **The JDK returns THIS string** when a range covers all of it, so
