@@ -752,6 +752,39 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **Throwable's own contract, and what a catch parameter's type is**
+  (2026-08-02, round 9, JLS §11) — the catch-semantics cluster:
+  - **A cause is set ONCE.** `initCause` on an exception that already has one
+    throws `IllegalStateException: Can't overwrite cause with …` rather than
+    silently replacing it; self-causation is refused too.
+  - **`getLocalizedMessage()` is `getMessage()`.** The JDK's default body IS
+    `return getMessage();`, so an override of `getMessage` answers for both.
+    caturra read the stored `__message` field, so a subclass that COMPUTES
+    its message returned the raw one from `getLocalizedMessage`.
+  - **`super.getMessage()` / `super.toString()` inside a user exception now
+    compile.** Its superclass is a library throwable with no entry in the
+    class table, so `super` was refused as "X has no superclass" — on the
+    single most common thing to write in an exception subclass.
+    `super.toString()` reads the message VIRTUALLY, as `Throwable.toString`
+    does, so an overridden `getMessage` shows through it.
+  - **A multi-catch parameter's type is the least upper bound of its
+    alternatives**, not `Throwable`: `catch (A | B e)` over two subclasses of
+    `Base` can call what `Base` declares. Every such call was refused.
+  - **Three validations javac makes and caturra did not**: precise rethrow
+    requires an effectively final parameter (assigned, `throw e` throws the
+    DECLARED type, which the method must report — this let an under-declared
+    `throws` compile); every name in a `throws` clause must be a Throwable;
+    and a generic class may not extend Throwable. A `catch` of a real
+    non-throwable type now names it as javac does rather than claiming the
+    class does not exist.
+  - Deferred: a lambda BODY may still throw a checked exception its
+    functional interface does not declare — the synthesized lambda class
+    carries no `throws` contract, so the check has nothing to compare
+    against; the program fails at run time with that exception rather than
+    at compile time.
+  - Pinned by `diff_throwable_contract`, `diff_multi_catch_lub`,
+    `reject_rethrow_of_assigned_parameter`, `reject_throws_non_throwable`,
+    `reject_generic_throwable` and `reject_catch_non_throwable`.
 - **A format argument is rendered by the VM, not the call site**
   (2026-08-02, round 9, `java.util.Formatter`) — the format-conversions
   cluster:

@@ -2840,6 +2840,76 @@ impl<'run> Interpreter<'run> {
             let lines = self.construction_trace_lines();
             self.exception_traces.insert(receiver, lines);
         }
+        // `super.getMessage()` / `super.toString()` inside a user exception
+        // subclass: the superclass is a LIBRARY throwable, so there is no user
+        // method to dispatch to and the DEFAULT (non-virtual) behaviour is what
+        // `super` asks for — the stored message, and Throwable's
+        // `name: message` rendering.
+        if caturra_classfile::exceptions::is_exception_class(target_class)
+            && descriptor == "()Ljava/lang/String;"
+            && matches!(
+                method_name,
+                "getMessage" | "getLocalizedMessage" | "toString"
+            )
+        {
+            let message = self
+                .heap
+                .get(receiver)
+                .and_then(|object| object.field("__message"))
+                .and_then(|value| match value {
+                    JValue::Ref(Some(text)) => self.heap.string_text(text),
+                    _ => None,
+                })
+                .or_else(|| match self.heap.get(receiver) {
+                    Some(crate::value::HeapObject::Exception { message, .. }) => message.clone(),
+                    _ => None,
+                });
+            let value = if method_name == "toString" {
+                let name = self.object_class_name(receiver).replace('/', ".");
+                // Throwable.toString() reads the message VIRTUALLY (through
+                // `getLocalizedMessage`), so a subclass that overrides
+                // `getMessage` sees its own text inside `super.toString()`.
+                let class_name = match self.heap.get(receiver) {
+                    Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                        Some(class_name.clone())
+                    }
+                    _ => None,
+                };
+                let message = match class_name {
+                    Some(class_name) => {
+                        let dispatched = self.user_virtual_dispatch(
+                            receiver,
+                            &class_name,
+                            "getMessage",
+                            "()Ljava/lang/String;",
+                            &[],
+                        )?;
+                        let returned = match dispatched {
+                            UserDispatch::Call(frame) => self.run_nested(frame)?,
+                            UserDispatch::Value(value) => value,
+                        };
+                        match returned {
+                            Some(JValue::Ref(Some(text))) => self.heap.string_text(text),
+                            _ => None,
+                        }
+                    }
+                    None => message,
+                };
+                let text = match message {
+                    Some(message) => format!("{name}: {message}"),
+                    None => name,
+                };
+                JValue::Ref(Some(self.heap.alloc_string(&text)))
+            } else {
+                match message {
+                    Some(text) => JValue::Ref(Some(self.heap.alloc_string(&text))),
+                    None => JValue::NULL,
+                }
+            };
+            frame.stack.push(value);
+            self.vec_pool.push(args);
+            return Ok(None);
+        }
         // `new HashMap<>(map)` copies the entries. Handled HERE, not in the
         // heap-only intrinsic layer, because the source may be any map-shaped
         // object (a `singletonMap`, an `unmodifiableMap`, a TreeMap) and
@@ -8973,6 +9043,19 @@ impl<'run> Interpreter<'run> {
                 reason: String::from("instance of an unloaded class"),
             });
         }
+        // `getLocalizedMessage()` is not a separate message: the JDK's default
+        // body IS `return getMessage();`, so an OVERRIDE of `getMessage` must
+        // answer for it. caturra read the raw `__message` field instead, so a
+        // subclass that computes its message returned the stored one here.
+        let method_name = if method_name == "getLocalizedMessage"
+            && descriptor == "()Ljava/lang/String;"
+            && resolve_virtual(classes, instance_class, "getLocalizedMessage", descriptor).is_none()
+            && resolve_virtual(classes, instance_class, "getMessage", descriptor).is_some()
+        {
+            "getMessage"
+        } else {
+            method_name
+        };
         let found = resolve_virtual(classes, instance_class, method_name, descriptor);
         let Some((class, method)) = found else {
             // Throwable-descended classes inherit getMessage / getLocalizedMessage

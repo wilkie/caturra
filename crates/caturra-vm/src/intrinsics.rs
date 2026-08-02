@@ -703,9 +703,32 @@ pub fn invoke_virtual(
         }
         // `getCause()` — the chained cause, or null.
         (HeapObject::Exception { cause, .. }, "getCause") => Ok(Some(JValue::Ref(*cause))),
-        // `initCause(Throwable)` sets the cause and returns `this`.
+        // `initCause(Throwable)` sets the cause ONCE and returns `this`. A
+        // second call is an error, not an overwrite: the JDK refuses so that a
+        // cause set at construction cannot be silently replaced.
         (HeapObject::Exception { .. }, "initCause") => {
             let cause = args.first().and_then(ref_arg);
+            if let Some(JValue::Ref(Some(_))) = args.first().copied()
+                && cause == Some(receiver)
+            {
+                return Err(throw(
+                    "java.lang.IllegalArgumentException: Self-causation not permitted",
+                ));
+            }
+            if let Some(HeapObject::Exception {
+                cause: Some(existing),
+                ..
+            }) = heap.get(receiver)
+            {
+                let existing = *existing;
+                return Err(throw(format!(
+                    "java.lang.IllegalStateException: Can't overwrite cause with {}",
+                    match cause {
+                        Some(_) => throwable_to_string(heap, cause.unwrap_or(existing)),
+                        None => String::from("a null"),
+                    }
+                )));
+            }
             if let Some(HeapObject::Exception { cause: slot, .. }) = heap.get_mut(receiver) {
                 *slot = cause;
             }

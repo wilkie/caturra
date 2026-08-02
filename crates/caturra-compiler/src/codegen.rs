@@ -1880,6 +1880,21 @@ impl MethodTable {
         out
     }
 
+    /// Whether this simple name denotes a TYPE at all — a user class or a
+    /// library one. Used to tell "not a Throwable" apart from "no such class".
+    pub(crate) fn names_a_type(&self, name: &str) -> bool {
+        self.resolve_type(&TypeRef::Named(String::from(name)))
+            .is_some_and(|ty| ty != JType::Unsupported)
+    }
+
+    fn class_count(&self) -> usize {
+        self.class_names.len()
+    }
+
+    fn superclass_of(&self, id: ClassId) -> Option<ClassId> {
+        self.info_by_id(id).and_then(|info| info.superclass)
+    }
+
     fn has_user_class(&self, name: &str) -> bool {
         self.classes.contains_key(name) && !self.synthesized.contains(name)
     }
@@ -11284,7 +11299,7 @@ impl BodyGen<'_> {
             }
             // A multi-catch has ONE handler; the alternatives differ only in which
             // exceptions reach it, so the variable takes a type that covers them all.
-            let ty = Self::catch_variable_type(kinds);
+            let ty = self.catch_variable_type(kinds);
             let slot = self.next_slot;
             self.next_slot += 1;
             self.emit_store(slot, ty);
@@ -11479,8 +11494,39 @@ impl BodyGen<'_> {
     /// variable (its least upper bound). Climbing to a common library ancestor is
     /// exact for the library hierarchy; anything else falls back to `Throwable`,
     /// which is stricter than javac, never looser.
-    fn catch_variable_type(kinds: &[CatchKind]) -> JType {
+    fn catch_variable_type(&self, kinds: &[CatchKind]) -> JType {
         let [single] = kinds else {
+            // All-USER alternatives: climb from the first until it covers the
+            // rest, which is their least upper bound — `catch (A | B e)` over
+            // two subclasses of `Base` types `e` as a `Base`, so the methods
+            // `Base` declares are callable on it. Typing it as `Throwable`
+            // refused every one of them.
+            let user: Vec<ClassId> = kinds
+                .iter()
+                .filter_map(|kind| match kind {
+                    CatchKind::User(id) => Some(*id),
+                    CatchKind::Library(_) => None,
+                })
+                .collect();
+            if user.len() == kinds.len()
+                && let Some(&first) = user.first()
+            {
+                let mut candidate = Some(first);
+                let mut steps = 0usize;
+                while let Some(id) = candidate {
+                    steps += 1;
+                    if steps > self.table.class_count() + 1 {
+                        break;
+                    }
+                    if user.iter().all(|other| self.table.is_subtype(*other, id)) {
+                        return JType::Object(id);
+                    }
+                    candidate = self.table.superclass_of(id);
+                }
+                // The common ancestor is a LIBRARY throwable (both extend
+                // RuntimeException directly, say): fall through to Throwable,
+                // which is what the alternatives' shared surface is anyway.
+            }
             let library: Vec<u8> = kinds
                 .iter()
                 .filter_map(|kind| match kind {
@@ -11543,6 +11589,15 @@ impl BodyGen<'_> {
         }
         if let Some(internal) = caturra_classfile::exceptions::internal_name_of(name.as_str()) {
             return exception_id(internal).map(CatchKind::Library);
+        }
+        // A real type that is simply not a Throwable (`catch (String s)`) is a
+        // type error naming it, not a missing symbol.
+        if self.table.resolve_type(ty).is_some() {
+            self.error(
+                clause,
+                format!("incompatible types: {name} cannot be converted to Throwable"),
+            );
+            return None;
         }
         self.error(clause, format!("cannot find symbol: class {name}"));
         None
@@ -20229,6 +20284,27 @@ impl BodyGen<'_> {
         }
         let current = self.table.class_name(self.current_class_id).to_owned();
         let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass) else {
+            // A user exception's superclass is a LIBRARY throwable, which has no
+            // entry in the class table — but `super.getMessage()` and
+            // `super.toString()` inside one are ordinary Java, and were refused
+            // as "X has no superclass". The VM answers them with Throwable's
+            // own (non-virtual) behaviour.
+            if let Some(parent) = self
+                .table
+                .classes
+                .get(&current)
+                .and_then(|c| c.library_superclass)
+                && caturra_classfile::exceptions::is_exception_class(parent)
+                && matches!(method, "getMessage" | "getLocalizedMessage" | "toString")
+                && args.is_empty()
+            {
+                self.code.push_op(op::ALOAD_0, 1);
+                let method_ref =
+                    intern_method_ref(self.pool, parent, method, "()Ljava/lang/String;");
+                self.code.push_op_u16(op::INVOKESPECIAL, method_ref, 1);
+                self.code.drop_stack(1);
+                return Some(Some(JType::Str));
+            }
             self.error(span, format!("{current} has no superclass"));
             return None;
         };

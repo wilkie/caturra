@@ -20834,3 +20834,140 @@ public class DiffMapCopy {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: catch and Throwable semantics (JLS §11, §14.20).
+// ---------------------------------------------------------------------------
+
+// A cause is set ONCE, an exception cannot suppress itself, a
+// `getLocalizedMessage()` with no override IS `getMessage()` (so an overridden
+// one answers for it), and `super.getMessage()`/`super.toString()` inside a user
+// exception reach Throwable's own behaviour — the last did not compile at all.
+differential_test!(
+    diff_throwable_contract,
+    "DiffThrowable",
+    r#"
+class DiffEx extends RuntimeException {
+    DiffEx(String m) { super(m); }
+    @Override public String getMessage() { return "<" + super.getMessage() + ">"; }
+    @Override public String toString() { return "[" + super.toString() + "]"; }
+}
+public class DiffThrowable {
+    public static void main(String[] args) {
+        try { throw new DiffEx("hi"); }
+        catch (RuntimeException e) {
+            System.out.println(e);
+            System.out.println(e.getMessage());
+            System.out.println(e.getLocalizedMessage());
+        }
+        RuntimeException a = new RuntimeException("a");
+        RuntimeException b = new RuntimeException("b");
+        RuntimeException c = new RuntimeException("c");
+        c.initCause(a);
+        System.out.println("cause=" + c.getCause().getMessage());
+        try { c.initCause(b); }
+        catch (IllegalStateException e) { System.out.println("ISE " + e.getMessage()); }
+        System.out.println("still=" + c.getCause().getMessage());
+        try { a.addSuppressed(a); }
+        catch (IllegalArgumentException e) { System.out.println("IAE " + e.getMessage()); }
+        try { a.addSuppressed(null); }
+        catch (NullPointerException e) { System.out.println("NPE " + e.getMessage()); }
+        System.out.println("sup=" + a.getSuppressed().length);
+    }
+}
+"#
+);
+
+// A multi-catch parameter's static type is the least upper bound of the
+// alternatives, so the methods their common superclass declares are callable.
+// Typing it as `Throwable` refused every one of them.
+differential_test!(
+    diff_multi_catch_lub,
+    "DiffMultiCatch",
+    r#"
+public class DiffMultiCatch {
+    static class Base extends RuntimeException {
+        Base(String m) { super(m); }
+        int tag() { return 0; }
+    }
+    static class A extends Base { A(String m) { super(m); } int tag() { return 1; } }
+    static class B extends Base { B(String m) { super(m); } int tag() { return 2; } }
+    public static void main(String[] args) {
+        for (int k = 0; k < 2; k++) {
+            try {
+                if (k == 0) throw new A("a"); else throw new B("b");
+            } catch (A | B e) {
+                System.out.println("tag=" + e.tag() + " msg=" + e.getMessage());
+            }
+        }
+    }
+}
+"#
+);
+
+// javac: precise rethrow requires an effectively final catch parameter. Assigned,
+// `throw e` throws the parameter's DECLARED type, which this method does not
+// report.
+differential_reject!(
+    reject_rethrow_of_assigned_parameter,
+    "RejectRethrow",
+    r#"
+public class RejectRethrow {
+    static class A extends Exception {}
+    static class B extends Exception {}
+    static void g(int k) throws A, B { if (k == 0) throw new A(); throw new B(); }
+    static void f(int k) throws A, B {
+        try {
+            g(k);
+        } catch (Exception e) {
+            e = new Exception("re");
+            throw e;
+        }
+    }
+    public static void main(String[] args) throws Exception { f(0); }
+}
+"#
+);
+
+// javac: every name in a `throws` clause must be a Throwable.
+differential_reject!(
+    reject_throws_non_throwable,
+    "RejectThrows",
+    r#"
+public class RejectThrows {
+    static void f() throws Integer { }
+    public static void main(String[] args) { System.out.println("ran"); }
+}
+"#
+);
+
+// javac: a generic class may not extend Throwable — a catch clause could not
+// check its type argument.
+differential_reject!(
+    reject_generic_throwable,
+    "RejectGenericEx",
+    r#"
+public class RejectGenericEx {
+    static class GenEx<T> extends Exception { }
+    public static void main(String[] args) { System.out.println("ran"); }
+}
+"#
+);
+
+// javac: a `catch` of a real type that is not a Throwable is a type error naming
+// it, not a missing symbol.
+differential_reject!(
+    reject_catch_non_throwable,
+    "RejectCatchType",
+    r#"
+public class RejectCatchType {
+    public static void main(String[] args) {
+        try {
+            System.out.println("a");
+        } catch (String s) {
+            System.out.println("b");
+        }
+    }
+}
+"#
+);

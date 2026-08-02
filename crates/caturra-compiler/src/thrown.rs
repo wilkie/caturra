@@ -92,7 +92,29 @@ pub(crate) fn check(
     if path.starts_with('<') || class.is_anonymous || class.is_local {
         return;
     }
+    // JLS §8.1.2: a generic class may not extend Throwable — the catch clause
+    // that would name it cannot check a type argument at run time.
+    if !class.type_params.is_empty()
+        && let Some(parent) = &class.superclass
+        && resolve_exc(parent, table).is_some()
+    {
+        diagnostics.push(Diagnostic::error(
+            path,
+            String::from("a generic class may not extend java.lang.Throwable"),
+            class.span,
+        ));
+    }
     for method in &class.methods {
+        // JLS §8.4.6: every name in a `throws` clause must be a Throwable.
+        for thrown in &method.throws {
+            if resolve_exc(thrown, table).is_none() && table.names_a_type(thrown) {
+                diagnostics.push(Diagnostic::error(
+                    path,
+                    format!("incompatible types: {thrown} cannot be converted to Throwable"),
+                    method.span,
+                ));
+            }
+        }
         if method.is_abstract {
             continue;
         }
@@ -445,6 +467,18 @@ fn thrown_of_try(
     for clause in catches {
         // JLS §11.2.2 precise rethrow: an (effectively final) catch parameter
         // rethrows only what the body can throw that this clause catches.
+        // A REASSIGNED parameter forfeits precise rethrow, and then `throw e`
+        // throws its DECLARED type — which the enclosing method must report.
+        // Recording "unknown" instead let an under-declared `throws` compile.
+        if !body_thrown.unknown
+            && is_reassigned(&clause.name, &clause.body)
+            && let [declared] = clause.types.as_slice()
+        {
+            ctx.locals
+                .insert(clause.name.clone(), Binding::Declared(declared.clone()));
+            out.absorb(thrown_of_block(&clause.body, handlers, ctx));
+            continue;
+        }
         let precise = if body_thrown.unknown || is_reassigned(&clause.name, &clause.body) {
             None
         } else {
