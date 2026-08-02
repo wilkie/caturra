@@ -20971,3 +20971,77 @@ public class RejectCatchType {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: generic inference (JLS §18).
+// ---------------------------------------------------------------------------
+
+// A type variable that a WRAPPER argument pins. `Node<Integer>.get()` typed as
+// `Object`, so `Integer y = node.get()` did not compile — and, worse,
+// `p(node.get())` silently picked the `p(Object)` overload where javac picks
+// `p(Integer)`. The same for a generic METHOD whose return is inferred from its
+// arguments: `p(id(5))` chose `p(Object)`.
+differential_test!(
+    diff_generic_wrapper_substitution,
+    "DiffGenericWrapper",
+    r#"
+import java.util.*;
+public class DiffGenericWrapper {
+    static class Cell<T> { private T v; void set(T v) { this.v = v; } T get() { return v; } }
+    static <T> T id(T t) { return t; }
+    static void p(Object o) { System.out.println("Object: " + o); }
+    static void p(Integer i) { System.out.println("Integer: " + i); }
+    static void p(Boolean b) { System.out.println("Boolean: " + b); }
+    static void p(Character c) { System.out.println("Character: " + c); }
+    static void p(Double d) { System.out.println("Double: " + d); }
+    static void p(String s) { System.out.println("String: " + s); }
+    public static void main(String[] args) {
+        p(id(5));
+        p(id("s"));
+        p(id(true));
+        List<Integer> l = new ArrayList<>(Arrays.asList(1, 2));
+        var v = l.get(0);
+        p(v);
+        var w = id(9);
+        p(w);
+        Cell<Integer> ci = new Cell<>(); ci.set(7);
+        Integer i = ci.get();
+        System.out.println(i + 1);
+        System.out.println(ci.get().intValue() + 1);
+        p(ci.get());
+        Cell<Boolean> cb = new Cell<>(); cb.set(true);
+        Boolean b = cb.get();
+        System.out.println("bool " + b);
+        p(cb.get());
+        Cell<Character> cc = new Cell<>(); cc.set('x');
+        Character c = cc.get();
+        System.out.println("char " + c);
+        p(cc.get());
+        Cell<Double> cd = new Cell<>(); cd.set(1.5);
+        System.out.println("double " + cd.get());
+        p(cd.get());
+        Cell<String> cs = new Cell<>(); cs.set("q");
+        System.out.println(cs.get().length());
+    }
+}
+"#
+);
+
+// Java 11's `(var s) -> …` lambda parameters.
+differential_test!(
+    diff_var_lambda_parameters,
+    "DiffVarLambda",
+    r#"
+import java.util.*;
+import java.util.function.*;
+public class DiffVarLambda {
+    public static void main(String[] args) {
+        Function<String, Integer> len = (var s) -> s.length();
+        System.out.println(len.apply("hello"));
+        List<String> l = new ArrayList<>(Arrays.asList("b", "a"));
+        l.sort((var x, var y) -> x.compareTo(y));
+        System.out.println(l);
+    }
+}
+"#
+);

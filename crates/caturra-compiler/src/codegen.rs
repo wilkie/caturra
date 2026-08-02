@@ -637,6 +637,7 @@ impl MethodTable {
         // user class may implement (`compareTo` compares to a peer).
         let comparable_id = ClassId(1);
         table.class_names.push(String::from("Comparable"));
+        table.synthesized.insert(String::from("Comparable"));
         table.classes.insert(
             String::from("Comparable"),
             ClassInfo {
@@ -681,6 +682,7 @@ impl MethodTable {
         {
             let id = ClassId(2 + u16::try_from(offset).unwrap_or(0));
             table.class_names.push(String::from(name));
+            table.synthesized.insert(String::from(name));
             table.classes.insert(
                 String::from(name),
                 ClassInfo {
@@ -816,6 +818,7 @@ impl MethodTable {
         {
             let id = ClassId(u16::try_from(table.class_names.len()).unwrap_or(u16::MAX));
             table.class_names.push(String::from("Number"));
+            table.synthesized.insert(String::from("Number"));
             let accessor = |name: &str, ret: JType| MethodSig {
                 name: String::from(name),
                 params: Vec::new(),
@@ -1038,6 +1041,7 @@ impl MethodTable {
                             diagnostics.push(Diagnostic::error(
                                 path,
                                 crate::imports::unsupported_class_reason(name)
+                                    .or_else(|| builtin_supertype_reason(name))
                                     .unwrap_or_else(|| format!("cannot find symbol: class {name}")),
                                 class.span,
                             ));
@@ -1062,6 +1066,7 @@ impl MethodTable {
                             diagnostics.push(Diagnostic::error(
                                 path,
                                 crate::imports::unsupported_class_reason(name)
+                                    .or_else(|| builtin_supertype_reason(name))
                                     .unwrap_or_else(|| format!("cannot find symbol: class {name}")),
                                 class.span,
                             ));
@@ -2220,8 +2225,27 @@ impl MethodTable {
                         None
                     };
                     match arg {
-                        // Track only reference type arguments (primitive
-                        // args would need boxing, which caturra lacks).
+                        // A WRAPPER argument is tracked too (`Node<Integer>`):
+                        // fields and collections hold boxed references, so
+                        // `T get()` really does hand back an `Integer` — it
+                        // just used to come back typed as `Object`, which made
+                        // `Integer y = node.get()` a compile error and
+                        // `p(node.get())` pick the `p(Object)` overload.
+                        // A WRAPPER argument is tracked for a class the PROGRAM
+                        // declares (`Node<Integer>`): its fields hold boxed
+                        // references, so `T get()` really does hand back an
+                        // `Integer`. A SYNTHESIZED library interface
+                        // (`Comparable<Integer>`) stays erased — a boxed value
+                        // assigns to it, and tracking the argument would refuse
+                        // that.
+                        Some(elem @ ElemType::Wrapper(_))
+                            if !self.synthesized.contains(base.as_str()) =>
+                        {
+                            Some(JType::Generic {
+                                class: id,
+                                arg: elem,
+                            })
+                        }
                         Some(elem @ (ElemType::Str | ElemType::Object(_))) => {
                             Some(JType::Generic {
                                 class: id,
@@ -2929,6 +2953,17 @@ fn unknown_name_in(ty: &TypeRef, table: &MethodTable) -> Option<String> {
 /// exactly as its import and its `new` do, rather than as a typo or as the
 /// unhelpful "this type cannot be used for a variable".
 fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
+    // A type-variable ERASURE sentinel reaching here means a shape caturra
+    // does not model — a library functional interface parameterized on a
+    // METHOD's own type variable (`<T> void run(T t, Consumer<T> c)`). Leaking
+    // the sentinel's spelling read as an internal error; say what it is.
+    if let TypeRef::Named(name) | TypeRef::Generic { base: name, .. } = ty
+        && crate::ast::wildcard_parts(name).is_some()
+    {
+        return String::from(
+            "a functional interface parameterized on a method's own type variable is not supported by caturra",
+        );
+    }
     if let Some(reason) = unsupported_name_in(ty) {
         return reason;
     }
@@ -5005,6 +5040,33 @@ fn is_null_expression(expr: &Expr) -> bool {
         Expr::Cast { operand, .. } => is_null_expression(operand),
         _ => false,
     }
+}
+
+/// The honest reason a BUILTIN collection cannot be a supertype. Extending one
+/// (`new ArrayList<>() { … }`, `class MyList extends ArrayList<String>`) is
+/// ordinary Java, but caturra's collections are VM objects with no class file
+/// to inherit from — so saying "cannot find symbol: class `ArrayList`" about a
+/// class the very next line uses reads as our bug.
+fn builtin_supertype_reason(name: &str) -> Option<String> {
+    const BUILTIN_COLLECTIONS: &[&str] = &[
+        "ArrayList",
+        "LinkedList",
+        "HashMap",
+        "TreeMap",
+        "HashSet",
+        "TreeSet",
+        "ArrayDeque",
+        "PriorityQueue",
+        "Stack",
+        "StringBuilder",
+        "Scanner",
+    ];
+    BUILTIN_COLLECTIONS.contains(&name).then(|| {
+        format!(
+            "extending {name} is not supported by caturra (its collections are \
+             built into the VM, so there is no class to inherit from)"
+        )
+    })
 }
 
 fn const_from_literal(lit: &Literal) -> Option<crate::constfold::ConstValue> {
@@ -15176,6 +15238,19 @@ impl BodyGen<'_> {
             return ty;
         }
         let concrete = arg.base_type();
+        // A WRAPPER argument stays BOXED: the value on the stack is a
+        // reference (that is how a `T` field holds an Integer), so the type
+        // must be the wrapper, not the primitive — unboxing it here would
+        // leave an int where a reference belongs.
+        if let ElemType::Wrapper(prim) = arg {
+            let class_index = intern_class(self.pool, wrapper_internal(arg));
+            self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            // The BOXED type a declared `Integer`/`Boolean` resolves to —
+            // `Boxed(Int)`, not `Boxed(Wrapper(Int))`. They are different
+            // element kinds, and handing back the wrong one put a value in a
+            // local that printed as an int (`true` came out as `1`).
+            return JType::Boxed(prim.elem());
+        }
         let internal = match concrete {
             JType::Str => Some(String::from("java/lang/String")),
             JType::Object(id) => Some(self.table.class_name(id).to_owned()),
@@ -19556,7 +19631,12 @@ impl BodyGen<'_> {
                                 args.iter().map(|a| self.type_of(a)).collect();
                             return match self.table.resolve(&class_name, method, &arg_types) {
                                 Resolution::Found(sig) => match sig.ret {
-                                    Some(JType::TypeVar) => arg.base_type(),
+                                    // Must agree with `substitute_type_var`: a
+                                    // wrapper argument keeps its BOXED type.
+                                    Some(JType::TypeVar) => match arg {
+                                        ElemType::Wrapper(prim) => JType::Boxed(prim.elem()),
+                                        other => other.base_type(),
+                                    },
                                     Some(ret) => ret,
                                     None => JType::Error,
                                 },
@@ -19800,11 +19880,18 @@ impl BodyGen<'_> {
                     if let Resolution::Found(sig) =
                         self.table.resolve(&enc_name, method, &arg_types)
                     {
-                        return sig.ret.unwrap_or(JType::Error);
+                        return inferred_return(sig, &arg_types).unwrap_or(JType::Error);
                     }
                 }
                 match table.resolve(&class, method, &arg_types) {
-                    Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
+                    // The RETURN-TYPE INFERENCE plan applies here as it does
+                    // when emitting: `<T> T id(T)` called with a `5` returns an
+                    // `Integer`, not the erased `Object`. Without it the
+                    // enclosing overload resolution saw `Object` and silently
+                    // picked `p(Object)` where javac picks `p(Integer)`.
+                    Resolution::Found(sig) => {
+                        inferred_return(sig, &arg_types).unwrap_or(JType::Error)
+                    }
                     _ => {
                         // Inherited Throwable members (mirrors emission).
                         if (method == "getMessage" || method == "toString")

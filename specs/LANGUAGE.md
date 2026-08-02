@@ -752,6 +752,42 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A wrapper type argument survives erasure** (2026-08-02, round 9,
+  JLS §18) — the generic-inference cluster:
+  - **`Node<Integer>.get()` typed as `Object`.** Only `String` and class-typed
+    type arguments were tracked on a parameterized user type; a WRAPPER one
+    was dropped, so the class went raw. That refused `Integer y = node.get()`
+    outright and — the dangerous half — made `p(node.get())` silently pick
+    the `p(Object)` overload where javac picks `p(Integer)`. Wrapper
+    arguments are now tracked (fields and collections hold boxed references,
+    so `T get()` really does hand back an `Integer`), and the substituted
+    type is the BOXED one a declared `Integer` resolves to — handing back a
+    differently-shaped element kind put a value in a local that printed
+    `true` as `1`.
+  - **A generic METHOD's inferred return applies in `type_of` too**, not just
+    when emitting: `p(id(5))` for `<T> T id(T)` chose `p(Object)` because the
+    enclosing overload resolution asked for the argument's type and got the
+    erased one. The two paths disagreeing is the same trap this file records
+    for `box.get() + box.get()`.
+  - A synthesized library interface (`Comparable<Integer>`) stays ERASED, so
+    a boxed value still assigns to it; only classes the program declares
+    track a wrapper argument.
+  - **Java 11 `(var s) -> …` lambda parameters** parse.
+  - Two internal-looking refusals now say what they mean: a functional
+    interface parameterized on a METHOD's own type variable
+    (`<T> void run(T t, Consumer<T> c)`) leaked the erasure sentinel as
+    `unknown type ' Wildcard ='`, and extending a builtin collection
+    (`new ArrayList<>() { … }`) claimed the class did not exist rather than
+    saying caturra's collections are VM objects with no class to inherit
+    from.
+  - Deferred: a generic type with TWO type parameters substitutes neither
+    (`JType::Generic` carries one argument); inference from the assignment
+    TARGET (`List<String> l = box("hi")`); a lambda whose target is a generic
+    method's `Function<T,R>` parameter; an explicit type witness on a
+    constructor (`new <Integer>Box<String>(…)`); and javac's rejection of a
+    call whose inference variable has incompatible equality constraints.
+  - Pinned by `diff_generic_wrapper_substitution` and
+    `diff_var_lambda_parameters`.
 - **Throwable's own contract, and what a catch parameter's type is**
   (2026-08-02, round 9, JLS §11) — the catch-semantics cluster:
   - **A cause is set ONCE.** `initCause` on an exception that already has one

@@ -2918,7 +2918,15 @@ impl Parser<'_> {
                     // bare name (an identifier followed by `,` or `)`).
                     let bare_name = matches!(self.peek(), Some(TokenKind::Identifier(_)))
                         && !matches!(self.peek_at(1), Some(TokenKind::Identifier(_)));
-                    let ty = if bare_name {
+                    // Java 11's `(var s) -> …`: `var` here is not a type at
+                    // all, it just says the parameter is written explicitly.
+                    // The inferred type is the same one a bare name gets.
+                    let ty = if self.at_keyword(Keyword::Var)
+                        && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
+                    {
+                        self.pos += 1;
+                        None
+                    } else if bare_name {
                         None
                     } else {
                         Some(self.type_ref()?)
