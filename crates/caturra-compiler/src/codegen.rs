@@ -41,7 +41,7 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
     for (path, unit) in units {
         for class in &unit.classes {
             check_enum_static_references(class, path, &mut diagnostics);
-            crate::flow::check(class, path, &mut diagnostics);
+            crate::flow::check(class, path, &table, &mut diagnostics);
             crate::thrown::check(class, path, &table, &mut diagnostics);
             check_inner_static_members(class, path, &mut diagnostics);
             classes.push(CompiledClass {
@@ -1857,6 +1857,29 @@ impl MethodTable {
     /// Whether the PROGRAM declares this class — as opposed to caturra having
     /// synthesized a library interface of that name. A builtin type name is
     /// only given up to a real user declaration.
+    /// Every `static final boolean` CONSTANT VARIABLE the program declares,
+    /// keyed both by simple name (for `current`'s own) and as `Class.FIELD`.
+    /// Reachability needs them: `while (Cfg.DEBUG)` over a false constant makes
+    /// the body unreachable, which javac reports as an error — and the flow
+    /// pass sees one class at a time, so it cannot find another's alone.
+    pub(crate) fn boolean_constants(
+        &self,
+        current: &str,
+    ) -> std::collections::HashMap<String, bool> {
+        let mut out = std::collections::HashMap::new();
+        for (name, info) in &self.classes {
+            for field in &info.fields {
+                if let Some(Literal::Bool(value)) = field.const_literal {
+                    out.insert(format!("{name}.{}", field.name), value);
+                    if name == current {
+                        out.insert(field.name.clone(), value);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn has_user_class(&self, name: &str) -> bool {
         self.classes.contains_key(name) && !self.synthesized.contains(name)
     }
@@ -4939,6 +4962,36 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
 /// `Double`/`Float`/`Null` return `None` — a floating form risks disagreeing
 /// with the runtime's, and `null` is not a constant expression — so those defer
 /// to the (correct, just un-interned) runtime concat path.
+/// A stored constant literal, back as a folder value. The literal was already
+/// coerced to its variable's declared type, so its kind IS the Java type.
+/// The Java type name of a folded constant, for a type-mismatch diagnostic.
+fn literal_type_name(lit: &Literal) -> &'static str {
+    match lit {
+        Literal::Int(_) => "int",
+        Literal::Long(_) => "long",
+        Literal::Float(_) => "float",
+        Literal::Double(_) => "double",
+        Literal::Bool(_) => "boolean",
+        Literal::Char(_) => "char",
+        Literal::Str(_) => "String",
+        Literal::Null => "<null>",
+    }
+}
+
+fn const_from_literal(lit: &Literal) -> Option<crate::constfold::ConstValue> {
+    use crate::constfold::ConstValue;
+    Some(match lit {
+        Literal::Int(v) => ConstValue::Int(i32::try_from(*v).ok()?),
+        Literal::Long(v) => ConstValue::Long(*v),
+        Literal::Float(v) => ConstValue::Float(*v),
+        Literal::Double(v) => ConstValue::Double(*v),
+        Literal::Bool(b) => ConstValue::Bool(*b),
+        Literal::Char(c) => ConstValue::Char(u16::try_from(u32::from(*c)).ok()?),
+        Literal::Str(s) => ConstValue::Str(s.clone()),
+        Literal::Null => return None,
+    })
+}
+
 fn literal_java_string(lit: &Literal) -> Option<String> {
     Some(match lit {
         Literal::Str(s) => s.clone(),
@@ -4976,6 +5029,31 @@ fn coerce_const_to_type(lit: Literal, ty: JType) -> Option<Literal> {
             Literal::Char(c) => Some(Literal::Long(i64::from(u32::from(c)))),
             _ => None,
         },
+        // A floating constant variable is one too (`static final double HALF =
+        // 1.0 / 2;`): reading it must not initialize its class, since javac
+        // inlines the value and never touches the class.
+        JType::Double => match lit {
+            Literal::Double(_) => Some(lit),
+            Literal::Float(v) => Some(Literal::Double(f64::from(v))),
+            Literal::Int(v) | Literal::Long(v) => {
+                #[allow(clippy::cast_precision_loss)] // the widening Java does
+                Some(Literal::Double(v as f64))
+            }
+            Literal::Char(c) => Some(Literal::Double(f64::from(u32::from(c)))),
+            _ => None,
+        },
+        JType::Float => match lit {
+            Literal::Float(_) => Some(lit),
+            #[allow(clippy::cast_possible_truncation)] // float IS narrower
+            Literal::Double(v) => Some(Literal::Float(v as f32)),
+            Literal::Int(v) | Literal::Long(v) =>
+            {
+                #[allow(clippy::cast_precision_loss)]
+                Some(Literal::Float(v as f32))
+            }
+            Literal::Char(c) => Some(Literal::Float(f32::from(u16::try_from(u32::from(c)).ok()?))),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -4987,94 +5065,13 @@ fn coerce_const_to_type(lit: Literal, ty: JType) -> Option<Literal> {
 /// static declared after the constants). `None` for a non-constant field or a
 /// non-primitive/String type.
 fn constant_field_literal(field_ty: JType, init: &Expr) -> Option<Literal> {
-    match field_ty {
-        JType::Str => match init {
-            Expr::Literal {
-                value: Literal::Str(s),
-                ..
-            } => Some(Literal::Str(s.clone())),
-            _ => None,
-        },
-        JType::Boolean => match init {
-            Expr::Literal {
-                value: Literal::Bool(b),
-                ..
-            } => Some(Literal::Bool(*b)),
-            _ => None,
-        },
-        JType::Char => {
-            let code = u32::try_from(constant_int_value(init)?).ok()?;
-            char::from_u32(code).map(Literal::Char)
-        }
-        JType::Int | JType::Short | JType::Byte => constant_int_value(init).map(Literal::Int),
-        JType::Long => constant_long_value(init).map(Literal::Long),
-        JType::Double => constant_double_value(init).map(Literal::Double),
-        JType::Float => constant_float_value(init).map(Literal::Float),
-        _ => None,
-    }
-}
-
-fn constant_long_value(expr: &Expr) -> Option<i64> {
-    match expr {
-        Expr::Literal {
-            value: Literal::Long(v) | Literal::Int(v),
-            ..
-        } => Some(*v),
-        Expr::Literal {
-            value: Literal::Char(c),
-            ..
-        } => Some(i64::from(u32::from(*c))),
-        Expr::Unary {
-            op: UnaryOp::Neg,
-            operand,
-            ..
-        } => constant_long_value(operand).map(|v| -v),
-        _ => None,
-    }
-}
-
-#[allow(clippy::cast_precision_loss)] // a compile-time constant's exact value
-fn constant_double_value(expr: &Expr) -> Option<f64> {
-    match expr {
-        Expr::Literal {
-            value: Literal::Double(v),
-            ..
-        } => Some(*v),
-        Expr::Literal {
-            value: Literal::Float(v),
-            ..
-        } => Some(f64::from(*v)),
-        Expr::Literal {
-            value: Literal::Int(v) | Literal::Long(v),
-            ..
-        } => Some(*v as f64),
-        Expr::Unary {
-            op: UnaryOp::Neg,
-            operand,
-            ..
-        } => constant_double_value(operand).map(|v| -v),
-        _ => None,
-    }
-}
-
-#[allow(clippy::cast_precision_loss)] // a compile-time constant's exact value
-fn constant_float_value(expr: &Expr) -> Option<f32> {
-    match expr {
-        Expr::Literal {
-            value: Literal::Float(v),
-            ..
-        } => Some(*v),
-        Expr::Literal {
-            value: Literal::Int(v),
-            ..
-        } => i32::try_from(*v).ok().map(|v| v as f32),
-        Expr::Unary {
-            op: UnaryOp::Neg,
-            operand,
-            ..
-        } => constant_float_value(operand).map(|v| -v),
-        _ => None,
-    }
+    // The full JLS §15.29 folder, not just a literal: `static final int MODE =
+    // 1 + 1;` IS a constant variable, and every rule that keys off constness
+    // (case labels, class initialization, unreachability) was wrong without it.
+    // Only LIBRARY names resolve here — the user's own constants are still
+    // being collected, so `static final int B = A + 1;` is left non-constant.
+    let value = crate::constfold::fold(init, &mut |path| crate::constfold::library_constant(path))?;
+    coerce_const_to_type(value.literal(), field_ty)
 }
 
 /// The int value of a constant-field literal for a `case` label (char/int/…).
@@ -5084,38 +5081,6 @@ fn const_literal_as_int(lit: &Literal) -> Option<i64> {
         Literal::Char(c) => Some(i64::from(u32::from(*c))),
         _ => None,
     }
-}
-
-/// Fold a binary operator over two constant integer operands (i64), for
-/// [`Codegen::const_int`]. Arithmetic and integer bitwise only — a comparison
-/// or a shift (width-dependent) is not an int constant here, so it returns
-/// `None` and the whole expression falls back to non-constant.
-fn fold_const_int(op: BinaryOp, l: i64, r: i64) -> Option<i64> {
-    Some(match op {
-        BinaryOp::Add => l.wrapping_add(r),
-        BinaryOp::Sub => l.wrapping_sub(r),
-        BinaryOp::Mul => l.wrapping_mul(r),
-        // A division by a zero constant is not a compile-time constant
-        // expression (JLS §15.29), so it is not foldable.
-        BinaryOp::Div if r != 0 => l.wrapping_div(r),
-        BinaryOp::Rem if r != 0 => l.wrapping_rem(r),
-        BinaryOp::BitAnd => l & r,
-        BinaryOp::BitOr => l | r,
-        BinaryOp::BitXor => l ^ r,
-        // Shifts fold with Java INT semantics (count masked to 5 bits): only
-        // int-typed constants reach this folder — a `long` literal or a
-        // `final long` variable is a `Literal::Long`, which `const_int` never
-        // matches — so the 32-bit evaluation is exact, as javac's is.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        BinaryOp::Shl => i64::from((l as i32).wrapping_shl(r as u32 & 31)),
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        BinaryOp::Shr => i64::from((l as i32).wrapping_shr(r as u32 & 31)),
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        BinaryOp::Ushr => {
-            i64::from(((l as i32).cast_unsigned().wrapping_shr(r as u32 & 31)).cast_signed())
-        }
-        _ => return None,
-    })
 }
 
 fn constant_int_value(expr: &Expr) -> Option<i64> {
@@ -11016,9 +10981,25 @@ impl BodyGen<'_> {
                     self.code.branch(op::IF_ACMPEQ, arm_labels[index], 2);
                 } else if is_string {
                     // JLS §15.29: any constant String expression is a label —
-                    // a literal, a `final` constant variable, folded `+`.
-                    let Some(Literal::Str(text)) = self.const_eval(value) else {
-                        self.error(value.span(), "constant string expression required");
+                    // a literal, a `final` constant variable, folded `+`, a
+                    // cast, a constant conditional.
+                    let folded = self.const_eval(value);
+                    let Some(Literal::Str(text)) = folded else {
+                        // A constant of the WRONG TYPE is a type error, not a
+                        // constness one, and javac says which type: `case 'a':`
+                        // on a String switch is "char cannot be converted to
+                        // String", not "constant string expression required".
+                        if let Some(other) = folded {
+                            let described = literal_type_name(&other);
+                            self.error(
+                                value.span(),
+                                format!(
+                                    "incompatible types: {described} cannot be converted to String"
+                                ),
+                            );
+                        } else {
+                            self.error(value.span(), "constant string expression required");
+                        }
                         continue;
                     };
                     if seen_strings.iter().any(|s| s == &text) {
@@ -11049,7 +11030,22 @@ impl BodyGen<'_> {
                         .case_label_value(value)
                         .or_else(|| self.const_int(value))
                     else {
-                        self.error(value.span(), "constant expression required");
+                        // As above: a constant that is not integral is a type
+                        // mismatch against the selector, and javac names it.
+                        match self.const_eval(value) {
+                            Some(other) => {
+                                let described = literal_type_name(&other);
+                                let selector = selector_ty.describe(self.table);
+                                self.error(
+                                    value.span(),
+                                    format!(
+                                        "incompatible types: {described} cannot be \
+                                         converted to {selector}"
+                                    ),
+                                );
+                            }
+                            None => self.error(value.span(), "constant expression required"),
+                        }
                         continue;
                     };
                     // JLS §14.11: a case constant must be assignable to the
@@ -22486,118 +22482,11 @@ impl BodyGen<'_> {
     /// on the safe (stricter-than-javac) side. Shifts fold with exact int
     /// semantics — see `fold_const_int` for why the width is unambiguous.
     fn const_int(&mut self, expr: &Expr) -> Option<i64> {
-        match expr {
-            Expr::Literal {
-                value: Literal::Int(v),
-                ..
-            } => Some(*v),
-            Expr::Literal {
-                value: Literal::Char(c),
-                ..
-            } => Some(i64::from(u32::from(*c))),
-            Expr::Unary {
-                op: UnaryOp::Neg,
-                operand,
-                ..
-            } => Some(self.const_int(operand)?.wrapping_neg()),
-            Expr::Unary {
-                op: UnaryOp::Plus,
-                operand,
-                ..
-            } => self.const_int(operand),
-            Expr::Unary {
-                op: UnaryOp::BitNot,
-                operand,
-                ..
-            } => Some(!self.const_int(operand)?),
-            Expr::Binary { op, lhs, rhs, .. } => {
-                let l = self.const_int(lhs)?;
-                let r = self.const_int(rhs)?;
-                fold_const_int(*op, l, r)
-            }
-            Expr::Cast { ty, operand, .. } => {
-                let v = self.const_int(operand)?;
-                match self.table.resolve_type(ty)? {
-                    #[allow(clippy::cast_possible_truncation)]
-                    JType::Byte => Some(i64::from(v as i8)),
-                    #[allow(clippy::cast_possible_truncation)]
-                    JType::Short => Some(i64::from(v as i16)),
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    JType::Char => Some(i64::from(v as u16)),
-                    #[allow(clippy::cast_possible_truncation)]
-                    JType::Int => Some(i64::from(v as i32)),
-                    JType::Long => Some(v),
-                    _ => None,
-                }
-            }
-            Expr::Name { .. } => match self.const_eval(expr)? {
-                Literal::Int(v) => Some(v),
-                Literal::Char(c) => Some(i64::from(u32::from(c))),
-                _ => None,
-            },
-            // JLS §15.29: a conditional whose three parts are all constants is
-            // itself a constant — `flag ? 1 : 2` with a `final boolean flag`
-            // narrows into a byte. Only the TAKEN branch's value matters, but
-            // the untaken one must still be constant for the whole to be.
-            Expr::Ternary {
-                cond, then, els, ..
-            } => {
-                let taken = self.const_bool(cond)?;
-                let (then, els) = (self.const_int(then)?, self.const_int(els)?);
-                Some(if taken { then } else { els })
-            }
-            _ => None,
-        }
-    }
-
-    /// The constant boolean value of an expression (JLS §15.29), or `None`
-    /// when it is not one: `true`/`false` literals, constant `final`
-    /// variables, `!`, comparisons of constant ints, and `&&`/`||`/`&`/`|`/`^`
-    /// over constant booleans. Conservative — a shape not handled simply makes
-    /// the surrounding expression non-constant, which is the stricter
-    /// direction.
-    fn const_bool(&mut self, expr: &Expr) -> Option<bool> {
-        match expr {
-            Expr::Literal {
-                value: Literal::Bool(b),
-                ..
-            } => Some(*b),
-            Expr::Name { .. } => match self.const_eval(expr)? {
-                Literal::Bool(b) => Some(b),
-                _ => None,
-            },
-            Expr::Unary {
-                op: UnaryOp::Not,
-                operand,
-                ..
-            } => Some(!self.const_bool(operand)?),
-            Expr::Binary { op, lhs, rhs, .. } => match op {
-                BinaryOp::And | BinaryOp::BitAnd => {
-                    Some(self.const_bool(lhs)? && self.const_bool(rhs)?)
-                }
-                BinaryOp::Or | BinaryOp::BitOr => {
-                    Some(self.const_bool(lhs)? || self.const_bool(rhs)?)
-                }
-                BinaryOp::BitXor => Some(self.const_bool(lhs)? != self.const_bool(rhs)?),
-                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                    let (l, r) = (self.const_int(lhs)?, self.const_int(rhs)?);
-                    Some(match op {
-                        BinaryOp::Lt => l < r,
-                        BinaryOp::Le => l <= r,
-                        BinaryOp::Gt => l > r,
-                        _ => l >= r,
-                    })
-                }
-                BinaryOp::Eq | BinaryOp::Ne => {
-                    // Constant equality over ints or over booleans.
-                    let same = match (self.const_int(lhs), self.const_int(rhs)) {
-                        (Some(l), Some(r)) => l == r,
-                        _ => self.const_bool(lhs)? == self.const_bool(rhs)?,
-                    };
-                    Some(if *op == BinaryOp::Eq { same } else { !same })
-                }
-                _ => None,
-            },
+        use crate::constfold::ConstValue;
+        match self.const_fold(expr)? {
+            ConstValue::Int(v) => Some(i64::from(v)),
+            ConstValue::Long(v) => Some(v),
+            ConstValue::Char(c) => Some(i64::from(c)),
             _ => None,
         }
     }
@@ -22609,39 +22498,39 @@ impl BodyGen<'_> {
     /// sub-expression simply makes the whole thing non-constant here, so it
     /// takes the (correct, un-interned) runtime path.
     fn const_eval(&mut self, expr: &Expr) -> Option<Literal> {
-        match expr {
-            Expr::Literal { value, .. } if !matches!(value, Literal::Null) => Some(value.clone()),
-            Expr::Name { path, .. } if path.len() == 1 => {
-                if let Some(var) = self.lookup(&path[0]) {
-                    return var.const_val.clone();
+        Some(self.const_fold(expr)?.literal())
+    }
+
+    /// Fold a constant expression, resolving names against this method's
+    /// constant variables, the enclosing class's constant fields, another
+    /// class's (`Cfg.DEBUG`), and the `java.lang` constants.
+    fn const_fold(&self, expr: &Expr) -> Option<crate::constfold::ConstValue> {
+        crate::constfold::fold(expr, &mut |path| match path {
+            [name] => {
+                // Innermost scope outwards, like `lookup` — which takes `&mut
+                // self` for the assignment tracking this does not need.
+                if let Some(var) = self
+                    .scopes
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.iter().rev().find(|(n, _)| n == name))
+                    .map(|(_, var)| var)
+                {
+                    return var.const_val.as_ref().and_then(const_from_literal);
                 }
                 self.table
-                    .field(self.current_class, &path[0])
-                    .and_then(|(_, f)| f.const_literal.clone())
+                    .field(self.current_class, name)
+                    .and_then(|(_, f)| f.const_literal.as_ref().and_then(const_from_literal))
             }
-            Expr::Name { path, .. } if path.len() == 2 => self
+            // A user class of that name wins over the library one, as it does
+            // everywhere else.
+            [class, name] => self
                 .table
-                .field(&path[0], &path[1])
-                .and_then(|(_, f)| f.const_literal.clone()),
-            Expr::Binary {
-                op: BinaryOp::Add,
-                lhs,
-                rhs,
-                ..
-            } => {
-                let l = self.const_eval(lhs)?;
-                let r = self.const_eval(rhs)?;
-                // A `+` is string concatenation exactly when an operand is a
-                // String; two numeric constants are addition, which is left
-                // un-folded (see the method note).
-                if !matches!(l, Literal::Str(_)) && !matches!(r, Literal::Str(_)) {
-                    return None;
-                }
-                let folded = format!("{}{}", literal_java_string(&l)?, literal_java_string(&r)?);
-                Some(Literal::Str(folded))
-            }
+                .field(class, name)
+                .and_then(|(_, f)| f.const_literal.as_ref().and_then(const_from_literal))
+                .or_else(|| crate::constfold::library_constant(path)),
             _ => None,
-        }
+        })
     }
 
     fn concat(&mut self, lhs: &Expr, rhs: &Expr) -> JType {

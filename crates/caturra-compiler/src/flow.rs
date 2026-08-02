@@ -19,7 +19,13 @@ use crate::ast::{BinaryOp, ClassDecl, Expr, FieldDecl, Literal, MethodDecl, Stmt
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
 /// Report unreachable statements and blank-final violations in `decl`.
-pub(crate) fn check(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
+pub(crate) fn check(
+    decl: &ClassDecl,
+    path: &str,
+    table: &crate::codegen::MethodTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let constants = table.boolean_constants(&decl.name);
     for method in &decl.methods {
         if method.is_abstract {
             continue;
@@ -27,7 +33,7 @@ pub(crate) fn check(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnost
         let mut reporter = Reporter {
             path,
             diagnostics,
-            constants: boolean_constants(decl),
+            constants: constants.clone(),
         };
         // The body of a method is reachable (JLS §14.21).
         reachability(&method.body, &mut reporter);
@@ -39,7 +45,7 @@ pub(crate) fn check(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnost
         let mut reporter = Reporter {
             path,
             diagnostics,
-            constants: boolean_constants(decl),
+            constants: constants.clone(),
         };
         reachability(&block.body, &mut reporter);
         // JLS §14.17: `return` belongs to a method or constructor. An
@@ -413,27 +419,6 @@ fn has_escaping_break(statement: &Stmt, label: Option<&str>) -> bool {
     }
 }
 
-/// The value of a constant boolean condition, or `None` when it is not one.
-///
-/// Literals only — see the module note. Recognising more would be *correct*
-/// per JLS §15.28 but risks rejecting a valid program if the folding is ever
-/// wrong, and a missed unreachable-statement error costs nothing but strictness.
-/// The class's `static final boolean` constant variables with a literal
-/// initializer, by name.
-fn boolean_constants(decl: &ClassDecl) -> std::collections::HashMap<String, bool> {
-    decl.fields
-        .iter()
-        .filter(|field| field.is_static && field.is_final)
-        .filter_map(|field| match field.init.as_ref()? {
-            Expr::Literal {
-                value: Literal::Bool(value),
-                ..
-            } => Some((field.name.clone(), *value)),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Whether this condition is a compile-time CONSTANT EXPRESSION with a known
 /// value (JLS §15.28). Reachability turns on it: `while (1 == 1) { }` makes
 /// what follows unreachable exactly as `while (true)` does, and caturra saw
@@ -457,8 +442,9 @@ fn constant_bool_in(
             value: Literal::Bool(value),
             ..
         } => Some(*value),
-        // A constant VARIABLE of the enclosing class.
-        Expr::Name { path, .. } if path.len() == 1 => constants.get(&path[0]).copied(),
+        // A constant VARIABLE — of the enclosing class by simple name, or of
+        // any class as `Cfg.DEBUG`.
+        Expr::Name { path, .. } => constants.get(&path.join(".")).copied(),
         Expr::Unary {
             op: crate::ast::UnaryOp::Not,
             operand,

@@ -20569,3 +20569,106 @@ public class DiffMethodRefEach {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: constant expressions (JLS §15.29) and constant variables
+// (§4.12.4).
+// ---------------------------------------------------------------------------
+
+// A `final` variable initialized with a constant EXPRESSION is a constant
+// variable, and its reads are inlined. caturra recognised only bare literals, so
+// a `static final int MODE = 1 + 1;` was not one — and three separate rules key
+// off that: case labels, class initialization, and reachability.
+differential_test!(
+    diff_constant_expressions,
+    "DiffConstExpr",
+    r#"
+class ConstHolder {
+    static { System.out.println("HOLDER INIT"); }
+    static final String S = "a" + "b";
+    static final char C = (char) 65;
+    static final int N = 2 * 3 + 1;
+    static final boolean B = true && false;
+    static final double D = 1.0 / 2;
+    static final long L = 1L << 40;
+    static final int M = Integer.MAX_VALUE;
+    static final int SHIFTED = -8 >>> 28;
+}
+public class DiffConstExpr {
+    static final int MODE = 1 + 1;
+    static final String J = "j" + "b";
+    public static void main(String[] args) {
+        // Reading a constant variable does NOT initialize its class.
+        System.out.println(ConstHolder.S + " " + ConstHolder.C + " " + ConstHolder.N);
+        System.out.println(ConstHolder.B + " " + ConstHolder.D + " " + ConstHolder.L);
+        System.out.println(ConstHolder.M + " " + ConstHolder.SHIFTED);
+        switch (2) {
+            case MODE: System.out.println("mode"); break;
+            default: System.out.println("no");
+        }
+        switch ("jb") {
+            case J: System.out.println("J"); break;
+            default: System.out.println("no");
+        }
+        int x = Integer.MIN_VALUE;
+        switch (x) {
+            case Integer.MIN_VALUE: System.out.println("min"); break;
+            default: System.out.println("no");
+        }
+        switch (1) {
+            case (int) 1L: System.out.println("cast"); break;
+            default: System.out.println("no");
+        }
+        switch ("y") {
+            case true ? "y" : "n": System.out.println("ternary"); break;
+            default: System.out.println("no");
+        }
+        switch ("b") {
+            case (String) "b": System.out.println("strcast"); break;
+            default: System.out.println("no");
+        }
+        switch (ConstHolder.C) {
+            case 'A': System.out.println("charconst"); break;
+            default: System.out.println("no");
+        }
+    }
+}
+"#
+);
+
+// javac: a `while` over a false constant makes its body unreachable — including
+// a constant declared in ANOTHER class, which the flow pass could not see.
+differential_reject!(
+    reject_unreachable_over_other_class_constant,
+    "RejectUnreachableConst",
+    r#"
+class Cfg {
+    static final boolean DEBUG = false;
+}
+public class RejectUnreachableConst {
+    public static void main(String[] args) {
+        if (Cfg.DEBUG) { System.out.println("never"); }
+        while (Cfg.DEBUG) { System.out.println("never2"); }
+        System.out.println("end");
+    }
+}
+"#
+);
+
+// javac: a case label of the wrong TYPE is a type error naming both types, not
+// a complaint about constness.
+differential_reject!(
+    reject_case_label_type_mismatch,
+    "RejectLabelType",
+    r#"
+public class RejectLabelType {
+    public static void main(String[] args) {
+        String s = "a";
+        switch (s) {
+            case 'a': System.out.println("charlabel"); break;
+            default: System.out.println("d");
+        }
+    }
+}
+"#
+);

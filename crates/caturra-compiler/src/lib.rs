@@ -10,6 +10,7 @@ pub mod ast;
 mod bridges;
 mod capture;
 pub mod codegen;
+mod constfold;
 pub mod diagnostics;
 mod flow;
 mod imports;

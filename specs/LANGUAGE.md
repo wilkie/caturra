@@ -752,6 +752,41 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A constant expression is more than a literal** (2026-08-02, round 9,
+  JLS §15.29/§4.12.4) — the constant-expressions cluster, ten findings with
+  one cause:
+  - **A `final` variable initialized with a constant EXPRESSION is a
+    constant variable**, whose reads javac inlines. caturra recognised only
+    bare literals, so `static final int MODE = 1 + 1;` was not one — and
+    three unrelated rules key off that. A `case MODE:` label was refused
+    outright; READING the constant ran its class's static initializer, which
+    a JDK never does (the value is inlined and the class is never touched);
+    and `while (Cfg.DEBUG)` over a false constant in ANOTHER class missed the
+    unreachable-statement error, because the flow pass sees one class at a
+    time and could not resolve the name.
+  - **One folder, in `constfold.rs`**, now answers for all of them: literals,
+    the `java.lang` constants (`Integer.MIN_VALUE`, `Math.PI`), constant
+    variables, unary and binary operators under Java's numeric promotion,
+    shifts masked to 5 or 6 bits, casts, string concatenation, and constant
+    conditionals. Name resolution is the CALLER's, because the folder runs
+    both while the method table is being built (only library names resolve
+    then) and from codegen (where a local, a field, or another class's
+    constant does). Integer arithmetic folds in the exact Java width, so a
+    wrapping `int` overflow gives the value a JDK gives.
+  - **A case label of the wrong TYPE is a type error**, naming both types as
+    javac does (`char cannot be converted to String`), not the previous
+    complaint about constness.
+  - Known gaps: `static final int B = A + 1;` referring to another user
+    constant is still not folded (they are collected in one pass, so the
+    dependency is not resolved), and a concatenation involving a floating
+    value is left un-folded rather than rendered. Both make FEWER things
+    constant, which is the safe direction. Deferred: a `switch` over a type
+    VARIABLE (`<T extends E>`) is accepted where javac refuses it — caturra
+    erases a type variable to its bound before codegen, so the selector is
+    indistinguishable from one of the bound's own type.
+  - Pinned by `diff_constant_expressions`,
+    `reject_unreachable_over_other_class_constant` and
+    `reject_case_label_type_mismatch`.
 - **A program's own class can be iterated** (2026-08-02, round 9, JLS
   §14.14.2) — the custom-iterable cluster, open since round 4:
   - **`implements Iterable<T>` / `implements Iterator<T>` were refused**
