@@ -56,7 +56,13 @@ const JAVA_UTIL: &[&str] = &[
     "MissingFormatArgumentException",
     "IllegalFormatConversionException",
     "IllegalFormatCodePointException",
+    // `Locale` is usable only as the leading argument of a format call, which
+    // is where a program actually reaches for it: caturra formats in the
+    // US/root locale, so `String.format(Locale.US, …)` is exact and the
+    // argument is dropped.
+    "Locale",
 ];
+
 const JAVA_IO: &[&str] = &[
     "File",
     "PrintWriter",

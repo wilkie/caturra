@@ -4978,6 +4978,20 @@ fn literal_type_name(lit: &Literal) -> &'static str {
     }
 }
 
+/// Whether an expression IS a null — the literal, or a cast of one. A `Null`
+/// static type alone does not mean it: caturra gives inference placeholders
+/// that type too.
+fn is_null_expression(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal {
+            value: Literal::Null,
+            ..
+        } => true,
+        Expr::Cast { operand, .. } => is_null_expression(operand),
+        _ => false,
+    }
+}
+
 fn const_from_literal(lit: &Literal) -> Option<crate::constfold::ConstValue> {
     use crate::constfold::ConstValue;
     Some(match lit {
@@ -14524,18 +14538,21 @@ impl BodyGen<'_> {
             }
             [source] => {
                 let source_ty = self.expr(source);
-                // `new HashMap<>(map)` copies; `new HashMap<>(16)` sizes.
-                let descriptor = if let JType::Map { key, value } = source_ty {
-                    if entry.is_none() {
-                        entry = Some((key, value));
-                    }
-                    "(Ljava/util/Map;)V"
-                } else {
-                    if !widens(source_ty, JType::Int, self.table) {
-                        self.error(span, "new HashMap(...) takes a Map or an int capacity");
-                    }
-                    "(I)V"
-                };
+                // `new HashMap<>(map)` copies; `new HashMap<>(16)` sizes. A
+                // SORTED map is a Map too — `new HashMap<>(treeMap)` used to be
+                // refused as neither.
+                let descriptor =
+                    if let JType::Map { key, value } | JType::TreeMap { key, value } = source_ty {
+                        if entry.is_none() {
+                            entry = Some((key, value));
+                        }
+                        "(Ljava/util/Map;)V"
+                    } else {
+                        if !widens(source_ty, JType::Int, self.table) {
+                            self.error(span, "new HashMap(...) takes a Map or an int capacity");
+                        }
+                        "(I)V"
+                    };
                 let init_ref =
                     intern_method_ref(self.pool, "java/util/HashMap", "<init>", descriptor);
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
@@ -15850,8 +15867,44 @@ impl BodyGen<'_> {
         object_ty
     }
 
+    /// Drop a leading `Locale` argument from a format call.
+    ///
+    /// caturra formats in the ROOT locale, which is what `Locale.US` and its
+    /// synonyms ask for — so those calls are exact and the argument is simply
+    /// not needed. A locale that formats DIFFERENTLY is refused rather than
+    /// silently ignored, which would be a wrong answer (`Locale.GERMANY` swaps
+    /// the decimal separator and the grouping character).
+    fn without_locale<'e>(&mut self, args: &'e [Expr]) -> &'e [Expr] {
+        let [first, rest @ ..] = args else {
+            return args;
+        };
+        let Expr::Name { path, span } = first else {
+            return args;
+        };
+        let [.., class, constant] = path.as_slice() else {
+            return args;
+        };
+        if class != "Locale" || self.table.has_class("Locale") {
+            return args;
+        }
+        if !matches!(
+            constant.as_str(),
+            "US" | "ROOT" | "ENGLISH" | "UK" | "CANADA"
+        ) {
+            self.error(
+                *span,
+                format!(
+                    "java.util.Locale.{constant} is not supported by caturra \
+                     (formatting always uses the US/root locale)"
+                ),
+            );
+        }
+        rest
+    }
+
     #[allow(clippy::too_many_lines)] // one arm per formattable type
     fn emit_format_varargs(&mut self, args: &[Expr], span: SourceSpan) -> Option<(String, u16)> {
+        let args = self.without_locale(args);
         let [template, rest @ ..] = args else {
             self.error(span, "format needs a format string");
             return None;
@@ -15959,6 +16012,15 @@ impl BodyGen<'_> {
                     width += 1;
                 }
                 JType::Error => return None,
+                // Anything else rides through as a reference and is rendered
+                // by the VM, which can call a user `toString()`. A PRIMITIVE
+                // array reaches here (a lone reference array was taken as the
+                // varargs array above), and `%s` of one is its default
+                // `toString` — `[I@1b6d3586` — not a refusal.
+                JType::Array { .. } | JType::Class | JType::Type | JType::CharSequence => {
+                    tags.push_str("Ljava/lang/Object;");
+                    width += 1;
+                }
                 other => {
                     self.error(
                         arg.span(),
@@ -19888,7 +19950,14 @@ impl BodyGen<'_> {
                 let outcome = match self.call_target(receiver.as_deref(), *span) {
                     None => None,
                     Some(CallTarget::Stream(_)) => {
-                        self.error(*span, "print/println do not return a value");
+                        // `printf`/`append` DO return the stream in Java, so
+                        // chaining is valid — caturra models the print calls as
+                        // statements and cannot carry the stream as a value.
+                        self.error(
+                            *span,
+                            "chained print calls are not supported by caturra \
+                             (printf and append return the stream in Java)",
+                        );
                         None
                     }
                     Some(CallTarget::Static(class)) => {
@@ -20514,8 +20583,20 @@ impl BodyGen<'_> {
         }
         // Array form: a single trailing argument assignable to the
         // varargs array is passed straight through.
-        let array_form = args.len() == sig.params.len()
-            && widens(self.type_of(&args[fixed]), array_ty, self.table);
+        //
+        // A `Null` type is only the array when the argument really is a null —
+        // `f(null)` or `f((Object[]) null)`. caturra types a DIAMOND
+        // constructor as `Null` when it cannot infer the element (its type
+        // comes from the context), and reading that as "already an array"
+        // passed the object itself where the array belonged:
+        // `log("%s", new TreeMap<>(m))` reached the callee with a TreeMap in
+        // place of its `Object[]`.
+        let array_form = args.len() == sig.params.len() && {
+            let trailing = &args[fixed];
+            let trailing_ty = self.type_of(trailing);
+            widens(trailing_ty, array_ty, self.table)
+                && (trailing_ty != JType::Null || is_null_expression(trailing))
+        };
         if array_form {
             let actual = self.expr(&args[fixed]);
             self.numeric_conversion(actual, array_ty);

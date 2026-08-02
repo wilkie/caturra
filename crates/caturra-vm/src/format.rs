@@ -78,12 +78,41 @@ struct Spec {
     conversion: char,
 }
 
+impl Spec {
+    /// The first flag written, in the order the JDK reports them for the
+    /// conversions that accept none at all (`%n`, `%%`).
+    fn first_flag(&self) -> Option<char> {
+        [
+            (self.left_justify, '-'),
+            (self.alternate, '#'),
+            (self.plus, '+'),
+            (self.space, ' '),
+            (self.zero_pad, '0'),
+            (self.grouping, ','),
+            (self.parentheses, '('),
+        ]
+        .into_iter()
+        .find_map(|(present, flag)| present.then_some(flag))
+    }
+}
+
+/// A format call's arguments.
+///
+/// `all_null` marks the JDK's odd corner: `format(fmt, (Object[]) null)` passes
+/// a null ARRAY, and the Formatter's `getArg` then answers null for every
+/// index — so `"%s %s"` prints "null null" rather than running out of
+/// arguments, and even `%2$s` is null.
+pub struct FormatArgs {
+    pub values: Vec<FormatArg>,
+    pub all_null: bool,
+}
+
 /// Format `template` with `args`, Java-style — discarding whatever was
 /// produced before a failure. Callers that WRITE the result as they go (a
 /// `printf` to a stream) want [`java_format_partial`] instead, because the
 /// JDK's Formatter appends to its destination one specifier at a time and so
 /// leaves the prefix visible when a later one throws.
-pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<String, VmError> {
+pub fn java_format(heap: &Heap, template: &str, args: &FormatArgs) -> Result<String, VmError> {
     java_format_partial(heap, template, args).1
 }
 
@@ -91,7 +120,7 @@ pub fn java_format(heap: &Heap, template: &str, args: &[FormatArg]) -> Result<St
 pub fn java_format_partial(
     heap: &Heap,
     template: &str,
-    args: &[FormatArg],
+    args: &FormatArgs,
 ) -> (String, Result<String, VmError>) {
     let mut produced = String::new();
     let result = java_format_inner(heap, template, args, &mut produced);
@@ -101,7 +130,7 @@ pub fn java_format_partial(
 fn java_format_inner(
     heap: &Heap,
     template: &str,
-    args: &[FormatArg],
+    args: &FormatArgs,
     produced: &mut String,
 ) -> Result<String, VmError> {
     let chars: Vec<char> = template.chars().collect();
@@ -154,12 +183,18 @@ fn java_format_inner(
                 };
                 last_index = index;
                 consumed_an_argument = true;
-                let arg = *args.get(index).ok_or_else(|| {
-                    throw(
-                        "java.util.MissingFormatArgumentException",
-                        &format!("Format specifier '{}'", spec.text),
-                    )
-                })?;
+                // A null argument ARRAY answers null for every index, however
+                // many specifiers the template has.
+                let arg = if args.all_null {
+                    FormatArg::Str(None)
+                } else {
+                    *args.values.get(index).ok_or_else(|| {
+                        throw(
+                            "java.util.MissingFormatArgumentException",
+                            &format!("Format specifier '{}'", spec.text),
+                        )
+                    })?
+                };
                 let text = render(heap, &spec, arg)?;
                 out.push_str(&text);
                 produced.push_str(&text);
@@ -247,15 +282,21 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
         *at += 1;
     }
     if *at > width_start {
-        spec.width = chars[width_start..*at]
-            .iter()
-            .collect::<String>()
-            .parse()
-            .ok();
+        // A width that does not fit an `int` is IGNORED, not clamped: the JDK
+        // parses it with `Integer.parseInt` and catches the failure, leaving no
+        // width at all. Clamping built a 2-billion-character string instead.
+        let digits: String = chars[width_start..*at].iter().collect();
+        spec.width = digits
+            .parse::<i32>()
+            .ok()
+            .and_then(|w| usize::try_from(w).ok());
     }
 
-    // Precision.
-    if chars.get(*at) == Some(&'.') {
+    // Precision. A '.' with no DIGITS after it is not a precision at all: the
+    // JDK's specifier pattern stops before it, so the '.' becomes the
+    // conversion character and `%.f` is an unknown conversion — where caturra
+    // read an empty precision and silently formatted.
+    if chars.get(*at) == Some(&'.') && chars.get(*at + 1).is_some_and(char::is_ascii_digit) {
         *at += 1;
         let precision_start = *at;
         while chars.get(*at).is_some_and(char::is_ascii_digit) {
@@ -271,6 +312,13 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
     }
 
     let conversion = *chars.get(*at).ok_or_else(|| unknown_conversion('%'))?;
+    // A specifier the JDK's pattern does not match at all — `%5.d`, where the
+    // '.' begins a precision with no digits — is reported against the
+    // character right after the '%', not against wherever the parse gave up.
+    if !conversion.is_ascii_alphabetic() && conversion != '%' {
+        let after_percent = chars.get(start + 1).copied().unwrap_or('%');
+        return Err(unknown_conversion(after_percent));
+    }
     *at += 1;
     spec.conversion = conversion;
     spec.text = chars[start..*at].iter().collect();
@@ -285,20 +333,24 @@ fn parse_spec(chars: &[char], at: &mut usize) -> Result<Spec, VmError> {
 fn validate_spec(spec: &Spec) -> Result<(), VmError> {
     let c = spec.conversion;
     // `%n` and `%%` take no width or precision.
-    if c == 'n' {
-        if let Some(width) = spec.width {
-            return Err(throw(
-                "java.util.IllegalFormatWidthException",
-                &width.to_string(),
-            ));
+    // A flag is illegal for BOTH of them; a width and a precision are illegal
+    // for `%n`, and only a precision for `%%` (which may be padded).
+    if c == 'n' || c == '%' {
+        if let Some(flag) = spec.first_flag() {
+            return Err(illegal_format_flags(&flag.to_string()));
         }
-        return Ok(());
-    }
-    if c == '%' {
         if let Some(precision) = spec.precision {
             return Err(throw(
                 "java.util.IllegalFormatPrecisionException",
                 &precision.to_string(),
+            ));
+        }
+        if c == 'n'
+            && let Some(width) = spec.width
+        {
+            return Err(throw(
+                "java.util.IllegalFormatWidthException",
+                &width.to_string(),
             ));
         }
         return Ok(());
@@ -333,10 +385,12 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
         return Err(illegal_format_flags("+ "));
     }
 
+    // The JDK reports the LOWERCASE conversion here: `%,E` says `Conversion =
+    // e`, because an uppercase conversion is the lowercase one plus a flag.
     let mismatch = |flag: char| -> VmError {
         throw(
             "java.util.FormatFlagsConversionMismatchException",
-            &format!("Conversion = {c}, Flags = {flag}"),
+            &format!("Conversion = {lower}, Flags = {flag}"),
         )
     };
 
@@ -374,6 +428,10 @@ fn validate_spec(spec: &Spec) -> Result<(), VmError> {
     // rejects '#' too (only e/f and the integer radixes o/x accept it).
     if (lower == 'd' || lower == 'g') && spec.alternate {
         return Err(mismatch('#'));
+    }
+    // Scientific notation has no grouping to do, so ',' is a mismatch there.
+    if lower == 'e' && spec.grouping {
+        return Err(mismatch(','));
     }
 
     // Precision is meaningless for the integer and character conversions.
@@ -1024,7 +1082,7 @@ pub fn args_from_descriptor(
     heap: &Heap,
     descriptor: &str,
     values: &[JValue],
-) -> Result<Vec<FormatArg>, VmError> {
+) -> Result<FormatArgs, VmError> {
     let inner = descriptor
         .strip_prefix("(Ljava/lang/String;")
         .and_then(|rest| rest.split_once(')'))
@@ -1058,20 +1116,23 @@ pub fn args_from_descriptor(
         }
     }
     let mut args = Vec::with_capacity(tags.len());
+    let mut all_null = false;
     for (tag, value) in tags.iter().zip(values) {
         if *tag == '[' {
-            let elements = match value {
-                JValue::Ref(Some(array)) => match heap.get(*array) {
+            let elements = if let JValue::Ref(Some(array)) = value {
+                match heap.get(*array) {
                     Some(HeapObject::RefArray(_, elements)) => elements.clone(),
                     _ => {
                         return Err(VmError::UncaughtException(String::from(
                             "java.lang.VerifyError: malformed format call",
                         )));
                     }
-                },
-                // `format(fmt, (Object[]) null)`: the JDK reads the null array
-                // as a single null argument.
-                _ => vec![JValue::NULL],
+                }
+            } else {
+                // `format(fmt, (Object[]) null)`: EVERY specifier reads null,
+                // whatever its index.
+                all_null = true;
+                Vec::new()
             };
             for element in elements {
                 args.push(match element {
@@ -1109,5 +1170,8 @@ pub fn args_from_descriptor(
             }
         });
     }
-    Ok(args)
+    Ok(FormatArgs {
+        values: args,
+        all_null,
+    })
 }

@@ -20672,3 +20672,165 @@ public class RejectLabelType {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: format conversions (java.util.Formatter).
+// ---------------------------------------------------------------------------
+
+// The classic logging helper — a varargs RELAY — formatted every heap object as
+// the EMPTY STRING. The compiler coerces a directly-written argument to text at
+// the call site; an argument arriving through an `Object...` array has no static
+// type left to coerce, and the formatter (which sees only the heap) cannot call
+// a user `toString()`. The VM now renders them before formatting.
+differential_test!(
+    diff_format_object_relay,
+    "DiffFormatRelay",
+    r#"
+import java.util.*;
+public class DiffFormatRelay {
+    enum Day { MON }
+    static class Point { public String toString() { return "(1,2)"; } }
+    static void log(String fmt, Object... a) {
+        System.out.println("log -> " + String.format(fmt, a));
+    }
+    public static void main(String[] args) {
+        log("enum=%s", Day.MON);
+        log("obj=%s", new Point());
+        ArrayList<Integer> list = new ArrayList<>();
+        list.add(9);
+        log("list=%s", list);
+        log("sb=%s", new StringBuilder("q"));
+        log("map=%s", new TreeMap<>(Collections.singletonMap("k", 1)));
+        log("str=%s int=%d boxed=%d", "ok", 5, Integer.valueOf(7));
+        log("null=%s bool=%b", null, null);
+        Object[] arr = new Object[] { Day.MON, new Point() };
+        System.out.println("array -> " + String.format("%s %s", arr));
+        System.out.printf("printf -> %s %s%n", Day.MON, new Point());
+        int[] ints = { 1, 2 };
+        System.out.println("prim -> " + String.format("%s", ints).startsWith("[I@"));
+        System.out.println("class -> " + String.format("%s|%s", String.class, int.class));
+    }
+}
+"#
+);
+
+// The specifier grammar and the run-time validations, each recorded from a real
+// JDK: an out-of-range width is IGNORED (not clamped, which built a
+// 2-billion-character string), a '.' with no digits ENDS the specifier and is
+// reported against the character after the '%', ',' is illegal for the
+// scientific conversions (reported with the LOWERCASE conversion), `%n`/`%%`
+// take no flags, and a null argument ARRAY answers null for every specifier.
+differential_test!(
+    diff_format_specifier_rules,
+    "DiffFormatRules",
+    r#"
+public class DiffFormatRules {
+    static void t(String label, String fmt, Object... a) {
+        try {
+            System.out.println(label + " OK [" + String.format(fmt, a).replace("\n", "\\n") + "]");
+        } catch (Exception e) {
+            System.out.println(label + " EX " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+    public static void main(String[] args) {
+        String wide = String.format("%2147483648d", 1);
+        System.out.println("width length=" + wide.length() + " [" + wide.trim() + "]");
+        t("comma-e", "%,e", 12345.0);
+        t("comma-E", "%,E", 12345.0);
+        t("comma-S", "%,S", "hi");
+        t("hash-g", "%#g", 12345.0);
+        t("dot-f", "%.f", 1.5);
+        t("dot-s", "%.s", "hi");
+        t("dot-d", "%.d", 1);
+        t("w-dot-d", "%5.d", 1);
+        t("q", "%q", 1);
+        t("w-q", "%5q", 1);
+        t("plus-pct", "%+%");
+        t("minus-n", "%-n");
+        t("prec-n", "%.2n");
+        t("width-n", "%5n");
+        System.out.println("[" + String.format("%s", (Object[]) null) + "]");
+        System.out.println("[" + String.format("%s %s", (Object[]) null) + "]");
+        System.out.println("[" + String.format("%2$s", (Object[]) null) + "]");
+        try {
+            System.out.println(String.format((String) null, 1));
+        } catch (Exception e) {
+            System.out.println("null-fmt " + e.getClass().getName() + " msg=" + e.getMessage());
+        }
+    }
+}
+"#
+);
+
+// `Locale.US` (and its synonyms) name the locale caturra always formats in, so
+// the argument is accepted and dropped rather than the class being reported as
+// nonexistent.
+differential_test!(
+    diff_format_us_locale,
+    "DiffFormatLocale",
+    r#"
+import java.util.Locale;
+public class DiffFormatLocale {
+    public static void main(String[] args) {
+        System.out.println(String.format(Locale.US, "[%,.2f]", 1234567.891));
+        System.out.println(String.format(Locale.US, "[%,d]", 1234567));
+        System.out.printf(Locale.ROOT, "[%,d]%n", 987654);
+    }
+}
+"#
+);
+
+// A DIAMOND constructor passed to a varargs parameter. caturra types a diamond
+// whose element it cannot infer as `Null`, and `null` IS assignable to the
+// varargs array — so the object itself was passed where the array belonged, and
+// the callee saw a TreeMap in place of its `Object[]`. Only a real null (the
+// literal, or a cast of one) takes the array form.
+differential_test!(
+    diff_varargs_diamond_argument,
+    "DiffVarargsDiamond",
+    r#"
+import java.util.*;
+public class DiffVarargsDiamond {
+    static void log(String fmt, Object... a) { System.out.println("log " + a.length + " -> " + String.format(fmt, a)); }
+    static int count(Object... a) { return a == null ? -1 : a.length; }
+    public static void main(String[] args) {
+        Map<String, Integer> m = new TreeMap<>();
+        m.put("k", 1);
+        log("A=%s", new TreeMap<>(m));
+        log("B=%s", new ArrayList<>(Arrays.asList("x")));
+        log("C=%s", new HashSet<>(Arrays.asList("y")));
+        log("none");
+        System.out.println(count());
+        System.out.println(count("a", "b"));
+        System.out.println(count((Object[]) null));
+        System.out.println(count(new Object[] { 1, 2, 3 }));
+    }
+}
+"#
+);
+
+// A map COPY constructor over any map-shaped source. Only a real HashMap was
+// understood, so an immutable view was a ClassCastException into a HashMap and
+// silently NOTHING into a TreeMap — an empty map where the JDK gives the copy.
+differential_test!(
+    diff_map_copy_constructors,
+    "DiffMapCopy",
+    r#"
+import java.util.*;
+public class DiffMapCopy {
+    public static void main(String[] args) {
+        Map<String, Integer> src = new HashMap<>();
+        src.put("k", 1);
+        src.put("j", 2);
+        System.out.println(new HashMap<>(src));
+        System.out.println(new TreeMap<>(src));
+        System.out.println(new HashMap<>(new TreeMap<>(src)));
+        System.out.println(new TreeMap<>(Collections.singletonMap("z", 9)));
+        System.out.println(new HashMap<>(Collections.singletonMap("z", 9)));
+        System.out.println(new HashMap<>(Collections.unmodifiableMap(src)));
+        TreeMap<String, Integer> t = new TreeMap<>(src);
+        System.out.println(t.firstKey() + " " + t.size());
+    }
+}
+"#
+);

@@ -752,6 +752,49 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A format argument is rendered by the VM, not the call site**
+  (2026-08-02, round 9, `java.util.Formatter`) — the format-conversions
+  cluster:
+  - **A varargs RELAY formatted every heap object as the EMPTY STRING.**
+    `static void log(String fmt, Object... a) { String.format(fmt, a); }` —
+    the shape every logging helper has — printed `enum=`, `obj=`, `list=`.
+    The compiler coerces a directly-written argument to text at the call
+    site, which is why a plain `format("%s", obj)` was right; an argument
+    arriving through an `Object...` array has no static type left to coerce,
+    and the formatter sees only the heap, so it cannot call a user
+    `toString()`. The VM now renders the objects among a format call's
+    arguments before formatting (into a FRESH array — the caller's own must
+    not be rewritten), leaving strings, wrappers and nulls alone. A primitive
+    array and a `Class` are arguments too, and print as a JDK prints them
+    (`[I@1b6d3586`, `class java.lang.String`).
+  - **The specifier grammar and its validations**, each recorded from a real
+    JDK: an out-of-range width is IGNORED, not clamped (clamping built a
+    2-billion-character string); a `.` with no digits after it ENDS the
+    specifier, and the JDK reports such a malformed specifier against the
+    character right after the `%` (`%5.d` says `Conversion = '5'`); `,` is
+    illegal for the scientific conversions and is reported with the
+    LOWERCASE conversion (`%,E` says `Conversion = e`); `%n` and `%%` take no
+    flags; a null argument ARRAY answers null for EVERY specifier, so
+    `format("%s %s", (Object[]) null)` prints `null null`; and
+    `format(null, …)` throws an NPE with no message.
+  - **`Locale.US`** (and `ROOT`/`ENGLISH`/`UK`/`CANADA`) names the locale
+    caturra always formats in, so the argument is accepted and dropped. A
+    locale that formats DIFFERENTLY is refused rather than silently ignored,
+    which would be a wrong answer.
+  - Two adjacent bugs found while testing this, neither reported by the
+    audit: a DIAMOND constructor passed to a varargs parameter was passed AS
+    the array (caturra types a diamond it cannot infer as `Null`, and `null`
+    is assignable to the array — only a real null takes the array form now);
+    and a map COPY constructor understood only a real `HashMap` source, so an
+    immutable view was a `ClassCastException` into a `HashMap` and silently
+    NOTHING into a `TreeMap` — an empty map where the JDK gives the copy.
+  - Deferred: `%c` of an unpaired surrogate yields U+FFFD, because the
+    formatter is `String`-based end to end and Rust's `String` cannot hold
+    one; `printf` chaining is refused with an honest reason (caturra models
+    the print calls as statements and cannot carry the stream as a value).
+  - Pinned by `diff_format_object_relay`, `diff_format_specifier_rules`,
+    `diff_format_us_locale`, `diff_varargs_diamond_argument` and
+    `diff_map_copy_constructors`.
 - **A constant expression is more than a literal** (2026-08-02, round 9,
   JLS §15.29/§4.12.4) — the constant-expressions cluster, ten findings with
   one cause:

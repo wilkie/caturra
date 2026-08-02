@@ -2840,6 +2840,30 @@ impl<'run> Interpreter<'run> {
             let lines = self.construction_trace_lines();
             self.exception_traces.insert(receiver, lines);
         }
+        // `new HashMap<>(map)` copies the entries. Handled HERE, not in the
+        // heap-only intrinsic layer, because the source may be any map-shaped
+        // object (a `singletonMap`, an `unmodifiableMap`, a TreeMap) and
+        // because hashing a key may run a user `hashCode`. The intrinsic arm
+        // read only a real HashMap, so every other source was a
+        // ClassCastException — or, for a TreeMap receiver, silently nothing.
+        if target_class == "java/util/HashMap" && descriptor == "(Ljava/util/Map;)V" {
+            use crate::value::HeapObject;
+            let JValue::Ref(Some(source)) = args[0] else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            let entries = self.map_entries(source);
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let hint = std::cmp::max((entries.len() as f32 / 0.75) as i32 + 1, 16);
+            if let Some(HeapObject::HashMap(map)) = self.heap.get_mut(receiver) {
+                *map = crate::map::JavaHashMap::with_capacity_hint(hint);
+            }
+            for (key, value) in entries {
+                self.map_put(receiver, key, value)?;
+            }
+            return Ok(None);
+        }
         // `new HashSet<>(collection)` copies the elements, deduplicating — which
         // may run a user `equals`/`hashCode`, so it belongs here rather than in
         // the heap-only intrinsic layer. Java pre-sizes the backing map to
@@ -3641,6 +3665,101 @@ impl<'run> Interpreter<'run> {
             // throwing, the way `String.valueOf(Object)` does.
             _ => String::from("null"),
         })
+    }
+
+    /// Render the heap objects among a format call's arguments to strings.
+    ///
+    /// The formatter sees only the heap, so it cannot call a user `toString()`
+    /// — and every heap object that is not already a string formatted as the
+    /// EMPTY STRING. That was invisible for a directly-written call, whose
+    /// arguments the compiler coerces at the call site, and hit exactly the
+    /// shape that cannot be coerced there: a varargs RELAY
+    /// (`log(String fmt, Object... a) { String.format(fmt, a); }`), where the
+    /// values arrive in an array with no static types left.
+    ///
+    /// A boxed wrapper is left alone: the formatter unwraps it so that `%d` of
+    /// an `Integer` formats the number. So is a null, which each conversion
+    /// renders its own way.
+    fn prerender_format_args(
+        &mut self,
+        descriptor: &str,
+        args: &mut [JValue],
+    ) -> Result<(), VmError> {
+        let inner = descriptor
+            .strip_prefix("(Ljava/lang/String;")
+            .and_then(|rest| rest.split_once(')'))
+            .map(|(args, _)| args)
+            .unwrap_or_default();
+        let mut tags = Vec::new();
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                'I' | 'D' | 'C' | 'Z' | 'J' | 'F' | 'S' | 'B' => tags.push(c),
+                tag @ ('L' | '[') => {
+                    for inner_char in chars.by_ref() {
+                        if inner_char == ';' {
+                            break;
+                        }
+                    }
+                    tags.push(tag);
+                }
+                _ => {}
+            }
+        }
+        // `args[0]` is the template; the tags describe what follows it.
+        for (index, tag) in tags.iter().enumerate() {
+            let Some(value) = args.get(index + 1).copied() else {
+                break;
+            };
+            match tag {
+                'L' => {
+                    if let Some(rendered) = self.rendered_format_value(value)? {
+                        args[index + 1] = rendered;
+                    }
+                }
+                // A FORWARDED varargs array: its ELEMENTS are the arguments.
+                // Rendered into a FRESH array — the caller's own array must not
+                // be rewritten under it.
+                '[' => {
+                    let JValue::Ref(Some(array)) = value else {
+                        continue;
+                    };
+                    let Some(crate::value::HeapObject::RefArray(name, elements)) =
+                        self.heap.get(array)
+                    else {
+                        continue;
+                    };
+                    let (name, elements) = (name.clone(), elements.clone());
+                    let mut out = Vec::with_capacity(elements.len());
+                    for element in elements {
+                        out.push(self.rendered_format_value(element)?.unwrap_or(element));
+                    }
+                    let fresh = self
+                        .heap
+                        .alloc(crate::value::HeapObject::RefArray(name, out));
+                    args[index + 1] = JValue::Ref(Some(fresh));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The string a format argument should become, or `None` when it is
+    /// already something the formatter renders itself.
+    fn rendered_format_value(&mut self, value: JValue) -> Result<Option<JValue>, VmError> {
+        let JValue::Ref(Some(reference)) = value else {
+            return Ok(None);
+        };
+        if matches!(
+            self.heap.get(reference),
+            Some(crate::value::HeapObject::JavaString(_) | crate::value::HeapObject::Boxed { .. })
+        ) {
+            return Ok(None);
+        }
+        let text = self.string_value_of(value, 0)?;
+        let rendered = self.heap.alloc_string(&text);
+        Ok(Some(JValue::Ref(Some(rendered))))
     }
 
     /// `String.valueOf(value)`: the text Java would produce. Unlike the
@@ -5808,6 +5927,10 @@ impl<'run> Interpreter<'run> {
             ) => entries.entries_in_order(),
             // A TreeMap's entries are already stored in key order.
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.clone(),
+            // An immutable WRAPPER is a map too: `new TreeMap<>(
+            // Collections.singletonMap(k, v))` read no entries at all and
+            // built an empty map.
+            Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_entries(*inner),
             _ => Vec::new(),
         }
     }
@@ -5819,6 +5942,7 @@ impl<'run> Interpreter<'run> {
                 | crate::value::HeapObject::HashSet(entries),
             ) => entries.len(),
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => entries.len(),
+            Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_len(*inner),
             _ => 0,
         }
     }
@@ -9264,6 +9388,14 @@ impl<'run> Interpreter<'run> {
             hit
         };
         let StaticTarget::User(class, method) = target else {
+            // `String.format(fmt, ...)`: heap objects among the arguments
+            // become their `toString()` text first (see
+            // `prerender_format_args`).
+            let mut args = args.to_vec();
+            if class_name == "java/lang/String" && method_name == "format" {
+                self.prerender_format_args(descriptor, &mut args)?;
+            }
+            let args = args.as_slice();
             // Intrinsic statics: Math.*, Integer.parseInt, ...
             let result = intrinsics::invoke_static(
                 &mut self.heap,
@@ -10584,6 +10716,12 @@ impl<'run> Interpreter<'run> {
             // declared fields), which the intrinsic layer lacks.
             self.reflect_virtual(receiver, method_name, &args)?
         } else {
+            // `out.printf(fmt, ...)` / `formatter.format(...)`: same
+            // pre-rendering as `String.format`.
+            let mut args = args;
+            if matches!(method_name, "printf" | "format") {
+                self.prerender_format_args(&descriptor, &mut args)?;
+            }
             intrinsics::invoke_virtual(
                 &mut self.heap,
                 self.console,

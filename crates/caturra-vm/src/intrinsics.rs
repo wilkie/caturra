@@ -6429,8 +6429,10 @@ fn string_static(
     if method == "format" {
         let template = match args.first() {
             Some(JValue::Ref(Some(reference))) => heap.string_text(*reference).unwrap_or_default(),
+            // The JDK's own NPE here carries NO message (it comes from
+            // `Objects.requireNonNull(format)` without one).
             Some(JValue::Ref(None)) => {
-                return Err(throw("java.lang.NullPointerException: format is null"));
+                return Err(throw("java.lang.NullPointerException"));
             }
             _ => String::new(),
         };
