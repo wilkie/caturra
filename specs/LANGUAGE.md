@@ -752,6 +752,49 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A resource is closed EXACTLY ONCE** (2026-08-02, round 9, JLS §14.20.3)
+  — the try-with-resources cluster:
+  - **Leaving the body by `return`/`break`/`continue` closed the resource
+    TWICE.** The cause was not in the desugaring but in how every `finally`
+    is compiled: the copy an abrupt exit inlines sat inside the protected
+    range of the try it was leaving, so when that copy threw, the try's own
+    handler caught it and ran the finally again — a second `close()`, whose
+    failure was then self-suppressed into the first (`getSuppressed().length`
+    1 where a JDK says 0). Silent until `close()` throws or is not
+    idempotent, and it applied to any `try`/`finally`, not just resources. A
+    protected region is now a LIST of intervals with the inlined copies cut
+    out. The exclusion is per guard, not global: a copy is excluded from its
+    OWN try and everything nested in it, but stays covered by the tries
+    outside it — which is exactly where an exception from a `finally` does
+    surface, and where the enclosing `catch` must still see it.
+  - **A try-with-resources nested in another's BODY now compiles.** Its
+    synthetic locals live in the enclosing method's scope, so the
+    per-resource index was not enough to keep two statements apart and
+    `__caturraPrimary$0` collided — a compile error naming an internal
+    symbol, on the canonical two-resource idiom. Sequential statements were
+    unaffected, which is why it went unnoticed.
+  - **A resource must BE an `AutoCloseable`**, not merely have a `close()`
+    method. Because the statement is desugared in the parser, before any
+    type is known, the desugaring marks one of its two generated close calls
+    with a reserved name and codegen checks the receiver's type there.
+    Only class types are judged, so a builtin resource is never wrongly
+    refused.
+  - **The rest of the resource surface**: a FIELD ACCESS is a resource
+    (`try (t.field)`, `try (this.out)`, Java 9), read once where it is
+    named; `AutoCloseable` is a functional interface, so a lambda is a
+    resource; `java.io.Closeable` exists and IS-A `AutoCloseable`; and a
+    class may inherit `close()` as a DEFAULT from an interface instead of
+    declaring it (the abstract-method search walked only the class chain,
+    never the interfaces). Known narrowness: caturra does not require an
+    existing-variable or field resource to be effectively final, which javac
+    does.
+  - **An exception cannot suppress itself** — `addSuppressed(this)` throws
+    `IllegalArgumentException: Self-suppression not permitted` rather than
+    building a cycle, and `addSuppressed(null)` compiles and throws NPE.
+  - Pinned by `diff_twr_close_once_on_abrupt_exit`,
+    `diff_finally_copy_is_not_self_caught`, `diff_twr_nested_in_body`,
+    `diff_twr_field_resource`, `diff_self_suppression_refused`,
+    `diff_closeable_shapes` and `reject_resource_not_autocloseable`.
 - **A read-only view stays read-only THROUGH its cursor** (2026-07-31,
   round 8) — the collection-views cluster, and the round's most dangerous
   finding:

@@ -65,6 +65,10 @@ const JAVA_IO: &[&str] = &[
     "InputStreamReader",
     "FileNotFoundException",
     "IOException",
+    // `Closeable` is modeled as an interface (it is `AutoCloseable` plus a
+    // narrower `throws`), so a resource class may implement the one every
+    // I/O tutorial names.
+    "Closeable",
 ];
 /// `java.nio.file` — the modeled slice: build a `Path` and read/write it through
 /// `Files`. The rest of `java.nio` stays unsupported.

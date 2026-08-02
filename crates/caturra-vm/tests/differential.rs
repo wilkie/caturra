@@ -20177,3 +20177,232 @@ public class DiffRegexErrors {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: try-with-resources (JLS §14.20.3).
+// ---------------------------------------------------------------------------
+
+// A resource is closed EXACTLY ONCE, whether the body completes normally or
+// abruptly. It used to close twice on the abrupt path, because the finally copy
+// that `return`/`break`/`continue` inlines sat inside the protected range of the
+// very try it was leaving — so when `close()` threw, the handler ran the close
+// again and self-suppressed the second failure into the first.
+differential_test!(
+    diff_twr_close_once_on_abrupt_exit,
+    "DiffTwrOnce",
+    r#"
+public class DiffTwrOnce {
+    static class R implements AutoCloseable {
+        String n;
+        int calls = 0;
+        R(String n) { this.n = n; }
+        public void close() {
+            calls++;
+            System.out.println("close " + n + " #" + calls);
+            throw new IllegalStateException("c-" + n);
+        }
+    }
+    static R shared = new R("s");
+    static void byReturn() {
+        try (R a = shared) {
+            return;
+        } catch (IllegalStateException e) {
+            System.out.println("caught " + e.getMessage() + " sup=" + e.getSuppressed().length);
+        }
+    }
+    static void byBreakAndContinue() {
+        for (int i = 0; i < 2; i++) {
+            try (R a = new R("L" + i)) {
+                if (i == 0) continue;
+                break;
+            } catch (IllegalStateException e) {
+                System.out.println("loop " + e.getMessage() + " sup=" + e.getSuppressed().length);
+            }
+        }
+    }
+    static void several() {
+        try (R a = new R("a"); R b = new R("b"); R c = new R("c")) {
+            return;
+        } catch (IllegalStateException e) {
+            System.out.print("several " + e.getMessage());
+            for (Throwable s : e.getSuppressed()) System.out.print(" sup " + s.getMessage());
+            System.out.println();
+        }
+    }
+    public static void main(String[] args) {
+        byReturn();
+        System.out.println("total " + shared.calls);
+        byBreakAndContinue();
+        several();
+    }
+}
+"#
+);
+
+// The same range split, without any resource: an exception thrown by a finally
+// copy inlined at a `return` must surface OUTSIDE its own try (so that try's
+// finally does not re-run) but still INSIDE the enclosing one, whose catch and
+// finally are exactly where Java delivers it.
+differential_test!(
+    diff_finally_copy_is_not_self_caught,
+    "DiffFinallyCopy",
+    r#"
+public class DiffFinallyCopy {
+    static String nested() {
+        try {
+            try {
+                return "body";
+            } finally { System.out.println("F2"); throw new IllegalStateException("from-F2"); }
+        } catch (IllegalStateException e) {
+            System.out.println("outer catch " + e.getMessage());
+            return "caught";
+        } finally { System.out.println("F1"); }
+    }
+    static String outerThrows() {
+        try {
+            try { return "b"; } finally { System.out.println("g-F2"); }
+        } finally { System.out.println("g-F1"); throw new IllegalStateException("from-F1"); }
+    }
+    public static void main(String[] args) {
+        System.out.println(nested());
+        try { System.out.println(outerThrows()); }
+        catch (IllegalStateException e) { System.out.println("main caught " + e.getMessage()); }
+    }
+}
+"#
+);
+
+// One try-with-resources inside another's BODY. The synthetic locals live in the
+// enclosing method's scope, so a per-statement counter was not enough to keep
+// them apart and the program was refused outright.
+differential_test!(
+    diff_twr_nested_in_body,
+    "DiffTwrNested",
+    r#"
+public class DiffTwrNested {
+    static class R implements AutoCloseable {
+        String n;
+        R(String n) { this.n = n; }
+        public void close() { System.out.println("close " + n); }
+    }
+    public static void main(String[] args) {
+        try (R a = new R("out")) {
+            try (R b = new R("in")) {
+                System.out.println("nested body");
+            }
+            for (int i = 0; i < 2; i++) {
+                try (R c = new R("loop" + i)) { System.out.println("loop body " + i); }
+            }
+        }
+        try (R d = new R("after")) { System.out.println("after body"); }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// A FIELD ACCESS is a resource too (Java 9). The expression is read once, where
+// the resource specification names it.
+differential_test!(
+    diff_twr_field_resource,
+    "DiffTwrField",
+    r#"
+public class DiffTwrField {
+    static class R implements AutoCloseable {
+        String n;
+        R(String n) { this.n = n; }
+        public void close() { System.out.println("close " + n); }
+    }
+    final R inst = new R("inst");
+    static final R stat = new R("stat");
+    void instanceForm() {
+        try (this.inst) { System.out.println("body1"); }
+    }
+    public static void main(String[] args) {
+        DiffTwrField t = new DiffTwrField();
+        try (t.inst) { System.out.println("body2"); }
+        t.instanceForm();
+        try (DiffTwrField.stat) { System.out.println("body3"); }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// An exception cannot suppress itself: the JDK refuses rather than building a
+// cycle. A resource whose close() rethrows the body's own exception hits this.
+differential_test!(
+    diff_self_suppression_refused,
+    "DiffSelfSuppress",
+    r#"
+public class DiffSelfSuppress {
+    static RuntimeException shared = new RuntimeException("shared");
+    static class R implements AutoCloseable {
+        public void close() { throw shared; }
+    }
+    public static void main(String[] args) {
+        try (R a = new R()) {
+            throw shared;
+        } catch (Throwable e) {
+            System.out.println("caught " + e.getClass().getName() + ": " + e.getMessage());
+            System.out.println("sup=" + e.getSuppressed().length);
+        }
+        RuntimeException e = new RuntimeException("x");
+        try { e.addSuppressed(e); }
+        catch (IllegalArgumentException x) { System.out.println("IAE " + x.getMessage()); }
+        try { e.addSuppressed(null); }
+        catch (NullPointerException x) { System.out.println("NPE " + x.getMessage()); }
+        System.out.println("sup=" + e.getSuppressed().length);
+    }
+}
+"#
+);
+
+// `AutoCloseable` is a functional interface, `Closeable` is a real java.io type
+// that IS-A `AutoCloseable`, and a class may inherit `close()` as a DEFAULT from
+// an interface rather than declaring it.
+differential_test!(
+    diff_closeable_shapes,
+    "DiffCloseable",
+    r#"
+import java.io.Closeable;
+import java.io.IOException;
+public class DiffCloseable {
+    interface Closeable2 extends AutoCloseable {
+        default void close() { System.out.println("default close"); }
+    }
+    static class UsesDefault implements Closeable2 { }
+    static class Io implements Closeable {
+        public void close() throws IOException { System.out.println("io close"); }
+    }
+    public static void main(String[] args) throws Exception {
+        try (AutoCloseable a = () -> System.out.println("lambda close")) {
+            System.out.println("body");
+        }
+        try (UsesDefault u = new UsesDefault()) { System.out.println("default body"); }
+        try (Closeable c = new Io()) { System.out.println("io body"); }
+        new UsesDefault().close();
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// javac: a resource must BE an AutoCloseable. Merely having a close() method is
+// not enough, and accepting one ran a program a real JDK will not compile.
+differential_reject!(
+    reject_resource_not_autocloseable,
+    "RejectResource",
+    r#"
+public class RejectResource {
+    static class NotCloseable {
+        public void close() { System.out.println("close"); }
+    }
+    public static void main(String[] args) {
+        try (NotCloseable n = new NotCloseable()) {
+            System.out.println("body");
+        }
+    }
+}
+"#
+);

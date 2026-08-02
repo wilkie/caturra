@@ -209,6 +209,20 @@ fn is_object_method_redeclaration(m: &MethodDecl) -> bool {
 /// The functional interfaces in the program: interface name -> its SAM.
 fn functional_interfaces(units: &[(String, CompilationUnit)]) -> HashMap<String, Sam> {
     let mut out = HashMap::new();
+    // `AutoCloseable`/`Closeable` are library interfaces, so they are not among
+    // the units — but they ARE functional (one abstract `close()`), and
+    // `try (AutoCloseable a = () -> ...)` is the shape that notices. A user
+    // interface of the same name overwrites this below, as it should.
+    for name in ["AutoCloseable", "Closeable"] {
+        out.insert(
+            String::from(name),
+            Sam {
+                method: String::from("close"),
+                params: Vec::new(),
+                ret: TypeRef::Void,
+            },
+        );
+    }
     for (_, unit) in units {
         for class in &unit.classes {
             if !class.is_interface {

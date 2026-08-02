@@ -22,7 +22,8 @@ use caturra_classfile::{
 use crate::CompiledClass;
 use crate::ast::{
     AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl, InitBlock,
-    LambdaBody, Literal, LocalDeclarator, MethodDecl, Stmt, SwitchArm, TypeRef, UnaryOp,
+    LambdaBody, Literal, LocalDeclarator, MethodDecl, RESOURCE_CLOSE, Stmt, SwitchArm, TypeRef,
+    UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourceSpan};
 
@@ -234,6 +235,7 @@ fn emit_clinit(
         loop_stack: Vec::new(),
         pending_label: None,
         finally_stack: Vec::new(),
+        protected: Vec::new(),
         local_var_debug: Vec::new(),
         forward_ref: None,
     };
@@ -677,7 +679,14 @@ impl MethodTable {
                     id,
                     superclass: None,
                     library_superclass: None,
-                    interfaces: Vec::new(),
+                    // `Closeable` IS-A `AutoCloseable` — the edge makes a
+                    // `Closeable` resource widen, and `implements Closeable`
+                    // satisfy a try-with-resources.
+                    interfaces: if name == "Closeable" {
+                        vec![ClassId(2)]
+                    } else {
+                        Vec::new()
+                    },
                     enclosing: None,
                     is_abstract: true,
                     is_interface: true,
@@ -1709,12 +1718,17 @@ impl MethodTable {
         }
 
         'outer: for (sig, owner) in required {
-            // Look for a concrete implementation along the class chain.
-            let mut current = Some(class);
+            // Look for a concrete implementation along the class chain — and
+            // through the interfaces, whose DEFAULT methods implement an
+            // abstract one just as a superclass method does (JLS §8.4.8.1).
+            // Only the class chain used to be searched, so a class that
+            // inherited `close()` as a default from an interface extending
+            // `AutoCloseable` was refused as not implementing it.
+            let mut stack = vec![class];
             let mut steps = 0usize;
-            while let Some(id) = current {
+            while let Some(id) = stack.pop() {
                 steps += 1;
-                if steps > self.class_names.len() + 1 {
+                if steps > self.class_names.len() * 4 {
                     break;
                 }
                 if let Some(info) = self.info_by_id(id) {
@@ -1725,9 +1739,10 @@ impl MethodTable {
                     }) {
                         continue 'outer;
                     }
-                    current = info.superclass;
-                } else {
-                    break;
+                    if let Some(parent) = info.superclass {
+                        stack.push(parent);
+                    }
+                    stack.extend(info.interfaces.iter().copied());
                 }
             }
             return Some((sig.name.clone(), self.class_name(owner).to_owned()));
@@ -5067,6 +5082,7 @@ fn emit_method(
         loop_stack: Vec::new(),
         pending_label: None,
         finally_stack: Vec::new(),
+        protected: Vec::new(),
         local_var_debug: Vec::new(),
         forward_ref: None,
     };
@@ -9799,7 +9815,10 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
 fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable) -> bool {
     match param {
         BParam::Throwable => {
-            matches!(arg, JType::Exception(_))
+            // `null` is a Throwable too — `addSuppressed(null)` and
+            // `initCause(null)` both compile, and both are meaningful calls
+            // (the first throws at run time, the second clears the cause).
+            matches!(arg, JType::Exception(_) | JType::Null)
                 || matches!(arg, JType::Object(id) if table.is_throwable(id))
         }
         BParam::RefArray => matches!(arg, JType::Array { .. }),
@@ -10169,9 +10188,18 @@ struct BodyGen<'a> {
     /// next loop/switch entry so `break label;` can target it.
     pending_label: Option<String>,
     /// Enclosing `finally` blocks (innermost last): the statements to
-    /// duplicate on abrupt exits, with the loop depth at try entry so
-    /// `break`/`continue` only run guards inside the exited loop.
-    finally_stack: Vec<(Vec<Stmt>, usize)>,
+    /// duplicate on abrupt exits.
+    finally_stack: Vec<FinallyGuard>,
+    /// Code ranges currently protected by an enclosing `try` (innermost last),
+    /// while their handlers are still being emitted.
+    ///
+    /// A protected region is a LIST of intervals, not one span, because the
+    /// finally copies that `return`/`break`/`continue` inline sit physically in
+    /// the middle of the body they leave — and must not be covered by that
+    /// body's own handlers. Covering them ran the finally a second time when
+    /// the first copy threw: a try-with-resources left by `return` closed its
+    /// resource twice and self-suppressed the second failure into the first.
+    protected: Vec<ProtectedRegion>,
     /// `(name, descriptor, generic signature, slot, live-from offset)`
     /// per declared local, for the `LocalVariableTable` (and, when the
     /// signature is present, `LocalVariableTypeTable`) debug
@@ -10183,6 +10211,29 @@ struct BodyGen<'a> {
     /// this class — for the JLS §8.3.3 forward-reference check. A simple-name
     /// READ of a field declared at or after the current one is illegal.
     forward_ref: Option<(usize, std::rc::Rc<std::collections::HashMap<String, usize>>)>,
+}
+
+/// An enclosing `finally` an abrupt exit has to run on its way out.
+struct FinallyGuard {
+    stmts: Vec<Stmt>,
+    /// Loop depth at try entry, so `break`/`continue` only run the guards of
+    /// the loops they actually leave.
+    loop_len: usize,
+    /// Index its own `try`'s protected regions occupy in `protected`. An
+    /// inlined copy of these statements is excluded from that region and from
+    /// everything nested inside it — but stays covered by the tries OUTSIDE
+    /// it, which is where an exception from a `finally` really does surface.
+    region: usize,
+}
+
+/// One `try`'s protected code, as the disjoint intervals its handlers cover.
+struct ProtectedRegion {
+    /// Where the interval being accumulated began.
+    start: u16,
+    /// Nesting depth of the suspensions in effect; while non-zero the code
+    /// being emitted is an inlined finally copy and belongs to no interval.
+    suspended: u32,
+    intervals: Vec<(u16, u16)>,
 }
 
 impl BodyGen<'_> {
@@ -11002,19 +11053,24 @@ impl BodyGen<'_> {
         // region must run the finally first; the guard stack tells
         // them to.
         if let Some(finally_stmts) = finally_body {
-            self.finally_stack
-                .push((finally_stmts.to_vec(), self.loop_stack.len()));
+            self.finally_stack.push(FinallyGuard {
+                stmts: finally_stmts.to_vec(),
+                loop_len: self.loop_stack.len(),
+                // The body region opens next, at exactly this depth; so does
+                // each catch-body region later.
+                region: self.protected.len(),
+            });
         }
 
         let before_flags = self.assigned_flags();
-        let start = self.code.offset();
+        self.open_protected();
         self.scopes.push(Vec::new());
         for stmt in body {
             self.statement(stmt);
         }
         self.scopes.pop();
-        let end = self.code.offset();
-        if start == end {
+        let ranges = self.close_protected();
+        if ranges.is_empty() {
             // An empty protected range is illegal in the table; with
             // nothing to throw, the catches are dead anyway. The
             // finally still runs.
@@ -11045,6 +11101,7 @@ impl BodyGen<'_> {
 
         for (clause, kinds) in catches.iter().zip(&resolved) {
             self.restore_assigned(&before_flags);
+            self.open_protected();
             let handler = self.code.offset();
             self.code.mark_line(clause.span.start.line);
             // The VM pushes the thrown object before jumping here.
@@ -11055,6 +11112,7 @@ impl BodyGen<'_> {
                 // Unresolvable type: an error was reported; skip body
                 // emission to avoid cascades.
                 self.scopes.pop();
+                let _ = self.close_protected();
                 continue;
             }
             // A multi-catch has ONE handler; the alternatives differ only in which
@@ -11091,8 +11149,7 @@ impl BodyGen<'_> {
                 self.statement(stmt);
             }
             self.scopes.pop();
-            let catch_body_end = self.code.offset();
-            catch_ranges.push((handler, catch_body_end));
+            catch_ranges.extend(self.close_protected());
             if let Some(finally_stmts) = finally_body {
                 let guard = self.finally_stack.pop();
                 self.emit_block(finally_stmts);
@@ -11103,11 +11160,14 @@ impl BodyGen<'_> {
             self.code.branch(op::GOTO, after, 0);
             branch_flags.push(self.assigned_flags());
 
-            // One entry per alternative, all pointing at this handler.
+            // One entry per alternative per protected interval, all pointing
+            // at this handler.
             for kind in kinds {
                 let catch_class = intern_class(self.pool, &kind.table_name(self.table));
-                self.code
-                    .add_exception_entry(start, end, handler, catch_class);
+                for &(range_start, range_end) in &ranges {
+                    self.code
+                        .add_exception_entry(range_start, range_end, handler, catch_class);
+                }
             }
         }
 
@@ -11125,7 +11185,10 @@ impl BodyGen<'_> {
             self.code.drop_stack(1);
             // catch_type 0 = any; covers the try body and each catch
             // body, but never the finally copies themselves.
-            self.code.add_exception_entry(start, end, handler, 0);
+            for &(range_start, range_end) in &ranges {
+                self.code
+                    .add_exception_entry(range_start, range_end, handler, 0);
+            }
             for (range_start, range_end) in catch_ranges {
                 if range_start != range_end {
                     self.code
@@ -11160,6 +11223,54 @@ impl BodyGen<'_> {
     /// `break`/`continue` (only guards entered inside the exited loop
     /// run); `None` (a `return`) runs them all. Guards are disabled
     /// while emitting so a finally body's own exits cannot recurse.
+    /// Begin accumulating a protected region at the current offset.
+    fn open_protected(&mut self) {
+        let start = self.code.offset();
+        self.protected.push(ProtectedRegion {
+            start,
+            suspended: 0,
+            intervals: Vec::new(),
+        });
+    }
+
+    /// Finish the innermost protected region, returning its intervals.
+    fn close_protected(&mut self) -> Vec<(u16, u16)> {
+        let end = self.code.offset();
+        let Some(mut region) = self.protected.pop() else {
+            return Vec::new();
+        };
+        if end > region.start {
+            region.intervals.push((region.start, end));
+        }
+        region.intervals
+    }
+
+    /// Stop covering code, from `from` inwards: what follows is the inlined
+    /// copy of the finally belonging to the try at `from`, so neither that try
+    /// nor anything nested in it may catch what the copy throws. Regions
+    /// OUTSIDE it keep covering — a `finally` that throws does surface in the
+    /// enclosing try, and its handlers must see it.
+    fn suspend_protected(&mut self, from: usize) {
+        let at = self.code.offset();
+        for region in self.protected.iter_mut().skip(from) {
+            if region.suspended == 0 && at > region.start {
+                region.intervals.push((region.start, at));
+            }
+            region.suspended += 1;
+        }
+    }
+
+    /// Resume coverage after an inlined finally copy.
+    fn resume_protected(&mut self, from: usize) {
+        let at = self.code.offset();
+        for region in self.protected.iter_mut().skip(from) {
+            region.suspended = region.suspended.saturating_sub(1);
+            if region.suspended == 0 {
+                region.start = at;
+            }
+        }
+    }
+
     fn emit_pending_finallys(&mut self, down_to_loop: Option<usize>) {
         // Innermost first — and while entry i's body is being emitted, the
         // ENCLOSING entries stay on the stack, so a `return`/`break` inside
@@ -11167,13 +11278,17 @@ impl BodyGen<'_> {
         // The old version took the whole stack for the duration, which made
         // an inner finally's overriding `return` silently skip every
         // enclosing finally (including a try-with-resources close).
-        let mut popped: Vec<(Vec<Stmt>, usize)> = Vec::new();
-        while let Some((_, loop_len)) = self.finally_stack.last() {
-            if down_to_loop.is_some_and(|target| *loop_len <= target) {
+        let mut popped: Vec<FinallyGuard> = Vec::new();
+        while let Some(guard) = self.finally_stack.last() {
+            if down_to_loop.is_some_and(|target| guard.loop_len <= target) {
                 break;
             }
             let entry = self.finally_stack.pop().expect("checked non-empty");
-            self.emit_block(&entry.0);
+            // Each copy has its own exclusion set, so the split is per guard,
+            // not once around the lot.
+            self.suspend_protected(entry.region);
+            self.emit_block(&entry.stmts);
+            self.resume_protected(entry.region);
             popped.push(entry);
         }
         while let Some(entry) = popped.pop() {
@@ -14875,6 +14990,34 @@ impl BodyGen<'_> {
         }
     }
 
+    /// A try-with-resources resource must be an `AutoCloseable` (JLS §14.20.3).
+    ///
+    /// Only CLASS types are judged: a builtin resource (`Scanner`,
+    /// `PrintWriter`, …) is closeable in Java when it has a `close()` at all,
+    /// and one that has none already fails to resolve the call with a message
+    /// of its own. This way the check never rejects something valid.
+    fn check_resource_type(&mut self, receiver_ty: JType, span: SourceSpan) {
+        let class = match receiver_ty {
+            JType::Object(id) => id,
+            JType::Generic { class, .. } => class,
+            _ => return,
+        };
+        let Some(closeable) = self.table.class_id("AutoCloseable") else {
+            return;
+        };
+        if widens(receiver_ty, JType::Object(closeable), self.table) {
+            return;
+        }
+        let name = self.table.class_name(class).to_owned();
+        self.error(
+            span,
+            format!(
+                "incompatible types: try-with-resources not applicable to variable type \
+                 ({name} cannot be converted to AutoCloseable)"
+            ),
+        );
+    }
+
     /// Resolve and emit an instance method call with the receiver
     /// expression. `None` means a diagnostic was reported.
     #[allow(clippy::option_option)] // error / void / value are distinct outcomes
@@ -14887,6 +15030,17 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> Option<Option<JType>> {
         let receiver_ty = self.expr(receiver);
+        // The try-with-resources desugaring marks ONE of its two `close()`
+        // calls, so the resource's type can be checked here where types are
+        // known — the statement itself is long gone by now. JLS §14.20.3
+        // requires the type to be `AutoCloseable`; merely HAVING a `close()`
+        // method is not enough, and javac says so.
+        let method = if method == RESOURCE_CLOSE {
+            self.check_resource_type(receiver_ty, span);
+            "close"
+        } else {
+            method
+        };
         // `Comparator` combinators (`reversed`/`thenComparing`) on a comparator
         // value — the bundled `__Comparator` interface has no such methods, so
         // caturra builds a derived comparator itself.

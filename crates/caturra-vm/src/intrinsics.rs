@@ -727,10 +727,28 @@ pub fn invoke_virtual(
         // `addSuppressed(t)` — what the try-with-resources desugaring calls
         // when a resource's `close()` throws and the body's exception wins.
         (HeapObject::Exception { .. }, "addSuppressed") => {
-            if let Some(JValue::Ref(Some(extra))) = args.first().copied()
-                && let Some(HeapObject::Exception { suppressed, .. }) = heap.get_mut(receiver)
-            {
-                suppressed.push(extra);
+            match args.first().copied() {
+                // An exception cannot suppress ITSELF: the JDK rejects it
+                // outright rather than building a self-referential chain that
+                // `printStackTrace` would never finish rendering. A resource
+                // whose `close()` rethrows the very exception the body threw
+                // reaches exactly this case.
+                Some(JValue::Ref(Some(extra))) if extra == receiver => {
+                    return Err(throw(
+                        "java.lang.IllegalArgumentException: Self-suppression not permitted",
+                    ));
+                }
+                Some(JValue::Ref(Some(extra))) => {
+                    if let Some(HeapObject::Exception { suppressed, .. }) = heap.get_mut(receiver) {
+                        suppressed.push(extra);
+                    }
+                }
+                Some(JValue::Ref(None)) => {
+                    return Err(throw(
+                        "java.lang.NullPointerException: Cannot suppress a null exception.",
+                    ));
+                }
+                _ => {}
             }
             Ok(None)
         }

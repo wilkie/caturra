@@ -182,6 +182,14 @@ pub struct TypeParam {
     pub extra_bounds: Vec<TypeRef>,
 }
 
+/// The method name the try-with-resources desugaring gives ONE of the two
+/// `close()` calls it generates per resource. Codegen turns it back into
+/// `close`, having first checked that the resource really is an
+/// `AutoCloseable` — a check the statement's own shape can no longer support,
+/// because desugaring happens in the parser, before any type is known. Marking
+/// one call and not both keeps the diagnostic from being reported twice.
+pub const RESOURCE_CLOSE: &str = "\u{0}close\u{0}";
+
 /// Reserved prefix that turns a wildcard type argument (`? extends Number`)
 /// into an ordinary [`TypeRef::Named`], the way the type-variable sentinel
 /// does — no dedicated variant, so the many `TypeRef` matches stay untouched.

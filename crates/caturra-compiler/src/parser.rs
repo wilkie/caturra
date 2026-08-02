@@ -9,7 +9,7 @@
 use crate::ast::{
     Annotation, AssignTarget, BinaryOp, CatchClause, ClassDecl, CompilationUnit, Expr, FieldDecl,
     ImportDecl, InitBlock, LambdaBody, LambdaParam, Literal, LocalDeclarator, MethodDecl, Param,
-    Stmt, SwitchArm, TypeParam, TypeRef, UnaryOp,
+    RESOURCE_CLOSE, Stmt, SwitchArm, TypeParam, TypeRef, UnaryOp,
 };
 use crate::diagnostics::{Diagnostic, SourcePosition, SourceSpan};
 use crate::lexer::{Keyword, Token, TokenKind};
@@ -28,6 +28,7 @@ pub fn parse(path: &str, tokens: Vec<Token>) -> (CompilationUnit, Vec<Diagnostic
         anon_classes: Vec::new(),
         anon_counter: 0,
         local_counter: 0,
+        resource_counter: 0,
         pending_annotations: Vec::new(),
     };
     let unit = parser.compilation_unit();
@@ -92,6 +93,7 @@ fn desugar_try_with_resources(
     catches: Vec<CatchClause>,
     finally_body: Option<Vec<Stmt>>,
     span: SourceSpan,
+    serial: usize,
 ) -> Stmt {
     let name_expr = |name: &str| Expr::Name {
         path: vec![name.to_owned()],
@@ -107,10 +109,11 @@ fn desugar_try_with_resources(
         rhs: Box::new(null_literal()),
         span,
     };
-    let close_call = |name: &str| {
+    // `checked` marks the one call codegen validates the resource type on.
+    let close_call = |name: &str, checked: bool, span: SourceSpan| {
         Stmt::Expr(Expr::Call {
             receiver: Some(Box::new(name_expr(name))),
-            method: String::from("close"),
+            method: String::from(if checked { RESOURCE_CLOSE } else { "close" }),
             args: Vec::new(),
             span,
         })
@@ -120,15 +123,18 @@ fn desugar_try_with_resources(
     let mut inner = body;
     for (depth, resource) in resources.into_iter().enumerate().rev() {
         // Synthetic names cannot collide with a source identifier: `$` is not
-        // in caturra's identifier set, and the depth keeps nested statements
-        // apart.
-        let primary = format!("__caturraPrimary${depth}");
-        let thrown = format!("__caturraThrown${depth}");
-        let closing = format!("__caturraClosing${depth}");
+        // in caturra's identifier set. Both numbers are needed — the depth
+        // keeps the resources of ONE statement apart, and the per-method serial
+        // keeps two statements apart, which matters because these locals live
+        // in the enclosing method's scope: a try-with-resources nested in
+        // another one's body used to redeclare `__caturraPrimary$0`.
+        let primary = format!("__caturraPrimary${serial}_{depth}");
+        let thrown = format!("__caturraThrown${serial}_{depth}");
+        let closing = format!("__caturraClosing${serial}_{depth}");
 
         // `try { r.close(); } catch (Throwable s) { primary.addSuppressed(s); }`
         let close_suppressing = Stmt::Try {
-            body: vec![close_call(&resource.name)],
+            body: vec![close_call(&resource.name, true, resource.span)],
             catches: vec![CatchClause {
                 types: vec![TypeRef::Named(String::from("Throwable"))],
                 name: closing.clone(),
@@ -148,7 +154,11 @@ fn desugar_try_with_resources(
         let close_either_way = Stmt::If {
             cond: is_null(&primary, true),
             then: Box::new(Stmt::Block(vec![close_suppressing])),
-            els: Some(Box::new(Stmt::Block(vec![close_call(&resource.name)]))),
+            els: Some(Box::new(Stmt::Block(vec![close_call(
+                &resource.name,
+                false,
+                span,
+            )]))),
             span,
         };
 
@@ -392,6 +402,11 @@ struct Parser<'a> {
     /// Distinguishes local classes so two methods can each declare a `class
     /// Local` without their hoisted names colliding.
     local_counter: usize,
+    /// Distinguishes the synthetic locals of one try-with-resources from
+    /// another's. A per-STATEMENT counter is not enough: the names live in the
+    /// enclosing method's scope, so a try-with-resources written inside another
+    /// one's body collided and the program was refused.
+    resource_counter: usize,
     pending_annotations: Vec<Annotation>,
 }
 
@@ -2276,12 +2291,14 @@ impl Parser<'_> {
                 span,
             });
         }
+        self.resource_counter += 1;
         Ok(desugar_try_with_resources(
             resources,
             body,
             catches,
             finally_body,
             span,
+            self.resource_counter,
         ))
     }
 
@@ -2295,6 +2312,29 @@ impl Parser<'_> {
             let _ = self.eat_keyword(Keyword::Final); // resources are final anyway
             // `try (r)` names an existing variable: one identifier, then `)`
             // or `;`. Anything else starts a declaration.
+            // `try (t.field)` / `try (this.field)` (Java 9): a FIELD ACCESS is
+            // a resource too, not just a local. The expression is read once,
+            // here, so it needs a synthetic local to name for the close — the
+            // field itself may be reassigned by the body, and Java still closes
+            // what the resource specification read.
+            if let Some(dots) = self.field_access_resource() {
+                let name = format!("__caturraRes${}_{}", self.resource_counter, resources.len());
+                let span = dots.span();
+                resources.push(Resource {
+                    ty: TypeRef::Var,
+                    name,
+                    init: dots,
+                    existing: false,
+                    span,
+                });
+                if self.eat_symbol(";") {
+                    if self.at_symbol(")") {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
             let bare_existing = matches!(self.peek(), Some(TokenKind::Identifier(_)))
                 && matches!(self.peek_at(1), Some(TokenKind::Symbol(")" | ";")));
             if bare_existing {
@@ -2364,6 +2404,33 @@ impl Parser<'_> {
         }
         self.expect_symbol(")", "to close the resource list")?;
         Ok(resources)
+    }
+
+    /// A resource written as a field access (`t.inst`, `this.out`, `A.B.f`),
+    /// consumed and returned when the head of the resource list is one.
+    ///
+    /// Restricted to a dotted chain of names, which is what JLS §14.20.3 allows
+    /// besides a variable: an arbitrary expression is NOT a resource, and
+    /// treating one as such would accept programs javac rejects. A chain with
+    /// no dot is the plain existing-variable form, handled by the caller.
+    fn field_access_resource(&mut self) -> Option<Expr> {
+        let mut ahead = 0;
+        match self.peek() {
+            Some(TokenKind::Identifier(_) | TokenKind::Keyword(Keyword::This)) => ahead += 1,
+            _ => return None,
+        }
+        let mut dots = 0;
+        while matches!(self.peek_at(ahead), Some(TokenKind::Symbol("."))) {
+            if !matches!(self.peek_at(ahead + 1), Some(TokenKind::Identifier(_))) {
+                return None;
+            }
+            ahead += 2;
+            dots += 1;
+        }
+        if dots == 0 || !matches!(self.peek_at(ahead), Some(TokenKind::Symbol(")" | ";"))) {
+            return None;
+        }
+        self.expression().ok()
     }
 
     /// `throw expr;`.
