@@ -3434,6 +3434,7 @@ fn iterator_method(
         last,
         expected_len,
         writes,
+        ..
     }) = heap.get(receiver)
     else {
         unreachable!("receiver kind checked by caller");
@@ -3685,6 +3686,7 @@ fn list_method(
                 last: None,
                 expected_len,
                 writes,
+                list: method != "iterator",
             });
             Ok(Some(JValue::Ref(Some(iterator))))
         }

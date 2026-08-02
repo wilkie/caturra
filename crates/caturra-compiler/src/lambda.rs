@@ -773,13 +773,16 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // `list.forEach(x -> ...)` / `list.removeIf(x -> ...)`: a single
             // lambda whose parameter type is the receiver's element type. The
             // erased SAM is `__Consumer` (void) or `__Predicate` (boolean).
+            // A METHOD REFERENCE stands here too (`list.forEach(this::show)`),
+            // and was refused with the false claim that this is not a
+            // functional-interface position.
+            let one_argument_function = matches!(&args[0..], [Expr::MethodRef { .. }])
+                || matches!(&args[0..], [Expr::Lambda { params, .. }] if params.len() == 1);
             if matches!(
                 method.as_str(),
                 "forEach" | "forEachRemaining" | "removeIf" | "replaceAll"
-            ) && args.len() == 1
-                && matches!(&args[0], Expr::Lambda { params, .. } if params.len() == 1)
-                && let Some(r) = receiver.as_deref()
-                && let Some(elem) = list_elem_type(r, ctx)
+            ) && one_argument_function
+                && let Some(elem) = receiver.as_deref().and_then(|r| list_elem_type(r, ctx))
             {
                 let object = TypeRef::Named(String::from("Object"));
                 let (iface, sam, ret) = match method.as_str() {
@@ -789,6 +792,18 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     // apply(Object)`. The result is boxed on return.
                     _ => ("__UnaryOperator", "apply", object),
                 };
+                // `list.forEach(System.out::println)` — a method reference is
+                // as good as a lambda here, and was refused with the false
+                // claim that this is not a functional-interface position. It
+                // becomes the equivalent lambda first, then erases like one.
+                if matches!(&args[0], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from(sam),
+                        params: vec![elem.clone()],
+                        ret: ret.clone(),
+                    };
+                    args[0] = method_ref_to_lambda(&args[0], &synth, ctx);
+                }
                 let result_type = (method == "replaceAll").then(|| elem.clone());
                 args[0] = build_erased_lambda(
                     &mut args[0],

@@ -481,6 +481,13 @@ pub(crate) struct MethodTable {
     /// check. Absent means public — which is what every synthetic and library
     /// signature is.
     method_access: std::collections::HashMap<(String, String, usize), u8>,
+    /// Library interfaces caturra SYNTHESIZES into the table (`Comparable`,
+    /// `Iterable`, `Iterator`, …) so a user class can implement one. They are
+    /// classes for inheritance purposes but not for type resolution: a
+    /// `Iterator<String>` variable still resolves to the builtin cursor type,
+    /// which is what `list.iterator()` yields. Only a class the PROGRAM
+    /// declares may take a builtin name over.
+    synthesized: std::collections::HashSet<String>,
 }
 
 /// The arena backing `ElemType::Nested` (see [`MethodTable::nested`]).
@@ -537,6 +544,7 @@ impl MethodTable {
             nested: std::cell::RefCell::default(),
             throws_clauses: std::collections::HashMap::new(),
             method_access: std::collections::HashMap::new(),
+            synthesized: std::collections::HashSet::new(),
         };
         // The synthetic top type: `Object`. It carries the universal
         // methods; user classes are registered as its subtypes.
@@ -709,6 +717,84 @@ impl MethodTable {
                             ret_infer: None,
                         }]
                     },
+                    fields: Vec::new(),
+                },
+            );
+        }
+        // `Iterable<T>` and `Iterator<T>` — the pair a program implements to
+        // make its own data structure work with a for-each, which is the whole
+        // point of them and was refused outright ("cannot find symbol: class
+        // Iterable"). They are registered for INHERITANCE only: the names still
+        // resolve to caturra's builtin cursor and collection types, since
+        // `list.iterator()` must keep yielding one. `remove()` is a default in
+        // Java 8+, so implementing `Iterator` requires only the two.
+        for (name, methods) in [
+            (
+                "Iterable",
+                vec![MethodSig {
+                    name: String::from("iterator"),
+                    params: Vec::new(),
+                    ret: Some(JType::Iterator(ElemType::Object(object_id))),
+                    is_static: false,
+                    is_private: false,
+                    is_final: false,
+                    is_abstract: true,
+                    is_varargs: false,
+                    ret_infer: None,
+                }],
+            ),
+            (
+                "Iterator",
+                vec![
+                    MethodSig {
+                        name: String::from("hasNext"),
+                        params: Vec::new(),
+                        ret: Some(JType::Boolean),
+                        is_static: false,
+                        is_private: false,
+                        is_final: false,
+                        is_abstract: true,
+                        is_varargs: false,
+                        ret_infer: None,
+                    },
+                    MethodSig {
+                        name: String::from("next"),
+                        params: Vec::new(),
+                        ret: Some(JType::TypeVar),
+                        is_static: false,
+                        is_private: false,
+                        is_final: false,
+                        is_abstract: true,
+                        is_varargs: false,
+                        ret_infer: None,
+                    },
+                ],
+            ),
+        ] {
+            if units
+                .iter()
+                .any(|(_, unit)| unit.classes.iter().any(|class| class.name == name))
+            {
+                continue;
+            }
+            let id = ClassId(u16::try_from(table.class_names.len()).unwrap_or(u16::MAX));
+            table.class_names.push(String::from(name));
+            table.synthesized.insert(String::from(name));
+            table.classes.insert(
+                String::from(name),
+                ClassInfo {
+                    id,
+                    superclass: None,
+                    library_superclass: None,
+                    interfaces: Vec::new(),
+                    enclosing: None,
+                    is_abstract: true,
+                    is_interface: true,
+                    is_enum: false,
+                    is_inner: false,
+                    type_param_count: 1,
+                    supertype_args: Vec::new(),
+                    methods,
                     fields: Vec::new(),
                 },
             );
@@ -1768,6 +1854,13 @@ impl MethodTable {
         self.classes.contains_key(name)
     }
 
+    /// Whether the PROGRAM declares this class — as opposed to caturra having
+    /// synthesized a library interface of that name. A builtin type name is
+    /// only given up to a real user declaration.
+    fn has_user_class(&self, name: &str) -> bool {
+        self.classes.contains_key(name) && !self.synthesized.contains(name)
+    }
+
     fn class_id(&self, name: &str) -> Option<ClassId> {
         self.classes.get(name).map(|c| c.id)
     }
@@ -1857,6 +1950,21 @@ impl MethodTable {
                     && let Some(id) = self.class_id("Comparable")
                 {
                     return Some(JType::Object(id));
+                }
+                // A RAW `Iterator it = list.iterator();` is still the builtin
+                // cursor, not the interface caturra synthesizes for a user
+                // class to implement. (The parameterized form takes the same
+                // route, a few arms below.)
+                if !self.has_user_class(simple) {
+                    match simple {
+                        "Iterator" => {
+                            return Some(JType::Iterator(ElemType::Object(self.object_id)));
+                        }
+                        "ListIterator" => {
+                            return Some(JType::ListIterator(ElemType::Object(self.object_id)));
+                        }
+                        _ => {}
+                    }
                 }
                 // `Comparator` and the `java.util.function` interfaces alias their
                 // bundled erased forms (`__Comparator`, `__UnaryOperator`, ...).
@@ -1995,9 +2103,12 @@ impl MethodTable {
                     && !self.has_class(simple)
                 {
                     elem_from_type_arg(&args[0], self).map(JType::TreeSet)
-                } else if simple == "ListIterator" && args.len() == 1 && !self.has_class(simple) {
+                } else if simple == "ListIterator"
+                    && args.len() == 1
+                    && !self.has_user_class(simple)
+                {
                     elem_from_type_arg(&args[0], self).map(JType::ListIterator)
-                } else if simple == "Iterator" && args.len() == 1 && !self.has_class(simple) {
+                } else if simple == "Iterator" && args.len() == 1 && !self.has_user_class(simple) {
                     // `Iterator<Map.Entry<K, V>>` is an entrySet iterator; anything
                     // else is a plain iterator over its element type.
                     if let TypeRef::Generic {
@@ -3318,6 +3429,14 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         )
         || (from == JType::Null && to.is_reference())
         || (to == JType::Object(table.object_id) && from.is_reference())
+        // A user class that implements `Iterator` IS one: it assigns to an
+        // `Iterator<E>` variable, and a for-each drives it through the same
+        // cursor calls a builtin one answers.
+        || matches!(
+            (from, to),
+            (JType::Object(sub), JType::Iterator(_))
+                if table.class_id("Iterator").is_some_and(|id| table.is_subtype(sub, id))
+        )
         // A LinkedList (or a narrower Queue/Deque face) assigns to a wider face
         // of the same element type: `Queue<E> q = new LinkedList<>()`.
         || matches!(
@@ -4076,6 +4195,11 @@ impl JType {
                 | JType::Type
                 | JType::StringBuilder
                 | JType::Constructor
+                // A cursor is an object like any other: it assigns to an
+                // `Object`, and `o instanceof Iterator` asks about one.
+                | JType::Iterator(_)
+                | JType::ListIterator(_)
+                | JType::EntryIterator { .. }
         )
     }
 
@@ -7135,6 +7259,17 @@ const INTSTREAM_STATIC_METHODS: &[BuiltinMethod] = &[
 
 /// `java.util.Optional<E>` — `get`/`orElse`/`orElseThrow` yield the element.
 const ENTRY_ITERATOR_METHODS: &[BuiltinMethod] = &[
+    // Every reference has the Object methods; a cursor overrides none of
+    // them, so it prints as `java.util.ArrayList$Itr@…` and compares by
+    // identity.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     bm("next", &[], BRet::Entry, "()Ljava/util/Map$Entry;"),
     bm("remove", &[], BRet::Void, "()V"),
@@ -7172,6 +7307,17 @@ const CHAR_SEQUENCE_METHODS: &[BuiltinMethod] = &[
 ];
 
 const ITERATOR_METHODS: &[BuiltinMethod] = &[
+    // Every reference has the Object methods; a cursor overrides none of
+    // them, so it prints as `java.util.ArrayList$Itr@…` and compares by
+    // identity.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     // `forEachRemaining(Consumer)` — the JDK 8 default that drains the cursor.
@@ -7193,6 +7339,17 @@ const ITERATOR_METHODS: &[BuiltinMethod] = &[
 /// return the boxed element (like `Iterator.next`), so a `List<Integer>` hands
 /// back an `Integer` either way.
 const LIST_ITERATOR_METHODS: &[BuiltinMethod] = &[
+    // Every reference has the Object methods; a cursor overrides none of
+    // them, so it prints as `java.util.ArrayList$Itr@…` and compares by
+    // identity.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("hasNext", &[], BRet::Boolean, "()Z"),
     bm(
@@ -13338,7 +13495,31 @@ impl BodyGen<'_> {
     }
 
     /// The static type of a `new` expression (pure).
-    fn type_of_new_object(&mut self, class: &str, type_args: &[TypeRef]) -> JType {
+    /// The element type a DIAMOND collection constructor takes from its copy
+    /// source: `new HashSet<>(names)` over a `List<String>` is a `Set<String>`.
+    ///
+    /// Without this the type is only known when the expression is EMITTED, and
+    /// `type_of` answered `Null` — so a method call on one typed as `Error`,
+    /// and an enclosing call taking it as an argument silently failed to
+    /// resolve and was never emitted at all. `q(new HashSet<>(src).size())`
+    /// compiled to its argument and no call.
+    fn copy_source_element(&mut self, args: &[Expr]) -> Option<ElemType> {
+        let [source] = args else {
+            return None;
+        };
+        match self.type_of(source) {
+            JType::List(elem)
+            | JType::Set(elem)
+            | JType::TreeSet(elem)
+            | JType::Collection(elem)
+            | JType::Stack(elem)
+            | JType::LinkedList { elem, .. } => Some(elem),
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per constructible library type
+    fn type_of_new_object(&mut self, class: &str, type_args: &[TypeRef], args: &[Expr]) -> JType {
         // Matches `new_simple_entry`. A diamond types as `Null` (assignable
         // to any `Map.Entry`), like the other diamond constructors here.
         if matches!(
@@ -13385,7 +13566,9 @@ impl BodyGen<'_> {
                 // `new_array_list` returns, so a nested `new C(new ArrayList<>(x))`
                 // does not read as an `Error` argument.
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::List),
-                _ => JType::Null,
+                _ => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, JType::List),
             },
             "Stack" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Stack),
@@ -13405,7 +13588,9 @@ impl BodyGen<'_> {
                 // A diamond `new HashSet<>(...)` gets its element from context —
                 // `Null` (assignable to any Set), matching `new_hash_set`.
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::Set),
-                _ => JType::Null,
+                _ => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, JType::Set),
             },
             "LinkedList" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
@@ -13414,7 +13599,12 @@ impl BodyGen<'_> {
                         role: SeqRole::Full,
                     }
                 }),
-                _ => JType::Null,
+                _ => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, |elem| JType::LinkedList {
+                        elem,
+                        role: SeqRole::Full,
+                    }),
             },
             "PriorityQueue" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
@@ -13423,7 +13613,12 @@ impl BodyGen<'_> {
                         role: SeqRole::Queue,
                     }
                 }),
-                _ => JType::Null,
+                _ => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, |elem| JType::LinkedList {
+                        elem,
+                        role: SeqRole::Queue,
+                    }),
             },
             "ArrayDeque" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, |elem| {
@@ -13432,11 +13627,18 @@ impl BodyGen<'_> {
                         role: SeqRole::ArrayDeque,
                     }
                 }),
-                _ => JType::Null,
+                _ => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, |elem| JType::LinkedList {
+                        elem,
+                        role: SeqRole::ArrayDeque,
+                    }),
             },
             "TreeSet" => match type_args {
                 [arg] => elem_from_type_arg(arg, self.table).map_or(JType::Null, JType::TreeSet),
-                _ => JType::Null,
+                _ => self
+                    .copy_source_element(args)
+                    .map_or(JType::Null, JType::TreeSet),
             },
             "TreeMap" => match type_args {
                 [key, value] => match (
@@ -16638,6 +16840,20 @@ impl BodyGen<'_> {
             self.for_each_indexed(ty, name, iterable_ty, accessor, element, body, span);
             return;
         }
+        // A USER `Iterable` is driven the way Java drives one: ask it for a
+        // cursor, then `hasNext`/`next`. No positional accessor exists to fake
+        // it with — the program's own class is the only thing that knows how to
+        // walk itself. (`Iterator` itself is not `Iterable`, so a bare cursor
+        // in a for-each stays the error javac reports.)
+        if let Some(class) = iterable_ty.erased_class()
+            && self
+                .table
+                .class_id("Iterable")
+                .is_some_and(|id| self.table.is_subtype(class, id))
+        {
+            self.for_each_cursor(ty, name, iterable_ty, class, body, span);
+            return;
+        }
         let Some(element) = iterable_ty.element_type() else {
             if iterable_ty != JType::Error {
                 self.error(
@@ -16728,6 +16944,121 @@ impl BodyGen<'_> {
         self.code.push_op(op::IADD, 0);
         self.code.drop_stack(1);
         self.emit_store(index_slot, JType::Int);
+        self.code.branch(op::GOTO, cond_label, 0);
+        self.code.bind(end);
+        self.scopes.pop();
+    }
+
+    /// `for (T x : iterable)` over a class that implements `Iterable`, compiled
+    /// to the loop the JLS §14.14.2 translation prescribes:
+    /// `for (Iterator i = e.iterator(); i.hasNext(); ) { T x = (T) i.next(); … }`.
+    ///
+    /// The cursor calls are emitted against `java/util/Iterator`, and the VM
+    /// dispatches them on the receiver's actual class — so a user `Iterator`
+    /// answers them, and a builtin cursor (what `iterator()` returns when the
+    /// class delegates to a collection) answers them too.
+    fn for_each_cursor(
+        &mut self,
+        ty: &TypeRef,
+        name: &str,
+        iterable_ty: JType,
+        class: ClassId,
+        body: &Stmt,
+        span: SourceSpan,
+    ) {
+        // The element comes from what the class's own `iterator()` returns:
+        // `Iterator<Integer>` there is what makes `for (int x : range)` unbox.
+        let class_name = self.table.class_name(class).to_owned();
+        let cursor_ty = match self.table.resolve(&class_name, "iterator", &[]) {
+            Resolution::Found(sig) => sig.ret,
+            _ => None,
+        }
+        .unwrap_or(JType::Iterator(ElemType::Object(self.table.object_id)));
+        let element = match cursor_ty {
+            JType::Iterator(elem) | JType::ListIterator(elem) => {
+                boxed_or_nested(Some(elem), self.table)
+            }
+            _ => JType::Object(self.table.object_id),
+        };
+        let var_ty = if matches!(ty, TypeRef::Var) {
+            element
+        } else {
+            let Some(resolved) = self.table.resolve_type(ty) else {
+                self.error(span, "unknown type for the for-each variable");
+                self.code.discard();
+                return;
+            };
+            resolved
+        };
+
+        let iterator_ref =
+            intern_method_ref(self.pool, &class_name, "iterator", "()Ljava/util/Iterator;");
+        let has_next = intern_method_ref(self.pool, "java/util/Iterator", "hasNext", "()Z");
+        let next = intern_method_ref(
+            self.pool,
+            "java/util/Iterator",
+            "next",
+            "()Ljava/lang/Object;",
+        );
+
+        let cursor_slot = self.next_slot;
+        self.next_slot += 1;
+        self.code.push_op_u16(op::INVOKEVIRTUAL, iterator_ref, 1);
+        self.code.drop_stack(1);
+        self.emit_store(cursor_slot, JType::Iterator(ElemType::Object(class)));
+        let _ = iterable_ty;
+
+        self.scopes.push(Vec::new());
+        if self.lookup(name).is_some() {
+            self.error(
+                span,
+                format!("variable '{name}' is already defined in this method"),
+            );
+        }
+        let var_slot = self.next_slot;
+        self.next_slot += var_ty.width();
+        self.record_local_debug(name, var_ty, var_slot);
+        self.scopes.last_mut().expect("scope pushed").push((
+            name.to_owned(),
+            LocalVar {
+                slot: var_slot,
+                ty: var_ty,
+                is_final: false,
+                assigned: true,
+                const_val: None,
+            },
+        ));
+
+        let cond_label = self.code.new_label();
+        let continue_label = self.code.new_label();
+        let end = self.code.new_label();
+
+        self.code.bind(cond_label);
+        self.emit_load(cursor_slot, JType::Iterator(ElemType::Object(class)));
+        self.code.push_op_u16(op::INVOKEVIRTUAL, has_next, 1);
+        self.code.drop_stack(1);
+        self.code.branch(op::IFEQ, end, 1);
+
+        self.emit_load(cursor_slot, JType::Iterator(ElemType::Object(class)));
+        self.code
+            .push_op_u16(op::INVOKEVIRTUAL, next, element.width());
+        self.code.drop_stack(1);
+        self.convert_for_assignment(element, var_ty, span);
+        self.emit_store(var_slot, var_ty);
+
+        let before = self.assigned_flags();
+        self.loop_stack.push(LoopLabels {
+            break_label: end,
+            continue_label,
+            is_loop: true,
+            label: self.pending_label.take(),
+            break_flags: Vec::new(),
+        });
+        self.statement(body);
+        self.loop_stack.pop();
+        self.restore_assigned(&before);
+
+        self.code.bind(continue_label);
         self.code.branch(op::GOTO, cond_label, 0);
         self.code.bind(end);
         self.scopes.pop();
@@ -19459,8 +19790,11 @@ impl BodyGen<'_> {
                 }
             }
             Expr::NewObject {
-                class, type_args, ..
-            } => self.type_of_new_object(class, type_args),
+                class,
+                type_args,
+                args,
+                ..
+            } => self.type_of_new_object(class, type_args, args),
             // Mirrors `ternary`'s target computation (JLS 15.25) — kept in
             // step so a ternary nested in another expression types the same
             // whether or not it is being emitted.
@@ -19752,6 +20086,10 @@ impl BodyGen<'_> {
             JType::List(_) => String::from("java/util/ArrayList"),
             JType::Stack(_) => String::from("java/util/Stack"),
             JType::Map { .. } => String::from("java/util/HashMap"),
+            // `it instanceof Iterator` — the VM answers for a cursor whatever
+            // collection made it.
+            JType::Iterator(_) => String::from("java/util/Iterator"),
+            JType::ListIterator(_) => String::from("java/util/ListIterator"),
             // `type instanceof ParameterizedType` — a runtime check on the
             // reflect Type's kind (the VM inspects the value).
             JType::Type => match ty {
@@ -20797,6 +21135,20 @@ impl BodyGen<'_> {
         {
             if !matches!(source, JType::List(_)) {
                 let class_index = intern_class(self.pool, "java/util/ArrayList");
+                self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            }
+            return target;
+        }
+        // Casting a reference (commonly an erased `Object`) back down to a
+        // cursor: `((Iterator<String>) o).next()`.
+        if let JType::Iterator(_) | JType::ListIterator(_) = target
+            && source.is_reference()
+        {
+            if !matches!(
+                source,
+                JType::Iterator(_) | JType::ListIterator(_) | JType::Null
+            ) {
+                let class_index = intern_class(self.pool, "java/util/Iterator");
                 self.code.push_op_u16(op::CHECKCAST, class_index, 0);
             }
             return target;
@@ -22709,6 +23061,9 @@ impl BodyGen<'_> {
             // separately from `widens`, so both need the arm — the same trap
             // that once left List -> Collection widening half-implemented.
             (JType::Object(_), JType::Generic { .. }) if widens(from, to, self.table) => {}
+            // A user class that implements `Iterator` assigned to an
+            // `Iterator<E>` variable — the same shape, and the same trap.
+            (JType::Object(_), JType::Iterator(_)) if widens(from, to, self.table) => {}
             // Any reference type widens to the Object top type.
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
             // A String already satisfies a `Comparable`-bounded param — it is a

@@ -1898,6 +1898,15 @@ impl<'run> Interpreter<'run> {
                                     _ => false,
                                 },
                             };
+                            // `Iterable` and `Iterator` cut across every arm
+                            // above: each collection is an `Iterable`, and a
+                            // cursor is an `Iterator`, whichever collection
+                            // made it. Answered here rather than by adding two
+                            // names to a dozen lists. (A user class that
+                            // implements either already matched, by name.)
+                            let matches_type = matches_type
+                                || reference
+                                    .is_some_and(|r| self.builtin_iteration_face(r, &target));
                             if opcode == op::INSTANCEOF {
                                 frame.stack.push(JValue::Int(i32::from(matches_type)));
                             } else {
@@ -3510,6 +3519,39 @@ impl<'run> Interpreter<'run> {
         Err(VmError::UncaughtException(format!(
             "java.lang.ArrayStoreException: {named}"
         )))
+    }
+
+    /// Whether a BUILTIN object answers to `Iterable` or `Iterator`.
+    ///
+    /// Both names reach here in two spellings: qualified, as a source
+    /// `java.util.Iterator` writes them, and bare, which is how the compiler's
+    /// synthesized library interfaces are interned — the same pair `Comparable`
+    /// needs.
+    fn builtin_iteration_face(&self, reference: HeapRef, target: &str) -> bool {
+        use crate::value::HeapObject as H;
+        let object = self.heap.get(reference);
+        match target {
+            "java/util/Iterator" | "Iterator" | "java/util/ListIterator" | "ListIterator" => {
+                matches!(object, Some(H::Iterator { .. }))
+            }
+            "java/lang/Iterable" | "Iterable" => matches!(
+                object,
+                Some(
+                    H::ArrayList(_)
+                        | H::ArrayBackedList(_)
+                        | H::UnmodifiableList(_)
+                        | H::UnmodifiableSet(_)
+                        | H::HashSet(_)
+                        | H::TreeSet { .. }
+                        | H::LinkedList(_)
+                        | H::ArrayDeque(_)
+                        | H::Stack(_)
+                        | H::PriorityQueue { .. }
+                        | H::MapView { .. }
+                )
+            ),
+            _ => false,
+        }
     }
 
     fn is_runtime_subtype(&self, sub: &str, sup: &str) -> bool {
@@ -5881,6 +5923,7 @@ impl<'run> Interpreter<'run> {
                 last: None,
                 expected_len,
                 writes,
+                list: false,
             });
             return Ok(Answered::Value(JValue::Ref(Some(iterator))));
         }
@@ -5913,6 +5956,7 @@ impl<'run> Interpreter<'run> {
                         last: None,
                         expected_len,
                         writes,
+                        list: false,
                     });
                     return Ok(Answered::Value(JValue::Ref(Some(iterator))));
                 }
@@ -10203,6 +10247,7 @@ impl<'run> Interpreter<'run> {
                     last: None,
                     expected_len,
                     writes,
+                    list: method_name != "iterator",
                 });
                 frame.stack.push(JValue::Ref(Some(iterator)));
                 self.vec_pool.push(args);
@@ -10359,6 +10404,39 @@ impl<'run> Interpreter<'run> {
             let reference = self.intern_class(name);
             frame.stack.push(JValue::Ref(Some(reference)));
             return Ok(None);
+        }
+        // `Object` methods on a cursor. A JDK iterator overrides none of them,
+        // so it prints as `java.util.ArrayList$Itr@1b6d3586` and compares by
+        // identity; caturra's had no `toString` at all and aborted the run.
+        if matches!(
+            self.heap.get(receiver),
+            Some(crate::value::HeapObject::Iterator { .. })
+        ) {
+            match method_name {
+                "toString" => {
+                    let text = format!(
+                        "{}@{:x}",
+                        self.object_class_name(receiver).replace('/', "."),
+                        intrinsics::identity_hash(receiver)
+                    );
+                    let reference = self.heap.alloc_string(&text);
+                    frame.stack.push(JValue::Ref(Some(reference)));
+                    return Ok(None);
+                }
+                "hashCode" => {
+                    frame
+                        .stack
+                        .push(JValue::Int(intrinsics::identity_hash(receiver)));
+                    return Ok(None);
+                }
+                "equals" => {
+                    let equal =
+                        matches!(args.first(), Some(JValue::Ref(Some(r))) if *r == receiver);
+                    frame.stack.push(JValue::Int(i32::from(equal)));
+                    return Ok(None);
+                }
+                _ => {}
+            }
         }
         // `Object` methods on an array (arrays don't override them): identity
         // equals/hashCode and a default toString.
@@ -10527,6 +10605,62 @@ impl<'run> Interpreter<'run> {
     /// structural, read-only reflection the curriculum uses. Reads the
     /// loaded [`ClassFile`] metadata; performs no invocation.
     /// The binary class name behind any heap object, for `getClass()`.
+    /// The class a cursor reports from `getClass()`.
+    ///
+    /// A JDK has a separate iterator class per collection, and the names are
+    /// observable — every one below was recorded from `OpenJDK` 11 rather than
+    /// guessed. Known gap: a cursor built AT a read-only wrapper
+    /// (`unmodifiableList`, `singletonList`, `emptyList`, `nCopies`) keeps only
+    /// the backing collection, so which wrapper made it — and thus which of the
+    /// four `Collections`/`AbstractList` cursor classes it is — cannot be told
+    /// apart here; those still answer with the backing collection's cursor.
+    fn cursor_class_name(
+        &self,
+        source: HeapRef,
+        writes: IteratorWrites,
+        list: bool,
+    ) -> &'static str {
+        use crate::value::{HeapObject as H, IteratorWrites as W, MapViewKind as K};
+        match writes {
+            // `Arrays.asList(a)`: JDK 9 gave it its own cursor with no `remove`,
+            // while its `listIterator()` is still `AbstractList`'s.
+            W::ArrayCursor => return "java/util/Arrays$ArrayItr",
+            W::FixedSize => return "java/util/AbstractList$ListItr",
+            _ => {}
+        }
+        match self.heap.get(source) {
+            Some(H::ArrayList(_) | H::ArrayBackedList(_) | H::UnmodifiableList(_)) => {
+                if list {
+                    "java/util/ArrayList$ListItr"
+                } else {
+                    "java/util/ArrayList$Itr"
+                }
+            }
+            // A LinkedList has ONE cursor class: `iterator()` returns its
+            // `ListItr` too.
+            Some(H::LinkedList(_)) => "java/util/LinkedList$ListItr",
+            Some(H::Stack(_)) => "java/util/Vector$Itr",
+            Some(H::ArrayDeque(_)) => "java/util/ArrayDeque$DeqIterator",
+            Some(H::PriorityQueue { .. }) => "java/util/PriorityQueue$Itr",
+            // A HashSet IS a HashMap's key set, and a TreeSet a TreeMap's, so
+            // both report the MAP's cursor.
+            Some(H::HashSet(_) | H::UnmodifiableSet(_)) => "java/util/HashMap$KeyIterator",
+            Some(H::TreeSet { .. }) => "java/util/TreeMap$KeyIterator",
+            Some(H::MapView { map, kind, .. }) => {
+                let sorted = matches!(self.heap.get(*map), Some(H::TreeMap { .. }));
+                match (kind, sorted) {
+                    (K::Keys, false) => "java/util/HashMap$KeyIterator",
+                    (K::Keys, true) => "java/util/TreeMap$KeyIterator",
+                    (K::Values, false) => "java/util/HashMap$ValueIterator",
+                    (K::Values, true) => "java/util/TreeMap$ValueIterator",
+                    (K::Entries, false) => "java/util/HashMap$EntryIterator",
+                    (K::Entries, true) => "java/util/TreeMap$EntryIterator",
+                }
+            }
+            _ => "java/util/Iterator",
+        }
+    }
+
     fn object_class_name(&self, receiver: HeapRef) -> String {
         use crate::value::HeapObject;
         match self.heap.get(receiver) {
@@ -10554,6 +10688,12 @@ impl<'run> Interpreter<'run> {
             // A library throwable stores its class DOTTED; everything else here
             // is internal, and callers compare against internal names.
             Some(HeapObject::Exception { class_name, .. }) => class_name.replace('.', "/"),
+            Some(HeapObject::Iterator {
+                source,
+                writes,
+                list,
+                ..
+            }) => String::from(self.cursor_class_name(*source, *writes, *list)),
             _ if is_array_object(self.heap.get(receiver)) => {
                 intrinsics::array_class_name(&self.heap, receiver).unwrap_or_default()
             }

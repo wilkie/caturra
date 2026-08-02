@@ -20406,3 +20406,166 @@ public class RejectResource {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: custom Iterable / Iterator (JLS §14.14.2).
+// ---------------------------------------------------------------------------
+
+// A program's own data structure in a for-each. `implements Iterable<T>` used to
+// be refused outright ("cannot find symbol: class Iterable"), as did
+// `implements Iterator<T>` — so the whole idiom was unavailable. The loop is the
+// JLS translation: `iterator()`, then `hasNext`/`next`.
+differential_test!(
+    diff_custom_iterable,
+    "DiffIterable",
+    r#"
+import java.util.*;
+public class DiffIterable {
+    static class Bag implements Iterable<String> {
+        private List<String> items = new ArrayList<>();
+        void add(String s) { items.add(s); }
+        public Iterator<String> iterator() { return items.iterator(); }
+    }
+    static class Countdown implements Iterable<Integer> {
+        int from;
+        Countdown(int from) { this.from = from; }
+        public Iterator<Integer> iterator() {
+            return new Iterator<Integer>() {
+                int n = from;
+                public boolean hasNext() { return n > 0; }
+                public Integer next() { return n--; }
+            };
+        }
+    }
+    static class Two implements Iterator<String> {
+        int k = 0;
+        public boolean hasNext() { return k < 2; }
+        public String next() { return "m" + (k++); }
+    }
+    static <T> int count(Iterable<T> it) { int c = 0; for (T x : it) c++; return c; }
+    public static void main(String[] args) {
+        Bag b = new Bag();
+        b.add("x"); b.add("y");
+        for (String s : b) System.out.println("bag " + s);
+        for (Object o : b) System.out.println("obj " + o);
+        for (int n : new Countdown(3)) { if (n == 2) continue; System.out.println("n=" + n); }
+        outer:
+        for (String s : b) for (int n : new Countdown(2)) {
+            System.out.println(s + n);
+            if (n == 1) break outer;
+        }
+        System.out.println("count " + count(b) + " " + count(new Countdown(4)));
+        Iterator<String> it = b.iterator();
+        it.next(); it.remove();
+        System.out.println("after remove " + count(b));
+        Two u = new Two();
+        while (u.hasNext()) System.out.println(u.next());
+        Iterator<String> v = new Two();
+        while (v.hasNext()) System.out.println(v.next());
+        System.out.println(b instanceof Iterable);
+    }
+}
+"#
+);
+
+// A cursor is an object: it assigns to `Object`, casts back down, answers
+// `instanceof`, and has the `Object` methods. Each of these was refused or wrong
+// — `getClass()` on any iterator claimed `java.lang.Object`, and the JDK's real
+// iterator class names are observable.
+differential_test!(
+    diff_iterator_is_an_object,
+    "DiffCursorObject",
+    r#"
+import java.util.*;
+public class DiffCursorObject {
+    static void show(String tag, Object o) { System.out.println(tag + " = " + o.getClass().getName()); }
+    public static void main(String[] args) {
+        List<String> al = new ArrayList<>(Arrays.asList("a", "b"));
+        Iterator<String> i = al.iterator();
+        Object o = i;
+        System.out.println(o == i);
+        System.out.println(((Iterator<String>) o).next());
+        System.out.println(i instanceof Iterator);
+        System.out.println(al instanceof Iterable);
+        System.out.println(o instanceof Iterable);
+        System.out.println(i.equals(i));
+        System.out.println(i.equals(al.iterator()));
+        System.out.println(i.toString().startsWith("java.util.ArrayList$Itr@"));
+        show("ArrayList.iterator", al.iterator());
+        show("ArrayList.listIterator", al.listIterator());
+        show("Arrays.asList.iterator", Arrays.asList("x").iterator());
+        show("Arrays.asList.listIterator", Arrays.asList("x").listIterator());
+        Map<String, Integer> hm = new HashMap<>();
+        hm.put("k", 1);
+        show("HashMap.keySet", hm.keySet().iterator());
+        show("HashMap.values", hm.values().iterator());
+        show("HashMap.entrySet", hm.entrySet().iterator());
+        show("HashSet", new HashSet<>(Arrays.asList("x")).iterator());
+        TreeMap<String, Integer> tm = new TreeMap<>();
+        tm.put("k", 1);
+        show("TreeMap.keySet", tm.keySet().iterator());
+        show("TreeMap.values", tm.values().iterator());
+        show("TreeMap.entrySet", tm.entrySet().iterator());
+        show("TreeSet", new TreeSet<>(Arrays.asList("x")).iterator());
+        show("LinkedList", new LinkedList<>(Arrays.asList("x")).iterator());
+        show("ArrayDeque", new ArrayDeque<>(Arrays.asList("x")).iterator());
+        show("Stack", new Stack<String>().iterator());
+    }
+}
+"#
+);
+
+// A method call on a DIAMOND copy constructor, in an argument position. The
+// diamond's type was only known while emitting, so `type_of` answered `Null`,
+// the call on it typed as `Error`, and the ENCLOSING call silently failed to
+// resolve — compiling to its own argument and no call at all. Nothing was
+// reported; the statement just did not run.
+differential_test!(
+    diff_diamond_copy_receiver_in_argument,
+    "DiffDiamondArg",
+    r#"
+import java.util.*;
+public class DiffDiamondArg {
+    static void q(String tag, int n) { System.out.println("q " + tag + " " + n); }
+    static void r(String tag, Object o) { System.out.println("r " + tag + " " + o); }
+    public static void main(String[] args) {
+        List<String> src = Arrays.asList("x", "y");
+        q("list", new ArrayList<>(src).size());
+        q("set", new HashSet<>(src).size());
+        q("tree", new TreeSet<>(src).size());
+        q("deque", new ArrayDeque<>(src).size());
+        q("linked", new LinkedList<>(src).size());
+        q("nested", new ArrayList<>(Arrays.asList("x")).size());
+        r("str", new ArrayList<>(src).toString());
+        r("first", new ArrayList<>(src).get(0));
+        System.out.println("end");
+    }
+}
+"#
+);
+
+// A METHOD REFERENCE is a functional-interface expression wherever a lambda is.
+// These were refused with the false claim that the position is not one.
+differential_test!(
+    diff_method_ref_to_collection_consumers,
+    "DiffMethodRefEach",
+    r#"
+import java.util.*;
+public class DiffMethodRefEach {
+    static void p(String s) { System.out.println("p:" + s); }
+    static boolean isX(String s) { return s.equals("x"); }
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>(Arrays.asList("x", "y"));
+        l.forEach(DiffMethodRefEach::p);
+        l.forEach(System.out::println);
+        Iterator<String> it = l.iterator();
+        it.forEachRemaining(DiffMethodRefEach::p);
+        List<String> m = new ArrayList<>(Arrays.asList("x", "y"));
+        m.removeIf(DiffMethodRefEach::isX);
+        System.out.println(m);
+        m.replaceAll(String::toUpperCase);
+        System.out.println(m);
+    }
+}
+"#
+);

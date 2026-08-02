@@ -752,6 +752,48 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A program's own class can be iterated** (2026-08-02, round 9, JLS
+  §14.14.2) — the custom-iterable cluster, open since round 4:
+  - **`implements Iterable<T>` / `implements Iterator<T>` were refused**
+    ("cannot find symbol: class Iterable"), so a user data structure could
+    not be walked by a for-each at all. Both are now interfaces in the method
+    table, registered for INHERITANCE only: the names still resolve to
+    caturra's builtin cursor and collection types, because `list.iterator()`
+    must keep yielding one, and only a class the PROGRAM declares takes a
+    builtin name over. A for-each over an `Iterable` compiles to the JLS
+    translation — `iterator()`, then `hasNext`/`next` — with the element type
+    read from what the class's own `iterator()` returns, so
+    `for (int x : range)` unboxes. The cursor calls are emitted against
+    `java/util/Iterator` and the VM dispatches them on the receiver's actual
+    class, so a user iterator and a builtin one both answer.
+  - **A cursor is an object.** It assigns to `Object`, casts back down,
+    answers `instanceof Iterator`, and has the `Object` methods —
+    `getClass()` on any iterator used to claim `java.lang.Object`, and
+    `toString()` aborted the run. The JDK's iterator class names are
+    observable and differ per collection (`ArrayList$Itr` vs `ArrayList
+    $ListItr` vs `HashMap$KeyIterator` vs `Arrays$ArrayItr`); each name
+    caturra reports was recorded from OpenJDK 11. Known gap: a cursor built
+    at a read-only wrapper keeps only the backing collection, so the four
+    `Collections`/`AbstractList` cursor classes cannot be told apart.
+    Likewise `x instanceof Iterable` is true for every collection.
+  - **A method reference stands wherever a lambda does** in
+    `forEach`/`forEachRemaining`/`removeIf`/`replaceAll`; these were refused
+    with the false claim that the position is not a functional-interface one.
+  - **A method call on a DIAMOND copy constructor, in an argument position,
+    compiled to nothing.** `q(new HashSet<>(src).size())` emitted its
+    argument and then no call — the enclosing call silently failed to
+    resolve, with no diagnostic, because the diamond's type was known only
+    while emitting and `type_of` answered `Null`, making the call on it an
+    `Error`. A diamond now takes its element from its copy source, as Java's
+    inference does. This was found while testing the cluster, not reported by
+    the audit.
+  - Known gap: `java.util.AbstractList` and the other `Abstract*` skeletons
+    are refused BY NAME (extending one means inheriting a dozen concrete
+    methods written in terms of the subclass's `get`/`size`), instead of the
+    previous claim that a real java.util class does not exist.
+  - Pinned by `diff_custom_iterable`, `diff_iterator_is_an_object`,
+    `diff_diamond_copy_receiver_in_argument` and
+    `diff_method_ref_to_collection_consumers`.
 - **A resource is closed EXACTLY ONCE** (2026-08-02, round 9, JLS §14.20.3)
   — the try-with-resources cluster:
   - **Leaving the body by `return`/`break`/`continue` closed the resource

@@ -137,7 +137,22 @@ const JAVA_LANG: &[&str] = &[
 /// implement — named so the message is honest instead of a misleading
 /// "cannot find symbol".
 const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
-    ("java.util", &["Vector", "Hashtable"]),
+    // The `Abstract*` skeletons: extending one means inheriting a dozen
+    // concrete methods written in terms of the two the subclass supplies
+    // (`get`/`size`), which caturra's builtin collections do not model.
+    // Refusing them BY NAME at least says so, instead of claiming a real
+    // java.util class does not exist.
+    (
+        "java.util",
+        &[
+            "Vector",
+            "Hashtable",
+            "AbstractList",
+            "AbstractCollection",
+            "AbstractSet",
+            "AbstractSequentialList",
+        ],
+    ),
     ("java.util.regex", &["Pattern", "Matcher", "MatchResult"]),
     (
         "java.io",

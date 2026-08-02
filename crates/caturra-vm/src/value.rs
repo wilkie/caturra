@@ -460,6 +460,10 @@ pub enum HeapObject {
         expected_len: usize,
         /// What this cursor may write back through — see [`IteratorWrites`].
         writes: IteratorWrites,
+        /// Built by `listIterator()` rather than `iterator()`. Only `getClass`
+        /// can tell the difference, and it can: a JDK's are separate classes
+        /// (`ArrayList$Itr` vs `ArrayList$ListItr`).
+        list: bool,
     },
     /// A live view onto a map: `keySet()`, `values()` or `entrySet()`.
     /// Java's are views too, so a later `put` shows through.
