@@ -4064,6 +4064,55 @@ impl<'run> Interpreter<'run> {
                 frame.stack.push(JValue::Ref(Some(list)));
                 return Ok(true);
             }
+            // Java 9's immutable factories. `of` REJECTS nulls (and, for a
+            // set or a map, duplicates), which is half of what they are for.
+            ("__listOf" | "__setOf" | "__mapOf", [JValue::Ref(Some(elements))]) => {
+                let items = self.array_elements(*elements).unwrap_or_default();
+                if items.iter().any(|item| matches!(item, JValue::Ref(None))) {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.NullPointerException",
+                    )));
+                }
+                let view = match method_name {
+                    "__listOf" => {
+                        let backing = self.heap.alloc(HeapObject::ArrayList(items));
+                        self.heap.alloc(HeapObject::UnmodifiableList(backing))
+                    }
+                    "__setOf" => {
+                        let backing = self.heap.alloc(HeapObject::HashSet(
+                            crate::map::JavaHashMap::with_capacity_hint(16),
+                        ));
+                        for item in items {
+                            if self.map_find(backing, item)?.is_some() {
+                                return Err(VmError::UncaughtException(format!(
+                                    "java.lang.IllegalArgumentException: duplicate element: {}",
+                                    self.string_value_of(item, 0)?
+                                )));
+                            }
+                            self.map_put(backing, item, JValue::NULL)?;
+                        }
+                        self.heap.alloc(HeapObject::UnmodifiableSet(backing))
+                    }
+                    _ => {
+                        let backing = self.heap.alloc(HeapObject::HashMap(
+                            crate::map::JavaHashMap::with_capacity_hint(16),
+                        ));
+                        for pair in items.chunks(2) {
+                            let [key, value] = pair else { continue };
+                            if self.map_find(backing, *key)?.is_some() {
+                                return Err(VmError::UncaughtException(format!(
+                                    "java.lang.IllegalArgumentException: duplicate key: {}",
+                                    self.string_value_of(*key, 0)?
+                                )));
+                            }
+                            self.map_put(backing, *key, *value)?;
+                        }
+                        self.heap.alloc(HeapObject::UnmodifiableMap(backing))
+                    }
+                };
+                frame.stack.push(JValue::Ref(Some(view)));
+                return Ok(true);
+            }
             ("emptyList", []) => {
                 let empty = self.heap.alloc(HeapObject::ArrayList(Vec::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(empty));
@@ -4660,6 +4709,13 @@ impl<'run> Interpreter<'run> {
             ("equals", [a, b]) => JValue::Int(i32::from(self.java_equals(*a, *b)?)),
             ("hashCode", [o]) => JValue::Int(self.java_hash_code(*o)?),
             ("hash", [array]) => {
+                // `Objects.hash(null)` — a null ARRAY, not an array holding a
+                // null — is 0, not the empty-array 1: `Objects.hash` delegates
+                // to `Arrays.hashCode`, whose null case answers 0.
+                if matches!(array, JValue::Ref(None)) {
+                    frame.stack.push(JValue::Int(0));
+                    return Ok(true);
+                }
                 let elements = match array {
                     JValue::Ref(Some(reference)) => {
                         self.array_elements(*reference).unwrap_or_default()
@@ -5967,6 +6023,21 @@ impl<'run> Interpreter<'run> {
                     -1
                 })
             }
+            // `Deque.removeFirstOccurrence` / `removeLastOccurrence`: drop the
+            // first (or last) element equal to the probe, reporting whether one
+            // was there. `remove(Object)` is the first-occurrence form.
+            ("removeFirstOccurrence" | "removeLastOccurrence", _, [probe]) => {
+                let from_end = method_name == "removeLastOccurrence";
+                let at = self.list_index_of(receiver, *probe, from_end)?;
+                let found = at >= 0;
+                if let Ok(at) = usize::try_from(at)
+                    && let Some(items) = self.heap.list_values_mut(receiver)
+                    && at < items.len()
+                {
+                    items.remove(at);
+                }
+                JValue::Int(i32::from(found))
+            }
             ("remove", "(Ljava/lang/Object;)Z", [probe]) => {
                 let at = self.list_index_of(receiver, *probe, false)?;
                 let found = at >= 0;
@@ -6070,6 +6141,11 @@ impl<'run> Interpreter<'run> {
     /// hashes first and only then `equals`, so a key whose `hashCode`
     /// disagrees with its `equals` goes missing — here exactly as there.
     fn map_find(&mut self, map: HeapRef, key: JValue) -> Result<Option<usize>, VmError> {
+        // An immutable wrapper looks up through the map it wraps.
+        if let Some(crate::value::HeapObject::UnmodifiableMap(inner)) = self.heap.get(map) {
+            let inner = *inner;
+            return self.map_find(inner, key);
+        }
         // A TreeMap locates a key by comparison, not hashing.
         if matches!(
             self.heap.get(map),
@@ -6541,9 +6617,16 @@ impl<'run> Interpreter<'run> {
                 let Some(other) = *other else {
                     return Ok(Answered::Value(JValue::Int(0)));
                 };
+                // An immutable WRAPPER is a Map too: `Map.of(k, v)` equals
+                // `singletonMap(k, v)` in a JDK, and comparing only the
+                // concrete map kinds said false.
                 if !matches!(
                     self.heap.get(other),
-                    Some(HeapObject::HashMap(_) | HeapObject::TreeMap { .. })
+                    Some(
+                        HeapObject::HashMap(_)
+                            | HeapObject::TreeMap { .. }
+                            | HeapObject::UnmodifiableMap(_)
+                    )
                 ) || self.map_len(receiver) != self.map_len(other)
                 {
                     return Ok(Answered::Value(JValue::Int(0)));
@@ -7017,15 +7100,21 @@ impl<'run> Interpreter<'run> {
                 };
                 value
             }
+            // `AbstractSet.equals` is `size == size && containsAll(other)` —
+            // and `containsAll` asks THIS set, so a TreeSet's own COMPARATOR
+            // decides. Asking the other set instead (which is what caturra
+            // did) made a case-insensitive `TreeSet` unequal to a `HashSet`
+            // holding the same element in another case, where a JDK says they
+            // are equal.
             ("equals", [JValue::Ref(other)]) => {
                 let Some(other) = *other else {
                     return Ok(Answered::Value(JValue::Int(0)));
                 };
-                let ours = self.tree_set_values(receiver);
-                let mut equal = self.set_len(other) == ours.len();
+                let theirs = self.collection_elements(other);
+                let mut equal = theirs.len() == self.tree_set_values(receiver).len();
                 if equal {
-                    for element in ours {
-                        if !self.set_contains_any(other, element)? {
+                    for element in theirs {
+                        if self.tree_set_index_of(receiver, element)?.is_none() {
                             equal = false;
                             break;
                         }
@@ -7077,24 +7166,6 @@ impl<'run> Interpreter<'run> {
             }
         }
         Ok(best)
-    }
-
-    /// Whether a set (Tree or Hash) contains an element equal to `probe`.
-    fn set_contains_any(&mut self, set: HeapRef, probe: JValue) -> Result<bool, VmError> {
-        use crate::value::HeapObject;
-        match self.heap.get(set) {
-            Some(HeapObject::TreeSet { .. }) => Ok(self.tree_set_index_of(set, probe)?.is_some()),
-            Some(HeapObject::HashSet(_)) => Ok(self.map_find(set, probe)?.is_some()),
-            _ => Ok(false),
-        }
-    }
-
-    /// The element count of a set (Tree or Hash).
-    fn set_len(&self, set: HeapRef) -> usize {
-        match self.heap.get(set) {
-            Some(crate::value::HeapObject::TreeSet { values, .. }) => values.len(),
-            _ => self.map_len(set),
-        }
     }
 
     /// `treeSet.forEach(consumer)`: call `accept` on each element in order.
@@ -8712,6 +8783,8 @@ impl<'run> Interpreter<'run> {
             Some(crate::value::HeapObject::TreeMap { entries, .. }) => {
                 entries.get(at).map_or(JValue::NULL, |(_, value)| *value)
             }
+            // An immutable wrapper reads through, as its `map_find` does.
+            Some(crate::value::HeapObject::UnmodifiableMap(inner)) => self.map_value_at(*inner, at),
             _ => JValue::NULL,
         }
     }

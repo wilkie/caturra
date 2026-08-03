@@ -21369,3 +21369,95 @@ public class DiffSortContracts {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: the equals/hashCode contract.
+// ---------------------------------------------------------------------------
+
+// The LOOKUP methods take `Object` in Java, not the collection's own element
+// type: `map.get(somethingElse)` compiles and answers null. Every reference has
+// the Object methods, including a Queue- or Deque-typed one. A String and the
+// wrappers are `Comparable`, so they assign to one.
+differential_test!(
+    diff_lookup_takes_object,
+    "DiffLookupObject",
+    r#"
+import java.util.*;
+public class DiffLookupObject {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        m.put("1", 1);
+        System.out.println(m.get(Integer.valueOf(1)));
+        System.out.println(m.containsKey(Integer.valueOf(1)));
+        System.out.println(m.remove(Integer.valueOf(1)));
+        System.out.println(m.getOrDefault(Integer.valueOf(1), -1));
+        List<String> l = new ArrayList<>(Arrays.asList("a"));
+        System.out.println(l.contains(Integer.valueOf(1)) + " " + l.indexOf(Integer.valueOf(1)));
+        Queue<String> q = new LinkedList<>(Arrays.asList("a"));
+        System.out.println("q.equals(q) = " + q.equals(q));
+        System.out.println("q.hashCode == q.hashCode : " + (q.hashCode() == q.hashCode()));
+        LinkedList<String> ll = new LinkedList<>(Arrays.asList("a", "b", "a"));
+        System.out.println(ll.removeFirstOccurrence("a") + " " + ll.removeLastOccurrence("a") + " " + ll);
+        Comparable<String> cs = "abc";
+        System.out.println(cs.equals("abc") + " " + cs.compareTo("abd"));
+        Comparable<Integer> ci = 5;
+        System.out.println(ci.equals(5));
+        System.out.println(Objects.hash((Object[]) null));
+        Object[] n = null;
+        System.out.println(Objects.hash(n) + " " + Arrays.hashCode((Object[]) null));
+    }
+}
+"#
+);
+
+// `AbstractSet.equals` is `size == size && containsAll(other)` — and
+// `containsAll` asks THIS set, so a TreeSet's own comparator decides. caturra
+// asked the other set, so a case-insensitive TreeSet was unequal to a HashSet
+// holding the same element in another case.
+differential_test!(
+    diff_tree_set_equals_uses_its_comparator,
+    "DiffTreeSetEquals",
+    r#"
+import java.util.*;
+public class DiffTreeSetEquals {
+    public static void main(String[] args) {
+        Comparator<String> ci = new Comparator<String>() {
+            public int compare(String x, String y) { return x.compareToIgnoreCase(y); }
+        };
+        TreeSet<String> ts = new TreeSet<>(ci);
+        ts.add("Apple");
+        Set<String> hs = new HashSet<>(Arrays.asList("apple"));
+        System.out.println("sizes: " + (ts.size() == hs.size()));
+        System.out.println("containsAll: " + ts.containsAll(hs));
+        System.out.println("equals: " + ts.equals(hs));
+        TreeSet<String> plain = new TreeSet<>(Arrays.asList("a", "b"));
+        System.out.println("plain: " + plain.equals(new HashSet<>(Arrays.asList("b", "a"))));
+    }
+}
+"#
+);
+
+// Java 9's immutable factories. Their CONTENTS are well defined; the iteration
+// ORDER of `Set.of`/`Map.of` is salted per JVM run in a real JDK, so only the
+// ordered `List.of` can be compared as text.
+differential_test!(
+    diff_immutable_factories,
+    "DiffImmutableOf",
+    r#"
+import java.util.*;
+public class DiffImmutableOf {
+    public static void main(String[] args) {
+        List<String> l = List.of("a", "b");
+        System.out.println(l + " " + l.equals(Arrays.asList("a", "b")) + " " + l.hashCode());
+        try { l.add("c"); } catch (UnsupportedOperationException e) { System.out.println("immutable"); }
+        try { List.of("a", (String) null); } catch (NullPointerException e) { System.out.println("NPE"); }
+        Set<String> s = Set.of("x", "y");
+        System.out.println(s.contains("x") + " " + s.size() + " " + s.equals(new HashSet<>(Arrays.asList("y", "x"))));
+        try { Set.of("d", "d"); } catch (IllegalArgumentException e) { System.out.println(e.getMessage()); }
+        Map<String, Integer> m = Map.of("k", 1);
+        System.out.println(m.get("k") + " " + m.size() + " " + m.equals(Collections.singletonMap("k", 1)));
+        try { m.put("j", 2); } catch (UnsupportedOperationException e) { System.out.println("map immutable"); }
+    }
+}
+"#
+);

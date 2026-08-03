@@ -752,6 +752,38 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A lookup takes `Object`, and an immutable view is still a collection**
+  (2026-08-03, round 9) — the equals/hashCode cluster:
+  - **`Map.get`/`containsKey`/`remove`/`getOrDefault` and
+    `Collection.contains`/`indexOf`/`lastIndexOf` take `Object` in Java**, not
+    the collection's own element type: `map.get(somethingElse)` compiles and
+    answers null. caturra demanded the element type — one of the few places
+    it was stricter than javac in a way a student meets by accident. A new
+    `BParam::Probe` accepts any reference.
+  - **A `Queue`/`Deque` face has the `Object` methods** (`q.equals(q)` did not
+    compile) and `removeFirstOccurrence`/`removeLastOccurrence`.
+  - **A `String` and the wrappers are `Comparable`**, so they assign to a
+    `Comparable<T>` variable, raw or parameterized.
+  - **`AbstractSet.equals` asks THIS set.** It is `size == size &&
+    containsAll(other)`, so a `TreeSet`'s own COMPARATOR decides — caturra
+    asked the other set, so a case-insensitive `TreeSet` was unequal to a
+    `HashSet` holding the same element in another case.
+  - **`Objects.hash(null)` is 0**, not the empty-array 1.
+  - **Java 9's `List.of`/`Set.of`/`Map.of`** build immutable collections that
+    reject nulls (and duplicates, with the JDK's message). Reading THROUGH an
+    immutable wrapper also had gaps that surfaced here: a wrapper compared
+    unequal to an ordinary map because `equals` recognised only the concrete
+    map kinds and read values without unwrapping. Documented divergence: a
+    JDK randomizes the ITERATION ORDER of `Set.of`/`Map.of` per JVM run (they
+    are salted — two runs of the same program disagree), so caturra iterates
+    in the order written and no engine can match a JDK there.
+  - Deferred: `HashMap` iteration order once a bucket holds ≥8 colliding keys
+    (a JDK treeifies the bin, ordering by hash then `compareTo`), and a live
+    `Map.Entry` whose hash changed while it sat in a `HashSet` — the same
+    hazard for a USER class already matches the JDK exactly.
+  - Pinned by `diff_lookup_takes_object`,
+    `diff_tree_set_equals_uses_its_comparator` and
+    `diff_immutable_factories`.
 - **The sorting contracts** (2026-08-03, round 9) — the sorting cluster, all
   twelve findings:
   - **`Arrays.rangeCheck`, in the JDK's order.** A reversed range is an

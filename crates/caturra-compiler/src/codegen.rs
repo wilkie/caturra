@@ -3542,6 +3542,17 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         )
         || (from == JType::Null && to.is_reference())
         || (to == JType::Object(table.object_id) && from.is_reference())
+        // A `String` and the wrappers implement `Comparable`, so they assign to
+        // a `Comparable<T>` variable — the erased interface caturra registers
+        // for a user class to implement. The VM dispatches `compareTo` on the
+        // value's own kind, so nothing else is needed.
+        || matches!(
+            (from, to),
+            (
+                JType::Str | JType::Boxed(_),
+                JType::Object(id) | JType::Generic { class: id, .. },
+            ) if table.class_id("Comparable") == Some(id)
+        )
         // A user class that implements `Iterator` IS one: it assigns to an
         // `Iterator<E>` variable, and a for-each drives it through the same
         // cursor calls a builtin one answers.
@@ -5709,6 +5720,12 @@ fn is_true_literal(expr: &Expr) -> bool {
 /// A parameter of an intrinsic method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BParam {
+    /// A LOOKUP argument: `Map.get`, `containsKey`, `Collection.contains`,
+    /// `indexOf` and friends all take `Object` in Java, not the collection's
+    /// own element type — `map.get(somethingElse)` compiles and answers null.
+    /// Refusing it was one of the few places caturra was stricter than javac
+    /// in a way a student meets by accident.
+    Probe,
     /// `java.lang.Throwable` (`addSuppressed`) — any exception.
     Throwable,
     Int,
@@ -6590,19 +6607,19 @@ const LIST_METHODS: &[BuiltinMethod] = &[
     bm("clear", &[], BRet::Void, "()V"),
     bm(
         "contains",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
     bm(
         "indexOf",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Int,
         "(Ljava/lang/Object;)I",
     ),
     bm(
         "lastIndexOf",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Int,
         "(Ljava/lang/Object;)I",
     ),
@@ -6736,19 +6753,19 @@ const STACK_METHODS: &[BuiltinMethod] = &[
     bm("clear", &[], BRet::Void, "()V"),
     bm(
         "contains",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
     bm(
         "indexOf",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Int,
         "(Ljava/lang/Object;)I",
     ),
     bm(
         "lastIndexOf",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Int,
         "(Ljava/lang/Object;)I",
     ),
@@ -6800,6 +6817,30 @@ const STACK_METHODS: &[BuiltinMethod] = &[
 /// `poll`/`peek` return the boxed element so their empty-collection `null` is
 /// representable; `remove()`/`element()` throw on empty instead.
 const QUEUE_METHODS: &[BuiltinMethod] = &[
+    // Every reference has the Object methods; these faces had none, so
+    // `q.equals(q)` did not compile.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    // `Deque.removeFirstOccurrence`/`removeLastOccurrence` — the only way to
+    // drop ONE matching element from a deque without walking a cursor.
+    bm(
+        "removeFirstOccurrence",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "removeLastOccurrence",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
@@ -6826,7 +6867,7 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
     bm("element", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm(
         "contains",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -6865,6 +6906,30 @@ const QUEUE_METHODS: &[BuiltinMethod] = &[
 /// stack (`push`/`pop`) operations.
 const DEQUE_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // Every reference has the Object methods; a Queue/Deque face had none, so
+    // `q.equals(q)` did not compile.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    // `Deque.removeFirstOccurrence`/`removeLastOccurrence` — the only way to
+    // drop ONE matching element from a deque without walking a cursor.
+    bm(
+        "removeFirstOccurrence",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "removeLastOccurrence",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     // `Queue`/`Deque` extend `Collection`, so both have `iterator()` — and it
     // is the only way to remove from the MIDDLE of one.
@@ -6930,7 +6995,7 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
     bm("peekLast", &[], BRet::BoxedElem, "()Ljava/lang/Object;"),
     bm(
         "contains",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -6959,6 +7024,30 @@ const DEQUE_METHODS: &[BuiltinMethod] = &[
 /// `List`), plus the `Deque`/`Queue` operations. `get`/`set`/`remove(int)` and
 /// the index methods come from being a list; the rest are the deque face.
 const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
+    // Every reference has the Object methods; these faces had none, so
+    // `q.equals(q)` did not compile.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    // `Deque.removeFirstOccurrence`/`removeLastOccurrence` — the only way to
+    // drop ONE matching element from a deque without walking a cursor.
+    bm(
+        "removeFirstOccurrence",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "removeLastOccurrence",
+        &[BParam::Probe],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     bm("stream", &[], BRet::Stream, "()Ljava/util/stream/Stream;"),
     bm("iterator", &[], BRet::Iterator, "()Ljava/util/Iterator;"),
@@ -6998,19 +7087,19 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "contains",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
     bm(
         "indexOf",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Int,
         "(Ljava/lang/Object;)I",
     ),
     bm(
         "lastIndexOf",
-        &[BParam::Elem],
+        &[BParam::Probe],
         BRet::Int,
         "(Ljava/lang/Object;)I",
     ),
@@ -8973,7 +9062,7 @@ const MAP_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "containsKey",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -8985,13 +9074,13 @@ const MAP_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "get",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Val,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
     bm(
         "getOrDefault",
-        &[BParam::Key, BParam::Val],
+        &[BParam::Probe, BParam::Val],
         BRet::Val,
         "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
     ),
@@ -9009,7 +9098,7 @@ const MAP_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "remove",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Val,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
@@ -9101,7 +9190,7 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "containsKey",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -9113,13 +9202,13 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "get",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Val,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
     bm(
         "getOrDefault",
-        &[BParam::Key, BParam::Val],
+        &[BParam::Probe, BParam::Val],
         BRet::Val,
         "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
     ),
@@ -9137,7 +9226,7 @@ const TREEMAP_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "remove",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Val,
         "(Ljava/lang/Object;)Ljava/lang/Object;",
     ),
@@ -9218,7 +9307,7 @@ const VIEW_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "contains",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -9311,13 +9400,13 @@ const SET_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "remove",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
     bm(
         "contains",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -9386,13 +9475,13 @@ const TREESET_METHODS: &[BuiltinMethod] = &[
     ),
     bm(
         "remove",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
     bm(
         "contains",
-        &[BParam::Key],
+        &[BParam::Probe],
         BRet::Boolean,
         "(Ljava/lang/Object;)Z",
     ),
@@ -10067,6 +10156,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         | BParam::Supplier
         | BParam::Comparator => JType::Object(ClassId(0)),
         BParam::Builder => JType::StringBuilder,
+        BParam::Probe => JType::Object(table.object_id),
         BParam::Key => boxed_or_nested(args.first, table),
         BParam::Val => boxed_or_nested(args.second, table),
         BParam::SelfMap => match (args.first, args.second) {
@@ -10087,6 +10177,8 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
             matches!(arg, JType::Exception(_) | JType::Null)
                 || matches!(arg, JType::Object(id) if table.is_throwable(id))
         }
+        // Any reference, or a primitive that boxes into one.
+        BParam::Probe => arg.is_reference() || boxable_primitive(arg).is_some(),
         BParam::RefArray => matches!(arg, JType::Array { .. }),
         // Any reference (or boxable value) satisfies an `Object` parameter.
         BParam::Object => widens(arg, JType::Object(table.object_id), table),
@@ -17585,6 +17677,9 @@ impl BodyGen<'_> {
                         // `java.nio.file` ones — none a bundled class nor in a
                         // fixed static table (their returns are handled inline).
                         || matches!(single, "Optional" | "Path" | "Paths" | "Files" | "Objects")
+                        // `List`/`Set`/`Map` hold Java 9's immutable `of`
+                        // factories — the only statics those interfaces have.
+                        || matches!(single, "List" | "Set" | "Map")
                     {
                         Some(CallTarget::Static(single.to_owned()))
                     } else if self.table.field(self.current_class, single).is_some()
@@ -17826,6 +17921,11 @@ impl BodyGen<'_> {
         // array argument is the varargs array; anything else packs into one.
         if class == "Arrays" && method == "asList" {
             return self.emit_arrays_as_list(args, span);
+        }
+        // Java 9's `List.of` / `Set.of` / `Map.of` — immutable factories.
+        if matches!(class, "List" | "Set" | "Map") && method == "of" && !self.table.has_class(class)
+        {
+            return self.emit_immutable_factory(class, args, span);
         }
         // `Arrays.deepToString/deepEquals/deepHashCode` recurse into element
         // arrays, which needs each element array's kind at run time. The VM
@@ -19041,6 +19141,69 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
         self.code.drop_stack(1); // the array argument
         Some(Some(JType::List(elem)))
+    }
+
+    /// `List.of(...)` / `Set.of(...)` / `Map.of(k, v, ...)` — Java 9's
+    /// immutable factories. The elements pack into one array and the VM builds
+    /// the collection, then wraps it so every mutator throws.
+    ///
+    /// Known divergence, and an unavoidable one: a JDK randomizes the
+    /// ITERATION ORDER of `Set.of`/`Map.of` per JVM run (they are salted), so
+    /// printing one does not even agree with itself between two runs of the
+    /// same program. caturra iterates in the order written.
+    #[allow(clippy::option_option)] // call-dispatch return shape
+    fn emit_immutable_factory(
+        &mut self,
+        class: &str,
+        args: &[Expr],
+        span: SourceSpan,
+    ) -> Option<Option<JType>> {
+        let object_elem = ElemType::Object(self.table.object_id);
+        if class == "Map" && !args.len().is_multiple_of(2) {
+            self.error(span, "Map.of takes alternating keys and values");
+            return None;
+        }
+        let elem = args
+            .first()
+            .and_then(|a| collection_elem_of(self.type_of(a)))
+            .unwrap_or(object_elem);
+        let value_elem = if class == "Map" {
+            args.get(1)
+                .and_then(|a| collection_elem_of(self.type_of(a)))
+                .unwrap_or(object_elem)
+        } else {
+            object_elem
+        };
+        // Every element as an Object[]: a map's keys and values alternate in
+        // it, which is the shape `Map.of` is written in anyway.
+        let array_ty = JType::Array {
+            elem: object_elem,
+            dims: 1,
+        };
+        self.emit_array_literal(args, array_ty, span);
+        let (name, ret) = match class {
+            "List" => ("__listOf", JType::List(elem)),
+            "Set" => ("__setOf", JType::Set(elem)),
+            _ => (
+                "__mapOf",
+                JType::Map {
+                    key: elem,
+                    value: value_elem,
+                },
+            ),
+        };
+        let descriptor = format!(
+            "([Ljava/lang/Object;)L{};",
+            match class {
+                "List" => "java/util/ArrayList",
+                "Set" => "java/util/HashSet",
+                _ => "java/util/HashMap",
+            }
+        );
+        let method_ref = intern_method_ref(self.pool, "Collections", name, &descriptor);
+        self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+        self.code.drop_stack(1);
+        Some(Some(ret))
     }
 
     /// The stream sources: `Stream.of(...)`, `Stream.empty()`,
@@ -23488,6 +23651,10 @@ impl BodyGen<'_> {
             // A user class that implements `Iterator` assigned to an
             // `Iterator<E>` variable — the same shape, and the same trap.
             (JType::Object(_), JType::Iterator(_)) if widens(from, to, self.table) => {}
+            // A String or a wrapper assigned to a `Comparable` variable, raw
+            // or parameterized.
+            (JType::Str | JType::Boxed(_), JType::Object(_) | JType::Generic { .. })
+                if widens(from, to, self.table) => {}
             // Any reference type widens to the Object top type.
             (from, JType::Object(id)) if id == self.table.object_id && from.is_reference() => {}
             // A String already satisfies a `Comparable`-bounded param — it is a
