@@ -889,9 +889,12 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             // element type is what the key extractor's parameter is, and only
             // this call site knows it. Handed down as the `Comparator<E>`
             // position the argument sits in.
+            // A METHOD REFERENCE takes the same route: it is a comparator
+            // expression like any other, and `list.sort(Cls::byX)` was refused
+            // as if the position were not a functional-interface one.
             if method == "sort"
                 && args.len() == 1
-                && !matches!(&args[0], Expr::Lambda { .. } | Expr::MethodRef { .. })
+                && !matches!(&args[0], Expr::Lambda { .. })
                 && let Some(r) = receiver.as_deref()
                 && let Some(elem) = list_elem_type(r, ctx)
             {
@@ -1809,6 +1812,17 @@ fn functional_lambda_spec(target: &TypeRef) -> Option<FunctionalSpec> {
                 None,
             ),
             ("Consumer", [a]) => ("__Consumer", "accept", TypeRef::Void, vec![a.clone()], None),
+            // `Comparator<E>` is a functional interface too, so a METHOD
+            // REFERENCE stands where its `compare(E, E)` is expected —
+            // `Comparator<Integer> c = Cls::byDescending;` was refused as if
+            // the position were not one.
+            ("Comparator", [a]) => (
+                "__Comparator",
+                "compare",
+                TypeRef::Int,
+                vec![a.clone(), a.clone()],
+                None,
+            ),
             ("Supplier", [a]) => ("__Supplier", "get", object(), Vec::new(), Some(a.clone())),
             ("BiFunction", [a, b, c]) => (
                 "__BiFunction",
@@ -1876,6 +1890,7 @@ fn key_extractor_elem(arg: &Expr, expected: Option<&TypeRef>) -> Option<TypeRef>
 /// .thenComparing(p -> p.n)` compares two `P`s throughout. So the target type
 /// travels down the receiver as well as into the argument — which is why this
 /// runs before the generic receiver walk, which passes `None`.
+#[allow(clippy::too_many_lines)] // one arm per comparator factory/combinator
 fn desugar_comparator_chain(
     receiver: &mut Option<Box<Expr>>,
     method: &str,
@@ -1895,6 +1910,35 @@ fn desugar_comparator_chain(
     // `Comparator.comparing(keyExtractor, keyComparator)`: the extractor is
     // typed exactly as in the one-argument form; the second argument compares
     // the KEYS, whose type nothing here knows, so it desugars on its own.
+    // `cmp.thenComparing(keyExtractor, keyComparator)` — the two-argument
+    // combinator, typed exactly like the two-argument factory: the extractor
+    // takes the element, and the second argument orders the KEYS.
+    if is_combinator && method == "thenComparing" && args.len() == 2 {
+        if let Some(r) = receiver.as_deref_mut() {
+            desugar_expr(r, expected, ctx);
+        }
+        let (extractor, rest) = args.split_at_mut(1);
+        if !desugar_key_extractor(&mut extractor[0], ctx) {
+            let single = matches!(&extractor[0], Expr::Lambda { params, .. } if params.len() == 1);
+            if let (true, Some(elem)) = (single, key_extractor_elem(&extractor[0], expected)) {
+                let object = TypeRef::Named(String::from("Object"));
+                extractor[0] = build_erased_lambda(
+                    &mut extractor[0],
+                    "__UnaryOperator",
+                    "apply",
+                    &object,
+                    &[elem],
+                    None,
+                    ctx,
+                );
+            } else {
+                let unary = TypeRef::Named(String::from("__UnaryOperator"));
+                desugar_expr(&mut extractor[0], Some(&unary), ctx);
+            }
+        }
+        desugar_expr(&mut rest[0], None, ctx);
+        return true;
+    }
     if is_factory && method == "comparing" && args.len() == 2 {
         let (extractor, rest) = args.split_at_mut(1);
         if !desugar_key_extractor(&mut extractor[0], ctx) {

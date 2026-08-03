@@ -212,6 +212,37 @@ pub fn invoke_special(
         // `new HashMap<>(initialCapacity)`: unlike a builder's, a map's
         // capacity IS observable — it sets the table length, and so the
         // iteration order.
+        // `new ArrayIndexOutOfBoundsException(index)` and friends: the JDK's
+        // int constructors word the message themselves.
+        ("<init>", "(I)V")
+            if caturra_classfile::exceptions::is_exception_class(class)
+                && matches!(args.first(), Some(JValue::Int(_))) =>
+        {
+            let Some(JValue::Int(index)) = args.first() else {
+                return Ok(());
+            };
+            let text = match class {
+                "java/lang/StringIndexOutOfBoundsException" => {
+                    format!("String index out of range: {index}")
+                }
+                "java/lang/ArrayIndexOutOfBoundsException" => {
+                    format!("Array index out of range: {index}")
+                }
+                _ => format!("Index out of range: {index}"),
+            };
+            if let Some(HeapObject::Exception { message, .. }) = heap.get_mut(receiver) {
+                *message = Some(text);
+            } else {
+                let reference = heap.alloc_string(&text);
+                if let Some(field) = heap
+                    .get_mut(receiver)
+                    .and_then(|object| object.field_mut("__message"))
+                {
+                    *field = JValue::Ref(Some(reference));
+                }
+            }
+            Ok(())
+        }
         ("<init>", "(I)V") => {
             let JValue::Int(capacity) = args[0] else {
                 return Err(throw("java.lang.VerifyError: expected an int argument"));

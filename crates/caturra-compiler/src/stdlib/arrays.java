@@ -69,14 +69,78 @@ class Arrays {
     for (int i = 1; i < a.length; i++) s = s + ", " + a[i];
     return s + "]";
   }
+  // java.util.Arrays.rangeCheck: the SAME order of checks, so a bad range
+  // throws before anything is sorted and names the index the JDK names.
+  private static void rangeCheck(int length, int fromIndex, int toIndex) {
+    if (fromIndex > toIndex)
+      throw new IllegalArgumentException("fromIndex(" + fromIndex + ") > toIndex(" + toIndex + ")");
+    if (fromIndex < 0) throw new ArrayIndexOutOfBoundsException(fromIndex);
+    if (toIndex > length) throw new ArrayIndexOutOfBoundsException(toIndex);
+  }
+
   // In-place ascending sort (insertion sort — stable, small inputs).
   public static void sort(int[] a) {
     sort(a, 0, a.length);
   }
   // Sort a[fromIndex..toIndex).
   public static void sort(int[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
     for (int i = fromIndex + 1; i < toIndex; i++) {
       int key = a[i];
+      int j = i - 1;
+      while (j >= fromIndex && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(double[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
+      double key = a[i];
+      int j = i - 1;
+      while (j >= fromIndex && Double.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(long[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
+      long key = a[i];
+      int j = i - 1;
+      while (j >= fromIndex && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(char[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
+      char key = a[i];
+      int j = i - 1;
+      while (j >= fromIndex && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(float[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
+      float key = a[i];
+      int j = i - 1;
+      while (j >= fromIndex && Float.compare(a[j], key) > 0) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(short[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
+      short key = a[i];
+      int j = i - 1;
+      while (j >= fromIndex && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(byte[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
+      byte key = a[i];
       int j = i - 1;
       while (j >= fromIndex && a[j] > key) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
@@ -130,6 +194,15 @@ class Arrays {
       byte key = a[i];
       int j = i - 1;
       while (j >= 0 && a[j] > key) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = key;
+    }
+  }
+  public static void sort(String[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
+      String key = a[i];
+      int j = i - 1;
+      while (j >= fromIndex && a[j].compareTo(key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }
@@ -274,10 +347,14 @@ class Arrays {
   // Insertion sort, so equal elements keep their order — Arrays.sort of a
   // reference array is stable, unlike its primitive overloads.
   public static void sort(Comparable[] a) {
-    for (int i = 1; i < a.length; i++) {
+    sort(a, 0, a.length);
+  }
+  public static void sort(Comparable[] a, int fromIndex, int toIndex) {
+    rangeCheck(a.length, fromIndex, toIndex);
+    for (int i = fromIndex + 1; i < toIndex; i++) {
       Comparable key = a[i];
       int j = i - 1;
-      while (j >= 0 && a[j].compareTo(key) > 0) { a[j + 1] = a[j]; j--; }
+      while (j >= fromIndex && a[j].compareTo(key) > 0) { a[j + 1] = a[j]; j--; }
       a[j + 1] = key;
     }
   }

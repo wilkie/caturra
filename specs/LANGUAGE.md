@@ -752,6 +752,41 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **The sorting contracts** (2026-08-03, round 9) — the sorting cluster, all
+  twelve findings:
+  - **`Arrays.rangeCheck`, in the JDK's order.** A reversed range is an
+    `IllegalArgumentException` naming both bounds; an out-of-range one throws
+    BEFORE anything moves — caturra sorted first and complained afterwards,
+    leaving a half-sorted array. The message is
+    `new ArrayIndexOutOfBoundsException(index)`'s, which names the index
+    alone ("Array index out of range: 9"), so the three JDK exceptions with
+    an int constructor now have one here too.
+  - **Every `Arrays.sort` range overload exists** (the primitives, a
+    reference array, and both with a `Comparator`), and
+    **`Arrays.sort(Object[])`** is accepted as javac accepts it — throwing
+    `ClassCastException` at run time when an element is not `Comparable`,
+    rather than refusing at compile time.
+  - **`binarySearch` uses the JDK's own loop** — a CLOSED range with
+    `mid = (low + high) >>> 1`. A half-open loop finds a different one of
+    several EQUAL elements, and the index is observable.
+  - **An immutable list of 0 or 1 elements can be sorted** (those classes
+    override `sort` to do nothing, since nothing can move), and **a
+    comparator that modifies the list being sorted is a
+    `ConcurrentModificationException`** rather than a silent discard of what
+    it added.
+  - **A user `Comparator` inherits the interface's default combinators.**
+    `myComparator.reversed()` looked for a `reversed` method on the user's own
+    class and aborted the run; it now builds the same derived comparator the
+    factories return. The cause ran deeper: a class file recorded
+    `implements Comparator` under the SOURCE name while everything else used
+    the aliased `__Comparator`, so `x instanceof Comparator` was false for a
+    class that plainly implements it. Both spellings agree now.
+  - **A method reference stands wherever a `Comparator` is expected** — a
+    variable, a field, or `list.sort(Cls::byX)` — and
+    `thenComparing(keyExtractor, keyComparator)` (the two-argument form) is
+    accepted, desugaring like the two-argument `comparing` factory.
+  - Pinned by `diff_array_sort_range_checks`, `diff_binary_search_duplicates`
+    and `diff_sorting_contracts`.
 - **The `Collections` utilities take the types Java declares**
   (2026-08-03, round 9) — the collections-utility cluster:
   - **`max`/`min`/`frequency`/`disjoint`/`addAll` are declared over

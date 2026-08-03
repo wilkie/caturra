@@ -21241,3 +21241,131 @@ public class DiffViewMessages {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: sorting contracts.
+// ---------------------------------------------------------------------------
+
+// `Arrays.rangeCheck`, in the JDK's order: a reversed range is an
+// IllegalArgumentException naming both bounds, and an out-of-range one throws
+// BEFORE anything is sorted (caturra sorted first and then complained, so the
+// array was left half-sorted). The message is
+// `new ArrayIndexOutOfBoundsException(index)`'s, which names the index alone.
+differential_test!(
+    diff_array_sort_range_checks,
+    "DiffSortRange",
+    r#"
+import java.util.*;
+public class DiffSortRange {
+    public static void main(String[] args) {
+        int[] a = {5, 4, 3, 2, 1};
+        try { Arrays.sort(a, 3, 1); System.out.println("no throw"); }
+        catch (Exception e) { System.out.println("E: " + e.getClass().getName() + " / " + e.getMessage()); }
+        System.out.println("after reversed range: " + Arrays.toString(a));
+        try { Arrays.sort(a, 1, 9); }
+        catch (Exception e) { System.out.println("E: " + e.getClass().getName() + " / " + e.getMessage()); }
+        System.out.println("after past-end: " + Arrays.toString(a));
+        try { Arrays.binarySearch(a, 0, 9, 2); }
+        catch (Exception e) { System.out.println("bs: " + e.getClass().getName() + " / " + e.getMessage()); }
+        try { throw new ArrayIndexOutOfBoundsException(9); }
+        catch (ArrayIndexOutOfBoundsException e) { System.out.println("ctor: " + e.getMessage()); }
+        String[] s = {"e", "d", "c", "b", "a"};
+        Arrays.sort(s, 1, 4);
+        System.out.println("obj range: " + Arrays.toString(s));
+        Integer[] b = {9, 8, 7, 6, 5};
+        Arrays.sort(b, 1, 4, Comparator.<Integer>naturalOrder());
+        System.out.println("obj range cmp: " + Arrays.toString(b));
+        char[] c = {'z', 'y', 'x', 'w'};
+        Arrays.sort(c, 1, 3);
+        System.out.println("char range: " + new String(c));
+        double[] d = {4.0, 3.0, 2.0, 1.0};
+        Arrays.sort(d, 0, 2);
+        System.out.println("double range: " + Arrays.toString(d));
+        Object[] o = { "pear", "apple", "fig" };
+        Arrays.sort(o);
+        System.out.println("object sort: " + Arrays.toString(o));
+    }
+}
+"#
+);
+
+// `binarySearch` promises no particular one of several EQUAL elements, but the
+// index it returns is observable — and a half-open loop finds a different one
+// from the JDK's closed `(low + high) >>> 1`.
+differential_test!(
+    diff_binary_search_duplicates,
+    "DiffBinarySearchDups",
+    r#"
+import java.util.*;
+public class DiffBinarySearchDups {
+    public static void main(String[] args) {
+        List<Integer> a = Arrays.asList(1,2,2,2,2,2,2,3,4,5,6,7,8,9,9,9,9,10);
+        System.out.println("list 2 = " + Collections.binarySearch(a, 2));
+        System.out.println("list 9 = " + Collections.binarySearch(a, 9));
+        System.out.println("list absent = " + Collections.binarySearch(a, 100));
+        int[] arr = {1,2,2,2,2,2,2,3,4,5,6,7,8,9,9,9,9,10};
+        System.out.println("array 2 = " + Arrays.binarySearch(arr, 2));
+        System.out.println("array 9 = " + Arrays.binarySearch(arr, 9));
+        System.out.println("array absent = " + Arrays.binarySearch(arr, 0));
+    }
+}
+"#
+);
+
+// The rest of the sorting contracts: an immutable list of 0 or 1 elements CAN
+// be sorted (those classes override `sort` to do nothing), a comparator that
+// modifies the list being sorted is a ConcurrentModificationException, a USER
+// comparator inherits the interface's default combinators, and a method
+// reference stands wherever a `Comparator` is expected.
+differential_test!(
+    diff_sorting_contracts,
+    "DiffSortContracts",
+    r#"
+import java.util.*;
+public class DiffSortContracts {
+    static class ByValue implements Comparator<Integer> {
+        public int compare(Integer a, Integer b) { return Integer.compare(a, b); }
+    }
+    static class P {
+        String n; int a;
+        P(String n, int a) { this.n = n; this.a = a; }
+        public String toString() { return n + ":" + a; }
+    }
+    static int byDescending(Integer a, Integer b) { return Integer.compare(b, a); }
+    public static void main(String[] args) {
+        List<Integer> el = Collections.emptyList();
+        el.sort(null);
+        System.out.println("empty ok " + el);
+        List<Integer> s1 = Collections.singletonList(5);
+        s1.sort(null);
+        System.out.println("single ok " + s1);
+        List<Integer> m = new ArrayList<>(Arrays.asList(4, 2, 6, 1, 8));
+        try {
+            m.sort((a, b) -> { m.add(99); return Integer.compare(a, b); });
+            System.out.println("no throw: " + m);
+        } catch (ConcurrentModificationException e) {
+            System.out.println("CME");
+        }
+        List<Integer> l = new ArrayList<>(Arrays.asList(3, 1, 2));
+        Comparator<Integer> named = new ByValue();
+        l.sort(named.reversed());
+        System.out.println("named reversed: " + l);
+        Comparator<Integer> anon = new Comparator<Integer>() {
+            public int compare(Integer a, Integer b) { return Integer.compare(a, b); }
+        };
+        l.sort(anon.reversed());
+        System.out.println("anon reversed: " + l);
+        System.out.println("instanceof: " + (named instanceof Comparator));
+        Comparator<Integer> ref = DiffSortContracts::byDescending;
+        l.sort(ref);
+        System.out.println("via variable: " + l);
+        l.sort(DiffSortContracts::byDescending);
+        System.out.println("inline: " + l);
+        List<P> ps = new ArrayList<>(Arrays.asList(new P("bob", 30), new P("amy", 30), new P("cal", 25)));
+        ps.sort(Comparator.comparingInt((P p) -> p.a)
+                          .thenComparing(p -> p.n, Comparator.<String>reverseOrder()));
+        System.out.println(ps);
+    }
+}
+"#
+);

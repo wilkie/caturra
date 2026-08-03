@@ -4409,13 +4409,16 @@ impl<'run> Interpreter<'run> {
                     [_, _, JValue::Ref(Some(comparator))] => Some(*comparator),
                     _ => None,
                 };
-                let (mut low, mut high) = (0usize, items.len());
+                // The JDK's loop, exactly (see `array_binary_search`): which of
+                // several equal elements is found depends on it.
+                let (mut low, mut high) = (0i64, i64::try_from(items.len()).unwrap_or(0) - 1);
                 let mut found = None;
-                while low < high {
-                    let mid = low + (high - low) / 2;
-                    match self.compare_with(items[mid], *key, comparator)?.cmp(&0) {
+                while low <= high {
+                    let mid = (low + high) >> 1;
+                    let at = usize::try_from(mid).unwrap_or(0);
+                    match self.compare_with(items[at], *key, comparator)?.cmp(&0) {
                         std::cmp::Ordering::Less => low = mid + 1,
-                        std::cmp::Ordering::Greater => high = mid,
+                        std::cmp::Ordering::Greater => high = mid - 1,
                         std::cmp::Ordering::Equal => {
                             found = Some(mid);
                             break;
@@ -4767,7 +4770,17 @@ impl<'run> Interpreter<'run> {
         // keeping the elements as a list stores them: unboxed.
         // `Arrays.sort(array, comparator)`: a stable sort of a REFERENCE array
         // in place. `null` means natural ordering, as the JDK defines it.
-        if let ("sort", [JValue::Ref(Some(array)), JValue::Ref(comparator)]) = (method_name, args) {
+        if let (
+            "sort",
+            [JValue::Ref(Some(array)), JValue::Ref(comparator)]
+            | [
+                JValue::Ref(Some(array)),
+                JValue::Int(_),
+                JValue::Int(_),
+                JValue::Ref(comparator),
+            ],
+        ) = (method_name, args)
+        {
             let array = *array;
             let comparator = *comparator;
             let Some(items) = self.array_elements(array) else {
@@ -4775,9 +4788,33 @@ impl<'run> Interpreter<'run> {
                     "Arrays.sort needs an array",
                 )));
             };
-            let sorted = self.merge_sort_by(items, comparator)?;
+            // The RANGE form sorts a slice in place; the range is checked in
+            // the JDK's order, before anything moves.
+            let (from, to) = match args {
+                [_, JValue::Int(from), JValue::Int(to), _] => {
+                    let length = i32::try_from(items.len()).unwrap_or(i32::MAX);
+                    if from > to {
+                        return Err(VmError::UncaughtException(format!(
+                            "java.lang.IllegalArgumentException: fromIndex({from}) > toIndex({to})"
+                        )));
+                    }
+                    if *from < 0 {
+                        return Err(array_index_error(*from));
+                    }
+                    if *to > length {
+                        return Err(array_index_error(*to));
+                    }
+                    (
+                        usize::try_from(*from).unwrap_or(0),
+                        usize::try_from(*to).unwrap_or(0),
+                    )
+                }
+                _ => (0, items.len()),
+            };
+            let slice = items[from..to].to_vec();
+            let sorted = self.merge_sort_by(slice, comparator)?;
             if let Some(crate::value::HeapObject::RefArray(_, values)) = self.heap.get_mut(array) {
-                *values = sorted;
+                values[from..to].clone_from_slice(&sorted);
             }
             return Ok(true);
         }
@@ -5106,12 +5143,20 @@ impl<'run> Interpreter<'run> {
         to: usize,
         key: JValue,
     ) -> Result<i32, VmError> {
-        let (mut low, mut high) = (from, to);
-        while low < high {
-            let mid = low + (high - low) / 2;
-            match self.array_compare_at(target, mid, key)?.cmp(&0) {
+        // The JDK's own loop, exactly: a CLOSED range with `high = to - 1` and
+        // `mid = (low + high) >>> 1`. A half-open loop finds a different one of
+        // several EQUAL elements — binarySearch promises no particular one, but
+        // the index it returns is observable, and students compare it.
+        let (mut low, mut high) = (
+            i64::try_from(from).unwrap_or(0),
+            i64::try_from(to).unwrap_or(0) - 1,
+        );
+        while low <= high {
+            let mid = (low + high) >> 1;
+            let at = usize::try_from(mid).unwrap_or(0);
+            match self.array_compare_at(target, at, key)?.cmp(&0) {
                 std::cmp::Ordering::Less => low = mid + 1,
-                std::cmp::Ordering::Greater => high = mid,
+                std::cmp::Ordering::Greater => high = mid - 1,
                 std::cmp::Ordering::Equal => return Ok(i32::try_from(mid).unwrap_or(i32::MAX)),
             }
         }
@@ -5889,7 +5934,18 @@ impl<'run> Interpreter<'run> {
             // as natural ordering rather than an NPE.
             ("sort", _, [JValue::Ref(comparator)]) => {
                 let items = self.list_items(receiver);
+                let before = items.len();
                 let sorted = self.merge_sort_by(items, *comparator)?;
+                // `List.sort` copies out, sorts, and writes back, checking the
+                // modification count as it goes: a COMPARATOR that adds to the
+                // list being sorted is a ConcurrentModificationException, not a
+                // silent discard of what it added (caturra models modCount as
+                // the length, so a size change is what shows).
+                if self.list_items(receiver).len() != before {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.util.ConcurrentModificationException",
+                    )));
+                }
                 if let Some(slot) = self.heap.list_values_mut(receiver) {
                     *slot = sorted;
                 }
@@ -7471,8 +7527,17 @@ impl<'run> Interpreter<'run> {
         if matches!(self.heap.get(receiver), Some(HeapObject::Optional { .. })) {
             return self.optional_intrinsic(receiver, method, descriptor, args);
         }
-        // Combinators on a factory-built comparator.
-        if matches!(self.heap.get(receiver), Some(HeapObject::Comparator(_))) {
+        // Combinators on a comparator — one the factories built, or a USER
+        // class that implements `Comparator`. The derived comparator wraps
+        // whichever it is, since `compare` reaches both the same way; without
+        // this a `myComparator.reversed()` looked for a `reversed` method on
+        // the user's own class and aborted the run.
+        let user_comparator = matches!(
+            self.heap.get(receiver),
+            Some(HeapObject::Instance { class_name, .. })
+                if self.class_implements(class_name, "__Comparator")
+        );
+        if user_comparator || matches!(self.heap.get(receiver), Some(HeapObject::Comparator(_))) {
             use crate::value::ComparatorSpec;
             match (method, args) {
                 ("reversed", []) => {
@@ -9193,6 +9258,35 @@ impl<'run> Interpreter<'run> {
                 let reference = self.heap.alloc_string(&text);
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
             }
+            // A user `Comparator` inherits the JDK's DEFAULT combinators
+            // (`reversed`, `thenComparing`), which are not methods it declares.
+            // Each builds a derived comparator that wraps this one — the same
+            // objects the `Comparator.comparing(...)` factories return.
+            if self.class_implements(instance_class, "__Comparator") {
+                use crate::value::ComparatorSpec;
+                match (method_name, args) {
+                    ("reversed", []) => {
+                        let reversed = self.heap.alloc(crate::value::HeapObject::Comparator(
+                            ComparatorSpec::Reversed(receiver),
+                        ));
+                        return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reversed)))));
+                    }
+                    ("thenComparing", [JValue::Ref(Some(next))]) => {
+                        let second = if descriptor.contains("function/Function") {
+                            self.heap.alloc(crate::value::HeapObject::Comparator(
+                                ComparatorSpec::ByKey(*next),
+                            ))
+                        } else {
+                            *next
+                        };
+                        let then = self.heap.alloc(crate::value::HeapObject::Comparator(
+                            ComparatorSpec::Then(receiver, second),
+                        ));
+                        return Ok(UserDispatch::Value(Some(JValue::Ref(Some(then)))));
+                    }
+                    _ => {}
+                }
+            }
             // A throwable-descended class also inherits `getCause()` (its
             // `super(msg, cause)` stashed the cause in `__cause`).
             if self.instance_is_throwable(instance_class)
@@ -10537,10 +10631,18 @@ impl<'run> Interpreter<'run> {
         // An unmodifiable view refuses every mutator and forwards the rest to
         // the list it wraps, so `size`, `get` and `toString` read through.
         let receiver = if self.is_unmodifiable_list(receiver) {
-            if LIST_MUTATORS.contains(&method_name) {
+            // `Collections.emptyList().sort(cmp)` and `singletonList(x).sort(cmp)`
+            // are fine in a JDK: those classes override `sort` to do nothing,
+            // since nothing can move. Only a longer immutable list refuses.
+            let harmless_sort = method_name == "sort"
+                && iterated_len_of(&self.heap, self.backing_list(receiver)) <= 1;
+            if LIST_MUTATORS.contains(&method_name) && !harmless_sort {
                 return Err(VmError::UncaughtException(String::from(
                     "java.lang.UnsupportedOperationException",
                 )));
+            }
+            if harmless_sort {
+                return Ok(None);
             }
             // An out-of-range index on a view that is NOT backed by an
             // ArrayList in a JDK words the failure its own way, and the message
@@ -12745,8 +12847,13 @@ fn is_view_mutator(method: &str) -> bool {
     )
 }
 
+/// `new ArrayIndexOutOfBoundsException(index)` — the constructor
+/// `Arrays.rangeCheck` and `copyOfRange` use, whose message names the index
+/// alone ("Array index out of range: 9"), not the array's length.
 fn array_index_error(index: i32) -> VmError {
-    VmError::UncaughtException(format!("java.lang.ArrayIndexOutOfBoundsException: {index}"))
+    VmError::UncaughtException(format!(
+        "java.lang.ArrayIndexOutOfBoundsException: Array index out of range: {index}"
+    ))
 }
 
 /// `Double.compare`: a total order where -0.0 sits below 0.0 and NaN above

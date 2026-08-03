@@ -98,7 +98,13 @@ fn emit_class(
         info: caturra_classfile::debug::encode_source_file(file_index),
     });
     for interface in decl.interfaces.iter().chain(anon_interfaces.iter()) {
-        let index = intern_class(&mut class.constant_pool, interface);
+        // The ALIASED name, as the method table records it: a source
+        // `Comparator` is caturra's bundled `__Comparator`. The class file used
+        // to keep the source spelling, so the VM's `instanceof Comparator` (a
+        // check against the aliased name) said false for a class that plainly
+        // implements it, and a user comparator did not inherit the interface's
+        // default methods either.
+        let index = intern_class(&mut class.constant_pool, comparator_alias(interface));
         class.interfaces.push(index);
     }
     {
@@ -14204,6 +14210,27 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2);
             }
+            // `new ArrayIndexOutOfBoundsException(index)` / the same for
+            // `IndexOutOfBoundsException` and `StringIndexOutOfBoundsException`
+            // — the JDK's int constructors, whose message is
+            // "Array index out of range: 9". Only these three have one.
+            [index]
+                if matches!(
+                    arg_types.first(),
+                    Some(JType::Int | JType::Short | JType::Byte)
+                ) && matches!(
+                    internal,
+                    "java/lang/ArrayIndexOutOfBoundsException"
+                        | "java/lang/IndexOutOfBoundsException"
+                        | "java/lang/StringIndexOutOfBoundsException"
+                ) =>
+            {
+                let actual = self.expr(index);
+                self.numeric_conversion(actual, JType::Int);
+                let init_ref = intern_method_ref(self.pool, internal, "<init>", "(I)V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
+            }
             [message] => {
                 let message_ty = self.expr(message);
                 if message_ty != JType::Str && message_ty != JType::Error {
@@ -14966,6 +14993,32 @@ impl BodyGen<'_> {
         // `thenComparingInt`/`Long`/`Double` differ from `thenComparing` only in
         // the extractor's declared return type, which erasure removes — the key
         // is compared by its natural ordering either way.
+        // `thenComparing(keyExtractor, keyComparator)` — the two-argument form
+        // orders the KEYS by a comparator of their own. It is the same derived
+        // comparator as `thenComparing(comparing(extractor, keyComparator))`.
+        if let [extractor, key_comparator] = args
+            && method == "thenComparing"
+        {
+            self.expr(extractor);
+            self.expr(key_comparator);
+            let comparing = intern_method_ref(
+                self.pool,
+                "java/util/Comparator",
+                "comparing",
+                "(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, comparing, 1);
+            self.code.drop_stack(2);
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/util/Comparator",
+                "thenComparing",
+                "(Ljava/util/Comparator;)Ljava/util/Comparator;",
+            );
+            self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 1);
+            self.code.drop_stack(2);
+            return Some(Some(comparator_ty));
+        }
         let [next] = args else {
             self.error(span, format!("{method} takes one argument"));
             return None;
@@ -17785,23 +17838,55 @@ impl BodyGen<'_> {
         // `__Comparator`, which is only injected when the program mentions a
         // comparator, so every other program's `Arrays` would stop compiling.
         // `null` is a legal comparator and means natural ordering.
-        if class == "Arrays" && method == "sort" && args.len() == 2 {
+        // `Arrays.sort(Object[])` — javac accepts it (and a JDK throws
+        // ClassCastException at run time if the elements are not Comparable),
+        // where the bundled `sort(Comparable[])` refused it at compile time.
+        // The VM's natural-ordering sort is exactly that behaviour.
+        if class == "Arrays"
+            && method == "sort"
+            && let [only] = args
+            && let JType::Array { elem, dims } = self.type_of(only)
+            && dims == 1
+            && matches!(elem, ElemType::Object(id) if id == self.table.object_id)
+        {
+            self.expr(only);
+            self.code.push_op(op::ACONST_NULL, 1);
+            let method_ref = intern_method_ref(
+                self.pool,
+                "Arrays",
+                "sort",
+                "([Ljava/lang/Object;Ljava/lang/Object;)V",
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
+            self.code.drop_stack(2);
+            return Some(None);
+        }
+        if class == "Arrays" && method == "sort" && matches!(args.len(), 2 | 4) {
             let source_ty = self.type_of(&args[0]);
-            let comparator_ty = self.type_of(&args[1]);
+            let comparator_ty = self.type_of(args.last().expect("non-empty"));
             if let JType::Array { elem, dims } = source_ty
                 && (dims > 1 || elem.base_type().is_reference())
                 && (comparator_ty == JType::Null || self.is_comparator_type(comparator_ty))
             {
                 self.expr(&args[0]);
-                self.expr(&args[1]);
-                let method_ref = intern_method_ref(
-                    self.pool,
-                    "Arrays",
-                    "sort",
-                    "([Ljava/lang/Object;Ljava/lang/Object;)V",
-                );
+                // The RANGE form (`sort(a, from, to, cmp)`) passes the bounds
+                // through; the VM checks them as the JDK's `rangeCheck` does.
+                let ranged = args.len() == 4;
+                if ranged {
+                    for bound in &args[1..3] {
+                        let actual = self.expr(bound);
+                        self.numeric_conversion(actual, JType::Int);
+                    }
+                }
+                self.expr(args.last().expect("non-empty"));
+                let descriptor = if ranged {
+                    "([Ljava/lang/Object;IILjava/lang/Object;)V"
+                } else {
+                    "([Ljava/lang/Object;Ljava/lang/Object;)V"
+                };
+                let method_ref = intern_method_ref(self.pool, "Arrays", "sort", descriptor);
                 self.code.push_op_u16(op::INVOKESTATIC, method_ref, 0);
-                self.code.drop_stack(2);
+                self.code.drop_stack(if ranged { 4 } else { 2 });
                 return Some(None);
             }
         }
