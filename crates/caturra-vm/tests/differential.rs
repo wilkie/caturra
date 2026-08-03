@@ -21045,3 +21045,122 @@ public class DiffVarLambda {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: inner-class instantiation (JLS §8.1.3, §15.9).
+// ---------------------------------------------------------------------------
+
+// `p.new Inner()` evaluates and NULL-CHECKS the qualifier before the arguments.
+// caturra passed it straight through as the leading constructor argument, so a
+// null enclosing instance built the object anyway and the argument's side
+// effects had already run.
+differential_test!(
+    diff_qualified_new_null_check,
+    "DiffQualifiedNew",
+    r#"
+public class DiffQualifiedNew {
+    int t = 1;
+    class Inner {
+        Inner(int x) { System.out.println("Inner " + x + " t=" + t); }
+    }
+    static int side() { System.out.println("side effect"); return 9; }
+    public static void main(String[] args) {
+        DiffQualifiedNew o = new DiffQualifiedNew();
+        o.new Inner(1);
+        try {
+            DiffQualifiedNew n = null;
+            n.new Inner(side());
+            System.out.println("no throw");
+        } catch (NullPointerException e) {
+            System.out.println("NPE");
+        }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// The inner-class construction shapes: a qualified nested type NAME (as a
+// return type, a parameter, a type argument, an array), a constructor that
+// delegates with `this(...)`, an inner class extending another inner class, an
+// INHERITED inner class, one built from inside an anonymous class, and one built
+// inside a lambda (whose qualifier the capture pass never even looked at).
+differential_test!(
+    diff_inner_class_shapes,
+    "DiffInnerShapes",
+    r#"
+import java.util.*;
+import java.util.function.Supplier;
+class Host {
+    static class Point { public String toString() { return "P"; } }
+    class Bound { public String toString() { return "B"; } }
+}
+class BaseHost {
+    int b = 5;
+    class Inherited { int g() { return b; } }
+}
+public class DiffInnerShapes extends BaseHost {
+    int tag = 9;
+    class A { public String toString() { return "A" + tag; } }
+    class Chained {
+        int k;
+        Chained() { this(99); }
+        Chained(int k) { this.k = k; }
+        public String toString() { return "C(" + tag + "," + k + ")"; }
+    }
+    class Sub extends A { }
+    Supplier<Object> field = () -> "from field " + tag;
+    static Host.Point make() { return new Host.Point(); }
+    static void take(Host.Point p) { System.out.println("took " + p); }
+    void useInherited() { System.out.println(new Inherited().g()); }
+    public static void main(String[] args) {
+        System.out.println(make());
+        take(new Host.Point());
+        List<Host.Point> l = new ArrayList<Host.Point>();
+        l.add(new Host.Point());
+        System.out.println(l);
+        Host h = new Host();
+        List<Host.Bound> m = new ArrayList<>();
+        m.add(h.new Bound());
+        System.out.println(m);
+        Host.Point[] arr = new Host.Point[2];
+        arr[0] = new Host.Point();
+        System.out.println(arr[0] + " " + arr[1] + " " + arr.length);
+        DiffInnerShapes o = new DiffInnerShapes();
+        System.out.println(o.new Chained());
+        System.out.println(o.new Sub());
+        o.useInherited();
+        System.out.println(o.field.get());
+        Supplier<Object> s = () -> o.new A();
+        System.out.println(s.get());
+    }
+}
+"#
+);
+
+// An anonymous class in a FIELD INITIALIZER that captures the enclosing
+// instance. The capture pass found the captures but never passed them at the
+// `new` site — field initializers were visited in one phase and not the other.
+differential_test!(
+    diff_anonymous_class_in_field_initializer,
+    "DiffAnonField",
+    r#"
+public class DiffAnonField {
+    interface Act { void run(); }
+    int tag = 3;
+    class A { public String toString() { return "A" + tag; } }
+    Act plain = new Act() { public void run() { System.out.println("plain " + tag); } };
+    Act inner = new Act() {
+        public void run() {
+            System.out.println(new A());
+            System.out.println(DiffAnonField.this.new A());
+        }
+    };
+    public static void main(String[] args) {
+        DiffAnonField o = new DiffAnonField();
+        o.plain.run();
+        o.inner.run();
+    }
+}
+"#
+);

@@ -29,11 +29,54 @@ pub fn bind_inner_classes(units: &mut [(String, CompilationUnit)]) {
     }
     for (_, unit) in units.iter_mut() {
         for class in &mut unit.classes {
+            // A class whose SUPERCLASS is an inner class must pass an enclosing
+            // instance to it — `class B extends A` inside one outer builds an
+            // `A` too. Its own `__caturraOuter` is that instance (they share the
+            // outer), and it is in scope as the leading constructor parameter
+            // this pass is about to add.
+            let super_is_inner = class
+                .superclass
+                .as_deref()
+                .is_some_and(|name| enclosing.contains_key(name));
             if class.is_inner
                 && let Some(outer) = enclosing.get(&class.name)
             {
                 add_outer_binding(class, outer);
             }
+            if super_is_inner && class.is_inner {
+                thread_outer_to_super(class);
+            }
+        }
+    }
+}
+
+/// Give every explicit `super(...)` the enclosing instance as its leading
+/// argument. The implicit one is synthesized by codegen, which is told the
+/// same thing by the superclass's signature.
+fn thread_outer_to_super(class: &mut ClassDecl) {
+    let zero = class.span;
+    for ctor in class.methods.iter_mut().filter(|m| m.is_constructor) {
+        let outer_arg = |span| Expr::Name {
+            path: vec![String::from(OUTER_FIELD)],
+            span,
+        };
+        match ctor.body.first_mut() {
+            Some(Stmt::SuperCall { args, span }) => {
+                let span = *span;
+                args.insert(0, outer_arg(span));
+            }
+            // Delegating to another of this class's constructors: that one
+            // passes the instance on.
+            Some(Stmt::ThisCall { .. }) => {}
+            // No explicit chain call: codegen would synthesize a `super()`
+            // with no arguments, which the inner superclass cannot accept.
+            _ => ctor.body.insert(
+                0,
+                Stmt::SuperCall {
+                    args: vec![outer_arg(zero)],
+                    span: zero,
+                },
+            ),
         }
     }
 }
@@ -99,10 +142,24 @@ fn add_outer_binding(class: &mut ClassDecl, outer: &str) {
     }
     for ctor in class.methods.iter_mut().filter(|m| m.is_constructor) {
         ctor.params.insert(0, param());
-        let after = usize::from(matches!(
-            ctor.body.first(),
-            Some(Stmt::SuperCall { .. } | Stmt::ThisCall { .. })
-        ));
+        // A constructor that DELEGATES (`Inner() { this(99); }`) threads the
+        // enclosing instance through to the one it calls, and does not store it
+        // itself — the delegate does. Without the extra argument the delegation
+        // matched the constructor's OWN new signature, which the recursion
+        // check then reported as a recursive constructor invocation (the same
+        // trap the capture pass records for its own captured values).
+        if let Some(Stmt::ThisCall { args, span }) = ctor.body.first_mut() {
+            let span = *span;
+            args.insert(
+                0,
+                Expr::Name {
+                    path: vec![String::from(OUTER_FIELD)],
+                    span,
+                },
+            );
+            continue;
+        }
+        let after = usize::from(matches!(ctor.body.first(), Some(Stmt::SuperCall { .. })));
         ctor.body.insert(after, store());
     }
 }

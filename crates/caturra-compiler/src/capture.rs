@@ -160,6 +160,16 @@ pub fn resolve_captures(
             for block in &mut class.init_blocks {
                 rewrite_stmts(&mut block.body, &captures);
             }
+            // A FIELD INITIALIZER holds `new Anon(){...}` sites too, and phase
+            // 1 already collects their captures from one — but the arguments
+            // were never passed here, so `Runnable r = new Runnable(){ … tag … };`
+            // (an anonymous class in a field, capturing the enclosing instance)
+            // failed with "constructor Anon$1 cannot be applied to given types".
+            for field in &mut class.fields {
+                if let Some(init) = &mut field.init {
+                    rewrite_expr(init, &captures);
+                }
+            }
         }
     }
     diagnostics
@@ -618,8 +628,20 @@ fn find_in_expr(
 ) {
     match expr {
         Expr::NewObject {
-            class, args, span, ..
+            class,
+            args,
+            outer,
+            span,
+            ..
         } => {
+            // The QUALIFIER of `o.new Inner()` is an expression like any
+            // other: every walk here used to visit only the arguments, so a
+            // local named in one was never seen — and a lambda body doing
+            // `o.new Inner()` failed with "cannot find variable 'o'" because
+            // `o` was never captured.
+            if let Some(outer) = outer {
+                find_in_expr(outer, scope, anon, out, owner, mutations);
+            }
             for a in args {
                 find_in_expr(a, scope, anon, out, owner, mutations);
             }
@@ -948,9 +970,12 @@ fn free_in_expr(expr: &Expr, bound: &mut HashSet<String>, free: &mut HashSet<Str
             }
         }
         // Longer dotted paths: only the head can be a captured local
-        // (`node.value` captures `node`).
+        // (`node.value` captures `node`). A path CONTAINING `this` is an
+        // enclosing-instance reference (`Outer.this`, `Outer.this.field`), and
+        // its head is a class name — capturing it would give the synthesized
+        // class a parameter for a variable that does not exist.
         Expr::Name { path, .. } => {
-            if !bound.contains(&path[0]) {
+            if !bound.contains(&path[0]) && !path.iter().any(|segment| segment == "this") {
                 free.insert(path[0].clone());
             }
         }
@@ -962,7 +987,15 @@ fn free_in_expr(expr: &Expr, bound: &mut HashSet<String>, free: &mut HashSet<Str
                 free_in_expr(a, bound, free);
             }
         }
-        Expr::SuperMethodCall { args, .. } | Expr::NewObject { args, .. } => {
+        Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                free_in_expr(a, bound, free);
+            }
+        }
+        Expr::NewObject { args, outer, .. } => {
+            if let Some(outer) = outer {
+                free_in_expr(outer, bound, free);
+            }
             for a in args {
                 free_in_expr(a, bound, free);
             }
@@ -1112,9 +1145,16 @@ fn rewrite_stmt(stmt: &mut Stmt, captures: &HashMap<String, Vec<(String, TypeRef
 
 fn rewrite_expr(expr: &mut Expr, captures: &HashMap<String, Vec<(String, TypeRef)>>) {
     if let Expr::NewObject {
-        class, args, span, ..
+        class,
+        args,
+        outer,
+        span,
+        ..
     } = expr
     {
+        if let Some(outer) = outer.as_deref_mut() {
+            rewrite_expr(outer, captures);
+        }
         for a in args.iter_mut() {
             rewrite_expr(a, captures);
         }
@@ -1152,7 +1192,15 @@ fn walk_expr_children(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 f(a);
             }
         }
-        Expr::SuperMethodCall { args, .. } | Expr::NewObject { args, .. } => {
+        Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                f(a);
+            }
+        }
+        Expr::NewObject { args, outer, .. } => {
+            if let Some(outer) = outer.as_deref_mut() {
+                f(outer);
+            }
             for a in args {
                 f(a);
             }
@@ -1428,7 +1476,15 @@ fn mutations_in_expr(expr: &Expr, out: &mut Mutations) {
                 mutations_in_expr(e, out);
             }
         }
-        Expr::NewObject { args, .. } | Expr::SuperMethodCall { args, .. } => {
+        Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                mutations_in_expr(a, out);
+            }
+        }
+        Expr::NewObject { args, outer, .. } => {
+            if let Some(outer) = outer {
+                mutations_in_expr(outer, out);
+            }
             for a in args {
                 mutations_in_expr(a, out);
             }

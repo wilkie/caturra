@@ -1892,6 +1892,26 @@ impl MethodTable {
             .is_some_and(|ty| ty != JType::Unsupported)
     }
 
+    /// The class a dotted name like `Host.Point` (or `Host.Inner.Deep`) names,
+    /// when the last segment is a nested class and the segments before it are
+    /// its enclosing chain. `None` for anything else — a package-qualified
+    /// library name, or a name whose qualifier does not match.
+    fn qualified_nested_class(&self, name: &str) -> Option<ClassId> {
+        let (qualifier, simple) = name.rsplit_once('.')?;
+        let info = self.classes.get(simple)?;
+        let mut expected = info.enclosing.clone();
+        // Walk the qualifier's segments from the innermost outward.
+        for segment in qualifier.rsplit('.') {
+            match expected {
+                Some(outer) if outer == segment => {
+                    expected = self.classes.get(&outer).and_then(|i| i.enclosing.clone());
+                }
+                _ => return None,
+            }
+        }
+        Some(info.id)
+    }
+
     fn class_count(&self) -> usize {
         self.class_names.len()
     }
@@ -1992,6 +2012,15 @@ impl MethodTable {
                 if (name == "Comparable" || name == "java.lang.Comparable")
                     && let Some(id) = self.class_id("Comparable")
                 {
+                    return Some(JType::Object(id));
+                }
+                // A QUALIFIED nested type name — `Host.Point`, the way Java
+                // names a nested class from outside its outer. Nested classes
+                // are hoisted under their simple name, so the qualifier just
+                // has to be checked against the class's recorded enclosing
+                // chain; without this the name read as a PACKAGE and the
+                // program was refused with "package Host does not exist".
+                if let Some(id) = self.qualified_nested_class(name) {
                     return Some(JType::Object(id));
                 }
                 // A RAW `Iterator it = list.iterator();` is still the builtin
@@ -3055,6 +3084,11 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
             if !name.contains('.')
                 && let Some(id) = table.class_id(name)
             {
+                return Some(ElemType::Object(id));
+            }
+            // `List<Host.Point>` — a nested class named the way Java names one
+            // from outside its outer.
+            if let Some(id) = table.qualified_nested_class(name) {
                 return Some(ElemType::Object(id));
             }
             match crate::imports::canonical_library_class(name).unwrap_or(name.as_str()) {
@@ -5591,6 +5625,13 @@ fn method_descriptor(
                 {
                     out.push('L');
                     out.push_str(simple);
+                    out.push(';');
+                } else if let Some(id) = table.qualified_nested_class(name) {
+                    // `Host.Point` in a SIGNATURE. Nested classes are hoisted
+                    // under their simple name, so the descriptor is that name —
+                    // the qualifier only had to be checked.
+                    out.push('L');
+                    out.push_str(table.class_name(id));
                     out.push(';');
                 } else if let Some(internal) = library_exception_internal(name, table) {
                     // A library throwable named in a signature —
@@ -13661,6 +13702,10 @@ impl BodyGen<'_> {
         if let Some(id) = self.table.class_id(class) {
             return JType::Object(id);
         }
+        // `new Host.Point()` — the emit path resolves this too.
+        if let Some(id) = self.table.qualified_nested_class(class) {
+            return JType::Object(id);
+        }
         if let Some(internal) = caturra_classfile::exceptions::internal_name_of(class)
             && let Some(id) = exception_id(internal)
         {
@@ -13875,8 +13920,10 @@ impl BodyGen<'_> {
         };
         let bound: Option<Expr> = if let Some(o) = outer {
             Some(o.clone())
-        } else if !self.in_static && self.current_class_id == enclosing {
-            // Inside the enclosing class: `new Inner()` binds to `this`.
+        } else if !self.in_static && self.table.is_subtype(self.current_class_id, enclosing) {
+            // Inside the enclosing class — or a SUBCLASS of it, which inherits
+            // the inner class and whose `this` is an instance of the enclosing
+            // type: `new Inner()` binds to `this`.
             Some(Expr::This { span })
         } else if !self.in_static
             && self
@@ -13895,6 +13942,24 @@ impl BodyGen<'_> {
                 format!("an enclosing instance that contains {simple} is required"),
             );
             return JType::Error;
+        };
+        // JLS §15.9.4: in `p.new Inner(args)` the qualifier is evaluated and
+        // NULL-CHECKED before the arguments are — `null.new Inner(side())` is
+        // an NPE, and the side effect never runs. caturra passed the qualifier
+        // as the leading argument with no check, so the inner object was built
+        // with a null enclosing instance and the arguments had already run.
+        let bound = if outer.is_some() && !self.table.has_class("Objects") {
+            Expr::Call {
+                receiver: Some(Box::new(Expr::Name {
+                    path: vec![String::from("Objects")],
+                    span,
+                })),
+                method: String::from("requireNonNull"),
+                args: vec![bound],
+                span,
+            }
+        } else {
+            bound
         };
         let mut all = Vec::with_capacity(args.len() + 1);
         all.push(bound);
@@ -14008,6 +14073,11 @@ impl BodyGen<'_> {
                 return JType::Error;
             }
         }
+        // `new Host.Point()` — a nested class named from outside its outer.
+        let class_name = match self.table.qualified_nested_class(class_name) {
+            Some(id) => self.table.class_name(id),
+            None => class_name,
+        };
         let Some(class_id) = self.table.class_id(class_name) else {
             let classlib = ["String", "Object", "Integer", "Double", "StringBuilder"];
             if classlib.contains(&class_name) {

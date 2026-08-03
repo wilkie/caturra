@@ -651,9 +651,14 @@ impl Parser<'_> {
         if segments < 2 {
             return false;
         }
+        // `a.b.C name`, `a.b.C<T> name`, or `a.b.C[] name` — the ARRAY form
+        // reads exactly like an index expression up to the `]`, so it is the
+        // pair `[]` followed by an identifier that tells them apart.
         matches!(self.peek_at(i), Some(TokenKind::Identifier(_)))
             || (matches!(self.peek_at(i), Some(TokenKind::Symbol("<")))
                 && matches!(self.peek_at(i + 1), Some(TokenKind::Identifier(_))))
+            || (matches!(self.peek_at(i), Some(TokenKind::Symbol("[")))
+                && matches!(self.peek_at(i + 1), Some(TokenKind::Symbol("]"))))
     }
 
     /// `import a.b.C;` or `import a.b.*;`.

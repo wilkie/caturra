@@ -752,6 +752,46 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **Inner classes: the qualifier, the chain, and the name**
+  (2026-08-03, round 9, JLS §8.1.3/§15.9) — the inner-class cluster:
+  - **`p.new Inner()` null-checks its qualifier BEFORE the arguments**
+    (§15.9.4). caturra passed the qualifier through as the leading
+    constructor argument with no check, so `null.new Inner(side())` built an
+    object with a null enclosing instance AND ran the side effect a JDK never
+    runs.
+  - **A constructor that delegates threads the enclosing instance on.**
+    `Inner() { this(99); }` did not pass `__caturraOuter` to the constructor
+    it delegated to, so the call matched the constructor's OWN new signature —
+    reported as a recursive constructor invocation. The capture pass records
+    this exact trap for its captured values; the inner pass had it too. An
+    inner class extending another inner class needs the same for `super`,
+    including the implicit one codegen synthesizes.
+  - **An INHERITED inner class** is instantiable with a bare `new Inner()`
+    from the subclass — `this` is an instance of the enclosing type, so the
+    binding rule is subtyping, not identity.
+  - **A qualified nested type NAME** (`Host.Point`) works as a return type, a
+    parameter, a type argument, an array element and a `new` — it used to read
+    as a PACKAGE ("package Host does not exist"). Nested classes are hoisted
+    under their simple name, so only the qualifier had to be checked against
+    the recorded enclosing chain. The array form also needed the declaration
+    lookahead, which could not tell `Host.Point[] a` from an index expression.
+  - **The capture pass now walks the QUALIFIER** of `o.new Inner()`. Every
+    walk visited only the arguments, so a local named in one was never
+    captured and `() -> o.new Inner()` failed with "cannot find variable 'o'".
+    A name path containing `this` (`Outer.this`) is not a variable and is not
+    captured — its head is a class name.
+  - Found while testing, not by the audit: **an anonymous class in a FIELD
+    INITIALIZER never received its captured values.** Field initializers were
+    visited when COLLECTING captures and not when passing them, so the
+    commonest anonymous-class shape of all — `Act r = new Act(){ … tag … };`
+    as a field — failed with "constructor Anon$1 cannot be applied to given
+    types".
+  - Deferred: two outer classes may not each declare a nested class of the
+    same simple name (hoisting uses simple names — the same limit as the
+    nested-class binary names recorded above), and an inner class of a GENERIC
+    outer cannot name the outer's type variable.
+  - Pinned by `diff_qualified_new_null_check`, `diff_inner_class_shapes` and
+    `diff_anonymous_class_in_field_initializer`.
 - **A wrapper type argument survives erasure** (2026-08-02, round 9,
   JLS §18) — the generic-inference cluster:
   - **`Node<Integer>.get()` typed as `Object`.** Only `String` and class-typed
