@@ -3639,14 +3639,22 @@ fn list_method(
     let list_len = heap
         .list_values(receiver)
         .map_or_else(|| unreachable!("receiver kind checked by caller"), Vec::len);
+    // `Arrays.asList` is a view ON an array, and its `get` indexes that array
+    // directly — so an out-of-range index is an ArrayIndexOutOfBoundsException,
+    // not the List one. The class is observable in a catch clause.
+    let backed_by_array = matches!(heap.get(receiver), Some(HeapObject::ArrayBackedList(_)));
     let check = |index: i32, limit: usize| -> Result<usize, VmError> {
         usize::try_from(index)
             .ok()
             .filter(|i| *i < limit)
             .ok_or_else(|| {
+                let class = if backed_by_array {
+                    "java.lang.ArrayIndexOutOfBoundsException"
+                } else {
+                    "java.lang.IndexOutOfBoundsException"
+                };
                 throw(format!(
-                    "java.lang.IndexOutOfBoundsException: Index {index} out of bounds for \
-                     length {list_len}"
+                    "{class}: Index {index} out of bounds for length {list_len}"
                 ))
             })
     };

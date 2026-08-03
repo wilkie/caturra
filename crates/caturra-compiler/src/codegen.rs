@@ -4451,6 +4451,9 @@ fn is_collections_method(method: &str) -> bool {
             | "fill"
             | "copy"
             | "disjoint"
+            | "replaceAll"
+            | "indexOfSubList"
+            | "lastIndexOfSubList"
     )
 }
 
@@ -6347,6 +6350,9 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("ArrayList", "parallelStream", "streams are not supported by caturra"),
     ("ArrayList", "toArray", "Object arrays are not supported by caturra"),
     ("ArrayList", "subList", "list views are not supported by caturra"),
+    ("LinkedList", "subList", "list views are not supported by caturra"),
+    ("Stack", "subList", "list views are not supported by caturra"),
+    ("Collection", "subList", "list views are not supported by caturra"),
     ("ArrayList", "clone", "clone is not supported by caturra"),
     ("Scanner", "useDelimiter", "regular expressions are not supported by caturra"),
     ("Scanner", "findInLine", "regular expressions are not supported by caturra"),
@@ -18243,7 +18249,14 @@ impl BodyGen<'_> {
             let count_ty = self.expr(count);
             self.numeric_conversion(count_ty, JType::Int);
             let value_ty = self.expr(value);
-            let Some(elem) = collection_elem_of(value_ty) else {
+            // `nCopies(n, null)` is a list of n nulls — an Object element, and
+            // exactly what a JDK gives. Refusing it was false about Java.
+            let elem = if value_ty == JType::Null {
+                Some(ElemType::Object(self.table.object_id))
+            } else {
+                collection_elem_of(value_ty)
+            };
+            let Some(elem) = elem else {
                 self.error(
                     value.span(),
                     format!(
@@ -18262,6 +18275,11 @@ impl BodyGen<'_> {
             let method_ref = intern_method_ref(self.pool, "Collections", "nCopies", &descriptor);
             self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
             self.code.drop_stack(1 + value_ty.width());
+            // A list of NULLS takes its element from the context, like the
+            // empty factories: `List<String> l = nCopies(3, null)` is fine.
+            if value_ty == JType::Null {
+                return Some(Some(JType::Null));
+            }
             return Some(Some(JType::List(elem)));
         }
 
@@ -18309,8 +18327,78 @@ impl BodyGen<'_> {
         // `Collections.rotate(list, n)` / `fill(list, v)` / `copy(dest, src)` /
         // `disjoint(a, b)` — the list algorithms, answered by the VM because a
         // list stores its primitives unboxed.
+        // `replaceAll(list, old, new)` and `indexOfSubList`/`lastIndexOfSubList`
+        // — real Java 11 methods the VM answers over the list's own elements.
+        if matches!(
+            method,
+            "replaceAll" | "indexOfSubList" | "lastIndexOfSubList"
+        ) {
+            let wanted = if method == "replaceAll" { 3 } else { 2 };
+            if args.len() != wanted {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            }
+            let first = self.type_of(&args[0]);
+            let Some(elem) = (match first {
+                JType::List(elem)
+                | JType::Stack(elem)
+                | JType::LinkedList {
+                    elem,
+                    role: SeqRole::Full,
+                } => Some(elem),
+                _ => None,
+            }) else {
+                self.no_suitable_library_method("Collections", method, args, span);
+                return None;
+            };
+            let element_ty = elem.base_type();
+            self.expr(&args[0]);
+            let mut width: u16 = 1;
+            let (descriptor, ret) = if method == "replaceAll" {
+                for arg in &args[1..] {
+                    let actual = self.expr(arg);
+                    self.convert_for_assignment(actual, element_ty, arg.span());
+                    width += element_ty.width();
+                }
+                let e = element_ty.descriptor(self.table);
+                (format!("(Ljava/util/ArrayList;{e}{e})Z"), JType::Boolean)
+            } else {
+                let source = self.type_of(&args[1]);
+                if any_collection_elem(source).is_none() {
+                    self.no_suitable_library_method("Collections", method, args, span);
+                    return None;
+                }
+                self.expr(&args[1]);
+                width += 1;
+                (
+                    String::from("(Ljava/util/ArrayList;Ljava/util/ArrayList;)I"),
+                    JType::Int,
+                )
+            };
+            let method_ref = intern_method_ref(self.pool, "Collections", method, &descriptor);
+            self.code
+                .push_op_u16(op::INVOKESTATIC, method_ref, ret.width());
+            self.code.drop_stack(width);
+            return Some(Some(ret));
+        }
         if matches!(method, "rotate" | "fill" | "copy" | "disjoint") && args.len() == 2 {
-            let JType::List(elem) = self.type_of(&args[0]) else {
+            // `disjoint` is declared over COLLECTION; the others over LIST,
+            // which a `LinkedList`- or `Stack`-typed variable also is.
+            let first = self.type_of(&args[0]);
+            let elem = if method == "disjoint" {
+                any_collection_elem(first)
+            } else {
+                match first {
+                    JType::List(elem)
+                    | JType::Stack(elem)
+                    | JType::LinkedList {
+                        elem,
+                        role: SeqRole::Full,
+                    } => Some(elem),
+                    _ => None,
+                }
+            };
+            let Some(elem) = elem else {
                 self.no_suitable_library_method("Collections", method, args, span);
                 return None;
             };
@@ -18401,8 +18489,9 @@ impl BodyGen<'_> {
         }
         let want = match method {
             "reverse" | "sort" | "max" | "min" | "unmodifiableList" => 1usize,
-            "frequency" | "binarySearch" | "rotate" | "fill" | "copy" | "disjoint" => 2,
-            "swap" => 3,
+            "frequency" | "binarySearch" | "rotate" | "fill" | "copy" | "disjoint"
+            | "indexOfSubList" | "lastIndexOfSubList" => 2,
+            "replaceAll" | "swap" => 3,
             // `addAll(list, elements...)` is variadic.
             "addAll" => args.len().max(1),
             // `shuffle(list)` or `shuffle(list, random)`.
@@ -18429,7 +18518,26 @@ impl BodyGen<'_> {
         } else {
             self.type_of(&args[0])
         };
-        let JType::List(elem) = list_ty else {
+        // Which shapes the first argument may take. `Collections` declares
+        // `max`/`min`/`frequency`/`disjoint`/`addAll` over COLLECTION, so a Set
+        // (or a `Collection`-typed variable) is fine there; the rest are
+        // declared over LIST, where a Set really is a compile error — but a
+        // `LinkedList`- or `Stack`-typed variable is a List and was refused.
+        let over_collection = matches!(method, "max" | "min" | "frequency" | "disjoint" | "addAll");
+        let elem = if over_collection {
+            any_collection_elem(list_ty)
+        } else {
+            match list_ty {
+                JType::List(elem)
+                | JType::Stack(elem)
+                | JType::LinkedList {
+                    elem,
+                    role: SeqRole::Full,
+                } => Some(elem),
+                _ => None,
+            }
+        };
+        let Some(elem) = elem else {
             // javac reports this as overload resolution failing, not as one
             // argument's type: `no suitable method found for max(int)`.
             self.no_suitable_library_method("Collections", method, args, span);
@@ -19764,9 +19872,32 @@ impl BodyGen<'_> {
                                 args.iter().map(|a| self.type_of(a)).collect();
                             let (_, methods) = builtin_instance_table(receiver_ty)
                                 .expect("matched builtin receivers");
-                            return pick_builtin(methods, method, &arg_types, elem, self.table)
-                                .and_then(|m| bret_type(m.ret, elem, self.table))
-                                .unwrap_or(JType::Error);
+                            if let Some(ret) =
+                                pick_builtin(methods, method, &arg_types, elem, self.table)
+                                    .and_then(|m| bret_type(m.ret, elem, self.table))
+                            {
+                                return ret;
+                            }
+                            // A real Java member caturra does not model, in a
+                            // position `type_of` reaches first (an ARGUMENT:
+                            // `Collections.reverse(list.subList(1, 5))`). Saying
+                            // so here is what makes the refusal visible at all —
+                            // the enclosing call sees an `Error` argument,
+                            // assumes the argument reported its own problem, and
+                            // silently emits NOTHING. The whole statement
+                            // vanished, and the program looked like it ran.
+                            let receiver_class = receiver_class_name(receiver_ty);
+                            if !methods.iter().any(|m| m.name == method)
+                                && let Some(reason) = unsupported_member(receiver_class, method)
+                            {
+                                self.error(
+                                    expr.span(),
+                                    format!(
+                                        "{receiver_class}.{method} exists in Java, but {reason}"
+                                    ),
+                                );
+                            }
+                            return JType::Error;
                         }
                         // `Object` methods on an array receiver. Mirror
                         // `array_object_call`, or `type_of` and the emitter
@@ -22693,7 +22824,13 @@ impl BodyGen<'_> {
     fn append_part(&mut self, ty: JType, span: SourceSpan) {
         let ty = self.coerce_to_string_for_output(ty);
         let descriptor = match ty {
-            JType::Generic { .. }
+            // `Null` is not only the null literal: caturra types an inference
+            // placeholder that way too (a diamond, `Collections.emptyList()`),
+            // and the value at run time is then a real object. Appending it as
+            // an Object renders "null" for a real null and the object's text
+            // for the rest — the String overload aborted the run on the latter.
+            JType::Null
+            | JType::Generic { .. }
             | JType::StringBuilder
             | JType::CharSequence
             | JType::TypeVar
@@ -22733,7 +22870,6 @@ impl BodyGen<'_> {
             JType::Boolean => "(Z)Ljava/lang/StringBuilder;",
             JType::Char => "(C)Ljava/lang/StringBuilder;",
             JType::Str
-            | JType::Null
             | JType::Object(_)
             | JType::List(_)
             | JType::Stack(_)

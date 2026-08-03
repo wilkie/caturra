@@ -21164,3 +21164,80 @@ public class DiffAnonField {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: the Collections utilities.
+// ---------------------------------------------------------------------------
+
+// `Collections` declares max/min/frequency/disjoint/addAll over COLLECTION and
+// the rest over LIST — caturra demanded a statically-`List` argument for all of
+// them, so a Set was refused outright and a `LinkedList`-typed variable was too.
+// Plus the methods that were missing entirely, and `nCopies(n, null)`.
+differential_test!(
+    diff_collections_over_any_collection,
+    "DiffCollectionsAny",
+    r#"
+import java.util.*;
+public class DiffCollectionsAny {
+    public static void main(String[] args) {
+        Set<Integer> s = new HashSet<>(Arrays.asList(4, 9, 2));
+        System.out.println("max=" + Collections.max(s) + " min=" + Collections.min(s));
+        System.out.println("freq=" + Collections.frequency(s, Integer.valueOf(9)));
+        System.out.println("disj=" + Collections.disjoint(s, new HashSet<>(Arrays.asList(1))));
+        System.out.println("addAll=" + Collections.addAll(s, 5));
+        System.out.println("s=" + new TreeSet<>(s));
+        LinkedList<Integer> a = new LinkedList<>(Arrays.asList(1, 2, 3, 4, 5));
+        Collections.rotate(a, 2);
+        System.out.println("rot=" + a);
+        Collections.reverse(a);
+        System.out.println("rev=" + a);
+        List<String> r = new ArrayList<>(Arrays.asList("a", "b", "a", "c"));
+        System.out.println("replaced=" + Collections.replaceAll(r, "a", "Z") + " " + r);
+        List<Integer> l = Arrays.asList(1, 2, 3, 4, 5, 3, 4);
+        System.out.println("iosl=" + Collections.indexOfSubList(l, Arrays.asList(3, 4)));
+        System.out.println("liosl=" + Collections.lastIndexOfSubList(l, Arrays.asList(3, 4)));
+        System.out.println("miss=" + Collections.indexOfSubList(l, Arrays.asList(9)));
+        System.out.println("empty=" + Collections.indexOfSubList(l, new ArrayList<Integer>()));
+        List<String> nulls = Collections.nCopies(3, null);
+        System.out.println("nulls=" + nulls);
+    }
+}
+"#
+);
+
+// The immutable views: copy-constructing from one, printing one in a
+// concatenation, and the out-of-range message each JDK view words its own way
+// (`nCopies` and `singletonList` are AbstractLists; the shared empty list
+// reports the index alone; `Arrays.asList` indexes its array, so the exception
+// CLASS differs).
+differential_test!(
+    diff_collection_view_messages,
+    "DiffViewMessages",
+    r#"
+import java.util.*;
+public class DiffViewMessages {
+    public static void main(String[] args) {
+        System.out.println("el=" + Collections.emptyList());
+        System.out.println("em=" + Collections.emptyMap());
+        System.out.println("es=" + Collections.emptySet());
+        System.out.println(new HashSet<>(Collections.singleton("z")));
+        System.out.println(new ArrayList<>(Collections.emptyList()));
+        System.out.println(new ArrayList<>(Collections.nCopies(2, "q")));
+        System.out.println(new ArrayList<>(Collections.unmodifiableList(
+            new ArrayList<>(Arrays.asList("u")))));
+        List<String> arr = new ArrayList<>(Arrays.asList("x", "y"));
+        try { arr.get(5); } catch (Exception e) { System.out.println("arraylist -> " + e.getMessage()); }
+        try { Collections.unmodifiableList(arr).get(5); }
+        catch (Exception e) { System.out.println("unmod -> " + e.getMessage()); }
+        try { Collections.nCopies(2, "hi").get(2); }
+        catch (Exception e) { System.out.println("ncopies -> " + e.getMessage()); }
+        try { Collections.<String>emptyList().get(0); }
+        catch (Exception e) { System.out.println("empty -> " + e.getMessage()); }
+        try { Collections.singletonList("z").get(1); }
+        catch (Exception e) { System.out.println("singleton -> " + e.getMessage()); }
+        try { Arrays.asList("p", "q").get(4); }
+        catch (Exception e) { System.out.println("aslist -> " + e.getClass().getName()); }
+    }
+}
+"#
+);

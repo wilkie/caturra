@@ -150,6 +150,12 @@ pub(crate) struct Interpreter<'run> {
     /// `UnsupportedOperationException`. Held aside rather than in the wrapper
     /// because it changes nothing else about the collection.
     checked_cursor_views: std::collections::HashSet<HeapRef>,
+    /// Immutable list views whose out-of-range message is NOT `ArrayList`'s.
+    /// `Collections.nCopies`/`singletonList` are `AbstractList`s
+    /// (`Index: 2, Size: 2`) and the shared empty list reports the index alone
+    /// (`Index: 0`) — messages a program can print, so they are recorded per
+    /// view rather than guessed from the wrapper.
+    view_index_style: HashMap<HeapRef, IndexStyle>,
     /// Streams whose pipeline has already been used — a stream is SINGLE-USE
     /// (JDK: "stream has already been operated upon or closed"), and both a
     /// terminal and an intermediate op spend it. Held aside rather than in the
@@ -244,6 +250,7 @@ impl<'run> Interpreter<'run> {
             exception_traces: HashMap::new(),
             map_views: HashMap::new(),
             checked_cursor_views: std::collections::HashSet::new(),
+            view_index_style: HashMap::new(),
             spent_streams: std::collections::HashSet::new(),
             stream_origins: HashMap::new(),
         }
@@ -2934,6 +2941,33 @@ impl<'run> Interpreter<'run> {
             }
             return Ok(None);
         }
+        // `new ArrayList<>(collection)` copies the elements. Handled HERE for
+        // the same reason the map copy is: the source may be any
+        // collection-shaped object (an `emptyList`, an `nCopies`, a set, a map
+        // view), where the heap-only arm read a list's own vector and threw
+        // "ClassCastException: not a Collection" for everything else.
+        if matches!(target_class, "java/util/ArrayList" | "java/util/LinkedList")
+            && descriptor == "(Ljava/util/Collection;)V"
+        {
+            use crate::value::HeapObject;
+            let JValue::Ref(Some(source)) = args[0] else {
+                return Err(VmError::UncaughtException(String::from(
+                    "java.lang.NullPointerException",
+                )));
+            };
+            let items = self.collection_elements(source);
+            match self.heap.get_mut(receiver) {
+                Some(HeapObject::ArrayList(target) | HeapObject::LinkedList(target)) => {
+                    *target = items;
+                    return Ok(None);
+                }
+                _ => {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.ClassCastException: not a Collection",
+                    )));
+                }
+            }
+        }
         // `new HashSet<>(collection)` copies the elements, deduplicating — which
         // may run a user `equals`/`hashCode`, so it belongs here rather than in
         // the heap-only intrinsic layer. Java pre-sizes the backing map to
@@ -4023,6 +4057,7 @@ impl<'run> Interpreter<'run> {
                 // UnsupportedOperationException like every other mutator.
                 let backing = self.heap.alloc(HeapObject::ArrayList(vec![*value; count]));
                 let list = self.heap.alloc(HeapObject::UnmodifiableList(backing));
+                self.view_index_style.insert(list, IndexStyle::WithSize);
                 // A `CopiesList` is an `AbstractList`, so it inherits the
                 // generic cursor rather than defining a refusing one.
                 self.checked_cursor_views.insert(list);
@@ -4032,6 +4067,7 @@ impl<'run> Interpreter<'run> {
             ("emptyList", []) => {
                 let empty = self.heap.alloc(HeapObject::ArrayList(Vec::new()));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(empty));
+                self.view_index_style.insert(view, IndexStyle::IndexOnly);
                 // The `empty*` factories share one `EmptyIterator`, whose
                 // `remove` is an IllegalStateException, not a refusal.
                 self.checked_cursor_views.insert(view);
@@ -4042,6 +4078,7 @@ impl<'run> Interpreter<'run> {
             ("singletonList", [value]) => {
                 let inner = self.heap.alloc(HeapObject::ArrayList(vec![*value]));
                 let view = self.heap.alloc(HeapObject::UnmodifiableList(inner));
+                self.view_index_style.insert(view, IndexStyle::WithSize);
                 frame.stack.push(JValue::Ref(Some(view)));
                 return Ok(true);
             }
@@ -4143,10 +4180,21 @@ impl<'run> Interpreter<'run> {
         // Everything below reads, or writes, the list itself.
         let unmodifiable = self.is_unmodifiable_list(list);
         let reference = self.backing_list(list);
+        // The READ-ONLY algorithms (`max`/`min`/`frequency`/`disjoint`) are
+        // declared over `Collection`, so their argument may be a set or any
+        // other collection — `list_values` sees only list-shaped ones, and a
+        // Set argument silently answered as if it were empty.
         let items = self
             .heap
             .list_values(reference)
-            .map(|items| (reference, items.clone()));
+            .map(|items| (reference, items.clone()))
+            .or_else(|| {
+                matches!(
+                    method_name,
+                    "max" | "min" | "frequency" | "disjoint" | "binarySearch"
+                )
+                .then(|| (reference, self.collection_elements(reference)))
+            });
         match (method_name, args) {
             ("sort", [_] | [_, JValue::Ref(Some(_))]) => {
                 let Some((reference, items)) = items else {
@@ -4257,6 +4305,63 @@ impl<'run> Interpreter<'run> {
                 if let Some(slot) = self.heap.list_values_mut(reference) {
                     *slot = items;
                 }
+            }
+            // `Collections.replaceAll(list, old, new)` — replaces every element
+            // equal to `old`, and answers whether it changed anything.
+            ("replaceAll", [_, old, new]) => {
+                let Some((reference, items)) = items else {
+                    frame.stack.push(JValue::Int(0));
+                    return Ok(true);
+                };
+                if unmodifiable {
+                    return Err(VmError::UncaughtException(String::from(
+                        "java.lang.UnsupportedOperationException",
+                    )));
+                }
+                let mut changed = false;
+                let mut out = items.clone();
+                for slot in &mut out {
+                    if self.java_equals(*old, *slot)? {
+                        *slot = *new;
+                        changed = true;
+                    }
+                }
+                if let Some(values) = self.heap.list_values_mut(reference) {
+                    *values = out;
+                }
+                frame.stack.push(JValue::Int(i32::from(changed)));
+            }
+            // `indexOfSubList` / `lastIndexOfSubList` — the first (or last)
+            // position where the second list appears inside the first, or -1.
+            // An EMPTY target matches at 0 (and, for the last form, at the
+            // source's size), as the JDK's own scan does.
+            ("indexOfSubList" | "lastIndexOfSubList", [_, JValue::Ref(Some(target))]) => {
+                let Some((_, items)) = items else {
+                    frame.stack.push(JValue::Int(-1));
+                    return Ok(true);
+                };
+                let target = self.collection_elements(*target);
+                let want_last = method_name == "lastIndexOfSubList";
+                let mut found = -1i32;
+                if target.len() <= items.len() {
+                    let positions = 0..=(items.len() - target.len());
+                    for start in positions {
+                        let mut matched = true;
+                        for (offset, probe) in target.iter().enumerate() {
+                            if !self.java_equals(*probe, items[start + offset])? {
+                                matched = false;
+                                break;
+                            }
+                        }
+                        if matched {
+                            found = i32::try_from(start).unwrap_or(-1);
+                            if !want_last {
+                                break;
+                            }
+                        }
+                    }
+                }
+                frame.stack.push(JValue::Int(found));
             }
             // `Collections.disjoint(a, b)`: whether the two share no element.
             ("disjoint", [_, JValue::Ref(Some(other))]) => {
@@ -10437,6 +10542,24 @@ impl<'run> Interpreter<'run> {
                     "java.lang.UnsupportedOperationException",
                 )));
             }
+            // An out-of-range index on a view that is NOT backed by an
+            // ArrayList in a JDK words the failure its own way, and the message
+            // is observable. Checked HERE because forwarding loses the wrapper.
+            if method_name == "get"
+                && let Some(&style) = self.view_index_style.get(&receiver)
+                && let Some(JValue::Int(index)) = args.first()
+            {
+                let size = iterated_len_of(&self.heap, self.backing_list(receiver));
+                if *index < 0 || usize::try_from(*index).is_ok_and(|at| at >= size) {
+                    let detail = match style {
+                        IndexStyle::WithSize => format!("Index: {index}, Size: {size}"),
+                        IndexStyle::IndexOnly => format!("Index: {index}"),
+                    };
+                    return Err(VmError::UncaughtException(format!(
+                        "java.lang.IndexOutOfBoundsException: {detail}"
+                    )));
+                }
+            }
             // The cursor is read-only too, and has to be built HERE: forwarding
             // would build it over the backing list, which knows nothing of this
             // view and would let `remove`/`set`/`add` corrupt the caller's data.
@@ -12746,6 +12869,15 @@ enum Answered {
     /// Answered, with no value (a `void` method).
     Void,
     Value(JValue),
+}
+
+/// How a list view words an out-of-range index (see `view_index_style`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexStyle {
+    /// `AbstractList`: `Index: 2, Size: 2`.
+    WithSize,
+    /// The shared empty list: `Index: 0`, with no size at all.
+    IndexOnly,
 }
 
 enum UserDispatch<'run> {

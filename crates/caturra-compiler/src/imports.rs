@@ -159,6 +159,10 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "AbstractSequentialList",
         ],
     ),
+    // `Enumeration` is the pre-collections cursor: `Collections.enumeration`
+    // and `Collections.list` are its only real uses today, and neither is
+    // modelled.
+    ("java.util", &["Enumeration"]),
     ("java.util.regex", &["Pattern", "Matcher", "MatchResult"]),
     (
         "java.io",

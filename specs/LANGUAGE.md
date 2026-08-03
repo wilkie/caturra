@@ -752,6 +752,43 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **The `Collections` utilities take the types Java declares**
+  (2026-08-03, round 9) — the collections-utility cluster:
+  - **`max`/`min`/`frequency`/`disjoint`/`addAll` are declared over
+    `Collection`**, so a `Set` (or a `Collection`-typed variable) is a legal
+    argument; the rest are declared over `List`, which a `LinkedList`- or
+    `Stack`-typed variable also is. caturra demanded a statically-`List`
+    argument for all of them, and the VM's own read of the argument saw only
+    list-shaped objects — so a `Set` passed to `frequency` answered 0 rather
+    than counting.
+  - **Methods that were missing**: `replaceAll`, `indexOfSubList`,
+    `lastIndexOfSubList`; and `nCopies(n, null)` (a list of nulls, typed from
+    its context like the empty factories) was refused with a reason that is
+    false about Java.
+  - **The immutable views**: copy-constructing from one
+    (`new ArrayList<>(Collections.emptyList())` was a `ClassCastException`,
+    because the heap-only arm read a list's own vector), printing one in a
+    concatenation (an inference-placeholder type appended through the
+    `String` overload and aborted the run — `Null` now appends as an
+    `Object`, which renders "null" for a real null and the text for the
+    rest), and the out-of-range MESSAGE, which each JDK view words its own
+    way: `nCopies`/`singletonList` are `AbstractList`s (`Index: 2, Size: 2`),
+    the shared empty list reports the index alone (`Index: 0`), and
+    `Arrays.asList` indexes its array, so the exception CLASS is
+    `ArrayIndexOutOfBoundsException`. Each was recorded from a real JDK.
+  - **An unsupported member named in an ARGUMENT is now reported.**
+    `Collections.reverse(list.subList(1, 5))` compiled to NOTHING and printed
+    an unchanged list: the refusal a direct `list.subList(...)` gives was
+    produced only by the emitting path, so `type_of` answered `Error`
+    silently, and the enclosing call assumed the argument had reported its
+    own problem. This is the same silent-non-emission shape as the diamond
+    argument recorded above.
+  - Deferred: `subList` is not a live view (it is refused, by that name, on
+    every list face), and `java.util.Enumeration` — with it
+    `Collections.enumeration`/`list` — is refused by name rather than
+    reported as a missing symbol.
+  - Pinned by `diff_collections_over_any_collection` and
+    `diff_collection_view_messages`.
 - **Inner classes: the qualifier, the chain, and the name**
   (2026-08-03, round 9, JLS §8.1.3/§15.9) — the inner-class cluster:
   - **`p.new Inner()` null-checks its qualifier BEFORE the arguments**
