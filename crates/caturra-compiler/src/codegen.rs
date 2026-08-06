@@ -1165,8 +1165,83 @@ impl MethodTable {
                 info.supertype_args.clone_from(&class.supertype_args);
             }
         }
+        table.resolve_constant_chains(units);
         table.check_hierarchy(units, diagnostics);
         table
+    }
+
+    /// A constant variable may name ANOTHER one (`static final int B = A + 1;`).
+    /// The member pass folds each initializer once, against the LIBRARY
+    /// constants alone — the user's own are still being collected — so a
+    /// constant defined in terms of a constant stayed non-constant, and every
+    /// rule that keys off constness (case labels, array dimensions,
+    /// unreachability, inlined reads) was wrong about it.
+    ///
+    /// Fold to a FIXPOINT instead: each round can see what the previous rounds
+    /// established, in any declaration order and across classes, and the loop
+    /// stops when a round establishes nothing new. A cyclic definition simply
+    /// never folds, which is the answer javac gives it as well ("illegal
+    /// forward reference" is reported elsewhere).
+    fn resolve_constant_chains(&mut self, units: &[(String, CompilationUnit)]) {
+        loop {
+            let mut progress = false;
+            for (_, unit) in units {
+                for class in &unit.classes {
+                    for field in &class.fields {
+                        if !field.is_final {
+                            continue;
+                        }
+                        let Some(init) = field.init.as_ref() else {
+                            continue;
+                        };
+                        let Some(id) = self.class_id(&class.name) else {
+                            continue;
+                        };
+                        let Some(existing) = self.info_by_id(id).and_then(|info| {
+                            info.fields.iter().find(|f| f.name == field.name).cloned()
+                        }) else {
+                            continue;
+                        };
+                        if existing.const_literal.is_some() {
+                            continue;
+                        }
+                        let owner = class.name.clone();
+                        let folded = crate::constfold::fold(init, &mut |path| match path {
+                            [name] => self
+                                .field(&owner, name)
+                                .and_then(|(_, f)| {
+                                    f.const_literal.as_ref().and_then(const_from_literal)
+                                })
+                                .or_else(|| crate::constfold::library_constant(path)),
+                            // A user class of that name wins over the library
+                            // one, as it does everywhere else.
+                            [class_name, name] => self
+                                .field(class_name, name)
+                                .and_then(|(_, f)| {
+                                    f.const_literal.as_ref().and_then(const_from_literal)
+                                })
+                                .or_else(|| crate::constfold::library_constant(path)),
+                            _ => None,
+                        });
+                        let Some(literal) =
+                            folded.and_then(|v| coerce_const_to_type(v.literal(), existing.ty))
+                        else {
+                            continue;
+                        };
+                        if let Some(info) = self.classes.get_mut(&owner)
+                            && let Some(slot) =
+                                info.fields.iter_mut().find(|f| f.name == field.name)
+                        {
+                            slot.const_literal = Some(literal);
+                            progress = true;
+                        }
+                    }
+                }
+            }
+            if !progress {
+                return;
+            }
+        }
     }
 
     /// Post-pass hierarchy validation: cycles, extends-shape, override

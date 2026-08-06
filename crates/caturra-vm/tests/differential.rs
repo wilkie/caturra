@@ -22382,3 +22382,47 @@ public class UserSamResult {
 }
 "
 );
+
+// A constant variable may name ANOTHER one. The member pass folds each
+// initializer once, against the LIBRARY constants alone — the user's own are
+// still being collected — so `static final int B = A + 1;` stayed
+// non-constant and could not be a case label or an array dimension.
+differential_test!(
+    diff_constant_referring_to_constant,
+    "ConstChain",
+    r#"
+class Cfg {
+    static final int BASE = 10;
+}
+
+public class ConstChain {
+    static final int A = 2;
+    static final int B = A + 1;
+    static final int C = B * 10;
+    static final int MAX = Cfg.BASE + 5;
+    static final String S = "ab";
+    static final String T = S + "c";
+
+    public static void main(String[] args) {
+        int[] arr = new int[B];
+        System.out.println(arr.length);
+        switch (30) {
+            case C:
+                System.out.println("c");
+                break;
+            default:
+                System.out.println("d");
+        }
+        switch (15) {
+            case MAX:
+                System.out.println("m");
+                break;
+            default:
+                System.out.println("d");
+        }
+        System.out.println(T == "abc");
+        System.out.println(A + " " + B + " " + C + " " + MAX);
+    }
+}
+"#
+);

@@ -802,6 +802,18 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   reference cast — it erases to `Object`, so `(Integer) t` is what javac says
   it is. Pinned by `diff_lambda_for_user_generic_interface` and
   `reject_lambda_body_wrong_result_type`.
+- **A constant variable may name another one** (2026-08-06, JLS §4.12.4) —
+  the last narrowness left by round 9's constant-expressions cluster. The
+  member pass folds each `final` initializer once, against the LIBRARY
+  constants alone, because the user's own are still being collected as it
+  runs; so `static final int B = A + 1;` stayed non-constant, and every rule
+  that keys off constness (case labels, array dimensions, inlined reads,
+  `==` on folded strings) was wrong about it. Constants now fold to a
+  FIXPOINT: each round sees what the previous rounds established, in any
+  declaration order and across classes, and the loop stops when a round
+  establishes nothing new. A cyclic definition simply never folds — and the
+  forward-reference check reports it, exactly as javac does.
+  Pinned by `diff_constant_referring_to_constant`.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is
