@@ -22426,3 +22426,77 @@ public class ConstChain {
 }
 "#
 );
+
+// An INNER class is bound to an instance of a parameterized outer, so the
+// outer's type variables are in scope in its body. It has no parameters of its
+// own to hold them, so it inherits the outer's ahead of any it declares — and
+// `o.new Inner()` takes the qualifier's own arguments. A `T` written inside an
+// inner class used to be an unknown type name outright.
+differential_test!(
+    diff_inner_class_of_generic_outer,
+    "InnerGeneric",
+    r#"
+class Outer<T> {
+    T held;
+
+    Outer(T t) {
+        held = t;
+    }
+
+    class Inner {
+        T get() {
+            return held;
+        }
+    }
+
+    class Tagged<U> {
+        U tag;
+
+        Tagged(U u) {
+            tag = u;
+        }
+
+        T outerVal() {
+            return held;
+        }
+
+        U tagVal() {
+            return tag;
+        }
+    }
+
+    static class Nested {
+        int n = 4;
+    }
+
+    Inner make() {
+        return new Inner();
+    }
+}
+
+public class InnerGeneric {
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static void main(String[] args) {
+        Outer<String> o = new Outer<>("z");
+
+        Outer<String>.Inner i = o.new Inner();
+        System.out.println(i.get().length());
+
+        var v = o.new Inner();
+        System.out.println(v.get().toUpperCase());
+
+        Outer<String>.Tagged<Integer> t = o.new Tagged<>(4);
+        System.out.println(t.outerVal().length() + " " + (t.tagVal() + 1));
+
+        System.out.println(o.make().get());
+
+        Outer.Nested n = new Outer.Nested();
+        System.out.println(n.n);
+
+        // A RAW inner reads its outer's variable as Object, as in Java.
+        Outer.Inner raw = o.new Inner();
+        System.out.println(raw.get());
+    }
+}
+"#
+);

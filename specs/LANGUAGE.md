@@ -814,6 +814,25 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   establishes nothing new. A cyclic definition simply never folds — and the
   forward-reference check reports it, exactly as javac does.
   Pinned by `diff_constant_referring_to_constant`.
+- **An inner class of a generic outer** (2026-08-06, JLS §4.5/§8.1.3) —
+  round 9's last generics deferral, where an earlier erasure-inheritance
+  attempt had been reverted as too speculative. An INNER (non-static) class is
+  bound to an instance of a parameterized outer, so the outer's type variables
+  are in scope in its body — but it has no parameters of its own to hold them,
+  and a `T` written inside one was an unknown type name outright. It now
+  INHERITS the outer's parameters, ahead of any it declares, so the positions
+  line up and a `T` inside `Inner` erases to the same slot it does in `Outer`.
+  `o.new Inner()` takes the qualifier's own arguments (in `type_of` as well as
+  on the emit path, or a `var` reads the inner's members erased), and
+  `Outer<String>.Inner` parses as a type — including `Outer<String>.Inner<U>`,
+  whose two argument lists concatenate in exactly the order the parameters are
+  inherited. A RAW `Outer.Inner` still reads the outer's variable as `Object`,
+  as it does in Java. A static nested class is untouched: it has no enclosing
+  instance, so no arguments to inherit.
+  Found on the way: `Objects.requireNonNull` narrowed a parameterized argument
+  all the way to `Object` — it answers `T`, and the qualifier of
+  `o.new Inner()` goes through it. Pinned by
+  `diff_inner_class_of_generic_outer`.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is

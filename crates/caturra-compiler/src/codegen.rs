@@ -14624,10 +14624,33 @@ impl BodyGen<'_> {
         } else {
             bound
         };
+        // An inner class INHERITS its outer's type parameters (they are in
+        // scope in its body), so `o.new Inner()` on an `Outer<String>` really
+        // is an `Outer<String>.Inner` — the leading slots take the qualifier's
+        // own arguments. Without this the inner's `T get()` came back erased.
+        let from_outer = match self.type_of(&bound) {
+            JType::Generic { arg, rest, .. } => Some((arg, rest)),
+            _ => None,
+        };
         let mut all = Vec::with_capacity(args.len() + 1);
         all.push(bound);
         all.extend(args.iter().cloned());
-        self.new_object(simple, type_args, &all, span)
+        let created = self.new_object(simple, type_args, &all, span);
+        match (created, from_outer) {
+            (JType::Object(id), Some((arg, rest)))
+                if self
+                    .table
+                    .info_by_id(id)
+                    .is_some_and(|info| info.type_param_count > 0) =>
+            {
+                JType::Generic {
+                    class: id,
+                    arg,
+                    rest,
+                }
+            }
+            _ => created,
+        }
     }
 
     #[allow(clippy::too_many_lines)] // one arm per built-in constructible type
@@ -19521,7 +19544,13 @@ impl BodyGen<'_> {
     fn narrow_object_return(&mut self, arg_ty: JType) -> JType {
         let (internal, ty) = match arg_ty {
             JType::Str => (Some(String::from("java/lang/String")), JType::Str),
-            JType::Object(id) => (Some(self.table.class_name(id).to_owned()), arg_ty),
+            // A PARAMETERIZED argument keeps its arguments: `requireNonNull`
+            // answers `T`, so narrowing `Outer<String>` to a bare `Outer` —
+            // or, as it did, all the way to `Object` — loses them. The
+            // qualifier of `o.new Inner()` goes through here.
+            JType::Object(id) | JType::Generic { class: id, .. } => {
+                (Some(self.table.class_name(id).to_owned()), arg_ty)
+            }
             JType::Boxed(elem) => (Some(wrapper_internal(elem).to_owned()), arg_ty),
             other => match boxable_primitive(other) {
                 Some(elem) => (Some(wrapper_internal(elem).to_owned()), JType::Boxed(elem)),
@@ -21102,8 +21131,30 @@ impl BodyGen<'_> {
                 class,
                 type_args,
                 args,
+                outer,
                 ..
-            } => self.type_of_new_object(class, type_args, args),
+            } => {
+                let created = self.type_of_new_object(class, type_args, args);
+                // `o.new Inner()` is an `Outer<String>.Inner`: an inner class
+                // inherits its outer's type parameters, and the qualifier
+                // carries the arguments. Must agree with `new_object_bound`,
+                // or a `var` reads the inner's members erased.
+                match (created, outer.as_deref().map(|o| self.type_of(o))) {
+                    (JType::Object(id), Some(JType::Generic { arg, rest, .. }))
+                        if self
+                            .table
+                            .info_by_id(id)
+                            .is_some_and(|info| info.type_param_count > 0) =>
+                    {
+                        JType::Generic {
+                            class: id,
+                            arg,
+                            rest,
+                        }
+                    }
+                    _ => created,
+                }
+            }
             // Mirrors `ternary`'s target computation (JLS 15.25) — kept in
             // step so a ternary nested in another expression types the same
             // whether or not it is being emitted.

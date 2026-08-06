@@ -1740,6 +1740,48 @@ impl Parser<'_> {
         )
     }
 
+    /// The `<...>` at the cursor as a type-argument list, answered as a
+    /// `TypeRef::Generic` over `base`. Split out of [`Self::type_ref`] so an
+    /// inner class named through a parameterized outer can parse a SECOND
+    /// list (`Outer<String>.Inner<Integer>`).
+    fn parse_type_arguments(&mut self, base: String) -> Parsed<TypeRef> {
+        self.pos += 1;
+        let mut args = Vec::new();
+        if !self.at_symbol(">") {
+            loop {
+                if self.at_symbol("?") {
+                    // Wildcard `?` / `? extends T` / `? super T`.
+                    // Erasure keeps only the raw class, but the variance and
+                    // bound decide argument applicability (`List<Integer>`
+                    // matches `List<? extends Number>`), so preserve them in a
+                    // sentinel name (see `ast::wildcard_type_name`).
+                    self.pos += 1;
+                    let (variance, bound) = match self.peek() {
+                        Some(TokenKind::Keyword(Keyword::Extends)) => {
+                            self.pos += 1;
+                            ('+', wildcard_bound_name(&self.type_ref()?))
+                        }
+                        Some(TokenKind::Keyword(Keyword::Super)) => {
+                            self.pos += 1;
+                            ('-', wildcard_bound_name(&self.type_ref()?))
+                        }
+                        _ => ('?', String::new()),
+                    };
+                    args.push(TypeRef::Named(crate::ast::wildcard_type_name(
+                        variance, &bound,
+                    )));
+                } else {
+                    args.push(self.type_ref()?);
+                }
+                if !self.eat_symbol(",") {
+                    break;
+                }
+            }
+        }
+        self.close_type_args()?;
+        Ok(TypeRef::Generic { base, args })
+    }
+
     fn type_ref(&mut self) -> Parsed<TypeRef> {
         let mut ty = match self.peek() {
             Some(TokenKind::Keyword(Keyword::Void)) => {
@@ -1790,42 +1832,45 @@ impl Parser<'_> {
                     name.push_str(&segment);
                 }
                 if self.at_symbol("<") {
-                    self.pos += 1;
-                    let mut args = Vec::new();
-                    if !self.at_symbol(">") {
-                        loop {
-                            if self.at_symbol("?") {
-                                // Wildcard `?` / `? extends T` / `? super T`.
-                                // Erasure keeps only the raw class, but the
-                                // variance and bound decide argument
-                                // applicability (`List<Integer>` matches
-                                // `List<? extends Number>`), so preserve them in
-                                // a sentinel name (see `ast::wildcard_type_name`).
-                                self.pos += 1;
-                                let (variance, bound) = match self.peek() {
-                                    Some(TokenKind::Keyword(Keyword::Extends)) => {
-                                        self.pos += 1;
-                                        ('+', wildcard_bound_name(&self.type_ref()?))
-                                    }
-                                    Some(TokenKind::Keyword(Keyword::Super)) => {
-                                        self.pos += 1;
-                                        ('-', wildcard_bound_name(&self.type_ref()?))
-                                    }
-                                    _ => ('?', String::new()),
-                                };
-                                args.push(TypeRef::Named(crate::ast::wildcard_type_name(
-                                    variance, &bound,
-                                )));
-                            } else {
-                                args.push(self.type_ref()?);
-                            }
-                            if !self.eat_symbol(",") {
-                                break;
-                            }
+                    let TypeRef::Generic { args, .. } = self.parse_type_arguments(name.clone())?
+                    else {
+                        return Err(Abort);
+                    };
+                    // `Outer<String>.Inner` — an inner class named through a
+                    // PARAMETERIZED outer (JLS §4.5). An inner class inherits
+                    // its outer's type parameters, so the arguments written on
+                    // the outer are the inner's own leading ones; the name is
+                    // the inner's, which is how a nested class is named
+                    // everywhere else here.
+                    if self.at_symbol(".")
+                        && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
+                    {
+                        self.pos += 1;
+                        let (mut inner, _) = self.expect_ident("in the qualified type")?;
+                        while self.at_symbol(".")
+                            && matches!(self.peek_at(1), Some(TokenKind::Identifier(_)))
+                        {
+                            self.pos += 1;
+                            let (segment, _) = self.expect_ident("in the qualified type")?;
+                            inner.push('.');
+                            inner.push_str(&segment);
                         }
+                        // `Outer<String>.Inner<Integer>` — the inner's own
+                        // arguments follow the outer's, which is exactly the
+                        // order it inherits its parameters in.
+                        let mut args = args;
+                        if self.at_symbol("<") {
+                            let TypeRef::Generic { args: own, .. } =
+                                self.parse_type_arguments(inner.clone())?
+                            else {
+                                return Err(Abort);
+                            };
+                            args.extend(own);
+                        }
+                        TypeRef::Generic { base: inner, args }
+                    } else {
+                        TypeRef::Generic { base: name, args }
                     }
-                    self.close_type_args()?;
-                    TypeRef::Generic { base: name, args }
                 } else {
                     TypeRef::Named(name)
                 }
@@ -2817,8 +2862,43 @@ impl Parser<'_> {
         {
             return false;
         }
+        let Some(mut next) = self.type_args_end(1) else {
+            return false;
+        };
+        // An inner class named through a parameterized outer, itself possibly
+        // parameterized: `Outer<String>.Inner<Integer> i`.
+        loop {
+            let mut advanced = false;
+            while matches!(self.peek_at(next), Some(TokenKind::Symbol(".")))
+                && matches!(self.peek_at(next + 1), Some(TokenKind::Identifier(_)))
+            {
+                next += 2;
+                advanced = true;
+            }
+            if advanced && matches!(self.peek_at(next), Some(TokenKind::Symbol("<"))) {
+                match self.type_args_end(next) {
+                    Some(after) => next = after,
+                    None => return false,
+                }
+                continue;
+            }
+            break;
+        }
+        // Allow a generic array type before the name: `Class<?>[] xs`.
+        while matches!(self.peek_at(next), Some(TokenKind::Symbol("[")))
+            && matches!(self.peek_at(next + 1), Some(TokenKind::Symbol("]")))
+        {
+            next += 2;
+        }
+        matches!(self.peek_at(next), Some(TokenKind::Identifier(_)))
+    }
+
+    /// The offset just past the balanced `<...>` that starts at `start`, or
+    /// `None` when the tokens are not a type-argument list at all (which is
+    /// how `a < b && c > d` stays a comparison expression).
+    fn type_args_end(&self, start: usize) -> Option<usize> {
         let mut depth = 0i32;
-        let mut offset = 1usize;
+        let mut offset = start;
         while let Some(kind) = self.peek_at(offset) {
             match kind {
                 TokenKind::Symbol("<") => depth += 1,
@@ -2847,21 +2927,14 @@ impl Parser<'_> {
                     | Keyword::Short
                     | Keyword::Byte,
                 ) => {}
-                _ => return false,
+                _ => return None,
             }
             if depth <= 0 {
-                // Allow a generic array type before the name: `Class<?>[] xs`.
-                let mut next = offset + 1;
-                while matches!(self.peek_at(next), Some(TokenKind::Symbol("[")))
-                    && matches!(self.peek_at(next + 1), Some(TokenKind::Symbol("]")))
-                {
-                    next += 2;
-                }
-                return matches!(self.peek_at(next), Some(TokenKind::Identifier(_)));
+                return Some(offset + 1);
             }
             offset += 1;
         }
-        false
+        None
     }
 
     /// The assignment operator at the cursor, if any: `Some(None)` for
@@ -4779,6 +4852,7 @@ fn flatten_nested_within(mut class: ClassDecl, enclosing: &str, out: &mut Vec<Cl
     }
     let nested = std::mem::take(&mut class.nested);
     let outer = class.name.clone();
+    let outer_params = class.type_params.clone();
     let inner_enclosing = if enclosing.is_empty() {
         outer.clone()
     } else {
@@ -4799,6 +4873,19 @@ fn flatten_nested_within(mut class: ClassDecl, enclosing: &str, out: &mut Vec<Cl
         // Only the *static* fallback opens up: the instance one needs a
         // captured `this`, which a nested class has not got.
         inner.enclosing.get_or_insert_with(|| outer.clone());
+        // An INNER (non-static) class is bound to an instance of a
+        // parameterized outer, so the outer's type variables are in scope in
+        // its body — `class Outer<T> { class Inner { T get() {…} } }`. It has
+        // no parameters of its own to hold them, so it INHERITS the outer's,
+        // ahead of any it declares: the positions then line up, and a `T`
+        // written inside `Inner` erases to the same slot it does in `Outer`.
+        // Without this the `T` was simply an unknown type name.
+        if inner.is_inner && !outer_params.is_empty() {
+            let mut params = outer_params.clone();
+            params.retain(|outer| !inner.type_params.iter().any(|own| own.name == outer.name));
+            params.extend(std::mem::take(&mut inner.type_params));
+            inner.type_params = params;
+        }
         flatten_nested_within(inner, &inner_enclosing, out);
     }
 }
