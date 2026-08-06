@@ -7825,6 +7825,14 @@ impl<'run> Interpreter<'run> {
                 };
                 self.stream_feed(ops, states, sink, i + 1, boxed)
             }
+            StreamOp::WidenToLong => {
+                let widened = JValue::Long(self.numeric_as_long(value));
+                self.stream_feed(ops, states, sink, i + 1, widened)
+            }
+            StreamOp::WidenToDouble => {
+                let widened = JValue::Double(self.numeric_as_double(value));
+                self.stream_feed(ops, states, sink, i + 1, widened)
+            }
             StreamOp::Distinct => {
                 // Take the seen set out so the borrow does not span the
                 // `java_equals` calls (which need `&mut self`).
@@ -8275,14 +8283,17 @@ impl<'run> Interpreter<'run> {
                     self.stream_with_op(receiver, StreamOp::Box),
                 ));
             }
-            // `asLongStream`/`asDoubleStream` ARE retypings — no element
-            // change, so the pipeline passes through unchanged.
+            // `asLongStream`/`asDoubleStream` widen every element to the new
+            // primitive — a downstream `map(x -> x * 2)` over a `long` element
+            // unboxes what it is handed, and an unwidened `Integer` there threw
+            // a `ClassCastException`.
             ("asLongStream" | "asDoubleStream", []) => {
-                let (source, ops) = self.stream_pipeline(receiver);
-                return Ok(Answered::Value(JValue::Ref(Some(
-                    self.heap
-                        .alloc(crate::value::HeapObject::Stream { source, ops }),
-                ))));
+                let op = if method == "asLongStream" {
+                    StreamOp::WidenToLong
+                } else {
+                    StreamOp::WidenToDouble
+                };
+                return Ok(Answered::Value(self.stream_with_op(receiver, op)));
             }
             // `flatMap(f)` is a barrier here: each element's own stream is
             // materialized and spliced in. A JDK's is lazy per element; the
@@ -11510,6 +11521,35 @@ impl<'run> Interpreter<'run> {
 
     /// Compare two list elements the way `Collections.sort` does: a user
     /// object by its own `compareTo`, everything else natively.
+    /// The class a value's NATURAL ordering belongs to — the wrapper or
+    /// `String` whose `compareTo` would run. `None` for anything else (a user
+    /// object, which dispatches to its own `compareTo`).
+    fn natural_class(&self, value: JValue) -> Option<&'static str> {
+        use crate::value::HeapObject;
+        match value {
+            JValue::Int(_) => Some("java.lang.Integer"),
+            JValue::Long(_) => Some("java.lang.Long"),
+            JValue::Double(_) => Some("java.lang.Double"),
+            JValue::Float(_) => Some("java.lang.Float"),
+            JValue::Ref(Some(reference)) => match self.heap.get(reference) {
+                Some(HeapObject::JavaString(_)) => Some("java.lang.String"),
+                Some(HeapObject::Boxed { class_name, .. }) => Some(match class_name.as_ref() {
+                    "java/lang/Integer" => "java.lang.Integer",
+                    "java/lang/Long" => "java.lang.Long",
+                    "java/lang/Double" => "java.lang.Double",
+                    "java/lang/Float" => "java.lang.Float",
+                    "java/lang/Short" => "java.lang.Short",
+                    "java/lang/Byte" => "java.lang.Byte",
+                    "java/lang/Character" => "java.lang.Character",
+                    "java/lang/Boolean" => "java.lang.Boolean",
+                    _ => return None,
+                }),
+                _ => None,
+            },
+            JValue::Ref(None) => None,
+        }
+    }
+
     fn compare_for_sort(&mut self, a: JValue, b: JValue) -> Result<i32, VmError> {
         // A natural-ordering comparison calls `a.compareTo(b)`, so either one
         // being null throws — as sorting a list holding a null does in Java.
@@ -11524,6 +11564,18 @@ impl<'run> Interpreter<'run> {
         {
             let class_name = class_name.clone();
             return self.call_compare_to(reference, &class_name, b);
+        }
+        // A wrapper's `compareTo` takes its OWN type: `Integer.compareTo` casts
+        // its argument to `Integer`, so comparing an Integer with a Long (or a
+        // String) is a ClassCastException. caturra compared the numbers, so a
+        // raw `TreeMap` holding both kinds silently collapsed two entries into
+        // one instead of refusing the second.
+        if let (Some(left), Some(right)) = (self.natural_class(a), self.natural_class(b))
+            && left != right
+        {
+            return Err(VmError::UncaughtException(format!(
+                "java.lang.ClassCastException: class {right} cannot be cast to class {left}"
+            )));
         }
         Ok(match self.compare_values(&a, &b) {
             std::cmp::Ordering::Less => -1,

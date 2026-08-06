@@ -87,6 +87,12 @@ pub enum StreamOp {
     /// references at rest, so a raw `int` reaching one is a `VerifyError` at the
     /// next reference use.
     Box,
+    /// `asLongStream()` / `asDoubleStream()` — every element WIDENS to that
+    /// primitive. Not a pure retyping: a downstream lambda declared over the
+    /// new width unboxes what it is handed, and a stray `Integer` there is a
+    /// `ClassCastException`.
+    WidenToLong,
+    WidenToDouble,
 }
 
 /// What a `Stream.collect(Collectors.…())` gathers its elements into.

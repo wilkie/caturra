@@ -752,6 +752,47 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A number's width is carried, not assumed** (2026-08-06, round 9, JLS
+  §5.1.3) — the numeric-corners cluster, all ten findings:
+  - **Which primitive pipeline a source produces is the ELEMENT's own
+    width.** `Arrays.stream(new double[] {1.5, 2.5, 3.5}).sum()` printed
+    `0`, a silent wrong answer: every primitive source was typed
+    `IntStream`, so `sum()` got an `()I` descriptor and read a double
+    pipeline as ints. The kind now follows the element, and the
+    shape-preserving intermediates (`filter`, `sorted`, `distinct`,
+    `limit`, `skip`) answer the RECEIVER's own kind rather than a fixed
+    `IntStream` — the three primitive streams share one method table here.
+  - **The primitive-to-primitive conversions** — `asLongStream`,
+    `asDoubleStream`, `mapToInt`/`mapToLong`/`mapToDouble` — with the JDK's
+    per-kind availability: an `IntStream` widens to long and double, a
+    `LongStream` only to double, and a `DoubleStream` narrows to neither.
+    `as…Stream` really WIDENS each element; treating it as a pure retyping
+    left an `Integer` to reach a `long` lambda, a `ClassCastException`.
+  - **A lambda after an inline array** was refused outright ("only allowed
+    where a functional-interface type is expected"): the element type was
+    read from a variable's declaration, and `Arrays.stream(new int[] {…})`
+    names no variable. And `map` on a primitive pipeline keeps the
+    element's width — only an object stream's `map` erases to `Object`.
+  - **A wrapper's `compareTo` takes its OWN type.** Reached through a raw
+    `Comparable`, comparing an `Integer` with a `Long` (or a `String`, or
+    any `Object`) is a `ClassCastException` with the JDK's two-class
+    wording, not a silent numeric comparison — which is also what a
+    `TreeMap`/`Collections.sort` over mixed wrappers must throw.
+  - **Every narrowing primitive conversion is "possible lossy
+    conversion"**, including the pairs among `byte`/`short`/`char` and
+    from `long`. `byte b = aLong;` used to say "long cannot be converted
+    to byte", which is what javac says about unrelated REFERENCE types.
+    The same wording now covers an ARGUMENT: with exactly one candidate of
+    a name and arity, javac blames the argument, so `"abc".charAt(aLong)`
+    reports the lossy conversion rather than "no suitable method found".
+  - **`void.class`**, and every wrapper's `TYPE` as the PRIMITIVE class it
+    wraps (`Integer.TYPE == int.class`, and not `Integer.class`); the
+    exponent, code-point and surrogate boundary constants; and
+    `Character.reverseBytes` plus `codePointCount` over any
+    `CharSequence`.
+  - Pinned by `diff_primitive_stream_kinds`, `diff_wrapper_compare_across_types`,
+    `diff_wrapper_boundary_constants`, `diff_primitive_class_literals`,
+    `diff_character_byte_and_code_point_api` and three `reject_*` tests.
 - **Modifiers: the inert ones parse, the illegal ones are refused**
   (2026-08-05, round 9, JLS §8.1.1/§8.4.3) — the modifiers cluster, all nine
   findings:

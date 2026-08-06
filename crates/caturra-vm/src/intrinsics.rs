@@ -4184,6 +4184,7 @@ fn box_any(heap: &mut Heap, value: Option<JValue>) -> JValue {
 /// Instance methods on a boxed wrapper: the unboxing accessors
 /// (`intValue`, ...) and the Object methods (`toString`, `equals`,
 /// `hashCode`, `compareTo`).
+#[allow(clippy::too_many_lines)] // one arm per wrapper method
 fn boxed_virtual(
     heap: &mut Heap,
     class_name: &str,
@@ -4276,12 +4277,37 @@ fn boxed_virtual(
             Ok(Some(JValue::Int(i32::from(equal))))
         }
         "compareTo" => {
+            // A wrapper's `compareTo` takes its OWN type — the JDK's is
+            // `compareTo(Integer)`, and reaching it through `Comparable` casts
+            // the argument. Comparing an Integer with a Long (or a String, or
+            // any other object) is a ClassCastException, not a number.
             let other = match args.first() {
                 Some(JValue::Ref(Some(reference))) => match heap.get(*reference) {
-                    Some(HeapObject::Boxed { value, .. }) => *value,
-                    _ => JValue::Int(0),
+                    Some(HeapObject::Boxed {
+                        value,
+                        class_name: other_class,
+                    }) if other_class.as_ref() == class_name => *value,
+                    other => {
+                        let named = match other {
+                            Some(
+                                HeapObject::Boxed { class_name, .. }
+                                | HeapObject::Instance { class_name, .. },
+                            ) => class_name.replace('/', "."),
+                            Some(HeapObject::JavaString(_)) => String::from("java.lang.String"),
+                            _ => String::from("java.lang.Object"),
+                        };
+                        return Err(throw(format!(
+                            "java.lang.ClassCastException: class {named} cannot be cast to \
+                             class {}",
+                            class_name.replace('/', ".")
+                        )));
+                    }
                 },
-                _ => JValue::Int(0),
+                Some(JValue::Ref(None)) => return Err(throw("java.lang.NullPointerException")),
+                // An UNBOXED primitive argument: caturra keeps wrapper values
+                // unboxed where it can, so this is the ordinary same-type call.
+                Some(other) => *other,
+                None => JValue::Int(0),
             };
             let ordering = match (value, other) {
                 (JValue::Double(a), JValue::Double(b)) => a.total_cmp(&b),
@@ -6045,6 +6071,25 @@ fn character_static(
         )))
     };
     match (method, args) {
+        // `reverseBytes(char)`: swap the two bytes of the UTF-16 unit.
+        ("reverseBytes", [JValue::Int(unit)]) => {
+            let value = u16::try_from(*unit & 0xFFFF).unwrap_or(0);
+            Ok(Some(JValue::Int(i32::from(value.swap_bytes()))))
+        }
+        // `codePointCount(CharSequence, begin, end)`: surrogate PAIRS count
+        // once, so it is not simply `end - begin`.
+        ("codePointCount", [text, JValue::Int(begin), JValue::Int(end)]) => {
+            let units = match text {
+                JValue::Ref(Some(reference)) => match heap.get(*reference) {
+                    Some(HeapObject::JavaString(units) | HeapObject::StringBuilder(units)) => {
+                        units.clone()
+                    }
+                    _ => return Err(throw("java.lang.ClassCastException: not a CharSequence")),
+                },
+                _ => return Err(throw("java.lang.NullPointerException")),
+            };
+            code_point_count(&units, *begin, *end).map(|n| Some(JValue::Int(n)))
+        }
         ("isDigit", [JValue::Int(v)]) => z(nd_digit_value(c_of(v)).is_some()),
 
         ("isLetterOrDigit", [JValue::Int(v)]) => {

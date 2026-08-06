@@ -239,6 +239,11 @@ fn desugar_try_with_resources(
 
 fn primitive_type_name(keyword: Keyword) -> Option<&'static str> {
     Some(match keyword {
+        // `void.class` is a class literal too (it is `Void.TYPE`), even though
+        // `void` names no value — so the keyword belongs in this list, which
+        // only ever leads to a class literal or an array-constructor
+        // reference, and `void[]` is rejected by the array path anyway.
+        Keyword::Void => "void",
         Keyword::Int => "int",
         Keyword::Double => "double",
         Keyword::Boolean => "boolean",

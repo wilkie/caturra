@@ -2145,11 +2145,18 @@ fn stream_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         "filter" | "sorted" | "distinct" | "limit" | "skip" | "peek" | "boxed" => {
             stream_elem_type(prev, ctx)
         }
-        // `mapToInt` produces an int stream; `map`/`mapToObj` an erased one.
+        // `mapToInt` produces an int stream; `mapToObj` an erased one.
+        // `as…Stream` widens every element to that primitive.
         "mapToInt" => Some(TypeRef::Int),
-        "map" | "mapToObj" | "flatMap" => Some(TypeRef::Named(String::from("Object"))),
-        "mapToDouble" => Some(TypeRef::Double),
-        "mapToLong" => Some(TypeRef::Long),
+        "asLongStream" | "mapToLong" => Some(TypeRef::Long),
+        "asDoubleStream" | "mapToDouble" => Some(TypeRef::Double),
+        // `map` on a PRIMITIVE pipeline is an `IntUnaryOperator` and friends:
+        // the element keeps its width. Only an object stream's `map` erases.
+        "map" => Some(match stream_elem_type(prev, ctx) {
+            Some(prim @ (TypeRef::Int | TypeRef::Long | TypeRef::Double)) => prim,
+            _ => TypeRef::Named(String::from("Object")),
+        }),
+        "mapToObj" | "flatMap" => Some(TypeRef::Named(String::from("Object"))),
         _ => None,
     }
 }
@@ -2278,6 +2285,17 @@ fn array_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0])?,
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
             ctx.lookup(name)?
+        }
+        // An array written INLINE — `Arrays.stream(new int[]{1, 2, 3})` — is
+        // its own declaration. Only a variable was looked up, so the identical
+        // call on a literal array had no element type and the lambda after it
+        // was refused as if the position were not a functional-interface one.
+        Expr::NewArray { elem, dims, .. } => {
+            let mut ty = elem.clone();
+            for _ in 0..dims.len().max(1).saturating_sub(1) {
+                ty = TypeRef::Array(Box::new(ty));
+            }
+            return Some(ty);
         }
         _ => return None,
     };

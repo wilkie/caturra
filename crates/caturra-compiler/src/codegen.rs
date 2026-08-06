@@ -3090,6 +3090,23 @@ fn collection_elem_of(ty: JType) -> Option<ElemType> {
 }
 
 /// The boxed primitive kind for a wrapper class simple name, if any.
+/// The primitive a wrapper's `TYPE` constant names (`Integer.TYPE` is
+/// `int.class`).
+fn wrapper_primitive_name(wrapper: &str) -> Option<&'static str> {
+    Some(match wrapper {
+        "Integer" => "int",
+        "Double" => "double",
+        "Long" => "long",
+        "Float" => "float",
+        "Short" => "short",
+        "Byte" => "byte",
+        "Character" => "char",
+        "Boolean" => "boolean",
+        "Void" => "void",
+        _ => return None,
+    })
+}
+
 fn wrapper_elem(name: &str) -> Option<ElemType> {
     Some(match name {
         "Integer" => ElemType::Int,
@@ -6036,8 +6053,13 @@ enum BRet {
     LongStream,
     /// `Stream<Object>` — an op (`map`) whose element type is erased.
     StreamErased,
-    /// `IntStream` (`mapToInt`, and the `IntStream` intermediate ops).
+    /// `IntStream` (`mapToInt`).
     IntStream,
+    /// The RECEIVER's own primitive pipeline — what every shape-preserving
+    /// intermediate op (`filter`, `sorted`, `limit`) answers. The three
+    /// primitive streams share one method table, so a fixed `IntStream` here
+    /// retyped a filtered `DoubleStream` as an int one.
+    SameStream,
     /// `Stream<String>` — `String.lines()`.
     StreamString,
     /// An array of the receiver's element (`IntStream.toArray()` is `int[]`,
@@ -7547,13 +7569,13 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm(
         "filter",
         &[BParam::Predicate],
-        BRet::IntStream,
+        BRet::SameStream,
         "(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;",
     ),
     bm(
         "map",
         &[BParam::UnaryOperator],
-        BRet::IntStream,
+        BRet::SameStream,
         "(Ljava/util/function/IntUnaryOperator;)Ljava/util/stream/IntStream;",
     ),
     bm(
@@ -7561,6 +7583,40 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         &[BParam::UnaryOperator],
         BRet::StreamErased,
         "(Ljava/util/function/IntFunction;)Ljava/util/stream/Stream;",
+    ),
+    // The primitive-to-primitive conversions. `as…Stream` is a widening
+    // retyping; `mapTo…` runs a lambda. WHICH of these a receiver has is per
+    // stream kind — `numeric_stream_conversion` keeps a `DoubleStream` from
+    // answering `asDoubleStream()`, since the three share this one table.
+    bm(
+        "mapToInt",
+        &[BParam::UnaryOperator],
+        BRet::IntStream,
+        "(Ljava/util/function/LongToIntFunction;)Ljava/util/stream/IntStream;",
+    ),
+    bm(
+        "mapToLong",
+        &[BParam::UnaryOperator],
+        BRet::LongStream,
+        "(Ljava/util/function/IntToLongFunction;)Ljava/util/stream/LongStream;",
+    ),
+    bm(
+        "mapToDouble",
+        &[BParam::UnaryOperator],
+        BRet::DoubleStream,
+        "(Ljava/util/function/IntToDoubleFunction;)Ljava/util/stream/DoubleStream;",
+    ),
+    bm(
+        "asLongStream",
+        &[],
+        BRet::LongStream,
+        "()Ljava/util/stream/LongStream;",
+    ),
+    bm(
+        "asDoubleStream",
+        &[],
+        BRet::DoubleStream,
+        "()Ljava/util/stream/DoubleStream;",
     ),
     bm(
         "boxed",
@@ -7571,25 +7627,25 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm(
         "sorted",
         &[],
-        BRet::IntStream,
+        BRet::SameStream,
         "()Ljava/util/stream/IntStream;",
     ),
     bm(
         "distinct",
         &[],
-        BRet::IntStream,
+        BRet::SameStream,
         "()Ljava/util/stream/IntStream;",
     ),
     bm(
         "limit",
         &[BParam::Long],
-        BRet::IntStream,
+        BRet::SameStream,
         "(J)Ljava/util/stream/IntStream;",
     ),
     bm(
         "skip",
         &[BParam::Long],
-        BRet::IntStream,
+        BRet::SameStream,
         "(J)Ljava/util/stream/IntStream;",
     ),
     bm(
@@ -8436,6 +8492,15 @@ const CHARACTER_METHODS: &[BuiltinMethod] = &[
     // The INT-codepoint overloads (`isDigit(int)` and family — for
     // `isAlphabetic(int)` the int form is the JDK's ONLY signature). The VM
     // arms match the value, not the descriptor, so the same intrinsics serve.
+    // `reverseBytes(char)` swaps the two bytes of a UTF-16 unit;
+    // `codePointCount(CharSequence, int, int)` counts code points in a range.
+    bm("reverseBytes", &[C], BRet::Char, "(C)C"),
+    bm(
+        "codePointCount",
+        &[BParam::CharSeq, I, I],
+        BRet::Int,
+        "(Ljava/lang/CharSequence;II)I",
+    ),
     bm("isDigit", &[I], BRet::Boolean, "(I)Z"),
     bm("isAlphabetic", &[I], BRet::Boolean, "(I)Z"),
     bm("isLetter", &[I], BRet::Boolean, "(I)Z"),
@@ -10257,6 +10322,21 @@ fn builtin_static_constant(class: &str, field: &str) -> Option<BuiltinConstant> 
         ("Float", "POSITIVE_INFINITY") => Some(BuiltinConstant::Float(f32::INFINITY)),
         ("Float", "NEGATIVE_INFINITY") => Some(BuiltinConstant::Float(f32::NEG_INFINITY)),
         ("Float", "NaN") => Some(BuiltinConstant::Float(f32::NAN)),
+        // The exponent bounds and the code-point limits — the rest of the
+        // wrappers' constant surface, each a plain compile-time number.
+        ("Double", "MIN_EXPONENT") => Some(Int(-1022)),
+        ("Double", "MAX_EXPONENT") => Some(Int(1023)),
+        ("Float", "MIN_EXPONENT") => Some(Int(-126)),
+        ("Float", "MAX_EXPONENT") => Some(Int(127)),
+        ("Character", "MIN_CODE_POINT") => Some(Int(0)),
+        ("Character", "MAX_CODE_POINT") => Some(Int(0x0010_FFFF)),
+        ("Character", "MIN_SUPPLEMENTARY_CODE_POINT") => Some(Int(0x0001_0000)),
+        ("Character", "MIN_HIGH_SURROGATE") => Some(Char(0xD800)),
+        ("Character", "MAX_HIGH_SURROGATE") => Some(Char(0xDBFF)),
+        ("Character", "MIN_LOW_SURROGATE") => Some(Char(0xDC00)),
+        ("Character", "MAX_LOW_SURROGATE") => Some(Char(0xDFFF)),
+        ("Character", "MIN_SURROGATE") => Some(Char(0xD800)),
+        ("Character", "MAX_SURROGATE") => Some(Char(0xDFFF)),
         _ => None,
     }
 }
@@ -10577,6 +10657,29 @@ fn descriptor_param_kinds(descriptor: &str) -> impl Iterator<Item = bool> + '_ {
     })
 }
 
+/// Which primitive-to-primitive conversions each numeric pipeline really has.
+/// An `IntStream` widens to long and double, a `LongStream` only to double,
+/// and a `DoubleStream` narrows to neither — but all three read the same
+/// `INTSTREAM_METHODS` table, which alone would offer every conversion to
+/// every receiver. Only a numeric pipeline is judged here: `Stream.mapToInt`
+/// is a different method on a different table.
+fn numeric_stream_conversion(receiver: JType, method: &str) -> bool {
+    if !matches!(
+        receiver,
+        JType::IntStream | JType::DoubleStream | JType::LongStream
+    ) {
+        return true;
+    }
+    match method {
+        "asLongStream" => receiver == JType::IntStream,
+        "asDoubleStream" => matches!(receiver, JType::IntStream | JType::LongStream),
+        "mapToInt" => matches!(receiver, JType::DoubleStream | JType::LongStream),
+        "mapToLong" => matches!(receiver, JType::IntStream | JType::DoubleStream),
+        "mapToDouble" => matches!(receiver, JType::IntStream | JType::LongStream),
+        _ => true,
+    }
+}
+
 #[allow(clippy::too_many_lines)] // one arm per return kind
 fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
     match ret {
@@ -10631,6 +10734,11 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         BRet::LongStream => Some(JType::LongStream),
         BRet::StreamErased => Some(JType::Stream(ElemType::Object(table.object_id))),
         BRet::IntStream => Some(JType::IntStream),
+        BRet::SameStream => Some(match args.first {
+            Some(ElemType::Double) => JType::DoubleStream,
+            Some(ElemType::Long) => JType::LongStream,
+            _ => JType::IntStream,
+        }),
         BRet::ElemArray => Some(
             args.first
                 .map_or(JType::Error, |elem| JType::Array { elem, dims: 1 }),
@@ -16092,6 +16200,21 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        // The three primitive pipelines share one method table, so the table
+        // alone would let a `DoubleStream` answer `asDoubleStream()`.
+        if !numeric_stream_conversion(receiver_ty, method) {
+            for arg in args {
+                self.expr(arg);
+            }
+            self.error(
+                span,
+                format!(
+                    "cannot find symbol: method {method}() in class {}",
+                    receiver_ty.describe(self.table)
+                ),
+            );
+            return None;
+        }
         // The reflective lookups take `Class<?>...`, and everybody writes them
         // that way: `getDeclaredConstructor()`, `getDeclaredConstructor(String.class,
         // int.class)`, `getMethod("addHours", int.class)`. Our tables describe
@@ -16279,6 +16402,33 @@ impl BodyGen<'_> {
         }
         let Some(chosen) = pick_builtin(methods, method, &arg_types, elem, self.table) else {
             if methods.iter().any(|m| m.name == method) {
+                // With exactly ONE candidate of this name and arity, javac
+                // blames the ARGUMENT — `"abc".charAt(aLong)` is "possible
+                // lossy conversion from long to int", not a missing overload.
+                let candidates: Vec<&BuiltinMethod> = methods
+                    .iter()
+                    .filter(|m| m.name == method && m.params.len() == arg_types.len())
+                    .collect();
+                if let [only] = candidates.as_slice()
+                    && let Some((actual, want)) = only
+                        .params
+                        .iter()
+                        .zip(&arg_types)
+                        .map(|(param, actual)| (*actual, bparam_type(*param, elem, self.table)))
+                        .find(|(actual, want)| {
+                            actual.is_numeric() && want.is_numeric() && actual != want
+                        })
+                {
+                    self.error(
+                        span,
+                        format!(
+                            "incompatible types: possible lossy conversion from {} to {}",
+                            actual.describe(self.table),
+                            want.describe(self.table)
+                        ),
+                    );
+                    return None;
+                }
                 self.error(
                     span,
                     format!(
@@ -19561,12 +19711,15 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
         self.code.drop_stack(1);
         // A primitive element means a primitive pipeline: `Arrays.stream(int[])`
-        // is an `IntStream`, as is `IntStream.of(...)`.
+        // is an `IntStream`, as is `IntStream.of(...)`. WHICH primitive one is
+        // the element's own width — a `double[]` source typed as an `IntStream`
+        // gave `sum()` an `()I` descriptor, so it answered 0.
         let primitive = !elem.base_type().is_reference();
-        Some(Some(if class == "IntStream" || primitive {
-            JType::IntStream
-        } else {
-            JType::Stream(elem)
+        Some(Some(match elem {
+            ElemType::Double => JType::DoubleStream,
+            ElemType::Long => JType::LongStream,
+            _ if class == "IntStream" || primitive => JType::IntStream,
+            _ => JType::Stream(elem),
         }))
     }
 
@@ -20107,7 +20260,8 @@ impl BodyGen<'_> {
             Expr::Name { path, .. }
                 if path.len() == 2
                     && !self.table.has_class(&path[0])
-                    && builtin_static_constant(&path[0], &path[1]).is_some() =>
+                    && (builtin_static_constant(&path[0], &path[1]).is_some()
+                        || (path[1] == "TYPE" && wrapper_primitive_name(&path[0]).is_some())) =>
             {
                 match builtin_static_constant(&path[0], &path[1]) {
                     Some(BuiltinConstant::Double(_)) => JType::Double,
@@ -20115,7 +20269,9 @@ impl BodyGen<'_> {
                     Some(BuiltinConstant::Bool(_)) => JType::Boxed(ElemType::Boolean),
                     Some(BuiltinConstant::Long(_)) => JType::Long,
                     Some(BuiltinConstant::Float(_)) => JType::Float,
-                    _ => JType::Int,
+                    Some(BuiltinConstant::Int(_)) => JType::Int,
+                    // `Integer.TYPE` is `int.class` — a Class, not a number.
+                    None => JType::Class,
                 }
             }
             Expr::Name { path, .. } if path.len() == 2 => {
@@ -21281,6 +21437,16 @@ impl BodyGen<'_> {
         {
             return self.class_literal(path.last().map_or("", String::as_str));
         }
+        // `Integer.TYPE` and friends ARE the primitive class literals:
+        // `Integer.TYPE == int.class`, and `Void.TYPE == void.class`.
+        if name == "TYPE"
+            && let Expr::Name { path, .. } = object
+            && let Some(wrapper) = path.last()
+            && !self.table.has_class(wrapper)
+            && let Some(primitive) = wrapper_primitive_name(wrapper)
+        {
+            return self.class_literal(primitive);
+        }
         let object_ty = self.expr(object);
         if object_ty == JType::Error {
             return JType::Error;
@@ -21796,6 +21962,16 @@ impl BodyGen<'_> {
             && let Some(value) = builtin_static_constant(&path[0], &path[1])
         {
             return self.emit_builtin_constant(value);
+        }
+        // `Integer.TYPE` and friends ARE the primitive class literals:
+        // `Integer.TYPE == int.class`, `Void.TYPE == void.class`.
+        if path.len() == 2
+            && path[1] == "TYPE"
+            && !self.table.has_class(&path[0])
+            && self.lookup(&path[0]).is_none()
+            && let Some(primitive) = wrapper_primitive_name(&path[0])
+        {
+            return self.class_literal(primitive);
         }
         // `x.field` on a local object, or `Class.staticField`.
         if path.len() == 2 {
@@ -24106,9 +24282,12 @@ impl BodyGen<'_> {
                 self.code.drop_stack(1);
             }
             (JType::Float, JType::Double) => self.code.push_op(op::F2D, 1),
-            (JType::Int | JType::Char | JType::Short, JType::Byte)
-            | (JType::Int | JType::Char, JType::Short)
-            | (JType::Short | JType::Byte, JType::Char) => {
+            // Every primitive pair still standing is a NARROWING conversion —
+            // the widening ones are all matched above — and javac calls each
+            // one lossy (JLS 5.1.3). `byte b = aLong;` used to say "long
+            // cannot be converted to byte", which is what javac says about
+            // unrelated REFERENCE types, not about numbers.
+            (from, to) if from.is_numeric() && to.is_numeric() => {
                 self.error(
                     span,
                     format!(
@@ -24116,53 +24295,6 @@ impl BodyGen<'_> {
                         from.describe(self.table),
                         to.describe(self.table)
                     ),
-                );
-            }
-            (JType::Float, JType::Int | JType::Char | JType::Long) => {
-                self.error(
-                    span,
-                    format!(
-                        "incompatible types: possible lossy conversion from float to {}",
-                        to.describe(self.table)
-                    ),
-                );
-            }
-            (JType::Double, JType::Float) => {
-                self.error(
-                    span,
-                    "incompatible types: possible lossy conversion from double to float",
-                );
-            }
-            (JType::Long, JType::Int | JType::Char) => {
-                self.error(
-                    span,
-                    format!(
-                        "incompatible types: possible lossy conversion from long to {}",
-                        to.describe(self.table)
-                    ),
-                );
-            }
-            (JType::Double, JType::Long) => {
-                self.error(
-                    span,
-                    "incompatible types: possible lossy conversion from double to long",
-                );
-            }
-            // javac's exact sentence — these two used to append friendly
-            // "add a cast" advice, which reads as our wording, not javac's.
-            (JType::Double, JType::Int | JType::Char) => {
-                self.error(
-                    span,
-                    format!(
-                        "incompatible types: possible lossy conversion from double to {}",
-                        to.describe(self.table)
-                    ),
-                );
-            }
-            (JType::Int, JType::Char) => {
-                self.error(
-                    span,
-                    "incompatible types: possible lossy conversion from int to char",
                 );
             }
             (from, to) => {

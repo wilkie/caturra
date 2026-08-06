@@ -21783,3 +21783,178 @@ public class RejectStaticBlankFinal {
 }
 "
 );
+
+// ---------------------------------------------------------------------------
+// Round 9, cluster 14: numeric conversion corners.
+// ---------------------------------------------------------------------------
+
+// A wrapper's `compareTo` takes its OWN type: comparing across wrappers is a
+// `ClassCastException`, not a silent numeric comparison.
+differential_test!(
+    diff_wrapper_compare_across_types,
+    "CmpAcross",
+    r#"
+public class CmpAcross {
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static void main(String[] args) {
+        Comparable ci = Integer.valueOf(5);
+        try {
+            System.out.println(ci.compareTo(Long.valueOf(9L)));
+        } catch (Exception e) {
+            System.out.println("threw " + e.getClass().getName());
+        }
+        try {
+            System.out.println(ci.compareTo("abc"));
+        } catch (Exception e) {
+            System.out.println("threw " + e.getClass().getName());
+        }
+        try {
+            System.out.println(ci.compareTo(new Object()));
+        } catch (Exception e) {
+            System.out.println("threw " + e.getClass().getName());
+        }
+        Comparable cd = Double.valueOf(5.0);
+        try {
+            System.out.println(cd.compareTo(Integer.valueOf(5)));
+        } catch (Exception e) {
+            System.out.println("threw " + e.getClass().getName());
+        }
+        System.out.println(ci.compareTo(Integer.valueOf(9)));
+    }
+}
+"#
+);
+
+// The wrapper constants a numerics-heavy program reaches for.
+differential_test!(
+    diff_wrapper_boundary_constants,
+    "WrapConst",
+    r#"
+public class WrapConst {
+    public static void main(String[] args) {
+        System.out.println(Double.MIN_EXPONENT + " " + Double.MAX_EXPONENT);
+        System.out.println(Float.MIN_EXPONENT + " " + Float.MAX_EXPONENT);
+        System.out.println(Character.MIN_CODE_POINT + " " + Character.MAX_CODE_POINT);
+        System.out.println(Character.MIN_SUPPLEMENTARY_CODE_POINT);
+        System.out.println((int) Character.MIN_HIGH_SURROGATE);
+        System.out.println((int) Character.MAX_HIGH_SURROGATE);
+        System.out.println((int) Character.MIN_LOW_SURROGATE);
+        System.out.println((int) Character.MAX_LOW_SURROGATE);
+        System.out.println(Character.MIN_RADIX + " " + Character.MAX_RADIX);
+    }
+}
+"#
+);
+
+// `void.class` is a class literal, and every wrapper's `TYPE` is the
+// PRIMITIVE class it wraps — not the wrapper's own.
+differential_test!(
+    diff_primitive_class_literals,
+    "VoidClass",
+    r"
+public class VoidClass {
+    public static void main(String[] args) {
+        System.out.println(void.class);
+        System.out.println(Integer.TYPE);
+        System.out.println(Double.TYPE);
+        System.out.println(Character.TYPE);
+        System.out.println(Void.TYPE);
+        System.out.println(Integer.TYPE == int.class);
+        System.out.println(Integer.TYPE == Integer.class);
+    }
+}
+"
+);
+
+// `Character.reverseBytes` and `codePointCount` over a `CharSequence`.
+differential_test!(
+    diff_character_byte_and_code_point_api,
+    "CharApi",
+    r#"
+public class CharApi {
+    public static void main(String[] args) {
+        System.out.println((int) Character.reverseBytes('A'));
+        System.out.println(Character.codePointCount("hello", 0, 5));
+        System.out.println(Character.codePointCount("hello", 1, 3));
+        StringBuilder sb = new StringBuilder("abcdef");
+        System.out.println(Character.codePointCount(sb, 0, 6));
+    }
+}
+"#
+);
+
+// Which primitive pipeline a source produces is the ELEMENT's own width: a
+// `double[]` source typed as an `IntStream` gave `sum()` an `()I` descriptor,
+// so it answered 0.
+differential_test!(
+    diff_primitive_stream_kinds,
+    "StreamKinds",
+    r"
+import java.util.Arrays;
+import java.util.stream.IntStream;
+
+public class StreamKinds {
+    public static void main(String[] args) {
+        System.out.println(Arrays.stream(new double[] {1.5, 2.5, 3.5}).filter(d -> d > 2).sum());
+        System.out.println(Arrays.stream(new double[] {1.5, 2.5}).sorted().toArray()[0]);
+        System.out.println(IntStream.of(1, 2, 3).asLongStream().map(x -> x * 2).sum());
+        System.out.println(IntStream.of(3, 1, 2).asDoubleStream().sorted().toArray()[0]);
+        System.out.println(IntStream.of(1, 2, 3).mapToDouble(x -> x / 2.0).sum());
+        System.out.println(IntStream.of(1, 2, 3).mapToLong(x -> x * 100L).sum());
+        System.out.println(Arrays.stream(new long[] {1L, 2L}).asDoubleStream().sum());
+        System.out.println(Arrays.stream(new double[] {1.9, 2.9}).mapToInt(d -> (int) d).sum());
+        long[] longs = {4L, 5L};
+        System.out.println(Arrays.stream(longs).map(x -> x + 1).sum());
+        System.out.println(Arrays.stream(new int[] {1, 2, 3}).map(x -> x * x).sum());
+    }
+}
+"
+);
+
+// javac: a `DoubleStream` has neither `asDoubleStream` nor `asLongStream` —
+// the three primitive pipelines share one method table here, which alone
+// would have offered every conversion to every receiver.
+differential_reject!(
+    reject_double_stream_as_double,
+    "BadConv",
+    r"
+import java.util.stream.IntStream;
+
+public class BadConv {
+    public static void main(String[] args) {
+        System.out.println(IntStream.of(1).asDoubleStream().asDoubleStream().sum());
+    }
+}
+"
+);
+
+// javac: with exactly one candidate of this name and arity, the ARGUMENT is
+// what is blamed — not the absence of an overload.
+differential_reject!(
+    reject_lossy_argument_to_builtin,
+    "CharAtLong",
+    r#"
+public class CharAtLong {
+    public static void main(String[] args) {
+        long i = 1L;
+        System.out.println("abc".charAt(i));
+    }
+}
+"#
+);
+
+// javac: EVERY narrowing primitive conversion is "possible lossy conversion",
+// including the ones between the small integral types.
+differential_reject!(
+    reject_narrowing_long_to_byte,
+    "NarrowOne",
+    r"
+public class NarrowOne {
+    public static void main(String[] args) {
+        long big = 5L;
+        byte b = big;
+        System.out.println(b);
+    }
+}
+"
+);
