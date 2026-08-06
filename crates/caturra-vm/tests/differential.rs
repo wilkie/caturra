@@ -21958,3 +21958,66 @@ public class NarrowOne {
 }
 "
 );
+
+// A construct caturra refuses must refuse in EVERY position, not only as a
+// statement. Four silent miscompiles came from a diagnostic that only the
+// EMITTING path produced: `type_of` answered `Error` quietly, the enclosing
+// call emitted nothing at all, and the program ran with a hole in it. A
+// refused member in an argument, in a concatenation and as a `new` argument
+// pins the three positions that hid one.
+stricter_than_javac!(
+    stricter_sublist_in_argument_position,
+    "SubListArg",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class SubListArg {
+    static void take(Object o) {
+        System.out.println("take " + o);
+    }
+
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c", "d"));
+        System.out.println("start");
+        take(list.subList(1, 3));
+        System.out.println("end");
+    }
+}
+"#
+);
+
+stricter_than_javac!(
+    stricter_sublist_in_concatenation,
+    "SubListConcat",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class SubListConcat {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c", "d"));
+        System.out.println("v" + list.subList(1, 3));
+    }
+}
+"#
+);
+
+stricter_than_javac!(
+    stricter_sublist_as_constructor_argument,
+    "SubListCtor",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class SubListCtor {
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c", "d"));
+        System.out.println(new ArrayList<Object>(list.subList(1, 3)));
+    }
+}
+"#
+);

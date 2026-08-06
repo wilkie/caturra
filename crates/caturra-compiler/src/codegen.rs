@@ -25,7 +25,7 @@ use crate::ast::{
     LambdaBody, Literal, LocalDeclarator, MethodDecl, RESOURCE_CLOSE, Stmt, SwitchArm, TypeRef,
     UnaryOp,
 };
-use crate::diagnostics::{Diagnostic, SourceSpan};
+use crate::diagnostics::{Diagnostic, Severity, SourceSpan};
 
 /// Generate class files for every class across all parsed units.
 /// Method calls resolve against every class in the compilation, so the
@@ -1167,7 +1167,7 @@ impl MethodTable {
         for id in cyclic {
             let name = self.class_name(id).to_owned();
             diagnostics.push(Diagnostic {
-                severity: crate::diagnostics::Severity::Error,
+                severity: Severity::Error,
                 message: format!("cyclic inheritance involving {name}"),
                 path: String::new(),
                 span: None,
@@ -10950,6 +10950,32 @@ impl BodyGen<'_> {
             .push(Diagnostic::error(self.path, message, span));
     }
 
+    /// Bailing out of an expression because a SUBEXPRESSION typed as `Error`.
+    ///
+    /// That type only ever arises from a problem, and every problem is meant
+    /// to have been reported by whoever produced it. Four separate silent
+    /// miscompiles came from one that was not: a diagnostic that only the
+    /// EMITTING path produces leaves `type_of` answering `Error` quietly, the
+    /// enclosing call emits nothing at all, and the program compiles with a
+    /// hole in it — `Collections.reverse(list.subList(1, 5))` printed an
+    /// unchanged list, `box.get() + box.get()` printed nothing whatsoever.
+    ///
+    /// So if NOTHING has been reported by the time an expression gives up,
+    /// say something. A wrong message is a nuisance; a missing one is a wrong
+    /// answer with no way to notice it.
+    fn error_bail(&mut self, span: SourceSpan, what: &str) {
+        if !self
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
+        {
+            self.error(
+                span,
+                format!("this {what} could not be compiled: its type is unknown"),
+            );
+        }
+    }
+
     /// Record a declared local for the `LocalVariableTable` (and, for
     /// generic types, the `LocalVariableTypeTable` signature).
     fn record_local_debug(&mut self, name: &str, ty: JType, slot: u16) {
@@ -13101,6 +13127,7 @@ impl BodyGen<'_> {
             FieldReceiver::Object(object) => {
                 let ty = self.expr(object);
                 if ty == JType::Error {
+                    self.error_bail(span, "field access");
                     return;
                 }
             }
@@ -13892,6 +13919,7 @@ impl BodyGen<'_> {
             FieldTarget::Implicit(_) => self.code.push_op(op::ALOAD_0, 1),
             FieldTarget::Qualified(object, _) => {
                 if self.expr(object) == JType::Error {
+                    self.error_bail(span, "assignment target");
                     return JType::Error;
                 }
             }
@@ -14744,7 +14772,10 @@ impl BodyGen<'_> {
                         elem: ElemType::Char,
                         dims: 1,
                     } => "([C)V",
-                    JType::Error => return JType::Error,
+                    JType::Error => {
+                        self.error_bail(span, "String constructor argument");
+                        return JType::Error;
+                    }
                     other => {
                         self.error(
                             span,
@@ -14850,6 +14881,7 @@ impl BodyGen<'_> {
         if let [source] = args {
             let source_ty = self.expr(source);
             if source_ty == JType::Error {
+                self.error_bail(span, "Scanner source");
                 return JType::Error;
             }
             let descriptor = match source_ty {
@@ -14906,6 +14938,7 @@ impl BodyGen<'_> {
 
         let arg_ty = self.expr(arg);
         if arg_ty == JType::Error {
+            self.error_bail(span, "constructor argument");
             return JType::Error;
         }
         let arg_desc = match (class_name, arg_ty) {
@@ -14936,6 +14969,7 @@ impl BodyGen<'_> {
         if let [path] = args {
             let path_ty = self.expr(path);
             if path_ty == JType::Error {
+                self.error_bail(span, "File path");
                 return JType::Error;
             }
             if path_ty == JType::Str {
@@ -14958,6 +14992,7 @@ impl BodyGen<'_> {
         if let [target] = args {
             let target_ty = self.expr(target);
             if target_ty == JType::Error {
+                self.error_bail(span, "writer target");
                 return JType::Error;
             }
             let descriptor = match target_ty {
@@ -15994,7 +16029,10 @@ impl BodyGen<'_> {
             }
             // A method on a type variable: only Object's methods.
             JType::TypeVar => self.table.object_id,
-            JType::Error => return None,
+            JType::Error => {
+                self.error_bail(span, "call receiver");
+                return None;
+            }
             JType::Str
             | JType::CharSequence
             | JType::StringBuilder
@@ -16761,7 +16799,10 @@ impl BodyGen<'_> {
                     tags.push_str("Ljava/lang/String;");
                     width += 1;
                 }
-                JType::Error => return None,
+                JType::Error => {
+                    self.error_bail(arg.span(), "format argument");
+                    return None;
+                }
                 // Anything else rides through as a reference and is rendered
                 // by the VM, which can call a user `toString()`. A PRIMITIVE
                 // array reaches here (a lone reference array was taken as the
@@ -16969,6 +17010,7 @@ impl BodyGen<'_> {
         for (arg, (want, desc)) in args.iter().zip(params) {
             let got = self.expr(arg);
             if got == JType::Error {
+                self.error_bail(arg.span(), "argument");
                 return None;
             }
             // A String is accepted for a CharSequence parameter, and Files.write
@@ -20138,7 +20180,10 @@ impl BodyGen<'_> {
                 self.error(span, "this value's type is not yet supported by caturra");
                 None
             }
-            JType::Error => None,
+            JType::Error => {
+                self.error_bail(span, "printed value");
+                None
+            }
         }
     }
 
@@ -21449,6 +21494,7 @@ impl BodyGen<'_> {
         }
         let object_ty = self.expr(object);
         if object_ty == JType::Error {
+            self.error_bail(span, "member access");
             return JType::Error;
         }
         if name == "length" && matches!(object_ty, JType::Array { .. }) {
@@ -22246,6 +22292,7 @@ impl BodyGen<'_> {
                 let ty = self.expr(operand);
                 let ty = self.unbox_wrapper(ty);
                 if ty == JType::Error {
+                    self.error_bail(span, "operand");
                     return JType::Error;
                 }
                 if ty != JType::Boolean {
@@ -22281,6 +22328,7 @@ impl BodyGen<'_> {
         };
         let source = self.expr(operand);
         if source == JType::Error {
+            self.error_bail(span, "cast operand");
             return JType::Error;
         }
         // Casting a reference (commonly an erased Object) to String: a
@@ -23644,7 +23692,10 @@ impl BodyGen<'_> {
                 self.error(span, "this value's type is not yet supported by caturra");
                 return;
             }
-            JType::Error => return,
+            JType::Error => {
+                self.error_bail(span, "concatenated value");
+                return;
+            }
         };
         let append = intern_method_ref(self.pool, "java/lang/StringBuilder", "append", descriptor);
         self.code.push_op_u16(op::INVOKEVIRTUAL, append, 0);
@@ -24049,7 +24100,7 @@ impl BodyGen<'_> {
             // 256+ locals needs the `wide` prefix; nobody's CSA program
             // gets there, so report instead of emitting bad code.
             self.diagnostics.push(Diagnostic {
-                severity: crate::diagnostics::Severity::Error,
+                severity: Severity::Error,
                 message: String::from("too many local variables in one method"),
                 path: self.path.to_owned(),
                 span: None,

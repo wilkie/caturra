@@ -752,6 +752,22 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
+  round's cross-cutting root cause, made an invariant rather than a fourth
+  patch. `JType::Error` only ever arises from a problem, and every problem is
+  meant to have been REPORTED by whoever produced it. A diagnostic that only
+  the EMITTING path produces breaks that: `type_of` answers `Error` quietly,
+  the enclosing call emits nothing at all, and the program compiles with a
+  hole in it — `Collections.reverse(list.subList(1, 5))` printed an unchanged
+  list, `box.get() + box.get()` printed nothing whatsoever, a diamond copy
+  constructor in an argument emitted its argument and no call. Every place an
+  expression gives up because a subexpression typed `Error` now checks that
+  something HAS been reported, and says so if not. A wrong message is a
+  nuisance; a missing one is a wrong answer with no way to notice it. The
+  guard never fires across the 2,600-program grading corpus, and a matrix of
+  every refused member (42) in nine positions, plus twelve unmodelled classes
+  in eight, found no remaining hole. Pinned by three
+  `stricter_*_position` tests.
 - **A number's width is carried, not assumed** (2026-08-06, round 9, JLS
   §5.1.3) — the numeric-corners cluster, all ten findings:
   - **Which primitive pipeline a source produces is the ELEMENT's own
