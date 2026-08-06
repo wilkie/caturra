@@ -127,6 +127,8 @@ fn emit_class(
                 unresolved_type_message(&field.ty, table),
                 field.span,
             ));
+        } else if let Some(message) = type_arity_error(&field.ty, table) {
+            diagnostics.push(Diagnostic::error(path, message, field.span));
         }
         let mut flags = if field.is_private {
             caturra_classfile::FieldAccessFlags::PRIVATE
@@ -502,7 +504,32 @@ pub(crate) struct MethodTable {
 #[derive(Default)]
 struct NestedTypes {
     types: Vec<JType>,
+    /// Interned type-ARGUMENT lists, for the generic classes that declare
+    /// more than one parameter (`Pair<String, Integer>`). `JType` is `Copy`,
+    /// so it cannot hold the list inline; it holds an index here.
+    arg_lists: Vec<Vec<ElemType>>,
 }
+
+/// What a tracked type argument READS OUT as. A wrapper argument keeps its
+/// BOXED type — the value on the stack is a reference, which is how a `T`
+/// field holds an `Integer`, and `Boxed(Int)` (not `Boxed(Wrapper(Int))`) is
+/// the shape a declared `Integer` resolves to. `substitute_type_var` must
+/// agree with this exactly, or a local prints `true` as `1`.
+fn substituted_read(arg: ElemType, table: &MethodTable) -> JType {
+    match arg {
+        ElemType::Wrapper(prim) => JType::Boxed(prim.elem()),
+        // A parameterized argument (`Pair<String, Pair<String, Integer>>`)
+        // keeps its own arguments — reading it back as the erased `Object` is
+        // what made the inner `getValue()` unresolvable.
+        other => elem_value_type(other, table),
+    }
+}
+
+/// An interned type-argument list. `NO_TYPE_ARGS` is the empty one, which is
+/// what every single-parameter generic carries — its one argument lives in
+/// `Generic::arg`, so the common case stays inline and allocation-free.
+type TypeArgsId = u32;
+const NO_TYPE_ARGS: TypeArgsId = u32::MAX;
 
 /// Outcome of static overload resolution (JLS §15.12.2, without boxing
 /// or varargs).
@@ -664,7 +691,7 @@ impl MethodTable {
                 supertype_args: Vec::new(),
                 methods: vec![MethodSig {
                     name: String::from("compareTo"),
-                    params: vec![JType::TypeVar],
+                    params: vec![JType::TypeVar(0)],
                     ret: Some(JType::Int),
                     is_static: false,
                     is_private: false,
@@ -773,7 +800,7 @@ impl MethodTable {
                     MethodSig {
                         name: String::from("next"),
                         params: Vec::new(),
-                        ret: Some(JType::TypeVar),
+                        ret: Some(JType::TypeVar(0)),
                         is_static: false,
                         is_private: false,
                         is_final: false,
@@ -1329,7 +1356,7 @@ impl MethodTable {
                             // override, not a covariant one. Without the
                             // substitution the erased `T` return matched
                             // nothing and every such override was refused.
-                            let substituted = (sup_sig.ret == Some(JType::TypeVar))
+                            let substituted = matches!(sup_sig.ret, Some(JType::TypeVar(_)))
                                 .then(|| {
                                     let parent = self.class_name(id).to_owned();
                                     self.classes
@@ -1464,7 +1491,7 @@ impl MethodTable {
                     };
                     let compatible_return = approximate
                         || implementation.ret == sig.ret
-                        || sig.ret == Some(JType::TypeVar)
+                        || matches!(sig.ret, Some(JType::TypeVar(_)))
                         || matches!(
                             (implementation.ret, sig.ret),
                             (Some(JType::Object(sub)), Some(JType::Object(sup)))
@@ -1691,6 +1718,40 @@ impl MethodTable {
         id
     }
 
+    /// Intern the type arguments AFTER the first (the first rides inline in
+    /// `JType::Generic::arg`). An empty tail is `NO_TYPE_ARGS`, so a
+    /// single-parameter generic never touches the arena.
+    fn intern_type_args(&self, rest: &[ElemType]) -> TypeArgsId {
+        if rest.is_empty() {
+            return NO_TYPE_ARGS;
+        }
+        let mut nested = self.nested.borrow_mut();
+        if let Some(pos) = nested.arg_lists.iter().position(|a| a == rest) {
+            return TypeArgsId::try_from(pos).unwrap_or(NO_TYPE_ARGS);
+        }
+        let id = TypeArgsId::try_from(nested.arg_lists.len()).unwrap_or(NO_TYPE_ARGS);
+        nested.arg_lists.push(rest.to_vec());
+        id
+    }
+
+    /// The `index`-th type argument of a `JType::Generic`, counting the
+    /// inline first one — `Pair<String, Integer>` answers `Str` at 0 and the
+    /// boxed `Integer` at 1.
+    fn type_arg(&self, first: ElemType, rest: TypeArgsId, index: u8) -> Option<ElemType> {
+        if index == 0 {
+            return Some(first);
+        }
+        if rest == NO_TYPE_ARGS {
+            return None;
+        }
+        self.nested
+            .borrow()
+            .arg_lists
+            .get(rest as usize)
+            .and_then(|args| args.get(usize::from(index) - 1))
+            .copied()
+    }
+
     /// The inner type an `ElemType::Nested(id)` denotes.
     fn nested_type(&self, id: u32) -> JType {
         self.nested
@@ -1718,7 +1779,7 @@ impl MethodTable {
             sup_params.len() == params.len()
                 && sup_params.iter().zip(params).all(|(sup, sub)| {
                     sup == sub
-                        || *sup == JType::TypeVar
+                        || matches!(sup, JType::TypeVar(_))
                         || (erasure_tolerant
                             && matches!(sup, JType::Object(id) if *id == self.object_id))
                 })
@@ -1987,7 +2048,7 @@ impl MethodTable {
         concrete.len() == abstract_.len()
             && concrete.iter().zip(abstract_).all(|(c, a)| {
                 c == a
-                    || *a == JType::TypeVar
+                    || matches!(a, JType::TypeVar(_))
                     || (*a == JType::Object(self.object_id) && c.is_reference())
             })
     }
@@ -2249,8 +2310,8 @@ impl MethodTable {
                 }
                 // The erased single type variable of the enclosing
                 // generic class.
-                if name == crate::parser::TYPEVAR_SENTINEL {
-                    return Some(JType::TypeVar);
+                if let Some(index) = crate::parser::typevar_index(name) {
+                    return Some(JType::TypeVar(index));
                 }
                 // Wrapper types (`Integer`, `Double`, ...) as a boxed
                 // value — unless the name is a user class of that name.
@@ -2446,42 +2507,39 @@ impl MethodTable {
                         _ => JType::Class,
                     })
                 } else if let Some(id) = self.class_id(base) {
-                    // A single-type-parameter user class tracks its
-                    // argument (`Box<String>`); otherwise it is raw.
-                    let single = self.info_by_id(id).is_some_and(|i| i.type_param_count == 1);
-                    let arg = if single && args.len() == 1 {
-                        elem_from_type_arg(&args[0], self)
-                    } else {
-                        None
+                    // A user class tracks its type arguments when the count
+                    // matches what it declares (`Box<String>`,
+                    // `Pair<String, Integer>`); otherwise it is raw. A
+                    // SYNTHESIZED library interface (`Comparable<Integer>`)
+                    // stays erased — a boxed value assigns to it, and tracking
+                    // the argument would refuse that.
+                    let declared = self.info_by_id(id).map_or(0, |i| i.type_param_count);
+                    let tracked: Option<Vec<ElemType>> = (declared == args.len() && declared > 0)
+                        .then(|| args.iter().map(|a| elem_from_type_arg(a, self)).collect())
+                        .flatten();
+                    // Each argument must be one caturra can carry: a WRAPPER
+                    // is tracked too (`Node<Integer>`), since fields and
+                    // collections hold boxed references, so `T get()` really
+                    // does hand back an `Integer` — it used to come back typed
+                    // as `Object`, which made `Integer y = node.get()` a
+                    // compile error and `p(node.get())` pick `p(Object)`.
+                    let carryable = |elem: &ElemType| match elem {
+                        ElemType::Wrapper(_) => !self.synthesized.contains(base.as_str()),
+                        ElemType::Str
+                        | ElemType::Object(_)
+                        | ElemType::Builder
+                        // A parameterized argument (`Pair<String, Pair<…>>`)
+                        // rides as an interned nested type, so the inner
+                        // arguments survive the outer read.
+                        | ElemType::Nested { .. } => true,
+                        _ => false,
                     };
-                    match arg {
-                        // A WRAPPER argument is tracked too (`Node<Integer>`):
-                        // fields and collections hold boxed references, so
-                        // `T get()` really does hand back an `Integer` — it
-                        // just used to come back typed as `Object`, which made
-                        // `Integer y = node.get()` a compile error and
-                        // `p(node.get())` pick the `p(Object)` overload.
-                        // A WRAPPER argument is tracked for a class the PROGRAM
-                        // declares (`Node<Integer>`): its fields hold boxed
-                        // references, so `T get()` really does hand back an
-                        // `Integer`. A SYNTHESIZED library interface
-                        // (`Comparable<Integer>`) stays erased — a boxed value
-                        // assigns to it, and tracking the argument would refuse
-                        // that.
-                        Some(elem @ ElemType::Wrapper(_))
-                            if !self.synthesized.contains(base.as_str()) =>
-                        {
-                            Some(JType::Generic {
-                                class: id,
-                                arg: elem,
-                            })
-                        }
-                        Some(elem @ (ElemType::Str | ElemType::Object(_) | ElemType::Builder)) => {
-                            Some(JType::Generic {
-                                class: id,
-                                arg: elem,
-                            })
-                        }
+                    match tracked {
+                        Some(elems) if elems.iter().all(carryable) => Some(JType::Generic {
+                            class: id,
+                            arg: elems[0],
+                            rest: self.intern_type_args(&elems[1..]),
+                        }),
                         _ => Some(JType::Object(id)),
                     }
                 } else {
@@ -2515,7 +2573,7 @@ impl MethodTable {
                     JType::Exception(id) => ElemType::Throwable(id),
                     // `T[]` (a type variable) erases to `Object[]` — the
                     // standard `(T[]) new Object[n]`.
-                    JType::TypeVar => ElemType::Object(self.object_id),
+                    JType::TypeVar(_) => ElemType::Object(self.object_id),
                     JType::Field => ElemType::Field,
                     JType::Method => ElemType::Method,
                     JType::Constructor => ElemType::Constructor,
@@ -2739,7 +2797,7 @@ impl MethodTable {
                     // erased one: `A.X.compareTo(B.Q)` across two enums compiled
                     // and ran, and `A.X.compareTo("s")` reached the enum body with
                     // a String and died on "unknown field __ordinal".
-                    let erased_override = m.params.contains(&JType::TypeVar)
+                    let erased_override = m.params.iter().any(|p| matches!(p, JType::TypeVar(_)))
                         && named
                             .iter()
                             .any(|seen| seen.name == m.name && seen.params.len() == m.params.len());
@@ -3203,6 +3261,38 @@ fn unknown_name_in(ty: &TypeRef, table: &MethodTable) -> Option<String> {
 /// not model says so by name — `LinkedList<Integer> l;` reads to a student
 /// exactly as its import and its `new` do, rather than as a typo or as the
 /// unhelpful "this type cannot be used for a variable".
+/// javac: "wrong number of type arguments; required N". A parameterization
+/// whose argument count disagrees with the class's declaration resolves to the
+/// RAW type here, which silently accepted `Pair<String>` for a two-parameter
+/// class — the type then erased and the program ran with the wrong static
+/// types throughout. Nested arguments are checked too (`List<Pair<String>>`).
+///
+/// A RAW use (no arguments at all) is legal Java and stays legal.
+fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
+    match ty {
+        TypeRef::Array(inner) => type_arity_error(inner, table),
+        TypeRef::Generic { base, args } => {
+            for arg in args {
+                if let Some(inner) = type_arity_error(arg, table) {
+                    return Some(inner);
+                }
+            }
+            // Only a class the PROGRAM declares is checked: the library types
+            // are modelled by hand, and their arities here are approximate
+            // (a `Map.Entry` argument names an entrySet's type, not a value).
+            let declared = table
+                .class_id(base)
+                .or_else(|| base.rsplit('.').next().and_then(|n| table.class_id(n)))
+                .and_then(|id| table.info_by_id(id))
+                .map(|info| info.type_param_count)?;
+            (declared != args.len()).then(|| {
+                format!("wrong number of type arguments; required {declared} in class {base}")
+            })
+        }
+        _ => None,
+    }
+}
+
 fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
     // A type-variable ERASURE sentinel reaching here means a shape caturra
     // does not model — a library functional interface parameterized on a
@@ -3738,7 +3828,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // records nothing and passes as unchecked, which is javac's rule too.
         || matches!(
             (from, to),
-            (JType::Object(sub), JType::Generic { class: sup, arg })
+            (JType::Object(sub), JType::Generic { class: sup, arg, .. })
                 if table.is_subtype(sub, sup)
                     && table
                         .generic_supertype_arg(sub, sup)
@@ -3893,8 +3983,9 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // primitive boxes on the way (`new Box<Integer>(42)`, JLS §5.3: boxing
         // then a widening reference conversion). Without the boxing half, a
         // generic constructor or method could not be handed a literal at all.
-        || (to == JType::TypeVar && (from.is_reference() || boxable_primitive(from).is_some()))
-        || (from == JType::TypeVar && to == JType::Object(table.object_id))
+        || (matches!(to, JType::TypeVar(_))
+            && (from.is_reference() || boxable_primitive(from).is_some()))
+        || (matches!(from, JType::TypeVar(_)) && to == JType::Object(table.object_id))
         // Autoboxing / unboxing in assignment and method invocation.
         || matches!((from, to), (JType::Boxed(e), t) if e.base_type() == t)
         || matches!((from, to), (f, JType::Boxed(e)) if e.base_type() == f)
@@ -4330,12 +4421,21 @@ enum JType {
     /// members.
     Generic {
         class: ClassId,
+        /// The FIRST type argument, inline — every generic caturra tracked
+        /// before had exactly one, and that case stays allocation-free.
         arg: ElemType,
+        /// The arguments AFTER the first, interned (`NO_TYPE_ARGS` when there
+        /// are none). Kept apart from `arg` so the single-parameter case reads
+        /// exactly as it did.
+        rest: TypeArgsId,
     },
-    /// The (single) type parameter of a generic class, seen while
-    /// compiling that class's own body. Erases to `Object`; at external
-    /// use it substitutes to the receiver's tracked type argument.
-    TypeVar,
+    /// A type parameter of a generic class, seen while compiling that
+    /// class's own body, identified by its DECLARED POSITION. Erases to
+    /// `Object`; at external use it substitutes to the receiver's tracked
+    /// type argument at that position. The position is what lets a
+    /// `Pair<K, V>` tell its two apart — one unindexed variable is why a
+    /// class with more than one parameter could not be tracked at all.
+    TypeVar(u8),
     /// A boxed primitive wrapper (`Integer`, `Double`, ...). The
     /// `ElemType` is the primitive kind (never `Str`/`Object`).
     Boxed(ElemType),
@@ -4395,12 +4495,14 @@ impl JType {
         match self {
             JType::Object(id) if id == table.object_id => String::from("Object"),
             JType::Boxed(elem) => wrapper_name(elem, table),
-            JType::Generic { class, arg } => {
-                format!(
-                    "{}<{}>",
-                    table.class_name(class),
-                    arg.base_type().describe(table)
-                )
+            JType::Generic { class, arg, rest } => {
+                let mut args = vec![arg.base_type().describe(table)];
+                let mut index = 1;
+                while let Some(next) = table.type_arg(arg, rest, index) {
+                    args.push(next.base_type().describe(table));
+                    index += 1;
+                }
+                format!("{}<{}>", table.class_name(class), args.join(", "))
             }
             JType::Map { key, value } => format!(
                 "HashMap<{}, {}>",
@@ -4454,7 +4556,7 @@ impl JType {
                 key.base_type().describe(table),
                 value.base_type().describe(table)
             ),
-            JType::TypeVar => String::from("Object"),
+            JType::TypeVar(_) => String::from("Object"),
             JType::Int => String::from("int"),
             JType::Double => String::from("double"),
             JType::Boolean => String::from("boolean"),
@@ -4545,7 +4647,7 @@ impl JType {
                 | JType::MapEntry { .. }
                 | JType::Exception(_)
                 | JType::Generic { .. }
-                | JType::TypeVar
+                | JType::TypeVar(_)
                 | JType::Boxed(_)
                 | JType::Class
                 | JType::Field
@@ -4649,7 +4751,7 @@ impl JType {
             JType::Stack(_) => String::from("Ljava/util/Stack;"),
             // Only reachable for methods that already produced a
             // diagnostic; the descriptor keeps the class file coherent.
-            JType::TypeVar | JType::Unsupported | JType::Error => {
+            JType::TypeVar(_) | JType::Unsupported | JType::Error => {
                 String::from("Ljava/lang/Object;")
             }
         }
@@ -5860,7 +5962,7 @@ fn method_descriptor(
                     && !table.has_class(simple)
                 {
                     out.push_str("Ljava/lang/reflect/Type;");
-                } else if name == crate::parser::TYPEVAR_SENTINEL
+                } else if crate::parser::typevar_index(name).is_some()
                     || name == "Object"
                     || name == "java.lang.Object"
                 {
@@ -12525,6 +12627,10 @@ impl BodyGen<'_> {
             self.error(span, unresolved_type_message(ty, self.table));
             return;
         };
+        if let Some(message) = type_arity_error(ty, self.table) {
+            self.error(span, message);
+            return;
+        }
 
         for declarator in declarators {
             // C-style `int a[], b;` gives the extra dimension to `a` alone, so
@@ -14554,6 +14660,17 @@ impl BodyGen<'_> {
                 self.error(span, format!("{class_name} is not a generic type"));
                 return JType::Error;
             }
+            // …and the COUNT must match what the class declares, unless the
+            // diamond wrote none: `new Pair<String>(k, v)` on a two-parameter
+            // class used to fall back to the raw type and run.
+            let written = TypeRef::Generic {
+                base: String::from(class_name),
+                args: type_args.to_vec(),
+            };
+            if let Some(message) = type_arity_error(&written, self.table) {
+                self.error(span, message);
+                return JType::Error;
+            }
         }
         // `new Host.Point()` — a nested class named from outside its outer.
         let class_name = match self.table.qualified_nested_class(class_name) {
@@ -15846,11 +15963,19 @@ impl BodyGen<'_> {
     /// Substitute a tracked type argument for a type variable on a
     /// read: emits a `checkcast` to the argument's class and returns
     /// its concrete type. Non-type-variable types pass through.
-    fn substitute_type_var(&mut self, ty: JType, arg: ElemType) -> JType {
-        if ty != JType::TypeVar {
+    ///
+    /// The variable's own POSITION selects the argument, so a
+    /// `Pair<String, Integer>` substitutes `String` for its `K` and `Integer`
+    /// for its `V`. A position the receiver does not carry (a raw use) leaves
+    /// the erased type alone.
+    fn substitute_type_var(&mut self, ty: JType, first: ElemType, rest: TypeArgsId) -> JType {
+        let JType::TypeVar(index) = ty else {
             return ty;
-        }
-        let concrete = arg.base_type();
+        };
+        let Some(arg) = self.table.type_arg(first, rest, index) else {
+            return ty;
+        };
+        let concrete = elem_value_type(arg, self.table);
         // A WRAPPER argument stays BOXED: the value on the stack is a
         // reference (that is how a `T` field holds an Integer), so the type
         // must be the wrapper, not the primitive — unboxing it here would
@@ -15866,7 +15991,9 @@ impl BodyGen<'_> {
         }
         let internal = match concrete {
             JType::Str => Some(String::from("java/lang/String")),
-            JType::Object(id) => Some(self.table.class_name(id).to_owned()),
+            JType::Object(id) | JType::Generic { class: id, .. } => {
+                Some(self.table.class_name(id).to_owned())
+            }
             _ => None,
         };
         if let Some(internal) = internal {
@@ -16018,17 +16145,17 @@ impl BodyGen<'_> {
             // A parameterized receiver: dispatch on the erased class,
             // then substitute the type variable in the return with the
             // tracked argument (inserting a checkcast on reads).
-            JType::Generic { class, arg } => {
+            JType::Generic { class, arg, rest } => {
                 let result =
                     self.emit_virtual_call_on_stacked_receiver(class, method, args, span)?;
-                return Some(result.map(|ret| self.substitute_type_var(ret, arg)));
+                return Some(result.map(|ret| self.substitute_type_var(ret, arg, rest)));
             }
             // Wrapper instance methods (intValue, compareTo, ...).
             JType::Boxed(elem) => {
                 return self.boxed_instance_call(elem, method, args, span);
             }
             // A method on a type variable: only Object's methods.
-            JType::TypeVar => self.table.object_id,
+            JType::TypeVar(_) => self.table.object_id,
             JType::Error => {
                 self.error_bail(span, "call receiver");
                 return None;
@@ -20119,7 +20246,7 @@ impl BodyGen<'_> {
             JType::Generic { .. }
             | JType::StringBuilder
             | JType::CharSequence
-            | JType::TypeVar
+            | JType::TypeVar(_)
             | JType::Boxed(_)
             | JType::Map { .. }
             | JType::TreeMap { .. }
@@ -20368,17 +20495,17 @@ impl BodyGen<'_> {
                 // A field of a PARAMETERIZED receiver (`box.v` on a
                 // `Box<String>`) — the tracked argument replaces the type
                 // variable, as it does for a method return.
-                JType::Generic { class, arg } => {
+                JType::Generic { class, arg, rest } => {
                     let owner = self.table.class_name(class).to_owned();
-                    self.table
-                        .field(&owner, name)
-                        .map_or(JType::Error, |(_, f)| {
-                            if f.ty == JType::TypeVar {
-                                arg.base_type()
-                            } else {
-                                f.ty
-                            }
-                        })
+                    let field = self.table.field(&owner, name).map(|(_, f)| f.ty);
+                    match field {
+                        Some(JType::TypeVar(index)) => self
+                            .table
+                            .type_arg(arg, rest, index)
+                            .map_or(JType::Error, |a| substituted_read(a, self.table)),
+                        Some(ty) => ty,
+                        None => JType::Error,
+                    }
                 }
                 _ => JType::Error,
             },
@@ -20507,18 +20634,20 @@ impl BodyGen<'_> {
                         // `box.get() + box.get()` typed as Error, so `+` was not
                         // seen as a string concatenation, and the whole
                         // `println` silently produced NOTHING.
-                        JType::Generic { class, arg } => {
+                        JType::Generic { class, arg, rest } => {
                             let class_name = self.table.class_name(class).to_owned();
                             let arg_types: Vec<JType> =
                                 args.iter().map(|a| self.type_of(a)).collect();
                             return match self.table.resolve(&class_name, method, &arg_types) {
                                 Resolution::Found(sig) => match sig.ret {
-                                    // Must agree with `substitute_type_var`: a
-                                    // wrapper argument keeps its BOXED type.
-                                    Some(JType::TypeVar) => match arg {
-                                        ElemType::Wrapper(prim) => JType::Boxed(prim.elem()),
-                                        other => other.base_type(),
-                                    },
+                                    // Must agree with `substitute_type_var`,
+                                    // down to WHICH parameter this is: a
+                                    // `Pair<String, Integer>.getValue()`
+                                    // returns the second argument.
+                                    Some(JType::TypeVar(index)) => self
+                                        .table
+                                        .type_arg(arg, rest, index)
+                                        .map_or(JType::Error, |a| substituted_read(a, self.table)),
                                     Some(ret) => ret,
                                     None => JType::Error,
                                 },
@@ -21520,8 +21649,8 @@ impl BodyGen<'_> {
             let field_ty = self.emit_getfield(owner, &field);
             // Substitute the tracked type argument for a type-variable
             // field (`cell.value` on a `Cell<String>` reads a String).
-            if let JType::Generic { arg, .. } = object_ty {
-                return self.substitute_type_var(field_ty, arg);
+            if let JType::Generic { arg, rest, .. } = object_ty {
+                return self.substitute_type_var(field_ty, arg, rest);
             }
             return field_ty;
         }
@@ -23635,7 +23764,7 @@ impl BodyGen<'_> {
             | JType::Generic { .. }
             | JType::StringBuilder
             | JType::CharSequence
-            | JType::TypeVar
+            | JType::TypeVar(_)
             | JType::Boxed(_)
             | JType::Map { .. }
             | JType::TreeMap { .. }
@@ -24170,7 +24299,7 @@ impl BodyGen<'_> {
             // A primitive handed to a type variable (`new Box<Integer>(42)`,
             // `<T> T id(T)` called with `3`): box it, then the wrapper is the
             // reference `T` erases to.
-            if to == JType::TypeVar
+            if matches!(to, JType::TypeVar(_))
                 && let Some(elem) = boxable_primitive(from)
             {
                 self.emit_box(elem);
@@ -24315,8 +24444,8 @@ impl BodyGen<'_> {
             ) if d1 >= 2 && sup == self.table.object_id => {}
             // Any reference stores into a type variable; a type variable
             // reads out as Object.
-            (from, JType::TypeVar) if from.is_reference() => {}
-            (JType::TypeVar, JType::Object(id)) if id == self.table.object_id => {}
+            (from, JType::TypeVar(_)) if from.is_reference() => {}
+            (JType::TypeVar(_), JType::Object(id)) if id == self.table.object_id => {}
             (f, t) if f == t => {}
             (JType::Int | JType::Char | JType::Short | JType::Byte, JType::Double) => {
                 self.code.push_op(op::I2D, 1);

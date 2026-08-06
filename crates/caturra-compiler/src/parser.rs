@@ -4981,38 +4981,44 @@ fn erased_type_key(ty: &TypeRef) -> String {
 fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
     use std::collections::HashMap;
     let span = class.span;
-    // A class with exactly one UNBOUNDED type parameter tracks it: that
-    // parameter erases to the `TypeVar` sentinel (enabling cast-free reads).
-    // Every other type parameter erases to its bound — `T extends Comparable`
-    // becomes `Comparable`, so a bounded `T`'s methods resolve — or to
-    // `Object` when unbounded.
-    let tracked: Option<String> = match class.type_params.as_slice() {
-        [tp] if tp.bound.is_none() => Some(tp.name.clone()),
-        _ => None,
-    };
+    // Every UNBOUNDED type parameter is tracked, each under its own position:
+    // it erases to that position's `TypeVar` sentinel, which enables
+    // cast-free reads. A BOUNDED one erases to its bound instead — `T extends
+    // Comparable` becomes `Comparable`, so a bounded `T`'s methods resolve —
+    // and an unbounded one in a class that has any bounded parameter still
+    // gets its own slot, since the slot is the DECLARED position.
+    let tracked: Tracked = class
+        .type_params
+        .iter()
+        .enumerate()
+        .filter(|(_, tp)| tp.bound.is_none())
+        .filter_map(|(i, tp)| u8::try_from(i).ok().map(|i| (tp.name.clone(), i)))
+        .collect();
     let class_erasures: HashMap<String, TypeRef> = class
         .type_params
         .iter()
-        .filter(|tp| Some(&tp.name) != tracked.as_ref())
+        .filter(|tp| !tracked.contains_key(&tp.name))
         .map(|tp| (tp.name.clone(), erasure_target(tp, span, synthesized)))
         .collect();
     let scope = |method: &MethodDecl,
                  synthesized: &mut Vec<ClassDecl>|
-     -> (HashMap<String, TypeRef>, Option<String>) {
+     -> (HashMap<String, TypeRef>, Tracked) {
         let mut to_object = class_erasures.clone();
         for tp in &method.type_params {
             to_object.insert(tp.name.clone(), erasure_target(tp, span, synthesized));
         }
-        // A method type parameter shadowing the class one drops tracking.
+        // A method type parameter shadowing a class one drops that tracking.
         let tracked = tracked
-            .clone()
-            .filter(|name| !method.type_params.iter().any(|tp| &tp.name == name));
+            .iter()
+            .filter(|(name, _)| !method.type_params.iter().any(|tp| &tp.name == *name))
+            .map(|(name, index)| (name.clone(), *index))
+            .collect();
         (to_object, tracked)
     };
     for field in &mut class.fields {
-        erase_in_type(&mut field.ty, &class_erasures, tracked.as_deref());
+        erase_in_type(&mut field.ty, &class_erasures, &tracked);
         if let Some(init) = &mut field.init {
-            erase_in_expr(init, &class_erasures, tracked.as_deref());
+            erase_in_expr(init, &class_erasures, &tracked);
         }
     }
     for method in &mut class.methods {
@@ -5022,17 +5028,17 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
         // parameter types, the call site can recover the type argument as the
         // join of those arguments (see `MethodDecl::infer_return`).
         method.infer_return = infer_return_plan(method, &to_object);
-        erase_in_type(&mut method.return_type, &to_object, tracked.as_deref());
+        erase_in_type(&mut method.return_type, &to_object, &tracked);
         for param in &mut method.params {
-            erase_in_type(&mut param.ty, &to_object, tracked.as_deref());
+            erase_in_type(&mut param.ty, &to_object, &tracked);
         }
         for stmt in &mut method.body {
-            erase_in_stmt(stmt, &to_object, tracked.as_deref());
+            erase_in_stmt(stmt, &to_object, &tracked);
         }
     }
     for block in &mut class.init_blocks {
         for stmt in &mut block.body {
-            erase_in_stmt(stmt, &class_erasures, tracked.as_deref());
+            erase_in_stmt(stmt, &class_erasures, &tracked);
         }
     }
 }
@@ -5131,18 +5137,34 @@ fn erasure_target(tp: &TypeParam, span: SourceSpan, synthesized: &mut Vec<ClassD
 /// since no class ever names it.
 pub(crate) const INTERSECTION_PREFIX: &str = "__And$";
 
-/// The reserved type name that [`resolve_type`] maps to
-/// [`JType::TypeVar`]; it cannot collide with a source identifier.
+/// The reserved type-name PREFIX that [`resolve_type`] maps to
+/// [`JType::TypeVar`]; it cannot collide with a source identifier. The
+/// parameter's own position follows it (`\0TypeVar0`, `\0TypeVar1`), because
+/// a class with several parameters needs to tell its `K` from its `V` — one
+/// unindexed sentinel is why `Pair<K, V>` could not be tracked at all.
 pub(crate) const TYPEVAR_SENTINEL: &str = "\u{0}TypeVar";
+
+/// The reserved name standing for type parameter `index`.
+pub(crate) fn typevar_sentinel(index: u8) -> String {
+    format!("{TYPEVAR_SENTINEL}{index}")
+}
+
+/// The type parameters a scope TRACKS, by name and declared position.
+type Tracked = std::collections::HashMap<String, u8>;
+
+/// Which type parameter a reserved name stands for, if it is one.
+pub(crate) fn typevar_index(name: &str) -> Option<u8> {
+    name.strip_prefix(TYPEVAR_SENTINEL)?.parse().ok()
+}
 
 fn erase_in_type(
     ty: &mut TypeRef,
     to_object: &std::collections::HashMap<String, TypeRef>,
-    tracked: Option<&str>,
+    tracked: &Tracked,
 ) {
     match ty {
-        TypeRef::Named(name) if Some(name.as_str()) == tracked => {
-            *ty = TypeRef::Named(String::from(TYPEVAR_SENTINEL));
+        TypeRef::Named(name) if tracked.contains_key(name) => {
+            *ty = TypeRef::Named(typevar_sentinel(tracked[name]));
         }
         TypeRef::Named(name) => {
             if let Some(target) = to_object.get(name) {
@@ -5151,8 +5173,8 @@ fn erase_in_type(
         }
         TypeRef::Array(inner) => erase_in_type(inner, to_object, tracked),
         TypeRef::Generic { base, args } => {
-            if Some(base.as_str()) == tracked {
-                *ty = TypeRef::Named(String::from(TYPEVAR_SENTINEL));
+            if let Some(index) = tracked.get(base) {
+                *ty = TypeRef::Named(typevar_sentinel(*index));
             } else if let Some(target) = to_object.get(base) {
                 *ty = target.clone();
             } else {
@@ -5178,10 +5200,10 @@ fn erase_in_type(
 fn erase_in_type_arg(
     ty: &mut TypeRef,
     to_object: &std::collections::HashMap<String, TypeRef>,
-    tracked: Option<&str>,
+    tracked: &Tracked,
 ) {
     if let TypeRef::Named(name) = ty
-        && (to_object.contains_key(name) || Some(name.as_str()) == tracked)
+        && (to_object.contains_key(name) || tracked.contains_key(name))
     {
         // The BOUND rides along, so a `<T extends Number> … List<T>` reads
         // its elements as `Number` rather than `Object` — the erasure of T
@@ -5203,7 +5225,7 @@ fn erase_in_type_arg(
 fn erase_in_stmt(
     stmt: &mut Stmt,
     to_object: &std::collections::HashMap<String, TypeRef>,
-    tracked: Option<&str>,
+    tracked: &Tracked,
 ) {
     match stmt {
         Stmt::Block(stmts) => {
@@ -5308,7 +5330,7 @@ fn erase_in_stmt(
 fn erase_in_expr(
     expr: &mut Expr,
     to_object: &std::collections::HashMap<String, TypeRef>,
-    tracked: Option<&str>,
+    tracked: &Tracked,
 ) {
     match expr {
         Expr::Cast { ty, operand, .. } => {

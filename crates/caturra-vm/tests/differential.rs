@@ -22021,3 +22021,271 @@ public class SubListCtor {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Multi-parameter user generics: `Pair<K, V>` (round-9 generics deferral).
+// ---------------------------------------------------------------------------
+
+// A class with two type parameters tracks BOTH: `getKey()` is a String and
+// `getValue()` an Integer, on the same receiver. One unindexed type variable
+// is why such a class could only ever be raw.
+differential_test!(
+    diff_two_parameter_generic_class,
+    "PairBasics",
+    r#"
+class Pair<K, V> {
+    private K key;
+    private V value;
+
+    Pair(K key, V value) {
+        this.key = key;
+        this.value = value;
+    }
+
+    K getKey() {
+        return key;
+    }
+
+    V getValue() {
+        return value;
+    }
+
+    void setValue(V v) {
+        this.value = v;
+    }
+
+    public String toString() {
+        return "(" + key + ", " + value + ")";
+    }
+}
+
+public class PairBasics {
+    static void show(Object o) {
+        System.out.println("obj " + o);
+    }
+
+    static void show(String s) {
+        System.out.println("str " + s);
+    }
+
+    public static void main(String[] args) {
+        Pair<String, Integer> p = new Pair<>("a", 1);
+        show(p.getKey());
+        System.out.println(p.getValue() + 41);
+        p.setValue(9);
+        System.out.println(p);
+        System.out.println(p.getKey().length());
+
+        Pair<Integer, String> q = new Pair<>(7, "seven");
+        System.out.println(q.getKey() * 2 + " " + q.getValue().toUpperCase());
+    }
+}
+"#
+);
+
+// Three parameters, a bounded parameter beside an unbounded one, the class's
+// own fields read through the type variables, and a parameterized argument
+// nested inside another (`Pair<String, Pair<String, Integer>>`).
+differential_test!(
+    diff_generic_parameters_in_depth,
+    "PairDepth",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+class Pair<K, V> {
+    K key;
+    V value;
+
+    Pair(K key, V value) {
+        this.key = key;
+        this.value = value;
+    }
+
+    V getValue() {
+        return value;
+    }
+}
+
+class Triple<A, B, C> {
+    A a;
+    B b;
+    C c;
+
+    Triple(A a, B b, C c) {
+        this.a = a;
+        this.b = b;
+        this.c = c;
+    }
+
+    C third() {
+        return c;
+    }
+}
+
+class Bounded<T extends Number, U> {
+    T n;
+    U u;
+
+    Bounded(T n, U u) {
+        this.n = n;
+        this.u = u;
+    }
+
+    double d() {
+        return n.doubleValue();
+    }
+
+    U u() {
+        return u;
+    }
+}
+
+public class PairDepth {
+    public static void main(String[] args) {
+        Triple<String, Integer, Boolean> t = new Triple<>("x", 2, true);
+        System.out.println(t.a.isEmpty() + " " + (t.b + 1) + " " + t.third());
+
+        Bounded<Integer, String> b = new Bounded<>(3, "s");
+        System.out.println(b.d() + " " + b.u().length());
+
+        List<Pair<String, Integer>> list = new ArrayList<>();
+        list.add(new Pair<>("k", 5));
+        System.out.println(list.get(0).key.toUpperCase() + list.get(0).value);
+
+        Pair<String, Pair<String, Integer>> nested =
+            new Pair<>("n", new Pair<>("in", 3));
+        System.out.println(nested.getValue().getValue() + 1);
+        System.out.println(nested.getValue().key.length());
+    }
+}
+"#
+);
+
+// A generic INTERFACE implemented with concrete arguments, a subclass of a
+// two-parameter class, a generic method with two parameters, and a
+// collection-valued argument.
+differential_test!(
+    diff_generic_interface_and_inheritance,
+    "PairFaces",
+    r#"
+import java.util.ArrayList;
+import java.util.List;
+
+interface Mapper<A, B> {
+    B apply(A a);
+}
+
+class Table<K, V> {
+    private List<K> keys = new ArrayList<>();
+    private List<V> vals = new ArrayList<>();
+
+    void put(K k, V v) {
+        keys.add(k);
+        vals.add(v);
+    }
+
+    V get(K k) {
+        int i = keys.indexOf(k);
+        return i < 0 ? null : vals.get(i);
+    }
+
+    K keyAt(int i) {
+        return keys.get(i);
+    }
+}
+
+class StrLen implements Mapper<String, Integer> {
+    public Integer apply(String s) {
+        return s.length();
+    }
+}
+
+class Sub<X, Y> extends Table<X, Y> {
+    Y firstValue() {
+        return get(keyAt(0));
+    }
+}
+
+public class PairFaces {
+    static <A, B> B second(A a, B b) {
+        System.out.println("first " + a);
+        return b;
+    }
+
+    public static void main(String[] args) {
+        Table<String, Integer> t = new Table<>();
+        t.put("a", 1);
+        t.put("b", 2);
+        System.out.println(t.get("b") + 10);
+        System.out.println(t.keyAt(0).toUpperCase());
+
+        Mapper<String, Integer> m = new StrLen();
+        System.out.println(m.apply("hello") + 1);
+
+        Sub<String, Integer> s = new Sub<>();
+        s.put("k", 5);
+        System.out.println(s.firstValue() + 1);
+        System.out.println(s.keyAt(0).length());
+
+        String r = second(1, "two");
+        System.out.println(r.toUpperCase());
+
+        Table<String, List<Integer>> deep = new Table<>();
+        List<Integer> nums = new ArrayList<>();
+        nums.add(3);
+        deep.put("n", nums);
+        System.out.println(deep.get("n").get(0) + 1);
+    }
+}
+"#
+);
+
+// javac: a parameterization must write as many arguments as the class
+// declares. Caturra resolved a mismatched one to the RAW type, so
+// `Pair<String>` compiled and ran with the wrong static types throughout.
+differential_reject!(
+    reject_wrong_type_argument_count,
+    "PairArity",
+    r#"
+class Pair<K, V> {
+    K k;
+    V v;
+
+    Pair(K k, V v) {
+        this.k = k;
+        this.v = v;
+    }
+}
+
+public class PairArity {
+    public static void main(String[] args) {
+        Pair<String> p = new Pair<>("x", 1);
+        System.out.println(p.k);
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_wrong_type_argument_count_at_new,
+    "PairArityNew",
+    r#"
+class Pair<K, V> {
+    K k;
+    V v;
+
+    Pair(K k, V v) {
+        this.k = k;
+        this.v = v;
+    }
+}
+
+public class PairArityNew {
+    public static void main(String[] args) {
+        Object o = new Pair<String>("x", 1);
+        System.out.println(o);
+    }
+}
+"#
+);

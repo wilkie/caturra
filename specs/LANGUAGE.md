@@ -752,6 +752,37 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A generic class may have more than one type parameter** (2026-08-06,
+  JLS §4.4/§4.5) — the largest of round 9's deferrals, and a rejects-valid
+  gap rather than a wrong answer: `class Pair<K, V>` compiled, but every USE
+  of one was raw, so `String k = p.getKey()` was "Object cannot be converted
+  to String". Two things were single where Java has many:
+  - **A type variable had no identity.** The parser erased every tracked
+    parameter to ONE reserved name, so a `K` and a `V` were the same type to
+    the compiler and only a class with exactly one parameter could be tracked
+    at all. The reserved name now carries the parameter's DECLARED POSITION,
+    and `JType::TypeVar` carries it too — that position is what selects the
+    argument, so `Pair<String, Integer>.getKey()` reads a `String` and
+    `.getValue()` an `Integer` on the same receiver.
+  - **A parameterized type carried ONE argument.** `JType` is `Copy`, so the
+    list cannot ride inline; the first argument stays inline (every generic
+    tracked before had exactly one, and that case remains allocation-free)
+    and the rest are interned. A parameterized ARGUMENT is carried too, so
+    `Pair<String, Pair<String, Integer>>` reads its inner pair back as a pair
+    rather than as `Object`.
+  - Bounded and unbounded parameters mix (`<T extends Number, U>`): a bounded
+    one still erases to its bound, so its methods resolve, while keeping its
+    slot — the slot is the declared position, not a count of tracked ones.
+    Generic interfaces implemented with concrete arguments, subclasses of a
+    two-parameter class, and two-parameter generic methods all follow.
+  - **And the arity is now CHECKED**: `Pair<String>` on a two-parameter class
+    used to fall back to the raw type and run. javac's "wrong number of type
+    arguments; required N" is reported for a declaration, a field, a nested
+    argument (`List<Pair<String>>`) and a `new`. A genuinely RAW use — no
+    arguments at all — stays legal, as it is in Java.
+  - Pinned by `diff_two_parameter_generic_class`,
+    `diff_generic_parameters_in_depth`,
+    `diff_generic_interface_and_inheritance` and two `reject_*` tests.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is

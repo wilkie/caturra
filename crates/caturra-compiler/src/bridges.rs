@@ -167,7 +167,7 @@ fn is_override_of(inherited: &MethodDecl, method: &MethodDecl) -> bool {
 /// pre-existing missing-bridge gap. Missing a bridge loses a dispatch; adding
 /// a wrong one steals a call that was never generic. The second is worse.
 fn is_erased_variable(key: &str) -> bool {
-    key == crate::parser::TYPEVAR_SENTINEL
+    crate::parser::typevar_index(key).is_some()
 }
 
 /// `void set(Object t) { set((String) t); }` — cast each narrowed parameter
