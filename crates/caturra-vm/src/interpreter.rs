@@ -12000,6 +12000,37 @@ impl<'run> Interpreter<'run> {
                         }
                         None => Ok(Some(JValue::NULL)),
                     },
+                    // The kind predicates: facts the class file already
+                    // records (its access flags), or the name's own shape.
+                    "isInterface" => {
+                        let is_interface = self.classes.get(&name).is_some_and(|class| {
+                            class.access_flags.0 & caturra_classfile::ClassAccessFlags::INTERFACE
+                                != 0
+                        });
+                        Ok(Some(JValue::Int(i32::from(is_interface))))
+                    }
+                    "isEnum" => {
+                        // caturra desugars an enum into a class; the marker it
+                        // keeps is the synthesized `values()` method.
+                        let is_enum = self.classes.get(&name).is_some_and(|class| {
+                            class.methods.iter().any(|m| {
+                                class.constant_pool.get_utf8(m.name_index) == Some("values")
+                            })
+                        });
+                        Ok(Some(JValue::Int(i32::from(is_enum))))
+                    }
+                    "isPrimitive" => Ok(Some(JValue::Int(i32::from(matches!(
+                        name.as_str(),
+                        "int"
+                            | "double"
+                            | "long"
+                            | "float"
+                            | "short"
+                            | "byte"
+                            | "char"
+                            | "boolean"
+                            | "void"
+                    ))))),
                     // `Class` inherits `Object`'s identity `equals`/`hashCode`,
                     // and identity is meaningful because a class has exactly
                     // one `Class` instance (see `intern_class`).
@@ -12086,6 +12117,33 @@ impl<'run> Interpreter<'run> {
                         let assignable =
                             other.is_some_and(|other| self.class_is_subtype(&other, &name));
                         Ok(Some(JValue::Int(i32::from(assignable))))
+                    }
+                    "getInterfaces" => {
+                        let names: Vec<String> = self
+                            .classes
+                            .get(&name)
+                            .map(|class| {
+                                class
+                                    .interfaces
+                                    .iter()
+                                    .filter_map(|index| {
+                                        class
+                                            .constant_pool
+                                            .get_class_name(*index)
+                                            .map(str::to_owned)
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let elements: Vec<JValue> = names
+                            .into_iter()
+                            .map(|each| JValue::Ref(Some(self.intern_class(each))))
+                            .collect();
+                        let array = self.heap.alloc(HeapObject::RefArray(
+                            String::from("[Ljava/lang/Class;"),
+                            elements,
+                        ));
+                        Ok(Some(JValue::Ref(Some(array))))
                     }
                     "getSuperclass" => {
                         let super_name = self.classes.get(&name).and_then(|cf| {

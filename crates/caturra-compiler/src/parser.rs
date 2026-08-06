@@ -3571,6 +3571,29 @@ impl Parser<'_> {
                     };
                     continue;
                 }
+                // `Iface.super.m(args)` — JLS §15.12.1, the way a class picks
+                // ONE of several inherited defaults. The qualifier names an
+                // interface the class implements, and the call is non-virtual.
+                if self.at_keyword(Keyword::Super)
+                    && let Expr::Name { path, .. } = &expr
+                    && path.len() == 1
+                    && matches!(self.peek_at(1), Some(TokenKind::Symbol(".")))
+                {
+                    let owner = path[0].clone();
+                    self.pos += 2; // `super` `.`
+                    let (method, method_span) = self.expect_ident("after 'super.'")?;
+                    let args = self.arguments()?;
+                    expr = Expr::SuperMethodCall {
+                        owner: Some(owner),
+                        method,
+                        args,
+                        span: SourceSpan {
+                            start: expr.span().start,
+                            end: method_span.end,
+                        },
+                    };
+                    continue;
+                }
                 // `Outer.this` — qualified this (JLS §15.8.4), naming the
                 // enclosing instance from inside an inner class. Encoded as a
                 // name path ending in `this`, which cannot collide with a
@@ -4100,6 +4123,7 @@ impl Parser<'_> {
                 }
                 let args = self.arguments()?;
                 Ok(Expr::SuperMethodCall {
+                    owner: None,
                     method,
                     args,
                     span: SourceSpan {

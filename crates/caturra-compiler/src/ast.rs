@@ -572,6 +572,10 @@ pub enum Expr {
     },
     /// `super.method(args)` — non-virtual call to the superclass.
     SuperMethodCall {
+        /// The INTERFACE named in `Iface.super.m()` — the standard way to pick
+        /// one of several inherited defaults. `None` for a plain `super.m()`,
+        /// which looks up the superclass chain.
+        owner: Option<String>,
         method: String,
         args: Vec<Expr>,
         span: SourceSpan,

@@ -752,6 +752,33 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **An implementation is checked against the INTERFACE it implements**
+  (2026-08-05, round 9, JLS §9) — the interface-members cluster, all eleven
+  findings:
+  - **The override rules stopped at the superclass chain.** An implementation
+    that contradicted an interface method — a different RETURN type, WEAKER
+    access (including one inherited from a superclass, which javac blames on
+    the superclass's method), a BROADER `throws` — compiled, and then either
+    ran the wrong body or aborted the run with an internal error. All three
+    are checked now, with javac's "cannot implement" wording. Two rules the
+    check has to know: an interface member is implicitly `public` whether or
+    not the word is written, and caturra's own SYNTHESIZED library interfaces
+    (`Iterable`, `Comparable`, `AutoCloseable`) carry approximate signatures,
+    so only the access rule applies to them — checking a return type against
+    `Iterable.iterator()`'s erased one would refuse ordinary Java.
+  - **`Iface.super.m()` did not parse at all** — the standard way to pick one
+    of several inherited defaults. It is a name path followed by `super`, and
+    emits a non-virtual call to that interface's default.
+  - **A name inherited from BOTH a superclass and an interface is
+    ambiguous.** The check existed, but constant FOLDING reached the
+    interface's constant first and printed a value; the folder now declines a
+    name with more than one declaration.
+  - **`Class.isInterface()`/`isEnum()`/`isPrimitive()`/`getInterfaces()`**, a
+    cast to a PARAMETERIZED user interface (which casts by its erasure, as
+    javac's unchecked warning says), a duplicate member reported as being in
+    "interface I" rather than "class I", and `super` inside a default method
+    reported as javac's missing symbol rather than a missing superclass.
+  - Pinned by `diff_interface_super_and_reflection` and five `reject_*` tests.
 - **A lookup takes `Object`, and an immutable view is still a collection**
   (2026-08-03, round 9) — the equals/hashCode cluster:
   - **`Map.get`/`containsKey`/`remove`/`getOrDefault` and

@@ -21461,3 +21461,123 @@ public class DiffImmutableOf {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: interface members (JLS §9).
+// ---------------------------------------------------------------------------
+
+// `Iface.super.m()` — the standard way to pick one of several inherited
+// defaults — did not parse at all. Plus `Class.isInterface()`/`getInterfaces()`
+// and a cast to a PARAMETERIZED user interface, which casts by its erasure.
+differential_test!(
+    diff_interface_super_and_reflection,
+    "DiffIfaceSuper",
+    r#"
+interface A { default String who() { return "A"; } }
+interface B { default String who() { return "B"; } }
+interface Marker { }
+interface Sub extends Marker { default String d() { return "d"; } }
+interface Gen<T> { default String g(T t) { return "G" + t; } }
+class C implements A, B {
+    public String who() { return A.super.who() + B.super.who(); }
+}
+class Impl implements Sub, Gen<String> { }
+public class DiffIfaceSuper {
+    public static void main(String[] args) {
+        System.out.println(new C().who());
+        System.out.println(Marker.class.isInterface() + " " + Impl.class.isInterface());
+        System.out.println(Marker.class.getName());
+        for (Class<?> c : Impl.class.getInterfaces()) System.out.println("i:" + c.getName());
+        for (Class<?> c : Sub.class.getInterfaces()) System.out.println("s:" + c.getName());
+        Object o = new Impl();
+        System.out.println(((Sub) o).d());
+        System.out.println(((Gen<String>) o).g("x"));
+    }
+}
+"#
+);
+
+// javac: an implementation must be compatible with the interface method it
+// implements — the same return type, no weaker access (including one INHERITED
+// from a superclass), and no broader `throws`. caturra checked only the
+// superclass chain, so each of these compiled and then ran the wrong body or
+// aborted with an internal error.
+differential_reject!(
+    reject_interface_return_mismatch,
+    "RejectIfaceReturn",
+    r#"
+interface I { String m(); }
+class C implements I {
+    public int m() { return 1; }
+}
+public class RejectIfaceReturn {
+    public static void main(String[] args) { System.out.println("m=" + new C().m()); }
+}
+"#
+);
+
+differential_reject!(
+    reject_interface_weaker_access,
+    "RejectIfaceAccess",
+    r#"
+interface I { default String d() { return "I.d"; } }
+class C implements I {
+    private String d() { return "C.d"; }
+}
+public class RejectIfaceAccess {
+    public static void main(String[] args) {
+        I i = new C();
+        System.out.println(i.d());
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_inherited_weaker_access,
+    "RejectInheritedAccess",
+    r#"
+class Sup { String m() { return "Sup"; } }
+interface I { default String m() { return "I"; } }
+class C extends Sup implements I { }
+public class RejectInheritedAccess {
+    public static void main(String[] args) {
+        I i = new C();
+        System.out.println(i.m());
+    }
+}
+"#
+);
+
+differential_reject!(
+    reject_interface_broader_throws,
+    "RejectIfaceThrows",
+    r#"
+interface I { default String risky() throws Exception { return "I"; } }
+class Bad implements I {
+    public String risky() throws Throwable { return "B"; }
+}
+public class RejectIfaceThrows {
+    public static void main(String[] args) throws Exception {
+        System.out.println(new Bad().risky());
+    }
+}
+"#
+);
+
+// javac: a name inherited from BOTH a superclass and an interface is
+// ambiguous — caturra folded the interface's constant and printed a value.
+differential_reject!(
+    reject_ambiguous_inherited_field,
+    "RejectAmbiguousField",
+    r#"
+interface I { int K = 1; }
+class Sup { int K = 2; }
+class C extends Sup implements I {
+    String show() { return "K=" + K; }
+}
+public class RejectAmbiguousField {
+    public static void main(String[] args) { System.out.println(new C().show()); }
+}
+"#
+);

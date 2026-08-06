@@ -1465,6 +1465,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 })
                 .collect();
             let call = Expr::SuperMethodCall {
+                owner: None,
                 method: method.clone(),
                 args,
                 span,

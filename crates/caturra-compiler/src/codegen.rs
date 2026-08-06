@@ -932,8 +932,14 @@ impl MethodTable {
                         diagnostics.push(Diagnostic::error(
                             path,
                             format!(
-                                "variable {} is already defined in class {}",
-                                sig.name, class.name
+                                "variable {} is already defined in {} {}",
+                                sig.name,
+                                if class.is_interface {
+                                    "interface"
+                                } else {
+                                    "class"
+                                },
+                                class.name
                             ),
                             field.span,
                         ));
@@ -991,9 +997,14 @@ impl MethodTable {
                         } else {
                             format!("method {}", sig.describe(&table))
                         };
+                        let kind = if class.is_interface {
+                            "interface"
+                        } else {
+                            "class"
+                        };
                         diagnostics.push(Diagnostic::error(
                             path,
-                            format!("{what} is already defined in class {}", class.name),
+                            format!("{what} is already defined in {kind} {}", class.name),
                             method.span,
                         ));
                     } else {
@@ -1393,6 +1404,105 @@ impl MethodTable {
                         }
                         ancestor = parent.superclass;
                     }
+                }
+
+                // The same compatibility rules against INTERFACES (JLS
+                // §9.4.1/§8.4.8.3). The walk above follows the superclass
+                // chain only, so an implementation that contradicted an
+                // interface method — a different return type, weaker access,
+                // a broader `throws` — compiled and then failed at run time
+                // with an internal error, or silently ran the wrong body.
+                for (interface_id, sig) in self.inherited_interface_methods(info.id) {
+                    let interface_name = self.class_name(interface_id).to_owned();
+                    // caturra SYNTHESIZES the library interfaces (`Iterable`,
+                    // `Comparable`, `AutoCloseable`, …) with approximate
+                    // signatures — an erased return, no `throws`. Checking an
+                    // implementation against one of those would refuse ordinary
+                    // Java (`Iterator<String> iterator()`, `close() throws
+                    // IOException`), so only the ACCESS rule applies to them.
+                    let approximate = self.synthesized.contains(&interface_name);
+                    // The implementing method: this class's own, or one
+                    // inherited from a superclass (which must satisfy the
+                    // interface just the same).
+                    let Some((owner, implementation)) =
+                        self.implementation_of(info.id, &sig.name, &sig.params)
+                    else {
+                        continue;
+                    };
+                    let owner_name = self.class_name(owner).to_owned();
+                    // An INTERFACE member is implicitly public, whether or not
+                    // the word is written; only a class's own declaration can
+                    // weaken access.
+                    let level = if self.info_by_id(owner).is_some_and(|info| info.is_interface) {
+                        3
+                    } else {
+                        self.method_access
+                            .get(&(owner_name.clone(), sig.name.clone(), sig.params.len()))
+                            .copied()
+                            .unwrap_or(3)
+                    };
+                    let compatible_return = approximate
+                        || implementation.ret == sig.ret
+                        || sig.ret == Some(JType::TypeVar)
+                        || matches!(
+                            (implementation.ret, sig.ret),
+                            (Some(JType::Object(sub)), Some(JType::Object(sup)))
+                                if self.is_subtype(sub, sup)
+                        );
+                    let interface_throws = self
+                        .throws_clauses
+                        .get(&(interface_name.clone(), sig.name.clone(), sig.params.len()))
+                        .cloned()
+                        .unwrap_or_default();
+                    let allowed: Vec<crate::thrown::Exc> = interface_throws
+                        .iter()
+                        .filter_map(|n| crate::thrown::resolve_exc(n, self))
+                        .collect();
+                    let declared = self
+                        .throws_clauses
+                        .get(&(owner_name.clone(), sig.name.clone(), sig.params.len()))
+                        .cloned()
+                        .unwrap_or_default();
+                    let broadened = if approximate {
+                        None
+                    } else {
+                        declared
+                            .iter()
+                            .filter_map(|n| crate::thrown::resolve_exc(n, self).map(|e| (n, e)))
+                            .find(|(_, e)| {
+                                crate::thrown::exc_is_checked(e, self)
+                                    && !allowed
+                                        .iter()
+                                        .any(|d| crate::thrown::exc_covers(d, e, self))
+                            })
+                            .map(|(n, _)| n.rsplit('.').next().unwrap_or(n).to_owned())
+                    };
+                    if compatible_return && level >= 3 && broadened.is_none() {
+                        continue;
+                    }
+                    let detail = if level < 3 {
+                        format!(
+                            ": attempting to assign weaker access privileges; was {}",
+                            ACCESS_NAMES[3]
+                        )
+                    } else if let Some(exc) = &broadened {
+                        format!(": overridden method does not throw {exc}")
+                    } else {
+                        String::new()
+                    };
+                    let span = class
+                        .methods
+                        .iter()
+                        .find(|m| m.name == sig.name)
+                        .map_or(class.span, |m| m.span);
+                    diagnostics.push(Diagnostic::error(
+                        path,
+                        format!(
+                            "{}() in {owner_name} cannot implement {}() in {interface_name}{detail}",
+                            sig.name, sig.name,
+                        ),
+                        span,
+                    ));
                 }
 
                 // `@Override` must override or implement SOMETHING (JLS
@@ -1916,6 +2026,70 @@ impl MethodTable {
             }
         }
         Some(info.id)
+    }
+
+    /// Every method declared by an interface this class implements, directly
+    /// or through another interface, paired with the interface that declares
+    /// it. Static interface methods are not inherited (JLS §8.4.8).
+    fn inherited_interface_methods(&self, class: ClassId) -> Vec<(ClassId, MethodSig)> {
+        let mut out = Vec::new();
+        let mut stack: Vec<ClassId> = Vec::new();
+        let mut seen: Vec<ClassId> = Vec::new();
+        let mut chain = Some(class);
+        let mut steps = 0usize;
+        while let Some(id) = chain {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                break;
+            }
+            let Some(info) = self.info_by_id(id) else {
+                break;
+            };
+            stack.extend(info.interfaces.iter().copied());
+            chain = info.superclass;
+        }
+        while let Some(id) = stack.pop() {
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let Some(info) = self.info_by_id(id) else {
+                continue;
+            };
+            for sig in &info.methods {
+                if !sig.is_static {
+                    out.push((id, sig.clone()));
+                }
+            }
+            stack.extend(info.interfaces.iter().copied());
+        }
+        out
+    }
+
+    /// The class that supplies a concrete `name(params)` for `class` — itself
+    /// or an ancestor — and the signature it declares.
+    fn implementation_of(
+        &self,
+        class: ClassId,
+        name: &str,
+        params: &[JType],
+    ) -> Option<(ClassId, MethodSig)> {
+        let mut current = Some(class);
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                return None;
+            }
+            let info = self.info_by_id(id)?;
+            if let Some(sig) = info.methods.iter().find(|m| {
+                m.name == name && !m.is_abstract && self.params_override(&m.params, params)
+            }) {
+                return Some((id, sig.clone()));
+            }
+            current = info.superclass;
+        }
+        None
     }
 
     fn class_count(&self) -> usize {
@@ -8558,6 +8732,12 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
     bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getSimpleName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
+    // The kind predicates. `isInterface` is the one a program actually asks —
+    // the others come with it, and each is a fact the VM already knows.
+    bm("isInterface", &[], BRet::Boolean, "()Z"),
+    bm("isEnum", &[], BRet::Boolean, "()Z"),
+    bm("isArray", &[], BRet::Boolean, "()Z"),
+    bm("isPrimitive", &[], BRet::Boolean, "()Z"),
     bm("isArray", &[], BRet::Boolean, "()Z"),
     // `null` for a non-array class, so the return is a nullable Class.
     bm("getComponentType", &[], BRet::Class, "()Ljava/lang/Class;"),
@@ -8585,6 +8765,14 @@ const CLASS_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Z",
     ),
     bm("getSuperclass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // `getInterfaces()` — the interfaces this type declares directly, as a
+    // `Class[]`, which is how a program walks an implements clause.
+    bm(
+        "getInterfaces",
+        &[],
+        BRet::ClassArray,
+        "()[Ljava/lang/Class;",
+    ),
     bm(
         "getDeclaredFields",
         &[],
@@ -17620,9 +17808,12 @@ impl BodyGen<'_> {
                 }
             },
             // `super.method(...);` as a statement.
-            Expr::SuperMethodCall { method, args, span } => {
-                self.super_method_call(method, args, *span)
-            }
+            Expr::SuperMethodCall {
+                owner,
+                method,
+                args,
+                span,
+            } => self.super_method_call(owner.as_deref(), method, args, *span),
             // `new Foo();` is a class-instance-creation statement expression;
             // assignment and `++`/`--` are statement expressions too (JLS §14.8,
             // the last two reached as a lambda's single-expression body like
@@ -20458,13 +20649,25 @@ impl BodyGen<'_> {
                 JType::Boxed(elem) => elem.base_type(),
                 _ => JType::Error,
             },
-            Expr::SuperMethodCall { method, args, .. } => {
-                let current = self.table.class_name(self.current_class_id).to_owned();
-                let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass)
-                else {
-                    return JType::Error;
+            Expr::SuperMethodCall {
+                owner,
+                method,
+                args,
+                ..
+            } => {
+                // `Iface.super.m()` resolves in the named interface; a plain
+                // `super.m()` in the superclass.
+                let super_name = if let Some(owner) = owner {
+                    owner.clone()
+                } else {
+                    let current = self.table.class_name(self.current_class_id).to_owned();
+                    let Some(superclass) =
+                        self.table.classes.get(&current).and_then(|c| c.superclass)
+                    else {
+                        return JType::Error;
+                    };
+                    self.table.class_name(superclass).to_owned()
                 };
-                let super_name = self.table.class_name(superclass).to_owned();
                 let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
                 let table = self.table;
                 match table.resolve(&super_name, method, &arg_types) {
@@ -20649,19 +20852,22 @@ impl BodyGen<'_> {
                 span,
             } => self.inc_dec(target, *increment, *prefix, *span),
             Expr::InstanceOf { value, ty, span } => self.instance_of(value, ty, *span),
-            Expr::SuperMethodCall { method, args, span } => {
-                match self.super_method_call(method, args, *span) {
-                    None => JType::Error,
-                    Some(Some(ty)) => ty,
-                    Some(None) => {
-                        self.error(
-                            *span,
-                            format!("'{method}' returns void, so it cannot be used as a value"),
-                        );
-                        JType::Error
-                    }
+            Expr::SuperMethodCall {
+                owner,
+                method,
+                args,
+                span,
+            } => match self.super_method_call(owner.as_deref(), method, args, *span) {
+                None => JType::Error,
+                Some(Some(ty)) => ty,
+                Some(None) => {
+                    self.error(
+                        *span,
+                        format!("'{method}' returns void, so it cannot be used as a value"),
+                    );
+                    JType::Error
                 }
-            }
+            },
         }
     }
 
@@ -20805,8 +21011,10 @@ impl BodyGen<'_> {
 
     /// `super.method(args)` — non-virtual dispatch to the superclass.
     #[allow(clippy::option_option)]
+    #[allow(clippy::too_many_lines)] // the qualified and plain forms, in one plan
     fn super_method_call(
         &mut self,
+        owner: Option<&str>,
         method: &str,
         args: &[Expr],
         span: SourceSpan,
@@ -20817,6 +21025,39 @@ impl BodyGen<'_> {
                 "non-static variable super cannot be referenced from a static context",
             );
             return None;
+        }
+        // `Iface.super.m(args)`: a NON-VIRTUAL call to that interface's default
+        // method, which is how a class that inherits several picks one.
+        if let Some(owner) = owner {
+            let implemented = self
+                .table
+                .class_id(owner)
+                .is_some_and(|id| self.table.is_subtype(self.current_class_id, id));
+            if !implemented {
+                self.error(span, format!("not a direct superinterface: {owner}"));
+                return None;
+            }
+            let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+            let Resolution::Found(sig) = self.table.resolve(owner, method, &arg_types) else {
+                self.error(
+                    span,
+                    format!(
+                        "cannot find symbol: method {method}({}) in interface {owner}",
+                        describe_types(&arg_types, self.table)
+                    ),
+                );
+                return None;
+            };
+            let sig = sig.clone();
+            self.code.push_op(op::ALOAD_0, 1);
+            let args_width = self.emit_call_args(args, &sig, span);
+            let descriptor = sig.descriptor(self.table);
+            let method_ref = intern_method_ref(self.pool, owner, method, &descriptor);
+            let ret_width = sig.ret.map_or(0, JType::width);
+            self.code
+                .push_op_u16(op::INVOKESPECIAL, method_ref, ret_width);
+            self.code.drop_stack(1 + args_width);
+            return Some(inferred_return(&sig, &arg_types));
         }
         let current = self.table.class_name(self.current_class_id).to_owned();
         let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass) else {
@@ -20840,6 +21081,18 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::INVOKESPECIAL, method_ref, 1);
                 self.code.drop_stack(1);
                 return Some(Some(JType::Str));
+            }
+            // An INTERFACE has no superclass at all, and `super` inside a
+            // default method is not a variable — javac reports the symbol,
+            // not a missing supertype.
+            if self
+                .table
+                .classes
+                .get(&current)
+                .is_some_and(|c| c.is_interface)
+            {
+                self.error(span, "cannot find symbol: variable super");
+                return None;
             }
             self.error(span, format!("{current} has no superclass"));
             return None;
@@ -21865,7 +22118,14 @@ impl BodyGen<'_> {
             }
             return target;
         }
-        // Reference casts between class/interface types.
+        // Reference casts between class/interface types. A PARAMETERIZED
+        // target (`(Gen<String>) o`) casts by its erasure — the type argument
+        // is unchecked at run time, which is exactly what javac warns about
+        // and then allows.
+        let target = match target {
+            JType::Generic { class, .. } if source.is_reference() => JType::Object(class),
+            other => other,
+        };
         if let JType::Object(target_id) = target {
             match source {
                 JType::Null => return target,
@@ -23215,6 +23475,18 @@ impl BodyGen<'_> {
                     .map(|(_, var)| var)
                 {
                     return var.const_val.as_ref().and_then(const_from_literal);
+                }
+                // A name declared in BOTH a superclass and an interface is
+                // ambiguous (JLS §6.5.6.1) — folding it here would pick one
+                // silently and skip the diagnostic the emit path reports.
+                let mut steps = 0usize;
+                if self
+                    .table
+                    .class_id(self.current_class)
+                    .map(|id| self.table.field_declarations(id, id, name, &mut steps))
+                    .is_some_and(|owners| owners.len() > 1)
+                {
+                    return None;
                 }
                 self.table
                     .field(self.current_class, name)
