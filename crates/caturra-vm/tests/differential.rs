@@ -21581,3 +21581,78 @@ public class RejectAmbiguousField {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: StringBuilder as a reference type, and its own messages.
+// ---------------------------------------------------------------------------
+
+// A builder is an ordinary heap object, so it can be a collection's element, an
+// array's element, and a generic type argument — each of which was refused with
+// a message that was false about the program ("unknown type 'List'", "arrays are
+// not yet supported"). It is also a CharSequence, so `new String(sb)` and
+// `String.join(d, sb, sb)` take one, and it inherits Object's equals/hashCode.
+differential_test!(
+    diff_string_builder_as_a_reference,
+    "DiffBuilderRef",
+    r#"
+import java.util.*;
+public class DiffBuilderRef {
+    static class Box<T> { T v; Box(T v) { this.v = v; } T get() { return v; } }
+    public static void main(String[] args) {
+        List<StringBuilder> l = new ArrayList<>();
+        l.add(new StringBuilder("x"));
+        System.out.println("size=" + l.size() + " first=" + l.get(0));
+        StringBuilder[] arr = new StringBuilder[2];
+        arr[0] = new StringBuilder("z");
+        System.out.println("arr0=" + arr[0] + " arr1=" + arr[1]);
+        System.out.println("toString=" + Arrays.toString(arr));
+        arr[0].append("!");
+        System.out.println("mutated=" + arr[0]);
+        Box<StringBuilder> b = new Box<>(new StringBuilder("g"));
+        System.out.println("len=" + b.get().length());
+        StringBuilder a = new StringBuilder("abc");
+        System.out.println(new String(a));
+        System.out.println(String.join("-", a, new StringBuilder("z")));
+        StringBuilder same = new StringBuilder("abc");
+        System.out.println("equals=" + a.equals(same) + " self=" + a.equals(a));
+        System.out.println("hashStable=" + (a.hashCode() == a.hashCode()));
+        System.out.println("contains=" + l.contains(new StringBuilder("x")));
+    }
+}
+"#
+);
+
+// The out-of-range messages, each recorded from a real JDK: a builder's
+// `getChars` words the SOURCE failure as `start … end … length` and the
+// DESTINATION one as a plain IndexOutOfBoundsException over the destination's
+// range, while a STRING's `getChars` words the destination as `offset … count …
+// length`; a builder's one-argument `substring` is `substring(start, count)`,
+// so it reports the pair. A null destination is an ordinary NPE, not an
+// internal abort.
+differential_test!(
+    diff_builder_range_messages,
+    "DiffBuilderRanges",
+    r#"
+public class DiffBuilderRanges {
+    public static void main(String[] args) {
+        StringBuilder a = new StringBuilder("abcdef");
+        char[] dst = new char[10];
+        try { a.getChars(-1, 4, dst, 0); }
+        catch (Throwable t) { System.out.println("src -1  -> " + t.getClass().getName() + ": " + t.getMessage()); }
+        try { a.getChars(0, 6, dst, 8); }
+        catch (Throwable t) { System.out.println("dst ovf -> " + t.getClass().getName() + ": " + t.getMessage()); }
+        try { a.getChars(0, 2, dst, -1); }
+        catch (Throwable t) { System.out.println("dst -1  -> " + t.getClass().getName() + ": " + t.getMessage()); }
+        try { a.getChars(0, 2, null, 0); }
+        catch (Throwable t) { System.out.println("gc null -> " + t.getClass().getName() + ": " + t.getMessage()); }
+        String s = "abcdef";
+        try { s.getChars(0, 6, dst, 8); }
+        catch (Throwable t) { System.out.println("str dst -> " + t.getClass().getName() + ": " + t.getMessage()); }
+        StringBuilder b = new StringBuilder("abc");
+        try { b.substring(4); } catch (Throwable t) { System.out.println("sub(4)  -> " + t.getMessage()); }
+        try { b.substring(-1); } catch (Throwable t) { System.out.println("sub(-1) -> " + t.getMessage()); }
+        System.out.println("still alive");
+    }
+}
+"#
+);

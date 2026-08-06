@@ -183,6 +183,11 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     (
         "java.lang",
         &[
+            // The synchronized twin of `StringBuilder`. Aliasing the two would
+            // make `getClass()` lie about which one a program built, and
+            // synchronization is the only other difference — so it is refused
+            // by name, which at least says what it is.
+            "StringBuffer",
             "StrictMath",
             "Thread",
             "Runnable",

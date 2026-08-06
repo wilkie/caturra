@@ -2455,7 +2455,7 @@ impl MethodTable {
                                 arg: elem,
                             })
                         }
-                        Some(elem @ (ElemType::Str | ElemType::Object(_))) => {
+                        Some(elem @ (ElemType::Str | ElemType::Object(_) | ElemType::Builder)) => {
                             Some(JType::Generic {
                                 class: id,
                                 arg: elem,
@@ -2485,6 +2485,8 @@ impl MethodTable {
                     JType::Boolean => ElemType::Boolean,
                     JType::Char => ElemType::Char,
                     JType::Str => ElemType::Str,
+                    // `StringBuilder[]` — an array of ordinary references.
+                    JType::StringBuilder => ElemType::Builder,
                     JType::Object(id) => ElemType::Object(id),
                     // `Throwable[]`/`Exception[]` — a throwable element, so
                     // `getSuppressed()` assigns and its elements reach
@@ -3085,6 +3087,8 @@ fn wrapper_elem(name: &str) -> Option<ElemType> {
 /// primitive: `Integer`, `Double`, ...
 fn wrapper_internal(elem: ElemType) -> &'static str {
     match elem {
+        // Not a wrapper at all — a builder IS its own class.
+        ElemType::Builder => "java/lang/StringBuilder",
         ElemType::Int => "java/lang/Integer",
         ElemType::Double => "java/lang/Double",
         ElemType::Long => "java/lang/Long",
@@ -3190,6 +3194,7 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
 
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
+        ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
         ElemType::Int => String::from("Integer"),
         ElemType::Double => String::from("Double"),
@@ -3285,6 +3290,10 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 "Boolean" => Some(ElemType::Wrapper(Prim::Boolean)),
                 "Character" => Some(ElemType::Wrapper(Prim::Char)),
                 "String" => Some(ElemType::Str),
+                // A builder is an ordinary heap object, so a collection or an
+                // array can hold one: `List<StringBuilder>` used to be refused
+                // with the false message "unknown type 'List'".
+                "StringBuilder" => Some(ElemType::Builder),
                 "Object" => Some(ElemType::Object(table.object_id)),
                 other => table.class_id(other).map(ElemType::Object),
             }
@@ -3492,6 +3501,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::Boolean => Some(ElemType::Boolean),
         JType::Char => Some(ElemType::Char),
         JType::Str => Some(ElemType::Str),
+        JType::StringBuilder => Some(ElemType::Builder),
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
         JType::Exception(id) => Some(ElemType::Throwable(id)),
@@ -3863,7 +3873,13 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         || matches!(
             (from, to),
             (
-                JType::Array { elem: ElemType::Str | ElemType::Field | ElemType::Constructor, dims: d1 },
+                JType::Array {
+                    elem: ElemType::Str
+                        | ElemType::Builder
+                        | ElemType::Field
+                        | ElemType::Constructor,
+                    dims: d1,
+                },
                 JType::Array { elem: ElemType::Object(sup), dims: d2 },
             ) if d1 == d2 && sup == table.object_id
         )
@@ -3948,6 +3964,10 @@ fn wrapper_elem_of(ty: JType) -> Option<ElemType> {
 /// via [`JType::Array`]'s `dims`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ElemType {
+    /// `StringBuilder` as an ELEMENT — of a collection, an array, or a
+    /// generic instantiation. The builder is a heap object like any other
+    /// reference, so it can be stored; it simply had no element kind.
+    Builder,
     Int,
     Double,
     Long,
@@ -4066,6 +4086,7 @@ enum WildcardBound {
 impl ElemType {
     fn descriptor(self, table: &MethodTable) -> String {
         match self {
+            ElemType::Builder => String::from("Ljava/lang/StringBuilder;"),
             ElemType::Int => String::from("I"),
             ElemType::Double => String::from("D"),
             ElemType::Long => String::from("J"),
@@ -4092,6 +4113,7 @@ impl ElemType {
 
     fn base_type(self) -> JType {
         match self {
+            ElemType::Builder => JType::StringBuilder,
             ElemType::Int => JType::Int,
             ElemType::Double => JType::Double,
             ElemType::Long => JType::Long,
@@ -8981,6 +9003,17 @@ const METHOD_METHODS: &[BuiltinMethod] = &[
 /// `java.lang.StringBuilder` methods (`append` returns the builder for
 /// chaining; the VM stores UTF-16 units).
 const STRINGBUILDER_METHODS: &[BuiltinMethod] = &[
+    // A builder does NOT override equals/hashCode — both are Object's, so two
+    // builders holding the same text are unequal and a builder's hash is
+    // stable for its lifetime. Refusing `hashCode()` outright was simply a
+    // missing entry.
+    bm("hashCode", &[], BRet::Int, "()I"),
+    bm(
+        "equals",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `equals` is Object identity (StringBuilder does NOT override it) — the
     // classic trap where two builders with equal contents are not equal.
@@ -14571,6 +14604,13 @@ impl BodyGen<'_> {
                 let ty = self.expr(arg);
                 match ty {
                     JType::Str | JType::Null => "(Ljava/lang/String;)V",
+                    // `new String(sb)` — the JDK's `String(CharSequence)`. The
+                    // builder's text is read here, so the copy is a plain
+                    // String from then on.
+                    JType::StringBuilder | JType::CharSequence => {
+                        self.coerce_to_string_for_output(ty);
+                        "(Ljava/lang/String;)V"
+                    }
                     JType::Array {
                         elem: ElemType::Char,
                         dims: 1,
@@ -16642,6 +16682,9 @@ impl BodyGen<'_> {
             let mut tags = String::new();
             for arg in rest {
                 let ty = self.expr(arg);
+                // Each element is a `CharSequence`, so a StringBuilder is one:
+                // read its text here, as the delimiter already does.
+                let ty = self.coerce_char_sequence(ty);
                 if ty != JType::Str && ty != JType::Null && ty != JType::Error {
                     self.error(
                         arg.span(),
@@ -21386,6 +21429,11 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            ElemType::Builder => {
+                let class = intern_class(self.pool, "java/lang/StringBuilder");
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             ElemType::Throwable(id) => {
                 let class = intern_class(self.pool, exception_internal(id));
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
@@ -21409,6 +21457,7 @@ impl BodyGen<'_> {
                     ElemType::Boolean => op::T_BOOLEAN,
                     ElemType::Char => op::T_CHAR,
                     ElemType::Str
+                    | ElemType::Builder
                     | ElemType::Throwable(_)
                     | ElemType::Object(_)
                     | ElemType::Field
@@ -23606,6 +23655,7 @@ impl BodyGen<'_> {
         let method = match elem {
             ElemType::Int
             | ElemType::Str
+            | ElemType::Builder
             | ElemType::Object(_)
             | ElemType::Field
             | ElemType::Method
@@ -23987,7 +24037,8 @@ impl BodyGen<'_> {
             // `Field[]` -> `Object[]` for `Arrays.toString`).
             (
                 JType::Array {
-                    elem: ElemType::Str | ElemType::Field | ElemType::Constructor,
+                    elem:
+                        ElemType::Str | ElemType::Builder | ElemType::Field | ElemType::Constructor,
                     dims: d1,
                 },
                 JType::Array {

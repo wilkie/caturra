@@ -752,6 +752,36 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **A `StringBuilder` is a reference like any other** (2026-08-05, round 9)
+  — the stringbuilder cluster:
+  - **A builder could not be an ELEMENT.** `List<StringBuilder>`,
+    `StringBuilder[]` and `Box<StringBuilder>` were each refused with a
+    message that was false about the program — "unknown type 'List'",
+    "arrays are not yet supported by caturra". The cause was structural: a
+    collection or array element is an `ElemType`, and there was no builder
+    kind. One new variant covers all three, and the array is covariant into
+    `Object[]` like every other reference array.
+  - **A builder is a `CharSequence`**, so `new String(sb)` and
+    `String.join(d, sb, …)` take one; and it inherits `Object`'s
+    `equals`/`hashCode`, so two builders holding the same text are UNEQUAL
+    and a builder's hash is stable for its lifetime — `hashCode()` was simply
+    a missing entry.
+  - **The out-of-range messages**, each recorded from a real JDK: a builder's
+    `getChars` words the SOURCE failure `start … end … length` and the
+    DESTINATION one as a plain `IndexOutOfBoundsException` over the
+    destination's range, while a STRING's words the destination
+    `offset … count … length`; a builder's one-argument `substring` is
+    `substring(start, count)`, so it reports the pair rather than String's
+    "String index out of range". A null `getChars` destination is an ordinary
+    NPE — it used to abort the run with an internal error.
+  - Deferred: a lone (unpaired) surrogate written as `\uXXXX` still becomes
+    U+FFFD — the lexer decodes an escape into a Rust `char`, which cannot
+    hold one; the same representational limit as `%c` above.
+    `java.lang.StringBuffer` is refused BY NAME rather than aliased to
+    `StringBuilder`, which would make `getClass()` lie about which one the
+    program built.
+  - Pinned by `diff_string_builder_as_a_reference` and
+    `diff_builder_range_messages`.
 - **An implementation is checked against the INTERFACE it implements**
   (2026-08-05, round 9, JLS §9) — the interface-members cluster, all eleven
   findings:

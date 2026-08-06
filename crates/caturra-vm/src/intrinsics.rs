@@ -1333,10 +1333,38 @@ fn string_method(
             [
                 JValue::Int(begin),
                 JValue::Int(end),
-                JValue::Ref(Some(target)),
+                JValue::Ref(target),
                 JValue::Int(at),
             ],
-        ) => get_chars(heap, &units, *begin, *end, *target, *at),
+        ) => match target {
+            // A STRING's `getChars` words the destination failure its own way
+            // ("offset 8, count 6, length 10") and throws the String flavour,
+            // where the builder's throws the plain IndexOutOfBoundsException.
+            Some(target) => {
+                let copied = end.saturating_sub(*begin);
+                let destination = match heap.get(*target) {
+                    Some(HeapObject::IntArray(_, values)) => {
+                        i32::try_from(values.len()).unwrap_or(i32::MAX)
+                    }
+                    _ => return Err(throw("java.lang.NullPointerException")),
+                };
+                if *begin >= 0
+                    && end >= begin
+                    && *end <= i32::try_from(units.len()).unwrap_or(i32::MAX)
+                    && (*at < 0 || at.saturating_add(copied) > destination)
+                {
+                    return Err(throw(format!(
+                        "java.lang.StringIndexOutOfBoundsException: offset {at}, \
+                         count {copied}, length {destination}"
+                    )));
+                }
+                get_chars(heap, &units, *begin, *end, *target, *at)
+            }
+            // A NULL destination is an ordinary NullPointerException; the arm
+            // used to require a reference, so the call fell through to
+            // "unknown native member" and aborted the whole run.
+            None => Err(throw("java.lang.NullPointerException")),
+        },
         ("toString", []) => Ok(Some(JValue::Ref(Some(receiver)))),
         ("intern", []) => {
             let canonical = heap.find_string(&units).unwrap_or(receiver);
@@ -1368,6 +1396,10 @@ fn get_chars(
     target: HeapRef,
     at: i32,
 ) -> Result<Option<JValue>, VmError> {
+    // The JDK words the SOURCE range failure as `start … end … length` (it goes
+    // through `AbstractStringBuilder.checkRangeSIOOBE`), and the DESTINATION
+    // one as a plain IndexOutOfBoundsException describing the destination's
+    // range — not an array-index message about one element.
     let source = usize::try_from(begin)
         .ok()
         .zip(usize::try_from(end).ok())
@@ -1375,16 +1407,25 @@ fn get_chars(
         .map(|(b, e)| units[b..e].to_vec())
         .ok_or_else(|| {
             throw(format!(
-                "java.lang.StringIndexOutOfBoundsException: begin {begin}, end {end}, \
+                "java.lang.StringIndexOutOfBoundsException: start {begin}, end {end}, \
                  length {}",
                 units.len()
             ))
         })?;
-    let at = usize::try_from(at).map_err(|_| {
-        throw(format!(
-            "java.lang.ArrayIndexOutOfBoundsException: Index {at} out of bounds"
-        ))
-    })?;
+    let copied = i32::try_from(source.len()).unwrap_or(i32::MAX);
+    let destination_len = match heap.get(target) {
+        Some(HeapObject::IntArray(_, values)) => i32::try_from(values.len()).unwrap_or(i32::MAX),
+        // `getChars(…, null, 0)` is a plain NullPointerException, not an
+        // internal "not implemented".
+        _ => return Err(throw("java.lang.NullPointerException")),
+    };
+    if at < 0 || at.saturating_add(copied) > destination_len {
+        return Err(throw(format!(
+            "java.lang.IndexOutOfBoundsException: start {at}, end {}, length {destination_len}",
+            at.saturating_add(copied)
+        )));
+    }
+    let at = usize::try_from(at).unwrap_or(0);
     let Some(HeapObject::IntArray(_, values)) = heap.get_mut(target) else {
         return Err(throw("java.lang.NullPointerException"));
     };
@@ -1670,7 +1711,10 @@ fn builder_method(
             &arg_units(needle)?,
             *from,
         )))),
-        ("substring", [JValue::Int(begin)]) => substring(heap, &units, *begin, len),
+        // A BUILDER's one-argument substring is `substring(start, count)` in
+        // the JDK, so its failure carries the same `start, end, length` wording
+        // as the two-argument form — not String's "String index out of range".
+        ("substring", [JValue::Int(begin)]) => builder_substring(heap, &units, *begin, len),
         // subSequence is substring by another name (CharSequence view). Unlike
         // String's substring, StringBuilder's out-of-range message says
         // "start"/"end" (not "begin"), and does NOT clamp end.
@@ -1692,10 +1736,16 @@ fn builder_method(
             [
                 JValue::Int(begin),
                 JValue::Int(end),
-                JValue::Ref(Some(target)),
+                JValue::Ref(target),
                 JValue::Int(at),
             ],
-        ) => get_chars(heap, &units, *begin, *end, *target, *at),
+        ) => match target {
+            Some(target) => get_chars(heap, &units, *begin, *end, *target, *at),
+            // A NULL destination is an ordinary NullPointerException; the arm
+            // used to require a reference, so the call fell through to
+            // "unknown native member" and aborted the whole run.
+            None => Err(throw("java.lang.NullPointerException")),
+        },
         ("codePointAt", [JValue::Int(index)]) => {
             code_point_at(&units, *index).map(|cp| Some(JValue::Int(cp)))
         }
@@ -1708,6 +1758,9 @@ fn builder_method(
         ("offsetByCodePoints", [JValue::Int(index), JValue::Int(offset)]) => {
             offset_by_code_points(&units, *index, *offset).map(|at| Some(JValue::Int(at)))
         }
+        // A builder does NOT override hashCode either: it is Object's, and so
+        // stable for the object's lifetime whatever the text becomes.
+        ("hashCode", []) => Ok(Some(JValue::Int(identity_hash(receiver)))),
         _ => Err(VmError::UnknownIntrinsic(format!("StringBuilder.{method}"))),
     }
 }
