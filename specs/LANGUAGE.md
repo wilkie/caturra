@@ -783,6 +783,25 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_two_parameter_generic_class`,
     `diff_generic_parameters_in_depth`,
     `diff_generic_interface_and_inheritance` and two `reject_*` tests.
+- **A lambda for a USER functional interface** (2026-08-06, JLS §15.27.3) —
+  the half of multi-parameter generics that lambdas needed. A user interface's
+  own type parameters erase before the lambda pass runs, so
+  `Mapper<String, Integer> m = s -> s.length()` typed `s` as a bare type
+  variable: "cannot find symbol: method `length()`". The target's WRITTEN
+  arguments are now substituted into the SAM by parameter position — which is
+  possible only because the erasure sentinel carries that position. The
+  synthesized method keeps the ERASED signature (it has to, or it would not
+  override the interface's), and each type-variable parameter is cast to its
+  real type at the top of the body, the same shape the `Comparator` and
+  `java.util.function` lambdas already used. A type-variable RETURN is checked
+  against the target's argument too, so `Mapper<String, Integer> m = s -> s`
+  is refused as javac refuses it. Mixed concrete and variable parameters
+  (`String f(String a, T b)`) specialize only the variable ones, a RAW target
+  keeps its erased treatment, and method references, fields, parameters and
+  return positions all follow. A cast from a type variable is now an ordinary
+  reference cast — it erases to `Object`, so `(Integer) t` is what javac says
+  it is. Pinned by `diff_lambda_for_user_generic_interface` and
+  `reject_lambda_body_wrong_result_type`.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is

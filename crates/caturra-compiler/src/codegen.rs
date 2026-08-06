@@ -22634,7 +22634,11 @@ impl BodyGen<'_> {
         // (e.g. from `Field.get`) or a wrapper, cast to `int`/`double`/…
         // `checkcast Wrapper` + `Wrapper.xxxValue()` — caturra's boxed values
         // answer the unboxing accessor directly.
-        let erased_object = matches!(source, JType::Object(id) if id == self.table.object_id);
+        // A TYPE VARIABLE erases to `Object`, so it casts exactly like one:
+        // `(Integer) t` inside a generic body, and — the shape that noticed —
+        // the cast a specialized lambda parameter is introduced by.
+        let erased_object = matches!(source, JType::Object(id) if id == self.table.object_id)
+            || matches!(source, JType::TypeVar(_));
         if erased_object || matches!(source, JType::Boxed(_)) {
             // `(Integer) obj` — a cast to a wrapper is CHECKED (JLS §5.5). This
             // used to retag the static type and emit nothing, on the theory that

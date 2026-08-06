@@ -664,7 +664,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             && let Some(name) = interface_name(target)
             && let Some(sam) = ctx.sams.get(name).cloned()
         {
-            let replacement = build_lambda_class(expr, name, &sam, ctx);
+            let specialized = specialize_sam(&sam, target);
+            let replacement = build_lambda_class(expr, name, &sam, specialized.as_ref(), ctx);
             *expr = replacement;
         }
         return;
@@ -2672,7 +2673,70 @@ fn build_erased_lambda(
 /// Build the anonymous class for a lambda and the `new` expression that
 /// replaces it. Also recurses into the lambda body first so nested
 /// lambdas are handled.
-fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut Ctx) -> Expr {
+/// Substitute a target type's written type arguments into a user functional
+/// interface's SAM, per parameter POSITION.
+///
+/// The interface's own type parameters erased to indexed sentinels before this
+/// pass ran, so a sentinel's index picks the argument: for
+/// `Mapper<String, Integer>`, `apply`'s parameter becomes `String` and its
+/// return `Integer`. Without it the lambda's parameter stayed a bare type
+/// variable, and `Mapper<String, Integer> m = s -> s.length()` was "cannot
+/// find symbol: method `length()` in class `java/lang/Object`".
+///
+/// Answers `None` for a RAW target (no arguments written), which keeps its
+/// erased treatment.
+fn specialize_sam(sam: &Sam, target: &TypeRef) -> Option<Sam> {
+    let TypeRef::Generic { args, .. } = target else {
+        return None;
+    };
+    let specialized = Sam {
+        method: sam.method.clone(),
+        params: sam
+            .params
+            .iter()
+            .map(|ty| substitute_sentinels(ty, args))
+            .collect(),
+        ret: substitute_sentinels(&sam.ret, args),
+    };
+    (specialized.params != sam.params || specialized.ret != sam.ret).then_some(specialized)
+}
+
+/// Replace each indexed type-variable sentinel in `ty` with the type argument
+/// written at that position. An index the target does not carry is left as it
+/// is — a raw or mis-arity use keeps the erased type rather than inventing one.
+fn substitute_sentinels(ty: &TypeRef, args: &[TypeRef]) -> TypeRef {
+    match ty {
+        TypeRef::Named(name) => match crate::parser::typevar_index(name) {
+            Some(index) => args
+                .get(usize::from(index))
+                .cloned()
+                .unwrap_or_else(|| ty.clone()),
+            None => ty.clone(),
+        },
+        TypeRef::Array(inner) => TypeRef::Array(Box::new(substitute_sentinels(inner, args))),
+        TypeRef::Generic { base, args: inner } => TypeRef::Generic {
+            base: base.clone(),
+            args: inner
+                .iter()
+                .map(|a| substitute_sentinels(a, args))
+                .collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+#[allow(clippy::too_many_lines)] // the specialized and erased shapes, in one place
+fn build_lambda_class(
+    lambda: &mut Expr,
+    interface: &str,
+    sam: &Sam,
+    // The same SAM with the target's type arguments substituted in, when the
+    // target wrote any. The METHOD keeps the erased signature — it has to, or
+    // it would not override the interface's — and each type-variable parameter
+    // is cast to its real type at the top of the body instead.
+    specialized: Option<&Sam>,
+    ctx: &mut Ctx,
+) -> Expr {
     let Expr::Lambda { params, body, span } = lambda else {
         unreachable!("guarded by caller");
     };
@@ -2683,40 +2747,114 @@ fn build_lambda_class(lambda: &mut Expr, interface: &str, sam: &Sam, ctx: &mut C
     let prefix = std::mem::replace(&mut ctx.class_prefix, crate::LAMBDA_CLASS_PREFIX);
     let name = format!("{prefix}{}", ctx.counter);
 
-    // The synthesized method takes the SAM's parameter types with the
-    // lambda's parameter names.
+    // Which parameters need the cast: the ones the interface declared as a
+    // type variable and the target gave a real type. Those take a synthetic
+    // name on the method, so the lambda's own name can be the cast local.
+    let casts: Vec<Option<TypeRef>> = sam
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, erased)| {
+            let real = specialized?.params.get(i)?;
+            (real != erased).then(|| real.clone())
+        })
+        .collect();
+
+    // The synthesized method takes the SAM's ERASED parameter types (that is
+    // what makes it an override) with the lambda's parameter names, except
+    // where a cast will introduce the name itself.
     let method_params: Vec<Param> = params
         .iter()
         .zip(&sam.params)
-        .map(|(p, ty)| Param {
+        .enumerate()
+        .map(|(i, (p, ty))| Param {
             ty: ty.clone(),
-            name: p.name.clone(),
+            name: if casts[i].is_some() {
+                format!("__caturraArg{i}")
+            } else {
+                p.name.clone()
+            },
             is_varargs: false,
             is_final: false,
         })
         .collect();
 
+    // `String s = (String) __caturraArg0;` for each specialized parameter.
+    let mut prelude: Vec<Stmt> = Vec::new();
+    for (i, declared) in casts.iter().enumerate() {
+        let Some(declared) = declared else { continue };
+        prelude.push(Stmt::LocalDecl {
+            ty: declared.clone(),
+            is_final: false,
+            declarators: vec![crate::ast::LocalDeclarator {
+                name: params[i].name.clone(),
+                init: Some(Expr::Cast {
+                    ty: declared.clone(),
+                    operand: Box::new(Expr::Name {
+                        path: vec![format!("__caturraArg{i}")],
+                        span,
+                    }),
+                    span,
+                }),
+                span,
+                extra_dims: 0,
+            }],
+            span,
+        });
+    }
+
+    // A type-variable RETURN is checked against the target's argument the
+    // same way `build_erased_lambda` does it: the erased `Object` return
+    // would otherwise accept any reference, more permissive than javac.
+    let result_type = specialized
+        .filter(|spec| spec.ret != sam.ret)
+        .map(|spec| spec.ret.clone());
+
     // The body: an expression lambda becomes `return e;` (or `e;` when
     // the SAM is void); a block lambda's statements are used directly.
-    let method_body = match std::mem::replace(body, LambdaBody::Block(Vec::new())) {
+    let mut method_body = prelude;
+    match std::mem::replace(body, LambdaBody::Block(Vec::new())) {
         LambdaBody::Expr(mut e) => {
             desugar_expr(&mut e, None, ctx);
             if matches!(sam.ret, TypeRef::Void) {
-                vec![Stmt::Expr(*e)]
+                method_body.push(Stmt::Expr(*e));
+            } else if let Some(declared) = &result_type {
+                method_body.push(Stmt::LocalDecl {
+                    ty: declared.clone(),
+                    is_final: false,
+                    declarators: vec![crate::ast::LocalDeclarator {
+                        name: String::from("__caturraResult"),
+                        init: Some(*e),
+                        span,
+                        extra_dims: 0,
+                    }],
+                    span,
+                });
+                method_body.push(Stmt::Return {
+                    value: Some(Expr::Name {
+                        path: vec![String::from("__caturraResult")],
+                        span,
+                    }),
+                    span,
+                });
             } else {
-                vec![Stmt::Return {
+                method_body.push(Stmt::Return {
                     value: Some(*e),
                     span,
-                }]
+                });
             }
         }
         LambdaBody::Block(mut stmts) => {
             for s in &mut stmts {
                 desugar_stmt(s, ctx);
             }
-            stmts
+            if let Some(declared) = &result_type {
+                coerce_returns(&mut stmts, declared, span);
+            }
+            method_body.extend(stmts);
         }
-    };
+    }
+    let method_body = method_body;
 
     let method = MethodDecl {
         name: sam.method.clone(),

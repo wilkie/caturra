@@ -22289,3 +22289,96 @@ public class PairArityNew {
 }
 "#
 );
+
+// A lambda for a USER functional interface takes its parameter types from the
+// target's written type arguments. The interface's own parameters erased to
+// indexed sentinels, so `Mapper<String, Integer> m = s -> s.length()` used to
+// type `s` as a bare type variable: "cannot find symbol: method length()".
+differential_test!(
+    diff_lambda_for_user_generic_interface,
+    "UserSam",
+    r#"
+interface Mapper<A, B> {
+    B apply(A a);
+}
+
+interface Combiner<A, B, R> {
+    R combine(A a, B b);
+}
+
+interface Mix<T> {
+    String f(String a, T b);
+}
+
+interface Op<T> {
+    T apply(T t);
+}
+
+interface Named {
+    String name(int i);
+}
+
+public class UserSam {
+    static Mapper<String, Integer> field = s -> s.length();
+
+    static Mapper<String, Integer> make() {
+        return s -> s.length() + 1;
+    }
+
+    static String run(Mapper<String, Integer> m, String s) {
+        return "r" + m.apply(s);
+    }
+
+    static Integer twice(String s) {
+        return s.length() * 2;
+    }
+
+    public static void main(String[] args) {
+        Mapper<String, Integer> m = s -> s.length();
+        System.out.println(m.apply("hey") + 1);
+
+        Combiner<String, Integer, String> c = (s, n) -> {
+            return s + (n + 1);
+        };
+        System.out.println(c.combine("v", 4));
+
+        Mix<Integer> mix = (a, b) -> a + (b + 1);
+        System.out.println(mix.f("q", 4));
+
+        Op<String> o = s -> s.toUpperCase();
+        System.out.println(o.apply("hi"));
+
+        Named named = i -> "n" + i;
+        System.out.println(named.name(3));
+
+        Mapper<String, Integer> byRef = String::length;
+        System.out.println(byRef.apply("hey") + 1);
+
+        Mapper<String, Integer> byStatic = UserSam::twice;
+        System.out.println(byStatic.apply("hey"));
+
+        System.out.println(run(s -> s.length(), "abcd"));
+        System.out.println(field.apply("ab") + " " + make().apply("ab"));
+    }
+}
+"#
+);
+
+// javac: the lambda's body must fit the target's RESULT argument. The erased
+// `Object` return would otherwise accept any reference.
+differential_reject!(
+    reject_lambda_body_wrong_result_type,
+    "UserSamResult",
+    r"
+interface Mapper<A, B> {
+    B apply(A a);
+}
+
+public class UserSamResult {
+    public static void main(String[] args) {
+        Mapper<String, Integer> m = s -> s;
+        System.out.println(m.apply('x'));
+    }
+}
+"
+);
