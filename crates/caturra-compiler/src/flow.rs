@@ -534,6 +534,7 @@ fn stmt_span(statement: &Stmt) -> Option<SourceSpan> {
 ///
 /// Without this a blank final silently read its type's default, and `final`
 /// meant nothing for a field: it could be written twice in one constructor.
+#[allow(clippy::too_many_lines)] // the instance and static rules, in one pass
 fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>) {
     // A field a desugaring assigns in a constructor's PRE-INIT prologue (a
     // captured local, an enum constant's name and ordinal) is definitely
@@ -554,6 +555,44 @@ fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>)
             _ => None,
         })
         .collect();
+    // A blank `static final` is the same rule over the STATIC initializers,
+    // which are one program in source order: assigning in two of them is the
+    // second assignment, and never assigning at all leaves it uninitialized.
+    let static_blanks: Vec<&FieldDecl> = decl
+        .fields
+        .iter()
+        .filter(|field| field.is_final && field.is_static && field.init.is_none())
+        .collect();
+    for field in &static_blanks {
+        let mut assigned_in: Option<SourceSpan> = None;
+        for block in decl.init_blocks.iter().filter(|b| b.is_static) {
+            if let Some(span) = assigns_twice(&block.body, &field.name) {
+                diagnostics.push(Diagnostic::error(
+                    path,
+                    format!("variable {} might already have been assigned", field.name),
+                    span,
+                ));
+            }
+            if assigns_definitely_block(&block.body, &field.name) {
+                if let Some(_earlier) = assigned_in {
+                    diagnostics.push(Diagnostic::error(
+                        path,
+                        format!("variable {} might already have been assigned", field.name),
+                        block.span,
+                    ));
+                }
+                assigned_in = Some(block.span);
+            }
+        }
+        if assigned_in.is_none() {
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("variable {} might not have been initialized", field.name),
+                field.span,
+            ));
+        }
+    }
+
     let blanks: Vec<&FieldDecl> = decl
         .fields
         .iter()

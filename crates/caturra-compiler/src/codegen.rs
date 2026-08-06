@@ -431,6 +431,8 @@ struct ClassInfo {
     is_abstract: bool,
     is_interface: bool,
     is_enum: bool,
+    /// Declared `final`: no class may extend it (JLS §8.1.1.2).
+    is_final_class: bool,
     /// A non-static nested class, bound to an enclosing instance through its
     /// synthetic `__caturraOuter` field. Only these get the enclosing instance
     /// supplied at a `new` site — a lambda/anonymous class also carries that
@@ -568,6 +570,7 @@ impl MethodTable {
                 is_abstract: false,
                 is_interface: false,
                 is_enum: false,
+                is_final_class: false,
                 is_inner: false,
                 type_param_count: 0,
                 supertype_args: Vec::new(),
@@ -655,6 +658,7 @@ impl MethodTable {
                 is_abstract: true,
                 is_interface: true,
                 is_enum: false,
+                is_final_class: false,
                 is_inner: false,
                 type_param_count: 1,
                 supertype_args: Vec::new(),
@@ -707,6 +711,7 @@ impl MethodTable {
                     is_abstract: true,
                     is_interface: true,
                     is_enum: false,
+                    is_final_class: false,
                     is_inner: false,
                     type_param_count: 0,
                     supertype_args: Vec::new(),
@@ -799,6 +804,7 @@ impl MethodTable {
                     is_abstract: true,
                     is_interface: true,
                     is_enum: false,
+                    is_final_class: false,
                     is_inner: false,
                     type_param_count: 1,
                     supertype_args: Vec::new(),
@@ -849,6 +855,7 @@ impl MethodTable {
                     is_abstract: true,
                     is_interface: false,
                     is_enum: false,
+                    is_final_class: false,
                     is_inner: false,
                     type_param_count: 0,
                     supertype_args: Vec::new(),
@@ -887,6 +894,7 @@ impl MethodTable {
                         // still resolve it as an interface.
                         is_interface: class.is_interface,
                         is_enum: false,
+                        is_final_class: false,
                         is_inner: false,
                         type_param_count: 0,
                         supertype_args: Vec::new(),
@@ -1122,6 +1130,7 @@ impl MethodTable {
                 info.library_superclass = library_superclass;
                 info.interfaces = interface_ids;
                 info.is_abstract = class.is_abstract;
+                info.is_final_class = class.is_final;
                 info.is_interface = class.is_interface;
                 info.is_enum = class.is_enum;
                 info.is_inner = class.is_inner;
@@ -1201,6 +1210,18 @@ impl MethodTable {
                             class.name,
                             self.class_name(sup)
                         ),
+                        class.span,
+                    ));
+                }
+                // JLS §8.1.4: a `final` class has no subclasses. caturra
+                // accepted one and dispatched to it, which is a program a real
+                // JDK will not compile.
+                if let Some(parent) = info.superclass
+                    && self.info_by_id(parent).is_some_and(|i| i.is_final_class)
+                {
+                    diagnostics.push(Diagnostic::error(
+                        path,
+                        format!("cannot inherit from final {}", self.class_name(parent)),
                         class.span,
                     ));
                 }

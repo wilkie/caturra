@@ -21656,3 +21656,130 @@ public class DiffBuilderRanges {
 }
 "#
 );
+
+// ---------------------------------------------------------------------------
+// Round-9 cluster: modifiers and rare statements.
+// ---------------------------------------------------------------------------
+
+// Modifiers with no effect in a single-threaded VM are still ordinary Java a
+// member may carry — `transient`, `volatile`, `synchronized`, `strictfp` — and
+// used to make the whole member unparseable. So did `final` on an enhanced-for
+// variable.
+differential_test!(
+    diff_inert_modifiers,
+    "DiffInertModifiers",
+    r#"
+public class DiffInertModifiers {
+    transient int t = 1;
+    volatile int v = 2;
+    strictfp double d() { return 1.0 / 4.0; }
+    synchronized int s() { return 3; }
+    static synchronized String shared() { return "shared"; }
+    public static void main(String[] args) {
+        DiffInertModifiers p = new DiffInertModifiers();
+        System.out.println(p.t + " " + p.v + " " + p.d() + " " + p.s() + " " + shared());
+        int[] a = { 1, 2, 3 };
+        int sum = 0;
+        for (final int x : a) sum += x;
+        System.out.println("sum=" + sum);
+        for (final String w : new String[] { "a", "b" }) System.out.print(w);
+        System.out.println();
+    }
+}
+"#
+);
+
+// javac: a `final` class has no subclasses.
+differential_reject!(
+    reject_extends_final_class,
+    "RejectExtendsFinal",
+    r"
+final class Sealed { void m() { System.out.println('S'); } }
+class Sub extends Sealed { }
+public class RejectExtendsFinal {
+    public static void main(String[] args) { new Sub().m(); }
+}
+"
+);
+
+// javac: an abstract method has no body, and cannot be final, static or
+// private — each says it cannot be overridden, which is what it exists to ask.
+differential_reject!(
+    reject_abstract_method_body,
+    "RejectAbstractBody",
+    r"
+abstract class A {
+    abstract void m() { }
+}
+public class RejectAbstractBody {
+    public static void main(String[] args) { System.out.println('x'); }
+}
+"
+);
+
+differential_reject!(
+    reject_abstract_final_method,
+    "RejectAbstractFinal",
+    r"
+abstract class A {
+    abstract final void m();
+}
+public class RejectAbstractFinal {
+    public static void main(String[] args) { System.out.println('x'); }
+}
+"
+);
+
+differential_reject!(
+    reject_abstract_static_method,
+    "RejectAbstractStatic",
+    r"
+abstract class A {
+    abstract static void m();
+}
+public class RejectAbstractStatic {
+    public static void main(String[] args) { System.out.println('x'); }
+}
+"
+);
+
+// javac: a class cannot be both abstract and final.
+differential_reject!(
+    reject_abstract_final_class,
+    "RejectAbstractFinalClass",
+    r"
+public final abstract class RejectAbstractFinalClass {
+    public static void main(String[] args) { System.out.println('x'); }
+}
+"
+);
+
+// javac: an interface field is implicitly public — no other access modifier
+// may be written.
+differential_reject!(
+    reject_private_interface_field,
+    "RejectPrivateIfaceField",
+    r"
+interface I {
+    private int K = 10;
+}
+public class RejectPrivateIfaceField {
+    public static void main(String[] args) { System.out.println(I.K); }
+}
+"
+);
+
+// javac: a blank `static final` assigned in two static initializers is
+// assigned twice — the initializers are one program in source order.
+differential_reject!(
+    reject_static_blank_final_twice,
+    "RejectStaticBlankFinal",
+    r"
+public class RejectStaticBlankFinal {
+    static final int A;
+    static { A = 1; }
+    static { A = 2; }
+    public static void main(String[] args) { System.out.println(A); }
+}
+"
+);

@@ -752,6 +752,25 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - Pinned by `diff_initialization_order`,
     `diff_initializers_read_captured_locals` and eight
     `reject_*` differential tests.
+- **Modifiers: the inert ones parse, the illegal ones are refused**
+  (2026-08-05, round 9, JLS §8.1.1/§8.4.3) — the modifiers cluster, all nine
+  findings:
+  - **`transient`, `volatile`, `synchronized` and `strictfp` on a member**
+    used to make the whole member UNPARSEABLE ("expected a type"). They are
+    ordinary Java with nothing to do here — serialization and threading are
+    not modelled, and `strictfp` is the default since Java 17 — so they parse
+    and are ignored. So does `final` on an enhanced-`for` variable.
+  - **Seven checks javac makes and caturra did not**: a class may not extend
+    a `final` class; an `abstract` method has no body and cannot be `final`,
+    `static` or `private`; a class cannot be both `abstract` and `final`; an
+    interface field may not be `private` (it is implicitly public); and a
+    blank `static final` assigned in two static initializers is assigned
+    twice — the initializers are one program in source order.
+  - An enum is deliberately NOT marked final, though JLS §8.9 makes it so
+    unless a constant has a class body: caturra desugars such a body into a
+    subclass of the enum, and marking it final would refuse the desugaring's
+    own output.
+  - Pinned by `diff_inert_modifiers` and seven `reject_*` tests.
 - **A `StringBuilder` is a reference like any other** (2026-08-05, round 9)
   — the stringbuilder cluster:
   - **A builder could not be an ELEMENT.** `List<StringBuilder>`,

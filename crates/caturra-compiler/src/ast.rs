@@ -53,6 +53,8 @@ pub struct ClassDecl {
     /// `Box<String> b = new IntBox()` that javac refuses.
     pub supertype_args: Vec<(String, Vec<TypeRef>)>,
     pub is_abstract: bool,
+    /// Declared `final` — a class that may not be extended (JLS §8.1.1.2).
+    pub is_final: bool,
     pub is_interface: bool,
     /// Set for `enum` declarations (after desugaring to a class): the
     /// class has synthesized constant fields and `values`/`valueOf`;

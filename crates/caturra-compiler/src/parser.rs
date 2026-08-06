@@ -735,6 +735,21 @@ impl Parser<'_> {
                     modifiers.is_default = true;
                     self.pos += 1;
                 }
+                // Modifiers with no effect in caturra's single-threaded VM,
+                // but perfectly ordinary Java that a member may carry:
+                // `transient` (serialization, not modelled),
+                // `volatile`/`synchronized` (threading, likewise) and
+                // `strictfp` (the default since Java 17 — caturra's IEEE
+                // arithmetic already behaves that way). They used to make the
+                // whole member unparseable: "expected a type".
+                Some(TokenKind::Keyword(
+                    Keyword::Transient
+                    | Keyword::Volatile
+                    | Keyword::Strictfp
+                    | Keyword::Synchronized,
+                )) => {
+                    self.pos += 1;
+                }
                 Some(TokenKind::Symbol("@")) => self.skip_annotation(),
                 _ => return modifiers,
             }
@@ -902,6 +917,14 @@ impl Parser<'_> {
             decl.is_public = is_public;
             return Ok(decl);
         }
+        // JLS §8.1.1.2: a class cannot be both — `final` says it has no
+        // subclasses, `abstract` says it must have one.
+        if is_abstract_modifier && is_final_modifier {
+            self.error_at(
+                start,
+                "illegal combination of modifiers: abstract and final",
+            );
+        }
         let is_interface = self.eat_keyword(Keyword::Interface);
         if !is_interface && !self.eat_keyword(Keyword::Class) {
             self.error_here("expected a class declaration");
@@ -977,6 +1000,7 @@ impl Parser<'_> {
             interfaces,
             supertype_args,
             is_abstract: is_abstract_modifier || is_interface,
+            is_final: is_final_modifier,
             is_interface,
             is_enum: false,
             is_anonymous: false,
@@ -1169,6 +1193,21 @@ impl Parser<'_> {
                     modifiers.is_final = true;
                     self.pos += 1;
                 }
+                // Modifiers with no effect in caturra's single-threaded VM,
+                // but perfectly ordinary Java that a member may carry:
+                // `transient` (serialization, not modelled),
+                // `volatile`/`synchronized` (threading, likewise) and
+                // `strictfp` (the default since Java 17 — caturra's IEEE
+                // arithmetic already behaves that way). They used to make the
+                // whole member unparseable: "expected a type".
+                Some(TokenKind::Keyword(
+                    Keyword::Transient
+                    | Keyword::Volatile
+                    | Keyword::Strictfp
+                    | Keyword::Synchronized,
+                )) => {
+                    self.pos += 1;
+                }
                 Some(TokenKind::Symbol("@")) => self.skip_annotation(),
                 _ => return modifiers,
             }
@@ -1343,6 +1382,11 @@ impl Parser<'_> {
                     }
                     None
                 };
+                // JLS §9.3: an interface field is implicitly public static
+                // final, and no access modifier but `public` may be written.
+                if is_interface && modifiers.is_private {
+                    self.error_at(current.1, "modifier private not allowed here");
+                }
                 fields.push(FieldDecl {
                     name: current.0,
                     ty: crate::ast::array_of(member_type.clone(), dims),
@@ -1364,6 +1408,28 @@ impl Parser<'_> {
 
         let (params, throws, body) = self.method_rest(name_span, true)?;
         let is_abstract = body.is_none();
+        // JLS §8.4.3.1: `abstract` cannot pair with `final`, `static` or
+        // `private` — each says the method cannot be overridden, which is the
+        // one thing an abstract method exists to require. And an abstract
+        // method HAS no body (§8.4.3.1 again); one written with a body used to
+        // compile, leaving a method the subclass was never asked to supply.
+        if modifiers.is_abstract {
+            for (present, word) in [
+                (modifiers.is_final, "final"),
+                (modifiers.is_static, "static"),
+                (modifiers.is_private, "private"),
+            ] {
+                if present {
+                    self.error_at(
+                        name_span,
+                        format!("illegal combination of modifiers: abstract and {word}"),
+                    );
+                }
+            }
+            if body.is_some() {
+                self.error_at(name_span, "abstract methods cannot have a body");
+            }
+        }
         if is_interface {
             self.validate_interface_method(
                 modifiers,
@@ -2548,8 +2614,11 @@ impl Parser<'_> {
         self.pos += 1; // 'for'
         self.expect_symbol("(", "after 'for'")?;
 
-        // `for (Type name : iterable) body` — the enhanced for.
+        // `for (Type name : iterable) body` — the enhanced for. The loop
+        // variable may be declared `final` (JLS §14.14.2), which is common in
+        // code that hands it to a lambda.
         if self.header_contains_top_level_colon() {
+            let _ = self.eat_keyword(Keyword::Final);
             let ty = if self.eat_keyword(Keyword::Var) {
                 TypeRef::Var
             } else {
@@ -3786,6 +3855,7 @@ impl Parser<'_> {
             interfaces: Vec::new(),
             supertype_args: Vec::new(),
             is_abstract: false,
+            is_final: false,
             is_interface: false,
             is_enum: false,
             is_anonymous: true,
@@ -4665,6 +4735,12 @@ fn desugar_enum(
         interfaces,
         supertype_args: Vec::new(),
         is_abstract,
+        // JLS §8.9 makes an enum implicitly final UNLESS a constant has a
+        // class body — and caturra desugars such a body into a subclass of the
+        // enum, so marking it final here would refuse the desugaring's own
+        // output. Left false: `class X extends SomeEnum` is refused by the
+        // enum's private constructor anyway.
+        is_final: false,
         is_interface: false,
         is_enum: true,
         is_public: false,
@@ -5025,6 +5101,7 @@ fn erasure_target(tp: &TypeParam, span: SourceSpan, synthesized: &mut Vec<ClassD
             interfaces: bounds,
             supertype_args: Vec::new(),
             is_abstract: true,
+            is_final: false,
             is_interface: true,
             is_enum: false,
             is_anonymous: false,
