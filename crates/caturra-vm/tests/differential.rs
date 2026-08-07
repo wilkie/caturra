@@ -15,14 +15,22 @@ use std::process::Command;
 use caturra_vm::{BufferedConsole, VirtualFileSystem, Vm, VmOptions};
 
 fn jdk_available() -> bool {
-    let present = Command::new("javac")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success())
-        && Command::new("java")
-            .arg("--version")
-            .output()
-            .is_ok_and(|out| out.status.success());
+    // Probed ONCE for the whole suite. Every test asked separately before,
+    // which meant six hundred extra process spawns competing with the javac
+    // runs — and under that load a probe would occasionally fail, reporting
+    // "no JDK on PATH" for a JDK that was plainly there.
+    static PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let present = *PRESENT.get_or_init(|| {
+        let probe = |program: &str| {
+            Command::new(program)
+                .arg("--version")
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        // A failure here is far likelier to be contention than an absent JDK,
+        // so ask twice before believing it.
+        (probe("javac") || probe("javac")) && (probe("java") || probe("java"))
+    });
     assert!(
         present || std::env::var_os("CATURRA_REQUIRE_JDK").is_none(),
         "CATURRA_REQUIRE_JDK is set but no JDK is on PATH — the differential \
@@ -60,11 +68,7 @@ fn javac_first_error(class_name: &str, source: &str) -> Option<String> {
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let java_file = dir.join(format!("{class_name}.java"));
     std::fs::write(&java_file, source).expect("write source");
-    let compile = Command::new("javac")
-        .arg(java_file.file_name().expect("file name"))
-        .current_dir(&dir)
-        .output()
-        .expect("javac runs");
+    let compile = javac_in(&dir, &java_file);
     if compile.status.success() {
         return None;
     }
@@ -108,6 +112,35 @@ fn assert_both_reject(class_name: &str, source: &str) {
     );
 }
 
+/// Compile one file with `javac`, retrying a failure that is not a
+/// COMPILATION failure.
+///
+/// The suite runs one javac per test in parallel, and under that load javac
+/// itself sometimes dies — with an empty stderr, or with its own
+/// `NoClassDefFoundError` from `com.sun.tools.javac`. Either surfaced as
+/// "javac rejected X:" against whichever test happened to lose the race: a
+/// failure that blames the program under test for the harness's resource
+/// contention, and that moved between runs. A real rejection always prints a
+/// `file:line: error:` line, so its absence is the signal to try again.
+fn javac_in(dir: &std::path::Path, java_file: &std::path::Path) -> std::process::Output {
+    let run = || {
+        Command::new("javac")
+            .arg(java_file.file_name().expect("file name"))
+            .current_dir(dir)
+            .output()
+            .expect("javac runs")
+    };
+    let mut attempt = run();
+    for _ in 0..2 {
+        if attempt.status.success() || String::from_utf8_lossy(&attempt.stderr).contains("error: ")
+        {
+            break;
+        }
+        attempt = run();
+    }
+    attempt
+}
+
 /// Run `source` through javac+java, returning stdout.
 fn run_with_jdk(class_name: &str, source: &str) -> String {
     run_with_jdk_stdin(class_name, source, "")
@@ -128,32 +161,46 @@ fn run_with_jdk_stdin(class_name: &str, source: &str, stdin: &str) -> String {
     file.write_all(source.as_bytes()).expect("write source");
     drop(file);
 
-    let compile = Command::new("javac")
-        .arg(java_file.file_name().expect("file name"))
-        .current_dir(&dir)
-        .output()
-        .expect("javac runs");
+    let compile = javac_in(&dir, &java_file);
     assert!(
         compile.status.success(),
         "javac rejected {class_name}: {}",
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let mut child = Command::new("java")
-        .arg(class_name)
-        .current_dir(&dir)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("java starts");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(stdin.as_bytes())
-        .expect("write stdin");
-    let run = child.wait_with_output().expect("java runs");
+    let launch = || {
+        let mut child = Command::new("java")
+            .arg(class_name)
+            .current_dir(&dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("java starts");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(stdin.as_bytes())
+            .expect("write stdin");
+        child.wait_with_output().expect("java runs")
+    };
+    // A JVM that never got as far as the program is contention, not a result:
+    // retry it rather than compare against the empty output it produced. A
+    // program that runs and THROWS is a real outcome and is left alone.
+    let mut run = launch();
+    for _ in 0..2 {
+        let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+        if run.status.success()
+            || !(stderr.contains("Could not find or load main class")
+                || stderr.contains("Error occurred during initialization")
+                || stderr.contains("java.lang.NoClassDefFoundError: jdk/")
+                || stderr.is_empty())
+        {
+            break;
+        }
+        run = launch();
+    }
     assert!(
         run.status.success(),
         "java failed for {class_name}: {}",
@@ -22496,6 +22543,76 @@ public class InnerGeneric {
         // A RAW inner reads its outer's variable as Object, as in Java.
         Outer.Inner raw = o.new Inner();
         System.out.println(raw.get());
+    }
+}
+"#
+);
+
+// A generic method's return can be pinned by a CONTAINER parameter, not only
+// by a parameter that is the variable itself: `<T> T max(List<T> xs)` is how
+// every "biggest of a list" method is written, and its return used to come
+// back erased — as `Object`, or as the bound for a bounded variable.
+differential_test!(
+    diff_generic_return_from_container_argument,
+    "InferElem",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+class Box<T> {
+    T v;
+
+    Box(T v) {
+        this.v = v;
+    }
+
+    T get() {
+        return v;
+    }
+}
+
+public class InferElem {
+    static <T extends Comparable<T>> T max(List<T> xs) {
+        T best = xs.get(0);
+        for (T x : xs) {
+            if (x.compareTo(best) > 0) {
+                best = x;
+            }
+        }
+        return best;
+    }
+
+    static <T> T first(List<T> xs) {
+        return xs.get(0);
+    }
+
+    static <T> T open(Box<T> b) {
+        return b.get();
+    }
+
+    static <T> T pick(T a, T b) {
+        return a;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(max(Arrays.asList(3, 9, 4)) + 1);
+        System.out.println(max(Arrays.asList("b", "z", "a")).toUpperCase());
+        System.out.println(first(Arrays.asList("p", "q")).toUpperCase());
+        System.out.println(first(Arrays.asList(4, 5)) + 1);
+
+        Box<String> b = new Box<>("k");
+        System.out.println(open(b).length());
+        Box<Integer> n = new Box<>(4);
+        System.out.println(open(n) + 1);
+
+        System.out.println(pick("x", "y").toUpperCase());
+        System.out.println(pick(3, 4) + 1);
+
+        // An argument that pins nothing keeps the erased return.
+        List<Object> objects = new ArrayList<>();
+        objects.add("s");
+        System.out.println(first(objects));
     }
 }
 "#

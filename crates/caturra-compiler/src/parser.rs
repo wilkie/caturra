@@ -5139,21 +5139,31 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
 fn infer_return_plan(
     method: &MethodDecl,
     erasures: &std::collections::HashMap<String, TypeRef>,
-) -> Option<Vec<usize>> {
+) -> Option<Vec<crate::ast::InferSource>> {
+    use crate::ast::InferSource;
     let TypeRef::Named(ret_var) = &method.return_type else {
         return None;
     };
     if !erasures.contains_key(ret_var) {
         return None;
     }
-    let indices: Vec<usize> = method
+    let sources: Vec<InferSource> = method
         .params
         .iter()
         .enumerate()
-        .filter(|(_, p)| matches!(&p.ty, TypeRef::Named(name) if name == ret_var))
-        .map(|(index, _)| index)
+        .filter_map(|(index, p)| match &p.ty {
+            TypeRef::Named(name) if name == ret_var => Some(InferSource::Direct(index)),
+            // `<T> T max(List<T> xs)` — the ELEMENT pins T. Only a single
+            // type argument is read: with two, which one is `T` depends on
+            // the container, and guessing would be worse than erasing.
+            TypeRef::Generic { args, .. } => match args.as_slice() {
+                [TypeRef::Named(name)] if name == ret_var => Some(InferSource::Element(index)),
+                _ => None,
+            },
+            _ => None,
+        })
         .collect();
-    (!indices.is_empty()).then_some(indices)
+    (!sources.is_empty()).then_some(sources)
 }
 
 /// The simple name of a wildcard's bound (`? extends Number` → `"Number"`),

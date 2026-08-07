@@ -112,6 +112,18 @@ pub struct FieldDecl {
 }
 
 /// A method or constructor declaration. Constructors have
+/// Where a generic method's parameters mention the type variable its return
+/// names, for [`MethodDecl::infer_return`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InferSource {
+    /// The parameter IS the variable: `<T> T max(T a, T b)`.
+    Direct(usize),
+    /// The parameter is a container OF it: `<T> T max(List<T> xs)`. The
+    /// argument's ELEMENT type is what pins `T`, which is the commoner shape
+    /// of the two — every "biggest of a list" method is written this way.
+    Element(usize),
+}
+
 /// `is_constructor` set, `name` equal to the class name, and a `Void`
 /// return type.
 #[allow(clippy::struct_excessive_bools)] // mirrors Java modifiers
@@ -133,13 +145,12 @@ pub struct MethodDecl {
     /// Generic method type parameters (`<T> T identity(T x)`).
     pub type_params: Vec<TypeParam>,
     /// Return-type inference plan, filled in by `erase_type_vars`: `Some`
-    /// when the declared return type is a bare type variable that also
-    /// appears as one or more parameter types (`<T> T max(T a, T b)`),
-    /// holding those parameter indices. The call's actual return type is the
-    /// join of those arguments' types — recovering the type argument erasure
-    /// would otherwise drop. `None` when the return is not an inferable type
-    /// variable.
-    pub infer_return: Option<Vec<usize>>,
+    /// when the declared return type is a bare type variable that the
+    /// parameters also mention, holding where each mention is. The call's
+    /// actual return type is the join of what those arguments pin —
+    /// recovering the type argument erasure would otherwise drop. `None` when
+    /// the return is not an inferable type variable.
+    pub infer_return: Option<Vec<InferSource>>,
     pub return_type: TypeRef,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,

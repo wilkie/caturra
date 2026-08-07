@@ -383,7 +383,7 @@ struct MethodSig {
     /// argument types join to the actual (un-erased) return type. `None`
     /// for a method whose return is not an inferable type variable, and for
     /// every synthesized or library signature.
-    ret_infer: Option<Vec<usize>>,
+    ret_infer: Option<Vec<crate::ast::InferSource>>,
 }
 
 impl MethodSig {
@@ -3809,13 +3809,24 @@ fn functional_erased(name: &str) -> Option<&'static str> {
 /// STATIC type reported differs, exactly as an erased read of a type variable
 /// stays cast-free.
 fn inferred_return(sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
-    let Some(indices) = &sig.ret_infer else {
+    use crate::ast::InferSource;
+    let Some(sources) = &sig.ret_infer else {
         return sig.ret;
     };
     let mut joined: Option<JType> = None;
-    for &index in indices {
+    for &source in sources {
+        let (InferSource::Direct(index) | InferSource::Element(index)) = source;
         let Some(&arg) = arg_types.get(index) else {
             return sig.ret;
+        };
+        // For a container parameter it is the ELEMENT that pins the variable:
+        // `max(List<String>)` returns a String, not a `List<String>`.
+        let arg = match source {
+            InferSource::Direct(_) => arg,
+            InferSource::Element(_) => match TypeArgs::of(arg).first {
+                Some(elem) => elem.base_type(),
+                None => return sig.ret,
+            },
         };
         let reference = match boxable_primitive(arg) {
             Some(elem) => JType::Boxed(elem),
@@ -10545,6 +10556,13 @@ impl TypeArgs {
             | JType::Collection(elem)
             | JType::LinkedList { elem, .. } => Self {
                 first: Some(elem),
+                second: None,
+            },
+            // A parameterized USER class answers its first type argument, so a
+            // generic method taking one (`<T> T open(Box<T> b)`) can pin `T`
+            // from the argument the way it does for a library container.
+            JType::Generic { arg, .. } => Self {
+                first: Some(arg),
                 second: None,
             },
             // A primitive pipeline's element is that primitive, which is what

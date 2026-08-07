@@ -833,6 +833,19 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   all the way to `Object` — it answers `T`, and the qualifier of
   `o.new Inner()` goes through it. Pinned by
   `diff_inner_class_of_generic_outer`.
+- **A generic method's return can be pinned by a CONTAINER argument**
+  (2026-08-07, JLS §18) — the return-inference plan matched only a parameter
+  that WAS the type variable (`<T> T max(T a, T b)`), so the commoner shape,
+  `<T> T max(List<T> xs)`, came back erased: as `Object`, or as the bound for
+  a bounded variable, which made `max(listOfStrings).toUpperCase()` a "cannot
+  find symbol". The plan now records where each parameter mentions the
+  variable — directly, or as a container's single type argument — and the
+  call reads the argument's ELEMENT in the second case. A parameterized USER
+  class answers its first type argument the same way, so `<T> T open(Box<T>)`
+  works too. Arguments that pin different types still keep the erased return.
+  Known gap: a DIAMOND in an argument position (`open(new Box<>("k"))`) pins
+  nothing, because a diamond types as `Null` so that the declared target stays
+  the authority. Pinned by `diff_generic_return_from_container_argument`.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is
