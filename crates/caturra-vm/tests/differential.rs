@@ -22761,3 +22761,84 @@ public class GenericStructures {
 }
 "#
 );
+
+// A nested class's JVM name is `Outer$Inner`, which is what its class file is
+// called and so what `getClass().getName()`, a class literal, a default
+// `toString()` and a stack-trace frame report. Hoisting used the SIMPLE name
+// for all of them, so every nested class lied about itself; `getSimpleName()`
+// is the one that really is the simple name.
+differential_test!(
+    diff_nested_class_binary_names,
+    "NestedNames",
+    r#"
+class Outer {
+    static class Inner {
+        int v = 3;
+
+        int get() {
+            return v;
+        }
+    }
+
+    class Bound {
+        int w = 4;
+    }
+
+    static void boom() {
+        throw new IllegalStateException("x");
+    }
+}
+
+public class NestedNames {
+    public static void main(String[] args) {
+        Outer.Inner i = new Outer.Inner();
+        System.out.println(i.getClass().getName());
+        System.out.println(i.getClass().getSimpleName());
+        System.out.println(Outer.Inner.class.getName());
+        System.out.println(i.toString().split("@")[0]);
+        System.out.println(i.get());
+
+        Outer o = new Outer();
+        Outer.Bound b = o.new Bound();
+        System.out.println(b.getClass().getName() + b.w);
+
+        // The frame names the class the way the class FILE does.
+        try {
+            Outer.boom();
+        } catch (RuntimeException e) {
+            e.printStackTrace(System.out);
+        }
+    }
+}
+"#
+);
+
+// A nested class and a top-level class may share a simple name — their BINARY
+// names differ, which is the whole point of one. caturra hoists nested classes
+// to the top level, and used to reject the pair outright as a duplicate.
+differential_test!(
+    diff_nested_and_top_level_share_a_name,
+    "SharedName",
+    r"
+class Node {
+    int a = 1;
+}
+
+class Holder {
+    static class Node {
+        int b = 2;
+    }
+}
+
+public class SharedName {
+    public static void main(String[] args) {
+        Node top = new Node();
+        Holder.Node nested = new Holder.Node();
+        System.out.println(top.a + nested.b);
+        System.out.println(top.getClass().getName());
+        System.out.println(nested.getClass().getName());
+        System.out.println(nested.getClass().getSimpleName());
+    }
+}
+"
+);

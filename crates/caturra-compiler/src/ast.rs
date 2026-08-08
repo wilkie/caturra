@@ -41,6 +41,13 @@ pub struct ClassDecl {
     /// created it. Hoisting to the top level loses sight of that class's
     /// static fields, so name resolution falls back to them.
     pub enclosing: Option<String>,
+    /// The JVM BINARY name of a hoisted nested class — `Outer$Inner`, and
+    /// `A$B$C` for a deeper one. `name` stays the SIMPLE name, because that is
+    /// how the source refers to it and how every pass here matches it; this is
+    /// what the class file is called and therefore what `getClass().getName()`,
+    /// a default `toString()` and a stack-trace frame report. `None` for a
+    /// top-level class, whose binary name IS its name.
+    pub binary_name: Option<String>,
     /// `extends` clause (classes only; single inheritance).
     pub superclass: Option<String>,
     /// `implements` clause (or `extends` list for interfaces).

@@ -1001,6 +1001,7 @@ impl Parser<'_> {
             is_public,
             is_nested: false,
             enclosing: None,
+            binary_name: None,
             superclass,
             interfaces,
             supertype_args,
@@ -3927,6 +3928,7 @@ impl Parser<'_> {
             is_public: false,
             is_nested: false,
             enclosing: None,
+            binary_name: None,
             // The supertype is resolved to extends/implements by the
             // compiler (it knows which names are interfaces).
             superclass: Some(String::from(supertype)),
@@ -4824,6 +4826,7 @@ fn desugar_enum(
         is_public: false,
         is_nested: false,
         enclosing: None,
+        binary_name: None,
         is_anonymous: false,
         is_local: false,
         is_inner: false,
@@ -4873,6 +4876,13 @@ fn flatten_nested_within(mut class: ClassDecl, enclosing: &str, out: &mut Vec<Cl
         // Only the *static* fallback opens up: the instance one needs a
         // captured `this`, which a nested class has not got.
         inner.enclosing.get_or_insert_with(|| outer.clone());
+        // The JVM name of a nested class is `Outer$Inner` — what the class
+        // file is called, and so what `getClass().getName()`, a default
+        // `toString()` and a stack-trace frame report. Hoisting used the
+        // SIMPLE name for all three, so every nested class lied about itself.
+        inner
+            .binary_name
+            .get_or_insert_with(|| format!("{}${}", inner_enclosing.replace('.', "$"), inner.name));
         // An INNER (non-static) class is bound to an instance of a
         // parameterized outer, so the outer's type variables are in scope in
         // its body — `class Outer<T> { class Inner { T get() {…} } }`. It has
@@ -5205,6 +5215,7 @@ fn erasure_target(tp: &TypeParam, span: SourceSpan, synthesized: &mut Vec<ClassD
         synthesized.push(ClassDecl {
             name: name.clone(),
             enclosing: None,
+            binary_name: None,
             superclass: None,
             interfaces: bounds,
             supertype_args: Vec::new(),

@@ -870,6 +870,32 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     whether anyone else's did depended on declaration ORDER.
   - Pinned by `diff_type_variable_in_element_position`, which walks a `Bag`,
     a linked node chain, a linked stack and an array-backed stack.
+- **A nested class has a BINARY name** (2026-08-08, JLS §13.1) — the last
+  round-8/9 naming deferral, in both its halves. caturra hoists a nested class
+  to the top level, and used the SIMPLE name for everything, so every nested
+  class lied about itself: `getClass().getName()` and a class literal answered
+  `Inner`, a default `toString()` printed `Inner@…`, and a stack-trace frame
+  read `Inner.method`. The class file now carries `Outer$Inner` (`A$B$C` for a
+  deeper one), which is what all four report; `getSimpleName()` is the one
+  that really is the simple name, and strips at the last `$`.
+  - The method table is keyed by that binary name, with the SOURCE spellings —
+    the simple name and the canonical `Outer.Inner` — as aliases, resolved
+    through one `info()` chokepoint. That is what lets a nested `Holder.Node`
+    coexist with a top-level `Node`, which used to be refused outright as
+    "class 'Node' is already defined". Only the QUALIFIED spelling is answered
+    from the alias map: the bare simple name is an alias too, and answering it
+    there would let a nested class win over a top-level one.
+  - Two resolution orders had to flip with it: `new Outer.Inner()` and a
+    declared `Outer.Inner` read the WHOLE name first, where both used to take
+    the last segment on sight and build the wrong class — silently, since two
+    classes of the same simple name have the same members as often as not.
+  - A `ClassId` answers with the binary name, so everything that starts from
+    one and ends at a name — descriptors, `extends`/`implements` entries, the
+    `throws` and access side tables, the enclosing-statics walk — had to agree.
+    Pinned by `diff_nested_class_binary_names` and
+    `diff_nested_and_top_level_share_a_name`.
+  - Still open: `getStackTrace()` returns no `StackTraceElement[]`, so a frame
+    can only be read through `printStackTrace`.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is

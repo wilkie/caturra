@@ -409,7 +409,14 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
                     });
                 }
             }
-            if let Some(other_path) = seen.get(&class.name) {
+            // Two classes clash only if their BINARY names do: a nested
+            // `Holder.Node` is `Holder$Node`, so it may sit beside a top-level
+            // `Node` exactly as it may in Java.
+            let binary = class
+                .binary_name
+                .clone()
+                .unwrap_or_else(|| class.name.clone());
+            if let Some(other_path) = seen.get(&binary) {
                 compilation.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     message: format!("class '{}' is already defined in {other_path}", class.name),
@@ -417,7 +424,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
                     span: Some(class.span),
                 });
             } else {
-                seen.insert(class.name.clone(), source.path.clone());
+                seen.insert(binary, source.path.clone());
             }
         }
         units.push((source.path.clone(), unit));

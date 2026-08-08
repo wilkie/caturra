@@ -45,7 +45,10 @@ pub fn generate(units: &[(String, CompilationUnit)]) -> (Vec<CompiledClass>, Vec
             crate::thrown::check(class, path, &table, &mut diagnostics);
             check_inner_static_members(class, path, &mut diagnostics);
             classes.push(CompiledClass {
-                binary_name: class.name.clone(),
+                binary_name: class
+                    .binary_name
+                    .clone()
+                    .unwrap_or_else(|| class.name.clone()),
                 class_file: emit_class(path, &mut diagnostics, &table, class),
             });
         }
@@ -61,7 +64,13 @@ fn emit_class(
     decl: &ClassDecl,
 ) -> ClassFile {
     let mut class = ClassFile::new_java11();
-    class.this_class = intern_class(&mut class.constant_pool, &decl.name);
+    // The class file carries the JVM BINARY name (`Outer$Inner`), which is
+    // what every reference to it, and every runtime report of its name, uses.
+    let binary = decl
+        .binary_name
+        .clone()
+        .unwrap_or_else(|| decl.name.clone());
+    class.this_class = intern_class(&mut class.constant_pool, &binary);
     // For an anonymous class the extends/implements split was resolved
     // by the table; use its class name (Object) and interface list.
     let anon_interfaces: Vec<String> = if decl.is_anonymous {
@@ -84,7 +93,15 @@ fn emit_class(
                 caturra_classfile::exceptions::internal_name_of(name).unwrap_or(name)
             })
     };
-    class.super_class = intern_class(&mut class.constant_pool, super_name);
+    // A supertype named in SOURCE (`extends Inner`, `implements Face`) is
+    // written to the class file by the name its own class file carries — the
+    // binary one for a nested class.
+    let emitted_name = |name: &str| {
+        table
+            .class_id(name)
+            .map_or_else(|| name.to_owned(), |id| table.class_name(id).to_owned())
+    };
+    class.super_class = intern_class(&mut class.constant_pool, &emitted_name(super_name));
 
     // SourceFile attribute: which compilation unit this class came
     // from — the debugger keys breakpoints by (file, line).
@@ -104,7 +121,10 @@ fn emit_class(
         // check against the aliased name) said false for a class that plainly
         // implements it, and a user comparator did not inherit the interface's
         // default methods either.
-        let index = intern_class(&mut class.constant_pool, comparator_alias(interface));
+        let index = intern_class(
+            &mut class.constant_pool,
+            &emitted_name(comparator_alias(interface)),
+        );
         class.interfaces.push(index);
     }
     {
@@ -225,13 +245,19 @@ fn emit_clinit(
     decl: &ClassDecl,
     pool: &mut ConstantPool,
 ) -> MethodInfo {
-    let class_id = table.class_id(&decl.name).expect("class registered");
+    // By the BINARY name: a nested class's simple name may belong to a
+    // different, top-level class entirely.
+    let class_id = table
+        .class_id(decl.binary_name.as_deref().unwrap_or(&decl.name))
+        .expect("class registered");
     let mut body = BodyGen {
         path,
         diagnostics,
         pool,
         table,
-        current_class: &decl.name,
+        // The BINARY name: this is what a reference to the class being
+        // compiled must say, and lookups resolve either spelling.
+        current_class: table.class_name(class_id),
         current_class_id: class_id,
         in_static: true,
         in_constructor: false,
@@ -481,6 +507,13 @@ pub(crate) struct MethodTable {
     /// Filled during type resolution (hence the interior mutability) and read
     /// back where an element's true type matters (`get`/`add`/for-each).
     nested: std::cell::RefCell<NestedTypes>,
+    /// The SOURCE spellings a nested class answers to — its simple name and
+    /// its canonical `Outer.Inner` — to the BINARY name `classes` is keyed by.
+    /// The class file, and so every constant-pool reference, carries the
+    /// binary name; the program writes the source one. Keying by the binary
+    /// name is also what lets `Holder.Node` coexist with a top-level `Node`,
+    /// which used to be "class 'Node' is already defined".
+    by_source: std::collections::HashMap<String, String>,
     /// `throws` clauses by (class, method-or-`<init>`, arity), for JLS §11.2
     /// checked-exception enforcement. A side table (not a `MethodSig` field)
     /// so the many synthetic-signature literals stay untouched; empty clauses
@@ -637,6 +670,7 @@ impl MethodTable {
             object_id: ClassId(0),
             static_imports,
             nested: std::cell::RefCell::default(),
+            by_source: std::collections::HashMap::new(),
             throws_clauses: std::collections::HashMap::new(),
             method_access: std::collections::HashMap::new(),
             synthesized: std::collections::HashSet::new(),
@@ -960,13 +994,38 @@ impl MethodTable {
         }
         for (_, unit) in units {
             for class in &unit.classes {
-                if table.classes.contains_key(&class.name) {
+                let binary = class
+                    .binary_name
+                    .clone()
+                    .unwrap_or_else(|| class.name.clone());
+                if table.classes.contains_key(&binary) {
                     continue; // duplicate classes are reported by compile()
                 }
                 let id = ClassId(u16::try_from(table.class_names.len()).unwrap_or(u16::MAX));
-                table.class_names.push(class.name.clone());
+                // `class_names` holds the name the CLASS FILE carries, so a
+                // nested class is registered under its binary name — that is
+                // what every constant-pool reference, `getClass().getName()`,
+                // a default `toString()` and a stack-trace frame then say.
+                // `classes` stays keyed by the SOURCE name, which is what the
+                // program writes; `by_binary` maps one to the other.
+                table.class_names.push(binary.clone());
+                if binary != class.name {
+                    // The source spellings a nested class answers to: its
+                    // SIMPLE name — unless a top-level class already owns it,
+                    // which is why `Holder.Node` may now coexist with a
+                    // top-level `Node` — and its canonical dotted name.
+                    table
+                        .by_source
+                        .entry(class.name.clone())
+                        .or_insert_with(|| binary.clone());
+                    if let Some(outer) = &class.enclosing {
+                        table
+                            .by_source
+                            .insert(format!("{outer}.{}", class.name), binary.clone());
+                    }
+                }
                 table.classes.insert(
-                    class.name.clone(),
+                    binary.clone(),
                     ClassInfo {
                         id,
                         superclass: None,
@@ -1052,6 +1111,12 @@ impl MethodTable {
                     }
                 }
 
+                // Both side tables are keyed by the name a LOOKUP will use,
+                // which starts from a `ClassId` and so comes back BINARY.
+                let key_class = class
+                    .binary_name
+                    .clone()
+                    .unwrap_or_else(|| class.name.clone());
                 for method in &class.methods {
                     let key_name = if method.is_constructor {
                         String::from("<init>")
@@ -1060,7 +1125,7 @@ impl MethodTable {
                     };
                     if !method.throws.is_empty() {
                         table.throws_clauses.insert(
-                            (class.name.clone(), key_name.clone(), method.params.len()),
+                            (key_class.clone(), key_name.clone(), method.params.len()),
                             method.throws.clone(),
                         );
                     }
@@ -1068,7 +1133,7 @@ impl MethodTable {
                     if level < 3 {
                         table
                             .method_access
-                            .insert((class.name.clone(), key_name, method.params.len()), level);
+                            .insert((key_class.clone(), key_name, method.params.len()), level);
                     }
                     let sig = MethodSig {
                         name: if method.is_constructor {
@@ -1207,10 +1272,12 @@ impl MethodTable {
                 } else {
                     (superclass, interface_ids)
                 };
-                let info = table
-                    .classes
-                    .get_mut(&class.name)
-                    .expect("registered in pass 1");
+                // Keyed by the BINARY name, as pass 1 registered it.
+                let key = class
+                    .binary_name
+                    .clone()
+                    .unwrap_or_else(|| class.name.clone());
+                let info = table.classes.get_mut(&key).expect("registered in pass 1");
                 info.methods = methods;
                 info.fields = fields;
                 // A class with no declared parent is a subtype of the
@@ -1273,7 +1340,9 @@ impl MethodTable {
                         if existing.const_literal.is_some() {
                             continue;
                         }
-                        let owner = class.name.clone();
+                        // `classes` is keyed by the BINARY name, which is
+                        // what a `ClassId` answers with.
+                        let owner = self.class_name(id).to_owned();
                         let folded = crate::constfold::fold(init, &mut |path| match path {
                             [name] => self
                                 .field(&owner, name)
@@ -1343,14 +1412,17 @@ impl MethodTable {
                 span: None,
             });
             // Break the cycle so later chain walks terminate.
-            if let Some(info) = self.classes.get_mut(&name) {
+            let key = self
+                .class_id(&name)
+                .map_or_else(|| name.clone(), |id| self.class_name(id).to_owned());
+            if let Some(info) = self.classes.get_mut(&key) {
                 info.superclass = None;
             }
         }
 
         for (path, unit) in units {
             for class in &unit.classes {
-                let Some(info) = self.classes.get(&class.name) else {
+                let Some(info) = self.info(&class.name) else {
                     continue;
                 };
                 // An ENUM is implicitly final (JLS §8.9), so nothing may
@@ -1502,8 +1574,7 @@ impl MethodTable {
                             let substituted = matches!(sup_sig.ret, Some(JType::TypeVar(_)))
                                 .then(|| {
                                     let parent = self.class_name(id).to_owned();
-                                    self.classes
-                                        .get(&class.name)
+                                    self.info(&class.name)
                                         .and_then(|info| {
                                             info.supertype_args
                                                 .iter()
@@ -1811,15 +1882,14 @@ impl MethodTable {
 
     fn info_by_id(&self, id: ClassId) -> Option<&ClassInfo> {
         let name = self.class_names.get(usize::from(id.0))?;
-        self.classes.get(name)
+        self.info(name)
     }
 
     /// The resolved superclass internal name of an anonymous class:
     /// `java/lang/Object` when it implements an interface, otherwise
     /// the class it extends.
     fn anon_super_name(&self, name: &str) -> String {
-        self.classes
-            .get(name)
+        self.info(name)
             .and_then(|info| info.superclass)
             .map_or_else(
                 || String::from("java/lang/Object"),
@@ -1830,8 +1900,7 @@ impl MethodTable {
     /// The resolved interface names an anonymous class implements
     /// (its declared supertype, when that is an interface).
     fn anon_supertypes(&self, name: &str) -> Vec<String> {
-        self.classes
-            .get(name)
+        self.info(name)
             .map(|info| {
                 info.interfaces
                     .iter()
@@ -1957,21 +2026,20 @@ impl MethodTable {
     /// Whether this user class descends from a library throwable — i.e. it
     /// IS an exception class (for the checked-exception pass).
     pub(crate) fn is_user_throwable(&self, name: &str) -> bool {
-        self.classes
-            .get(name)
+        self.info(name)
             .is_some_and(|info| self.library_throwable_ancestor(info.id).is_some())
     }
 
     /// The library throwable ancestor's INTERNAL name of a user exception
     /// class, if it has one.
     pub(crate) fn user_throwable_ancestor(&self, name: &str) -> Option<&'static str> {
-        let info = self.classes.get(name)?;
+        let info = self.info(name)?;
         self.library_throwable_ancestor(info.id)
     }
 
     /// Whether user class `sub` is `sup` or descends from it, by name.
     pub(crate) fn user_class_is_subtype(&self, sub: &str, sup: &str) -> bool {
-        match (self.classes.get(sub), self.classes.get(sup)) {
+        match (self.info(sub), self.info(sup)) {
             (Some(a), Some(b)) => self.is_subtype(a.id, b.id),
             _ => false,
         }
@@ -1995,8 +2063,7 @@ impl MethodTable {
                 return list;
             }
             current = self
-                .classes
-                .get(&name)
+                .info(&name)
                 .and_then(|info| info.superclass)
                 .map(|id| self.class_name(id).to_owned());
         }
@@ -2197,7 +2264,7 @@ impl MethodTable {
     }
 
     pub(crate) fn has_class(&self, name: &str) -> bool {
-        self.classes.contains_key(name)
+        self.info(name).is_some()
     }
 
     /// Whether the PROGRAM declares this class — as opposed to caturra having
@@ -2238,14 +2305,24 @@ impl MethodTable {
     /// its enclosing chain. `None` for anything else — a package-qualified
     /// library name, or a name whose qualifier does not match.
     fn qualified_nested_class(&self, name: &str) -> Option<ClassId> {
+        // The CANONICAL spelling is recorded as an alias, and it is the only
+        // thing that tells `Holder.Node` from a top-level `Node`. Only a
+        // qualified name is answered here: the bare simple name is an alias
+        // too, and answering it would let a nested class win over a top-level
+        // one of the same name.
+        if name.contains('.')
+            && let Some(id) = self.by_source.get(name).and_then(|b| self.class_id(b))
+        {
+            return Some(id);
+        }
         let (qualifier, simple) = name.rsplit_once('.')?;
-        let info = self.classes.get(simple)?;
+        let info = self.info(simple)?;
         let mut expected = info.enclosing.clone();
         // Walk the qualifier's segments from the innermost outward.
         for segment in qualifier.rsplit('.') {
             match expected {
                 Some(outer) if outer == segment => {
-                    expected = self.classes.get(&outer).and_then(|i| i.enclosing.clone());
+                    expected = self.info(&outer).and_then(|i| i.enclosing.clone());
                 }
                 _ => return None,
             }
@@ -2326,11 +2403,25 @@ impl MethodTable {
     }
 
     fn has_user_class(&self, name: &str) -> bool {
-        self.classes.contains_key(name) && !self.synthesized.contains(name)
+        self.info(name).is_some() && !self.synthesized.contains(name)
+    }
+
+    /// A class by any name it answers to: the SOURCE spelling `classes` is
+    /// keyed by, or the BINARY name its class file carries (`Outer$Inner`).
+    /// Reads that start from a `ClassId` come back as the binary name, so both
+    /// have to land on the same entry.
+    fn info(&self, name: &str) -> Option<&ClassInfo> {
+        match self.classes.get(name) {
+            Some(info) => Some(info),
+            None => self
+                .by_source
+                .get(name)
+                .and_then(|binary| self.classes.get(binary)),
+        }
     }
 
     fn class_id(&self, name: &str) -> Option<ClassId> {
-        self.classes.get(name).map(|c| c.id)
+        self.info(name).map(|c| c.id)
     }
 
     fn class_name(&self, id: ClassId) -> &str {
@@ -2359,7 +2450,11 @@ impl MethodTable {
                 continue;
             };
             for (name, args) in &info.supertype_args {
-                if *name == sup_name && args.len() == 1 {
+                // `supertype_args` records the SOURCE spelling of the
+                // supertype; `sup_name` starts from a `ClassId`, so it comes
+                // back binary. Compare them by identity, not by string.
+                let same = *name == sup_name || self.class_id(name) == Some(sup);
+                if same && args.len() == 1 {
                     return elem_from_type_arg(&args[0], self);
                 }
             }
@@ -2771,7 +2866,7 @@ impl MethodTable {
         // `public static final` constants ARE inherited by an implementing
         // class (unlike its static methods), so `MAX` resolves in a class that
         // `implements Const`.
-        let start = self.classes.get(class).map(|i| i.id)?;
+        let start = self.info(class).map(|i| i.id)?;
         let mut stack = vec![start];
         let mut steps = 0usize;
         while let Some(id) = stack.pop() {
@@ -2879,7 +2974,7 @@ impl MethodTable {
     /// walking the superclass chain (a static method is inherited from a
     /// superCLASS, not an interface — JLS §8.4.8). Falls back to `class`.
     fn static_method_owner(&self, class: &str, sig: &MethodSig) -> String {
-        let mut current = self.classes.get(class).map(|info| info.id);
+        let mut current = self.info(class).map(|info| info.id);
         while let Some(id) = current {
             let Some(info) = self.info_by_id(id) else {
                 break;
@@ -2900,13 +2995,13 @@ impl MethodTable {
     /// first, then the unique most-specific method.
     #[allow(clippy::too_many_lines)] // the JLS 15.12.2 phase ladder, in order
     fn resolve(&self, class: &str, name: &str, args: &[JType]) -> Resolution<'_> {
-        if !self.classes.contains_key(class) {
+        if self.info(class).is_none() {
             return Resolution::UnknownName;
         }
         // Walk the chain (and interfaces, for interface receivers),
         // nearest declaration first; an override shadows its ancestor.
         let mut named: Vec<&MethodSig> = Vec::new();
-        let start = self.classes.get(class).map(|i| i.id);
+        let start = self.info(class).map(|i| i.id);
         let mut stack = vec![start];
         let mut steps = 0usize;
         while let Some(Some(id)) = stack.pop() {
@@ -2971,7 +3066,7 @@ impl MethodTable {
                 .classes
                 .get(class)
                 .is_some_and(|info| info.is_interface)
-            && let Some(object) = self.classes.get("java/lang/Object")
+            && let Some(object) = self.info("java/lang/Object")
         {
             named.extend(object.methods.iter().filter(|m| m.name == name));
         }
@@ -5808,7 +5903,14 @@ fn emit_method(
     pool: &mut ConstantPool,
     decl: &MethodDecl,
 ) -> MethodInfo {
-    let class_id = table.class_id(&class_decl.name).expect("class registered");
+    let class_id = table
+        .class_id(
+            class_decl
+                .binary_name
+                .as_deref()
+                .unwrap_or(&class_decl.name),
+        )
+        .expect("class registered");
     let return_type = match &decl.return_type {
         TypeRef::Void => None,
         other => Some(table.resolve_type(other).unwrap_or(JType::Unsupported)),
@@ -5818,7 +5920,7 @@ fn emit_method(
         diagnostics,
         pool,
         table,
-        current_class: &class_decl.name,
+        current_class: table.class_name(class_id),
         current_class_id: class_id,
         in_static: decl.is_static,
         in_constructor: decl.is_constructor,
@@ -6098,7 +6200,11 @@ fn method_descriptor(
                     // `Box<T>` only worked because a single-parameter class is
                     // resolved through `JType::Generic`, never described here.
                     out.push('L');
-                    out.push_str(base);
+                    out.push_str(
+                        table
+                            .class_id(base)
+                            .map_or(base.as_str(), |id| table.class_name(id)),
+                    );
                     out.push(';');
                 } else {
                     let message = crate::imports::unsupported_class_reason(base)
@@ -6157,13 +6263,18 @@ fn method_descriptor(
                     || crate::imports::canonical_library_class(name).is_some())
                     && table.has_class(simple)
                 {
+                    // The name the CLASS FILE carries: a nested class's
+                    // descriptor says `LOuter$Inner;`, not its simple name.
                     out.push('L');
-                    out.push_str(simple);
+                    out.push_str(
+                        table
+                            .class_id(simple)
+                            .map_or(simple, |id| table.class_name(id)),
+                    );
                     out.push(';');
                 } else if let Some(id) = table.qualified_nested_class(name) {
-                    // `Host.Point` in a SIGNATURE. Nested classes are hoisted
-                    // under their simple name, so the descriptor is that name —
-                    // the qualifier only had to be checked.
+                    // `Host.Point` in a SIGNATURE — the qualifier is checked,
+                    // and the descriptor is the class file's own name.
                     out.push('L');
                     out.push_str(table.class_name(id));
                     out.push(';');
@@ -11312,8 +11423,7 @@ impl BodyGen<'_> {
         while let Some(name) = next {
             next = self
                 .table
-                .classes
-                .get(&name)
+                .info(&name)
                 .and_then(|info| info.enclosing.clone());
             chain.push(name);
             if chain.len() > 64 {
@@ -13804,7 +13914,13 @@ impl BodyGen<'_> {
         };
         let args_width = self.emit_call_args(args, &sig, span);
         let descriptor = sig.descriptor(self.table);
-        let init_ref = intern_method_ref(self.pool, class_name, "<init>", &descriptor);
+        // The name the class FILE carries, which for a nested class is its
+        // binary one — the source spelling would not link.
+        let owner = self.table.class_id(class_name).map_or_else(
+            || class_name.to_owned(),
+            |id| self.table.class_name(id).to_owned(),
+        );
+        let init_ref = intern_method_ref(self.pool, &owner, "<init>", &descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
         self.code.drop_stack(1 + args_width);
     }
@@ -13943,7 +14059,7 @@ impl BodyGen<'_> {
             let descriptor = outer_ty.descriptor(self.table);
             let field_ref = intern_field_ref(
                 self.pool,
-                &class_decl.name,
+                self.current_class,
                 crate::capture::OUTER_FIELD,
                 &descriptor,
             );
@@ -14668,11 +14784,18 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) -> JType {
         // The simple name (a qualified `Outer.Inner` flattens to `Inner`).
-        let simple = class_name
-            .rsplit('.')
-            .next()
-            .filter(|last| self.table.class_id(last).is_some())
-            .unwrap_or(class_name);
+        // The WHOLE name first: `Holder.Node` names the nested class even when
+        // a top-level `Node` also exists, and taking the last segment on sight
+        // built the wrong one — silently, since both have the same members.
+        let simple = if self.table.class_id(class_name).is_some() {
+            class_name
+        } else {
+            class_name
+                .rsplit('.')
+                .next()
+                .filter(|last| self.table.class_id(last).is_some())
+                .unwrap_or(class_name)
+        };
         // Only a genuine inner class needs its enclosing instance supplied here.
         // A lambda/anonymous class also carries `__caturraOuter`, but the capture
         // pass already threads its value in at the `new` site.
@@ -14791,7 +14914,12 @@ impl BodyGen<'_> {
         // `new java.util.Scanner(...)`: resolve the qualified name (and
         // reject unknown ones with javac's wording).
         let class_name = if class_name.contains('.') {
-            if let Some(simple) = crate::imports::canonical_library_class(class_name) {
+            // The QUALIFIED name first: `Outer.Inner` names the nested class
+            // even when a top-level `Inner` exists too, and reading the last
+            // segment on sight built the wrong one.
+            if self.table.class_id(class_name).is_some() {
+                class_name
+            } else if let Some(simple) = crate::imports::canonical_library_class(class_name) {
                 simple
             } else if let Some(last) = class_name.rsplit('.').next()
                 && self.table.class_id(last).is_some()
@@ -14968,12 +15096,16 @@ impl BodyGen<'_> {
             return JType::Error;
         }
 
-        let class_index = intern_class(self.pool, class_name);
+        // Emit the name the CLASS FILE carries — a nested class's is
+        // `Outer$Inner`, while the source (and every diagnostic above) says
+        // the simple one.
+        let emitted = self.table.class_name(class_id).to_owned();
+        let class_index = intern_class(self.pool, &emitted);
         self.code.push_op_u16(op::NEW, class_index, 1);
         self.code.push_op(op::DUP, 1);
         let args_width = self.emit_call_args(args, &sig, span);
         let descriptor = sig.descriptor(self.table);
-        let init_ref = intern_method_ref(self.pool, class_name, "<init>", &descriptor);
+        let init_ref = intern_method_ref(self.pool, &emitted, "<init>", &descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
         self.code.drop_stack(1 + args_width);
         JType::Object(class_id)
@@ -21311,8 +21443,7 @@ impl BodyGen<'_> {
                     owner.clone()
                 } else {
                     let current = self.table.class_name(self.current_class_id).to_owned();
-                    let Some(superclass) =
-                        self.table.classes.get(&current).and_then(|c| c.superclass)
+                    let Some(superclass) = self.table.info(&current).and_then(|c| c.superclass)
                     else {
                         return JType::Error;
                     };
@@ -21710,7 +21841,7 @@ impl BodyGen<'_> {
             return Some(inferred_return(&sig, &arg_types));
         }
         let current = self.table.class_name(self.current_class_id).to_owned();
-        let Some(superclass) = self.table.classes.get(&current).and_then(|c| c.superclass) else {
+        let Some(superclass) = self.table.info(&current).and_then(|c| c.superclass) else {
             // A user exception's superclass is a LIBRARY throwable, which has no
             // entry in the class table — but `super.getMessage()` and
             // `super.toString()` inside one are ordinary Java, and were refused

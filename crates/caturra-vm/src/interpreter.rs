@@ -12122,7 +12122,7 @@ impl<'run> Interpreter<'run> {
                         let simple = if is_synthesized_anonymous(&name) {
                             ""
                         } else {
-                            simple_class_name(&name)
+                            nested_simple_name(&name)
                         };
                         Ok(Some(JValue::Ref(Some(self.heap.alloc_string(simple)))))
                     }
@@ -14243,6 +14243,16 @@ fn descriptor_class_name(descriptor: &str) -> String {
 
 fn simple_class_name(name: &str) -> &str {
     name.rsplit(['/', '.']).next().unwrap_or(name)
+}
+
+/// `getSimpleName`'s answer for a NESTED class: the segment after the last
+/// `$`, which is what separates a nested class from its outer in the binary
+/// name (`Outer$Inner` is simply `Inner`). Kept apart from
+/// [`simple_class_name`], which every other caller wants NOT to split there —
+/// a synthesized `Anon$1` would otherwise be recognised as neither anonymous
+/// nor itself.
+fn nested_simple_name(name: &str) -> &str {
+    simple_class_name(name).rsplit('$').next().unwrap_or(name)
 }
 
 /// Read a field's generic `Signature` attribute (e.g.
