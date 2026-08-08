@@ -510,6 +510,66 @@ struct NestedTypes {
     arg_lists: Vec<Vec<ElemType>>,
 }
 
+/// Substitute a receiver's type arguments for the type variables inside a
+/// member's type — including the ones in ELEMENT position, which
+/// `substitute_type_var` cannot see: an `Iterator<T> iterator()` on a
+/// `Bag<String>` really answers an `Iterator<String>`, and a `List<T> items`
+/// field really reads as a `List<String>`.
+///
+/// The bytecode is untouched: every one of these erases to the same raw
+/// container, and only the STATIC type differs.
+fn substitute_member_type(
+    ty: JType,
+    first: ElemType,
+    rest: TypeArgsId,
+    table: &MethodTable,
+) -> JType {
+    // An element slot holds a REFERENCE either way, so a wrapper argument
+    // needs no adjustment here — unlike `substituted_read`, which answers a
+    // VALUE type and must box.
+    let arg = |elem: ElemType| match elem {
+        ElemType::TypeVar(index) => table.type_arg(first, rest, index).unwrap_or(elem),
+        other => other,
+    };
+    match ty {
+        JType::List(elem) => JType::List(arg(elem)),
+        JType::Set(elem) => JType::Set(arg(elem)),
+        JType::TreeSet(elem) => JType::TreeSet(arg(elem)),
+        JType::Collection(elem) => JType::Collection(arg(elem)),
+        JType::Iterator(elem) => JType::Iterator(arg(elem)),
+        JType::ListIterator(elem) => JType::ListIterator(arg(elem)),
+        JType::Optional(elem) => JType::Optional(arg(elem)),
+        JType::Stack(elem) => JType::Stack(arg(elem)),
+        JType::Stream(elem) => JType::Stream(arg(elem)),
+        JType::LinkedList { elem, role } => JType::LinkedList {
+            elem: arg(elem),
+            role,
+        },
+        JType::Map { key, value } => JType::Map {
+            key: arg(key),
+            value: arg(value),
+        },
+        JType::TreeMap { key, value } => JType::TreeMap {
+            key: arg(key),
+            value: arg(value),
+        },
+        JType::Array { elem, dims } => JType::Array {
+            elem: arg(elem),
+            dims,
+        },
+        JType::Generic {
+            class,
+            arg: first_arg,
+            rest: own_rest,
+        } => JType::Generic {
+            class,
+            arg: arg(first_arg),
+            rest: own_rest,
+        },
+        other => other,
+    }
+}
+
 /// What a tracked type argument READS OUT as. A wrapper argument keeps its
 /// BOXED type — the value on the stack is a reference, which is how a `T`
 /// field holds an `Integer`, and `Boxed(Int)` (not `Boxed(Wrapper(Int))`) is
@@ -923,7 +983,16 @@ impl MethodTable {
                         is_enum: false,
                         is_final_class: false,
                         is_inner: false,
-                        type_param_count: 0,
+                        // Known in pass 1 for the same reason, and a sharper
+                        // one: a MEMBER's type may name a generic class
+                        // (`Node<T> next`, `Pair<String, Integer> p`), and
+                        // whether that parameterization is TRACKED is decided
+                        // by this count. Filled in pass 2, it was still zero
+                        // while the declaring class's own members resolved —
+                        // so a self-referential `Node<T>` went raw, and
+                        // whether anyone else's did depended on declaration
+                        // ORDER.
+                        type_param_count: class.type_params.len(),
                         supertype_args: Vec::new(),
                         methods: Vec::new(),
                         fields: Vec::new(),
@@ -1161,7 +1230,6 @@ impl MethodTable {
                 info.is_interface = class.is_interface;
                 info.is_enum = class.is_enum;
                 info.is_inner = class.is_inner;
-                info.type_param_count = class.type_params.len();
                 info.supertype_args.clone_from(&class.supertype_args);
             }
         }
@@ -2606,7 +2674,12 @@ impl MethodTable {
                         // A parameterized argument (`Pair<String, Pair<…>>`)
                         // rides as an interned nested type, so the inner
                         // arguments survive the outer read.
-                        | ElemType::Nested { .. } => true,
+                        | ElemType::Nested { .. }
+                        // A SELF-REFERENTIAL argument (`Node<T> next` inside a
+                        // `Node<T>`): the position rides along so a read
+                        // through a `Node<String>` puts the argument back —
+                        // which is what makes a linked structure walkable.
+                        | ElemType::TypeVar(_) => true,
                         _ => false,
                     };
                     match tracked {
@@ -3270,7 +3343,9 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::Boolean => "java/lang/Boolean",
         // A wrapper element defers to its own primitive.
         ElemType::Wrapper(prim) => wrapper_internal(prim.elem()),
-        ElemType::Str
+        // A type variable erases to `Object`, like every other reference here.
+        ElemType::TypeVar(_)
+        | ElemType::Str
         | ElemType::Object(_)
         | ElemType::Field
         | ElemType::Method
@@ -3397,6 +3472,7 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
 
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
+        ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
         ElemType::Int => String::from("Integer"),
@@ -3466,6 +3542,12 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
             // element that argument matching can vary over.
             if let Some((variance, bound)) = crate::ast::wildcard_parts(name) {
                 return Some(wildcard_elem(variance, bound, table));
+            }
+            // A tracked class variable in a field or return type
+            // (`List<T> items` inside a `Bag<T>`): the position rides along, so
+            // a read through a `Bag<String>` receiver puts `String` back.
+            if let Some(index) = crate::parser::typevar_index(name) {
+                return Some(ElemType::TypeVar(index));
             }
             // A user class shadows the wrapper/library simple names
             // (a level may define its own `Character`).
@@ -4231,6 +4313,12 @@ enum ElemType {
     /// through the `Object` boundary, so `arr[0] == arr[1]` answered wrongly
     /// in both directions.
     Wrapper(Prim),
+    /// A TYPE VARIABLE in element position, by declared position:
+    /// `List<T> items` and `Iterator<T> iterator()` inside a `Bag<T>`. Erases
+    /// to `Object` for storage like every other reference element; what it
+    /// adds is the ability to substitute the RECEIVER's argument on a read, so
+    /// `for (String s : bag)` and `bag.items.get(0)` see a `String`.
+    TypeVar(u8),
 }
 
 /// The primitive a [`ElemType::Wrapper`] element boxes. A dedicated enum
@@ -4301,6 +4389,9 @@ enum WildcardBound {
 impl ElemType {
     fn descriptor(self, table: &MethodTable) -> String {
         match self {
+            // A type variable erases to `Object` in the class file, which is
+            // the whole point: only the STATIC type differs.
+            ElemType::TypeVar(_) => String::from("Ljava/lang/Object;"),
             ElemType::Builder => String::from("Ljava/lang/StringBuilder;"),
             ElemType::Int => String::from("I"),
             ElemType::Double => String::from("D"),
@@ -4328,6 +4419,7 @@ impl ElemType {
 
     fn base_type(self) -> JType {
         match self {
+            ElemType::TypeVar(index) => JType::TypeVar(index),
             ElemType::Builder => JType::StringBuilder,
             ElemType::Int => JType::Int,
             ElemType::Double => JType::Double,
@@ -13230,7 +13322,14 @@ impl BodyGen<'_> {
         }
 
         let object_ty = self.type_of(object);
-        let JType::Object(class_id) = object_ty else {
+        // A PARAMETERIZED receiver assigns like a plain one — `top.item = x`
+        // where `top` is a `Node<T>`. Only `Object` was accepted here, so a
+        // write through a tracked receiver was "cannot find symbol: field".
+        let (JType::Object(class_id)
+        | JType::Generic {
+            class: class_id, ..
+        }) = object_ty
+        else {
             if matches!(object_ty, JType::Array { .. }) && name == "length" {
                 self.error(span, "cannot assign a value to final variable length");
             } else if object_ty != JType::Error {
@@ -16264,7 +16363,10 @@ impl BodyGen<'_> {
             JType::Generic { class, arg, rest } => {
                 let result =
                     self.emit_virtual_call_on_stacked_receiver(class, method, args, span)?;
-                return Some(result.map(|ret| self.substitute_type_var(ret, arg, rest)));
+                return Some(result.map(|ret| {
+                    let ret = self.substitute_type_var(ret, arg, rest);
+                    substitute_member_type(ret, arg, rest, self.table)
+                }));
             }
             // Wrapper instance methods (intValue, compareTo, ...).
             JType::Boxed(elem) => {
@@ -18070,6 +18172,16 @@ impl BodyGen<'_> {
             _ => None,
         }
         .unwrap_or(JType::Iterator(ElemType::Object(self.table.object_id)));
+        // `Iterator<T>` on a `Bag<String>` really answers an
+        // `Iterator<String>`, so `for (String s : bag)` needs the receiver's
+        // own argument put back — without it the element was `Object` and the
+        // loop variable would not take it.
+        let cursor_ty = match iterable_ty {
+            JType::Generic { arg, rest, .. } => {
+                substitute_member_type(cursor_ty, arg, rest, self.table)
+            }
+            _ => cursor_ty,
+        };
         let element = match cursor_ty {
             JType::Iterator(elem) | JType::ListIterator(elem) => {
                 boxed_or_nested(Some(elem), self.table)
@@ -20625,7 +20737,7 @@ impl BodyGen<'_> {
                             .table
                             .type_arg(arg, rest, index)
                             .map_or(JType::Error, |a| substituted_read(a, self.table)),
-                        Some(ty) => ty,
+                        Some(ty) => substitute_member_type(ty, arg, rest, self.table),
                         None => JType::Error,
                     }
                 }
@@ -20770,7 +20882,7 @@ impl BodyGen<'_> {
                                         .table
                                         .type_arg(arg, rest, index)
                                         .map_or(JType::Error, |a| substituted_read(a, self.table)),
-                                    Some(ret) => ret,
+                                    Some(ret) => substitute_member_type(ret, arg, rest, self.table),
                                     None => JType::Error,
                                 },
                                 _ => JType::Error,
@@ -21794,7 +21906,8 @@ impl BodyGen<'_> {
             // Substitute the tracked type argument for a type-variable
             // field (`cell.value` on a `Cell<String>` reads a String).
             if let JType::Generic { arg, rest, .. } = object_ty {
-                return self.substitute_type_var(field_ty, arg, rest);
+                let field_ty = self.substitute_type_var(field_ty, arg, rest);
+                return substitute_member_type(field_ty, arg, rest, self.table);
             }
             return field_ty;
         }
@@ -21945,6 +22058,13 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            // `new T[n]` is `new Object[n]` after erasure — the array a
+            // generic container allocates for itself.
+            ElemType::TypeVar(_) => {
+                let class = intern_class(self.pool, "java/lang/Object");
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             // `new Integer[n]` — a reference array, null-filled (Java's
             // default for references; the old int[] model zero-filled it).
             ElemType::Wrapper(prim) => {
@@ -21972,6 +22092,7 @@ impl BodyGen<'_> {
                     | ElemType::Class
                     | ElemType::Wildcard { .. }
                     | ElemType::Nested { .. }
+                    | ElemType::TypeVar(_)
                     | ElemType::Wrapper(_) => unreachable!(),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
@@ -22930,6 +23051,12 @@ impl BodyGen<'_> {
             // commonly written to pick an overload. No code: null is every
             // reference type; an unboxing USE later throws NPE at runtime.
             (JType::Null, target) if target.is_reference() => target,
+            // A cast TO a type variable — `(T) items[--n]`, the unchecked cast
+            // at the heart of every array-backed generic container. `T` erases
+            // to its bound, so there is nothing to check at runtime; javac
+            // warns and compiles, and caturra reported "cannot cast Object to
+            // Object", which is not even a sentence about the program.
+            (source, JType::TypeVar(_)) if source.is_reference() => target,
             (src, JType::Array { .. }) if src.is_reference() => {
                 let descriptor = target.descriptor(self.table);
                 let class_index = intern_class(self.pool, &descriptor);
@@ -24189,6 +24316,7 @@ impl BodyGen<'_> {
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }
+            | ElemType::TypeVar(_)
             | ElemType::Wrapper(_) => "intValue",
             ElemType::Double => "doubleValue",
             ElemType::Long => "longValue",

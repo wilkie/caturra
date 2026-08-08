@@ -846,6 +846,30 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   Known gap: a DIAMOND in an argument position (`open(new Box<>("k"))`) pins
   nothing, because a diamond types as `Null` so that the declared target stays
   the authority. Pinned by `diff_generic_return_from_container_argument`.
+- **A type variable in ELEMENT position** (2026-08-07, JLS §4.5.1) — what
+  makes the generic data structures every course writes actually work.
+  `List<T> items`, `Iterator<T> iterator()` and `Node<T> next` all erased
+  their argument to an anonymous wildcard, so a read through a `Bag<String>`
+  receiver came back as `Object`: `for (String s : bag)` would not take the
+  element, `b.items.get(0)` had no `String` methods, and a linked node's
+  `next` was raw. A new `ElemType::TypeVar` carries the parameter's declared
+  POSITION into element slots — seven exhaustive matches, no more — and a
+  member's type is substituted through on every read: field, method return,
+  and the for-each cursor, on both the emit and the `type_of` path.
+  - FIELDS, RETURNS and BODIES erase this way; PARAMETERS deliberately do
+    not. Applicability compares a declared parameter against the argument,
+    and `addAll(List<T>)` has to keep accepting a `List<String>` without the
+    receiver's arguments being in reach there.
+  - Three separate gaps had to close alongside it: a cast TO a type variable
+    (`(T) items[--n]`, the unchecked cast at the heart of every array-backed
+    container) was refused with "cannot cast Object to Object"; a field
+    ASSIGNMENT through a parameterized receiver (`top.item = x`) accepted only
+    a plain `Object` receiver; and `type_param_count` was filled in the pass
+    that resolves members, so a class's own members were resolved while its
+    count was still zero — a self-referential `Node<T>` always went raw, and
+    whether anyone else's did depended on declaration ORDER.
+  - Pinned by `diff_type_variable_in_element_position`, which walks a `Bag`,
+    a linked node chain, a linked stack and an array-backed stack.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is

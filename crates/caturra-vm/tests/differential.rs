@@ -22617,3 +22617,147 @@ public class InferElem {
 }
 "#
 );
+
+// A type variable in ELEMENT position — `List<T> items`, `Iterator<T>
+// iterator()`, `Node<T> next` — carries its declared position, so a read
+// through a `Bag<String>` receiver puts the real element back. Without it the
+// generic data structures every course writes were unusable: `for (String s :
+// bag)` would not take the element, and a linked node's `next` was raw.
+differential_test!(
+    diff_type_variable_in_element_position,
+    "GenericStructures",
+    r#"
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+class Bag<T> implements Iterable<T> {
+    List<T> items = new ArrayList<>();
+
+    void add(T t) {
+        items.add(t);
+    }
+
+    void addAll(List<T> more) {
+        items.addAll(more);
+    }
+
+    List<T> all() {
+        return items;
+    }
+
+    Map<String, T> index() {
+        Map<String, T> m = new HashMap<>();
+        m.put("k", items.get(0));
+        return m;
+    }
+
+    public Iterator<T> iterator() {
+        return items.iterator();
+    }
+}
+
+class Node<T> {
+    T v;
+    Node<T> next;
+
+    Node(T v) {
+        this.v = v;
+    }
+
+    void link(Node<T> n) {
+        next = n;
+    }
+
+    Node<T> nxt() {
+        return next;
+    }
+
+    T val() {
+        return v;
+    }
+}
+
+class LinkedStack<T> {
+    private Cell<T> top;
+    private int n;
+
+    private static class Cell<E> {
+        E item;
+        Cell<E> next;
+    }
+
+    void push(T item) {
+        Cell<T> old = top;
+        top = new Cell<>();
+        top.item = item;
+        top.next = old;
+        n++;
+    }
+
+    T pop() {
+        T item = top.item;
+        top = top.next;
+        n--;
+        return item;
+    }
+
+    boolean isEmpty() {
+        return top == null;
+    }
+
+    int size() {
+        return n;
+    }
+}
+
+class Stk<T> {
+    private Object[] items = new Object[10];
+    private int n;
+
+    void push(T t) {
+        items[n++] = t;
+    }
+
+    @SuppressWarnings("unchecked")
+    T pop() {
+        return (T) items[--n];
+    }
+}
+
+public class GenericStructures {
+    public static void main(String[] args) {
+        Bag<String> b = new Bag<>();
+        b.add("p");
+        b.add("q");
+        for (String s : b) {
+            System.out.print(s.toUpperCase());
+        }
+        System.out.println();
+        System.out.println(b.all().get(0).length() + b.items.get(1).length());
+        System.out.println(b.index().get("k").length());
+        b.addAll(new ArrayList<String>());
+        System.out.println(b.all().size());
+
+        Node<String> x = new Node<>("a");
+        x.link(new Node<>("b"));
+        System.out.println(x.next.val().toUpperCase());
+        System.out.println(x.nxt().val().toUpperCase());
+
+        LinkedStack<String> s = new LinkedStack<>();
+        s.push("a");
+        s.push("b");
+        while (!s.isEmpty()) {
+            System.out.print(s.pop().toUpperCase());
+        }
+        System.out.println(s.size());
+
+        Stk<String> st = new Stk<>();
+        st.push("z");
+        System.out.println(st.pop().toUpperCase());
+    }
+}
+"#
+);

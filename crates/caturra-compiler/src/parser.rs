@@ -5103,7 +5103,7 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
         (to_object, tracked)
     };
     for field in &mut class.fields {
-        erase_in_type(&mut field.ty, &class_erasures, &tracked);
+        erase_in_type_mode(&mut field.ty, &class_erasures, &tracked, true);
         if let Some(init) = &mut field.init {
             erase_in_expr(init, &class_erasures, &tracked);
         }
@@ -5115,7 +5115,7 @@ fn erase_type_vars(class: &mut ClassDecl, synthesized: &mut Vec<ClassDecl>) {
         // parameter types, the call site can recover the type argument as the
         // join of those arguments (see `MethodDecl::infer_return`).
         method.infer_return = infer_return_plan(method, &to_object);
-        erase_in_type(&mut method.return_type, &to_object, &tracked);
+        erase_in_type_mode(&mut method.return_type, &to_object, &tracked, true);
         for param in &mut method.params {
             erase_in_type(&mut param.ty, &to_object, &tracked);
         }
@@ -5259,6 +5259,30 @@ fn erase_in_type(
     to_object: &std::collections::HashMap<String, TypeRef>,
     tracked: &Tracked,
 ) {
+    erase_in_type_mode(ty, to_object, tracked, false);
+}
+
+/// `erase_in_type`, with `indexed` deciding what a TRACKED class variable
+/// becomes in TYPE-ARGUMENT position.
+///
+/// In a FIELD or a RETURN type it keeps its position (`List<T> items` stays
+/// `List<`slot 0`>`), so a read through a `Bag<String>` receiver can put the
+/// real element back — that is what makes `for (String s : bag)` and
+/// `bag.items.get(0)` see a `String`.
+///
+/// A BODY is indexed too: inside the class, a `List<T>` local really is a list
+/// of the class's own `T`, and its reads must agree with the field and return
+/// types they flow into.
+///
+/// In a PARAMETER it must not: applicability compares the declared parameter
+/// against the argument, and `addAll(List<T>)` has to keep accepting a
+/// `List<String>` without the receiver's arguments being in reach there.
+fn erase_in_type_mode(
+    ty: &mut TypeRef,
+    to_object: &std::collections::HashMap<String, TypeRef>,
+    tracked: &Tracked,
+    indexed: bool,
+) {
     match ty {
         TypeRef::Named(name) if tracked.contains_key(name) => {
             *ty = TypeRef::Named(typevar_sentinel(tracked[name]));
@@ -5268,7 +5292,7 @@ fn erase_in_type(
                 *ty = target.clone();
             }
         }
-        TypeRef::Array(inner) => erase_in_type(inner, to_object, tracked),
+        TypeRef::Array(inner) => erase_in_type_mode(inner, to_object, tracked, indexed),
         TypeRef::Generic { base, args } => {
             if let Some(index) = tracked.get(base) {
                 *ty = TypeRef::Named(typevar_sentinel(*index));
@@ -5276,7 +5300,7 @@ fn erase_in_type(
                 *ty = target.clone();
             } else {
                 for arg in args {
-                    erase_in_type_arg(arg, to_object, tracked);
+                    erase_in_type_arg(arg, to_object, tracked, indexed);
                 }
             }
         }
@@ -5298,7 +5322,17 @@ fn erase_in_type_arg(
     ty: &mut TypeRef,
     to_object: &std::collections::HashMap<String, TypeRef>,
     tracked: &Tracked,
+    indexed: bool,
 ) {
+    // A tracked class variable in a FIELD or RETURN type keeps its position,
+    // so the receiver's own argument can be substituted for it on a read.
+    if indexed
+        && let TypeRef::Named(name) = ty
+        && let Some(index) = tracked.get(name)
+    {
+        *ty = TypeRef::Named(typevar_sentinel(*index));
+        return;
+    }
     if let TypeRef::Named(name) = ty
         && (to_object.contains_key(name) || tracked.contains_key(name))
     {
@@ -5316,7 +5350,7 @@ fn erase_in_type_arg(
         *ty = TypeRef::Named(crate::ast::wildcard_type_name('=', &bound));
         return;
     }
-    erase_in_type(ty, to_object, tracked);
+    erase_in_type_mode(ty, to_object, tracked, indexed);
 }
 
 fn erase_in_stmt(
@@ -5333,7 +5367,10 @@ fn erase_in_stmt(
         Stmt::LocalDecl {
             ty, declarators, ..
         } => {
-            erase_in_type(ty, to_object, tracked);
+            // Indexed, like a field: inside the class a `List<T>` local really
+            // is a list of the class's own `T`, and its reads flow into the
+            // fields and returns that say so.
+            erase_in_type_mode(ty, to_object, tracked, true);
             for d in declarators {
                 if let Some(init) = &mut d.init {
                     erase_in_expr(init, to_object, tracked);
@@ -5445,7 +5482,7 @@ fn erase_in_expr(
             // rather than erasing to its bound: `new T[n]` is javac's
             // "generic array creation" error, which codegen reports from the
             // marker — erasing first would have silently allocated Object[].
-            erase_in_type_arg(elem, to_object, tracked);
+            erase_in_type_arg(elem, to_object, tracked, false);
             for d in dims.iter_mut().flatten() {
                 erase_in_expr(d, to_object, tracked);
             }
@@ -5462,7 +5499,7 @@ fn erase_in_expr(
             type_args, args, ..
         } => {
             for arg in type_args {
-                erase_in_type_arg(arg, to_object, tracked);
+                erase_in_type_arg(arg, to_object, tracked, false);
             }
             for a in args {
                 erase_in_expr(a, to_object, tracked);
