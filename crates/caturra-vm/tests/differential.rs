@@ -22980,3 +22980,64 @@ public class CustomToString {
 }
 "#
 );
+
+// A user throwable is `instanceof` every library throwable ABOVE its parent,
+// not just its parent: the runtime subtype walk left the program when it
+// reached a library class and simply stopped, so a user `RuntimeException`
+// subclass was not `instanceof Exception` or `Throwable`. And a null message
+// is legal Java — `getMessage()` answers null and `toString()` is the bare
+// class name — where caturra refused it at compile time or threw an NPE.
+differential_test!(
+    diff_user_throwable_hierarchy_and_null_message,
+    "ThrowShapes",
+    r#"
+public class ThrowShapes {
+    static class Boom extends Error {
+        Boom(String m) {
+            super(m);
+        }
+    }
+
+    static class R extends RuntimeException {
+        R(String m) {
+            super(m);
+        }
+    }
+
+    static class WithCause extends RuntimeException {
+        WithCause(String m, Throwable c) {
+            super(m, c);
+        }
+    }
+
+    public static void main(String[] args) {
+        Object b = new Boom("b");
+        System.out.println((b instanceof Throwable) + " " + (b instanceof Error) + " " + (b instanceof Boom));
+        Object r = new R("r");
+        System.out.println(
+            (r instanceof Throwable) + " " + (r instanceof RuntimeException) + " " + (r instanceof Exception));
+        Object lib = new IllegalStateException("l");
+        System.out.println((lib instanceof Throwable) + " " + (lib instanceof Exception));
+
+        R none = new R(null);
+        System.out.println(none.getMessage() + " / " + none);
+        RuntimeException libNone = new RuntimeException((String) null);
+        System.out.println(libNone.getMessage() + " / " + libNone);
+        WithCause wc = new WithCause(null, new IllegalStateException("c"));
+        System.out.println(wc.getMessage() + " / " + wc + " / " + wc.getCause().getMessage());
+
+        // Still an NPE where Java throws one.
+        try {
+            new String((String) null);
+        } catch (NullPointerException e) {
+            System.out.println("string NPE");
+        }
+        try {
+            new StringBuilder((String) null);
+        } catch (NullPointerException e) {
+            System.out.println("builder NPE");
+        }
+    }
+}
+"#
+);

@@ -15167,7 +15167,13 @@ impl BodyGen<'_> {
             }
             [message] => {
                 let message_ty = self.expr(message);
-                if message_ty != JType::Str && message_ty != JType::Error {
+                // `null` IS a String here: `new RuntimeException(null)` and
+                // `super(null, cause)` are ordinary Java, and record no
+                // message rather than throwing.
+                if message_ty != JType::Str
+                    && message_ty != JType::Null
+                    && message_ty != JType::Error
+                {
                     self.error(
                         message.span(),
                         format!(
@@ -15184,7 +15190,13 @@ impl BodyGen<'_> {
             // `new X(message, cause)`.
             [message, cause] if self.is_throwable_arg(arg_types[1]) => {
                 let message_ty = self.expr(message);
-                if message_ty != JType::Str && message_ty != JType::Error {
+                // `null` IS a String here: `new RuntimeException(null)` and
+                // `super(null, cause)` are ordinary Java, and record no
+                // message rather than throwing.
+                if message_ty != JType::Str
+                    && message_ty != JType::Null
+                    && message_ty != JType::Error
+                {
                     self.error(
                         message.span(),
                         format!(

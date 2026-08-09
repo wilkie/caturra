@@ -3748,6 +3748,14 @@ impl<'run> Interpreter<'run> {
                         stack.push(iface.to_owned());
                     }
                 }
+            } else if caturra_classfile::exceptions::is_exception_subclass(&name, sup) {
+                // The chain left the program: a user exception's parent is a
+                // LIBRARY throwable, which has no class file to walk. The
+                // exceptions table knows the rest of that hierarchy, and
+                // without it the walk simply stopped — so a user
+                // `RuntimeException` subclass was `instanceof RuntimeException`
+                // but not `instanceof Exception` or `Throwable`.
+                return true;
             }
         }
         false

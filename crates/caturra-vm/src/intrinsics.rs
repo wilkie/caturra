@@ -283,6 +283,32 @@ pub fn invoke_special(
             Ok(())
         }
         ("<init>", "(Ljava/lang/String;)V") => {
+            // A THROWABLE takes a null message — `new RuntimeException(null)`
+            // is legal Java, `getMessage()` answers null and `toString()` is
+            // the bare class name. Every other receiver here (String,
+            // StringBuilder, File, Scanner, PrintWriter) really does throw on
+            // one, which is why the null was rejected outright and a program
+            // that passed no message died with an NPE.
+            if matches!(args.first(), Some(JValue::Ref(None))) {
+                return match heap.get_mut(receiver) {
+                    Some(HeapObject::Exception { message, .. }) => {
+                        *message = None;
+                        Ok(())
+                    }
+                    Some(HeapObject::Instance { .. })
+                        if caturra_classfile::exceptions::is_exception_class(class) =>
+                    {
+                        if let Some(field) = heap
+                            .get_mut(receiver)
+                            .and_then(|object| object.field_mut("__message"))
+                        {
+                            *field = JValue::NULL;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(throw("java.lang.NullPointerException")),
+                };
+            }
             // `new StringBuilder(otherBuilder)` reaches here too (a
             // StringBuilder IS a CharSequence), so read the argument's chars
             // whether it is a String or a builder.
@@ -382,9 +408,14 @@ pub fn invoke_special(
         ("<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V")
             if caturra_classfile::exceptions::is_exception_class(class) =>
         {
-            let text = string_arg(heap, &args[0])?;
+            // A null message is legal here too: `super(null, cause)` records
+            // no message and keeps the cause.
+            let text = match &args[0] {
+                JValue::Ref(None) => None,
+                other => Some(string_arg(heap, other)?),
+            };
             let cause = ref_arg(&args[1]);
-            set_exception_cause(heap, receiver, class, Some(text), cause);
+            set_exception_cause(heap, receiver, class, text, cause);
             Ok(())
         }
         ("<init>", "(Ljava/lang/Throwable;)V")

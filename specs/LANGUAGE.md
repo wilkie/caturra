@@ -896,6 +896,22 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     `diff_nested_and_top_level_share_a_name`.
   - Still open: `getStackTrace()` returns no `StackTraceElement[]`, so a frame
     can only be read through `printStackTrace`.
+- **A user throwable's hierarchy, and a null message** (2026-08-09, JLS
+  §11.1.1) — two more from the same probe:
+  - **A user throwable was `instanceof` its parent but nothing above it.** The
+    runtime subtype walk climbs class FILES, and a user exception's parent is
+    a library throwable with no class file, so the walk stopped there: a user
+    `RuntimeException` subclass answered false to `instanceof Exception` and
+    to `instanceof Throwable`. The exceptions table knows the rest of that
+    hierarchy and is consulted now.
+  - **A null message crashed.** `new RuntimeException(null)` and
+    `super(null, cause)` are ordinary Java — `getMessage()` answers null and
+    `toString()` is the bare class name — but the compiler refused the
+    argument ("null cannot be converted to String") and the VM threw an NPE
+    from the constructor. Only a THROWABLE takes one: `new String(null)`,
+    `new StringBuilder(null)`, `new File(null)` and `new Scanner(null)` still
+    throw, which is why the null was being rejected wholesale.
+  - Pinned by `diff_user_throwable_hierarchy_and_null_message`.
 - **An exception's own words** (2026-08-09, JLS §11, `java.lang.Throwable`) —
   two bugs found by hand-probing the area the binary-name rename touched
   hardest, neither of them reported by any audit round:
