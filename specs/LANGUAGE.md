@@ -912,6 +912,24 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     `new StringBuilder(null)`, `new File(null)` and `new Scanner(null)` still
     throw, which is why the null was being rejected wholesale.
   - Pinned by `diff_user_throwable_hierarchy_and_null_message`.
+- **A sort's comparison SEQUENCE** (2026-08-09, `java.util.TimSort`) — the
+  route, not just the destination. WHICH comparisons a sort performs is
+  observable whenever the comparator is not a pure function of its arguments:
+  one that prints, one that counts, one that throws for a particular pair —
+  and the case that matters, an INCONSISTENT comparator, where two correct
+  sorts genuinely leave the elements in different orders. caturra merge-sorted,
+  which agreed with the JDK on the result and disagreed on the route.
+  `Collections.sort`, `List.sort` and `Arrays.sort(T[], c)` now run TimSort's
+  small-input path exactly — `countRunAndMakeAscending`, which reverses a
+  descending front run in place, then `binarySort`, whose binary search takes
+  the RIGHTMOST equal slot and so keeps the sort stable. Verified comparison-
+  for-comparison against a real JDK over empty, singleton, sorted, reversed,
+  duplicate-heavy and shuffled inputs.
+  At 32 elements and up (`MIN_MERGE`) the JDK runs the full TimSort merge
+  machinery — run stack, galloping — and caturra keeps its merge sort there,
+  so a side-effecting comparator on a long list still sees a different
+  sequence. The RESULT is the same for any consistent comparator.
+  Pinned by `diff_sort_comparison_sequence`.
 - **An exception's own words** (2026-08-09, JLS §11, `java.lang.Throwable`) —
   two bugs found by hand-probing the area the binary-name rename touched
   hardest, neither of them reported by any audit round:

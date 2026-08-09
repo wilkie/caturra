@@ -4308,7 +4308,7 @@ impl<'run> Interpreter<'run> {
                     [_, JValue::Ref(Some(comparator))] => Some(*comparator),
                     _ => None,
                 };
-                let sorted = self.merge_sort_by(items, comparator)?;
+                let sorted = self.sort_like_jdk(items, comparator)?;
                 if let Some(slot) = self.heap.list_values_mut(reference) {
                     *slot = sorted;
                 }
@@ -4916,7 +4916,7 @@ impl<'run> Interpreter<'run> {
                 _ => (0, items.len()),
             };
             let slice = items[from..to].to_vec();
-            let sorted = self.merge_sort_by(slice, comparator)?;
+            let sorted = self.sort_like_jdk(slice, comparator)?;
             if let Some(crate::value::HeapObject::RefArray(_, values)) = self.heap.get_mut(array) {
                 values[from..to].clone_from_slice(&sorted);
             }
@@ -6039,7 +6039,7 @@ impl<'run> Interpreter<'run> {
             ("sort", _, [JValue::Ref(comparator)]) => {
                 let items = self.list_items(receiver);
                 let before = items.len();
-                let sorted = self.merge_sort_by(items, *comparator)?;
+                let sorted = self.sort_like_jdk(items, *comparator)?;
                 // `List.sort` copies out, sorts, and writes back, checking the
                 // modification count as it goes: a COMPARATOR that adds to the
                 // list being sorted is a ConcurrentModificationException, not a
@@ -8395,12 +8395,12 @@ impl<'run> Interpreter<'run> {
             // materialize now and start a fresh pipeline over the sorted result.
             ("sorted", []) => {
                 let elements = self.stream_materialize(receiver)?;
-                let sorted = self.merge_sort_by(elements, None)?;
+                let sorted = self.sort_like_jdk(elements, None)?;
                 return Ok(Answered::Value(self.alloc_stream(sorted)));
             }
             ("sorted", [JValue::Ref(Some(comparator))]) => {
                 let elements = self.stream_materialize(receiver)?;
-                let sorted = self.merge_sort_by(elements, Some(*comparator))?;
+                let sorted = self.sort_like_jdk(elements, Some(*comparator))?;
                 return Ok(Answered::Value(self.alloc_stream(sorted)));
             }
             _ => {}
@@ -11515,6 +11515,73 @@ impl<'run> Interpreter<'run> {
         // object a literal `Integer y = 1` holds, and `x == y` is true.
         // Allocating directly minted a fresh one and answered false.
         self.heap.box_wrapper(class_name, value)
+    }
+
+    /// Sort as `Collections.sort` does — which means, for a list of fewer
+    /// than 32 elements, `java.util.TimSort`'s exact small-input path:
+    /// `countRunAndMakeAscending` followed by `binarySort`.
+    ///
+    /// WHICH comparisons a sort performs is observable whenever the
+    /// comparator is not a pure function of its arguments: one that prints,
+    /// one that counts, one that throws for a particular pair, and — the case
+    /// that matters — an INCONSISTENT one, where two correct sorts can leave
+    /// the elements in different orders. A plain merge sort agreed with the
+    /// JDK on the result and disagreed on the route.
+    ///
+    /// At 32 elements and up the JDK runs the full `TimSort` merge machinery
+    /// (run stack, galloping); caturra keeps its merge sort there, so a
+    /// side-effecting comparator on a long list still sees a different
+    /// sequence. The result is the same for any consistent comparator.
+    fn sort_like_jdk(
+        &mut self,
+        mut items: Vec<JValue>,
+        comparator: Option<HeapRef>,
+    ) -> Result<Vec<JValue>, VmError> {
+        const MIN_MERGE: usize = 32;
+        if items.len() < 2 {
+            return Ok(items);
+        }
+        if items.len() >= MIN_MERGE {
+            return self.merge_sort_by(items, comparator);
+        }
+        let hi = items.len();
+        // `countRunAndMakeAscending`: measure the run already at the front,
+        // reversing it when it is strictly descending.
+        let mut run_hi = 1;
+        if self.compare_with(items[run_hi], items[0], comparator)? < 0 {
+            run_hi += 1;
+            while run_hi < hi
+                && self.compare_with(items[run_hi], items[run_hi - 1], comparator)? < 0
+            {
+                run_hi += 1;
+            }
+            items[..run_hi].reverse();
+        } else {
+            run_hi += 1;
+            while run_hi < hi
+                && self.compare_with(items[run_hi], items[run_hi - 1], comparator)? >= 0
+            {
+                run_hi += 1;
+            }
+        }
+        // `binarySort`: extend that run one element at a time, each placed by
+        // a binary search that takes the RIGHTMOST equal slot, which is what
+        // keeps the sort stable.
+        for start in run_hi.max(1)..hi {
+            let pivot = items[start];
+            let (mut left, mut right) = (0, start);
+            while left < right {
+                let mid = left.midpoint(right);
+                if self.compare_with(pivot, items[mid], comparator)? < 0 {
+                    right = mid;
+                } else {
+                    left = mid + 1;
+                }
+            }
+            items.copy_within(left..start, left + 1);
+            items[left] = pivot;
+        }
+        Ok(items)
     }
 
     /// A stable merge sort, as `Collections.sort` is. It cannot use

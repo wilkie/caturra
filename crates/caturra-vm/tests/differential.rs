@@ -23041,3 +23041,89 @@ public class ThrowShapes {
 }
 "#
 );
+
+// WHICH comparisons a sort performs is observable whenever the comparator is
+// not a pure function of its arguments — one that prints, counts, or throws
+// for a particular pair, and (the case that matters) an INCONSISTENT one,
+// where two correct sorts can leave the elements in different orders.
+// `Collections.sort` runs `java.util.TimSort`, whose small-input path is
+// `countRunAndMakeAscending` then `binarySort`; a plain merge sort agreed on
+// the result and disagreed on the route.
+differential_test!(
+    diff_sort_comparison_sequence,
+    "SortSequence",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+
+public class SortSequence {
+    static StringBuilder log = new StringBuilder();
+
+    static class L implements Comparable<L> {
+        int v;
+
+        L(int v) {
+            this.v = v;
+        }
+
+        public int compareTo(L o) {
+            log.append("(").append(v).append(",").append(o.v).append(")");
+            return Integer.compare(v, o.v);
+        }
+
+        public String toString() {
+            return "" + v;
+        }
+    }
+
+    static void run(int[] xs) {
+        log.setLength(0);
+        List<L> l = new ArrayList<>();
+        for (int x : xs) {
+            l.add(new L(x));
+        }
+        java.util.Collections.sort(l);
+        System.out.println(Arrays.toString(xs) + " -> " + l + " " + log);
+    }
+
+    public static void main(String[] args) {
+        run(new int[] {});
+        run(new int[] {1});
+        run(new int[] {2, 1});
+        run(new int[] {1, 2});
+        run(new int[] {3, 1, 2});
+        run(new int[] {1, 2, 3, 4, 5});
+        run(new int[] {5, 4, 3, 2, 1});
+        run(new int[] {2, 2, 1, 1, 3});
+        run(new int[] {4, 1, 9, 2, 8, 3, 7, 5, 6, 0});
+        int[] big = new int[20];
+        for (int i = 0; i < 20; i++) {
+            big[i] = (i * 7) % 20;
+        }
+        run(big);
+
+        log.setLength(0);
+        List<Integer> nums = new ArrayList<>(Arrays.asList(4, 1, 3, 2));
+        nums.sort((x, y) -> {
+            log.append(x).append(":").append(y).append(" ");
+            return Integer.compare(x, y);
+        });
+        System.out.println(nums + " | " + log);
+
+        log.setLength(0);
+        Integer[] arr = {4, 1, 3, 2};
+        Arrays.sort(arr, (x, y) -> {
+            log.append(x).append(":").append(y).append(" ");
+            return Integer.compare(x, y);
+        });
+        System.out.println(Arrays.toString(arr) + " | " + log);
+
+        String[] words = {"pear", "fig", "apple"};
+        Arrays.sort(words, Comparator.comparingInt(String::length));
+        System.out.println(Arrays.toString(words));
+    }
+}
+"#
+);
