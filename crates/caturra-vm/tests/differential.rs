@@ -23127,3 +23127,53 @@ public class SortSequence {
 }
 "#
 );
+
+// Two gaps a probe of the library surface turned up: `IntStream.peek` (the
+// object `Stream` had it, a primitive one did not) and the three-argument
+// `new String(chars, offset, count)`, which is how a char buffer's used
+// prefix becomes a String.
+differential_test!(
+    diff_int_stream_peek_and_string_subrange,
+    "PeekAndChars",
+    r#"
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+public class PeekAndChars {
+    public static void main(String[] args) {
+        System.out.println(
+            IntStream.range(0, 5).peek(i -> System.out.print("i" + i + " ")).filter(i -> i % 2 == 0).sum());
+
+        List<String> words = Arrays.asList("apple", "fig", "pear", "kiwi");
+        System.out.println(words.stream()
+            .peek(s -> System.out.print("p" + s + " "))
+            .filter(s -> s.length() > 3)
+            .peek(s -> System.out.print("f" + s + " "))
+            .findFirst()
+            .orElse("none"));
+        System.out.println(words.stream()
+            .sorted()
+            .peek(s -> System.out.print("s" + s + " "))
+            .limit(2)
+            .collect(Collectors.toList()));
+
+        char[] cs = {'h', 'e', 'l', 'l', 'o'};
+        System.out.println(
+            new String(cs) + "|" + new String(cs, 0, 3) + "|" + new String(cs, 2, 3) + "|" + new String(cs, 5, 0) + "|");
+        System.out.println(String.valueOf(cs, 1, 2));
+        try {
+            new String(cs, 3, 5);
+        } catch (StringIndexOutOfBoundsException e) {
+            System.out.println(e.getMessage());
+        }
+        try {
+            new String(cs, -1, 2);
+        } catch (StringIndexOutOfBoundsException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+}
+"#
+);

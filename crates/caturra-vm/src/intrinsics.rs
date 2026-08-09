@@ -517,6 +517,38 @@ pub fn invoke_special(
                 )))
             }
         }
+        // `new String(chars, offset, count)` — a SUBRANGE of the array, which
+        // is how a char buffer's used prefix becomes a String. The JDK checks
+        // the range and words the failure with all three numbers.
+        ("<init>", "([CII)V") => {
+            let units = char_array_units(heap, &args[0])?;
+            let (offset, count) = match (&args[1], &args[2]) {
+                (JValue::Int(offset), JValue::Int(count)) => (*offset, *count),
+                _ => return Err(throw("java.lang.VerifyError: expected two ints")),
+            };
+            let end = offset.checked_add(count);
+            if offset < 0
+                || count < 0
+                || end.is_none_or(|end| end > i32::try_from(units.len()).unwrap_or(i32::MAX))
+            {
+                return Err(throw(format!(
+                    "java.lang.StringIndexOutOfBoundsException: offset {offset}, count {count}, \
+                     length {}",
+                    units.len()
+                )));
+            }
+            let start = usize::try_from(offset).unwrap_or(0);
+            let taken = usize::try_from(count).unwrap_or(0);
+            let slice = units[start..start + taken].to_vec();
+            if let Some(HeapObject::JavaString(target)) = heap.get_mut(receiver) {
+                *target = slice;
+                Ok(())
+            } else {
+                Err(VmError::UnknownIntrinsic(format!(
+                    "{class}.{method}{descriptor}"
+                )))
+            }
+        }
         // `new ArrayList<>(collection)` — copy the source collection's items.
         ("<init>", "(Ljava/util/Collection;)V") => {
             let items = match args.first() {

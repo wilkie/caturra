@@ -8045,6 +8045,14 @@ const INTSTREAM_METHODS: &[BuiltinMethod] = &[
         BRet::Void,
         "(Ljava/util/function/IntConsumer;)V",
     ),
+    // `peek` is an INTERMEDIATE op: it runs the consumer and passes the
+    // element on. The object `Stream` had it; a primitive one did not.
+    bm(
+        "peek",
+        &[BParam::Consumer],
+        BRet::SameStream,
+        "(Ljava/util/function/IntConsumer;)Ljava/util/stream/IntStream;",
+    ),
     // Element-driven: a `DoubleStream`'s `sum()` is a `double`.
     bm("sum", &[], BRet::Elem, "()I"),
     bm("count", &[], BRet::Long, "()J"),
@@ -15261,10 +15269,37 @@ impl BodyGen<'_> {
                     }
                 }
             }
+            // `new String(chars, offset, count)` — the used prefix of a char
+            // buffer, which is the commonest way one becomes a String.
+            [chars, offset, count] => {
+                let chars_ty = self.expr(chars);
+                if !matches!(
+                    chars_ty,
+                    JType::Array {
+                        elem: ElemType::Char,
+                        dims: 1,
+                    }
+                ) {
+                    self.error(
+                        span,
+                        format!(
+                            "no String constructor takes ({}, int, int)",
+                            chars_ty.describe(self.table)
+                        ),
+                    );
+                    return JType::Error;
+                }
+                for index in [offset, count] {
+                    let ty = self.expr(index);
+                    self.convert_for_assignment(ty, JType::Int, index.span());
+                }
+                "([CII)V"
+            }
             _ => {
                 self.error(
                     span,
-                    "caturra supports new String(), new String(String), and new String(char[])",
+                    "caturra supports new String(), new String(String), \
+                     new String(char[]) and new String(char[], int, int)",
                 );
                 return JType::Error;
             }
@@ -15272,7 +15307,11 @@ impl BodyGen<'_> {
         let init_ref = intern_method_ref(self.pool, "java/lang/String", "<init>", descriptor);
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
         // Pop the consumed args plus the duplicated receiver slot.
-        let arg_width = u16::from(descriptor != "()V");
+        let arg_width = match descriptor {
+            "()V" => 0,
+            "([CII)V" => 3,
+            _ => 1,
+        };
         self.code.drop_stack(1 + arg_width);
         JType::Str
     }

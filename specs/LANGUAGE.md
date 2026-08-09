@@ -912,6 +912,17 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     `new StringBuilder(null)`, `new File(null)` and `new Scanner(null)` still
     throw, which is why the null was being rejected wholesale.
   - Pinned by `diff_user_throwable_hierarchy_and_null_message`.
+- **`IntStream.peek` and `new String(char[], int, int)`** (2026-08-09) — two
+  library gaps a surface probe turned up. `peek` is an intermediate op the
+  object `Stream` had and a primitive one did not; the three-argument String
+  constructor takes the used PREFIX of a char buffer, and reports its range
+  failure with the JDK's three numbers (`offset o, count c, length n`).
+  Known limit, unchanged and honest: the element type is ERASED after `map`,
+  so `stream().map(String::toUpperCase).findFirst().get()` answers `Object`
+  and assigning it to a `String` is refused. `collect(toList())`, `forEach`
+  and `mapToInt` all keep their types; only a pipeline that ends in an
+  `Optional` loses it. The same shape refuses a `Supplier<List<String>>`'s
+  `get().size()`. Rejects-valid, which is the safe direction.
 - **A sort's comparison SEQUENCE** (2026-08-09, `java.util.TimSort`) — the
   route, not just the destination. WHICH comparisons a sort performs is
   observable whenever the comparator is not a pure function of its arguments:
