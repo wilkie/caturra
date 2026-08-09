@@ -22842,3 +22842,141 @@ public class SharedName {
 }
 "
 );
+
+// `Throwable.toString()` reads the message VIRTUALLY — its body is
+// `getLocalizedMessage()`, whose body is `getMessage()`. A subclass that
+// COMPUTES its message therefore names it, even when nothing was passed to
+// `super(...)`, and an override BEATS a stored message. caturra read the
+// stored field, so `new Quiet()` printed a bare class name.
+differential_test!(
+    diff_throwable_message_is_virtual,
+    "VirtualMessage",
+    r#"
+public class VirtualMessage {
+    static class Quiet extends RuntimeException {
+        public String getMessage() {
+            return "quiet";
+        }
+    }
+
+    static class WithMsg extends RuntimeException {
+        WithMsg() {
+            super("ctor");
+        }
+
+        public String getMessage() {
+            return "override";
+        }
+    }
+
+    static class Plain extends RuntimeException {
+        Plain() {
+            super("plain");
+        }
+    }
+
+    static class Nulled extends RuntimeException {
+        public String getMessage() {
+            return null;
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Quiet());
+        System.out.println(new WithMsg());
+        System.out.println(new Plain());
+        System.out.println(new Nulled());
+        System.out.println(new RuntimeException());
+        System.out.println("e=" + new Quiet());
+        System.out.println(String.valueOf(new Quiet()));
+
+        try {
+            throw new Quiet();
+        } catch (RuntimeException e) {
+            e.printStackTrace(System.out);
+        }
+    }
+}
+"#
+);
+
+// A user exception that overrides `toString()` must still be CATCHABLE. An
+// in-flight exception is carried as text and its class recovered from the
+// header — which is `toString()` — so an override renamed the exception out
+// of every catch clause and it escaped the program.
+differential_test!(
+    diff_custom_tostring_exception_is_catchable,
+    "CustomToString",
+    r#"
+public class CustomToString {
+    static class A extends RuntimeException {
+        public String toString() {
+            return "A!";
+        }
+    }
+
+    static class B extends RuntimeException {
+        public String toString() {
+            return "B!";
+        }
+    }
+
+    static void t(int i) {
+        if (i == 0) {
+            throw new A();
+        }
+        throw new B();
+    }
+
+    static void deep() {
+        throw new A();
+    }
+
+    static void mid() {
+        deep();
+    }
+
+    public static void main(String[] args) {
+        try {
+            throw new A();
+        } catch (RuntimeException e) {
+            System.out.println("caught " + e);
+        }
+
+        for (int i = 0; i < 2; i++) {
+            try {
+                t(i);
+            } catch (A | B e) {
+                System.out.println("m " + e.getClass().getSimpleName());
+            }
+        }
+
+        try {
+            try {
+                t(0);
+            } catch (RuntimeException e) {
+                throw e;
+            }
+        } catch (A e) {
+            System.out.println("re " + e);
+        }
+
+        try {
+            mid();
+        } catch (A e) {
+            System.out.println("deep " + e);
+        }
+
+        try {
+            try {
+                throw new A();
+            } finally {
+                System.out.println("fin");
+            }
+        } catch (A e) {
+            System.out.println("outer");
+        }
+    }
+}
+"#
+);

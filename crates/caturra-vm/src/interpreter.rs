@@ -432,7 +432,7 @@ impl<'run> Interpreter<'run> {
     /// The `Class: message` (or bare `Class`) header line of a throwable —
     /// what `toString()` renders — for a library exception or a user
     /// throwable instance.
-    fn throwable_header(&self, reference: HeapRef) -> String {
+    fn throwable_header(&mut self, reference: HeapRef) -> String {
         match self.heap.get(reference) {
             Some(crate::value::HeapObject::Exception {
                 class_name,
@@ -442,15 +442,33 @@ impl<'run> Interpreter<'run> {
                 Some(message) => format!("{class_name}: {message}"),
                 None => class_name.clone(),
             },
-            Some(object @ crate::value::HeapObject::Instance { class_name, .. }) => {
-                let message = object.field("__message").and_then(|value| match value {
-                    JValue::Ref(Some(text)) => self.heap.string_text(text),
-                    _ => None,
-                });
-                match message {
-                    Some(message) => format!("{class_name}: {message}"),
-                    None => class_name.to_string(),
-                }
+            Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                // The header IS `toString()`, which the JDK calls virtually —
+                // so a subclass that COMPUTES its message names it here, even
+                // when nothing was passed to `super(...)`. Reading `__message`
+                // printed a bare class name for one, and the stored text for a
+                // subclass whose override says otherwise.
+                let class_name = class_name.clone();
+                let rendered = self
+                    .user_virtual_dispatch(
+                        reference,
+                        &class_name,
+                        "toString",
+                        "()Ljava/lang/String;",
+                        &[],
+                    )
+                    .ok()
+                    .and_then(|dispatched| {
+                        let returned = match dispatched {
+                            UserDispatch::Call(frame) => self.run_nested(frame).ok()?,
+                            UserDispatch::Value(value) => value,
+                        };
+                        match returned {
+                            Some(JValue::Ref(Some(text))) => self.heap.string_text(text),
+                            _ => None,
+                        }
+                    });
+                rendered.unwrap_or_else(|| class_name.to_string())
             }
             _ => String::from("java.lang.Throwable"),
         }
@@ -481,7 +499,7 @@ impl<'run> Interpreter<'run> {
     /// then every `Suppressed:` block and the `Caused by:` chain, with the
     /// frames each enclosed trace shares with its enclosing one elided as
     /// "... N more" — `Throwable.printEnclosedStackTrace`, faithfully.
-    fn render_throwable(&self, reference: HeapRef) -> String {
+    fn render_throwable(&mut self, reference: HeapRef) -> String {
         use std::fmt::Write as _;
         let mut out = self.throwable_header(reference);
         let trace = self
@@ -503,7 +521,7 @@ impl<'run> Interpreter<'run> {
     }
 
     fn render_enclosed(
-        &self,
+        &mut self,
         reference: HeapRef,
         enclosing: &[String],
         prefix: &str,
@@ -2477,7 +2495,29 @@ impl<'run> Interpreter<'run> {
         let internal = dotted.replace('.', "/");
         let is_library = caturra_classfile::exceptions::is_exception_class(&internal);
         if !is_library && !self.instance_is_throwable(&dotted) {
-            return Ok(false);
+            // The header is `toString()`, and a user exception may OVERRIDE
+            // it — `class Custom { public String toString() { return "X"; } }`
+            // renders no class name at all, and the class is the only thing a
+            // catch clause matches on. So the exception became uncatchable by
+            // its own display method. The thrown OBJECT knows what it is; ask
+            // it rather than the text it printed.
+            let by_object = self
+                .last_thrown
+                .and_then(|reference| match self.heap.get(reference) {
+                    Some(crate::value::HeapObject::Instance { class_name, .. }) => {
+                        Some(class_name.to_string())
+                    }
+                    _ => None,
+                });
+            match by_object.filter(|name| self.instance_is_throwable(name)) {
+                // A user class, so never a library one — `is_library` above
+                // stays false, which is what the rest of the walk wants.
+                Some(name) => {
+                    dotted = name;
+                    message = None;
+                }
+                None => return Ok(false),
+            }
         }
 
         // A caught exception reuses the ORIGINAL thrown object when there is
@@ -9335,6 +9375,39 @@ impl<'run> Interpreter<'run> {
                         None => JValue::NULL,
                     })));
                 }
+                // `Throwable.toString()` reads the message VIRTUALLY — its
+                // body is `getLocalizedMessage()`, whose body is
+                // `getMessage()`. A subclass that COMPUTES its message
+                // therefore names it here, even when nothing was passed to
+                // `super(...)`: `new Quiet()` prints `Quiet: quiet`, not a
+                // bare class name, and an override BEATS a stored message.
+                let overridden = resolve_virtual(
+                    self.classes,
+                    instance_class,
+                    "getMessage",
+                    "()Ljava/lang/String;",
+                )
+                .is_some();
+                let message = if overridden {
+                    let class_name = instance_class.to_owned();
+                    let dispatched = self.user_virtual_dispatch(
+                        receiver,
+                        &class_name,
+                        "getMessage",
+                        "()Ljava/lang/String;",
+                        &[],
+                    )?;
+                    let returned = match dispatched {
+                        UserDispatch::Call(frame) => self.run_nested(frame)?,
+                        UserDispatch::Value(value) => value,
+                    };
+                    match returned {
+                        Some(JValue::Ref(Some(text))) => self.heap.string_text(text),
+                        _ => None,
+                    }
+                } else {
+                    message
+                };
                 let text = match message {
                     Some(message) => format!("{instance_class}: {message}"),
                     None => instance_class.to_owned(),

@@ -896,6 +896,29 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     `diff_nested_and_top_level_share_a_name`.
   - Still open: `getStackTrace()` returns no `StackTraceElement[]`, so a frame
     can only be read through `printStackTrace`.
+- **An exception's own words** (2026-08-09, JLS §11, `java.lang.Throwable`) —
+  two bugs found by hand-probing the area the binary-name rename touched
+  hardest, neither of them reported by any audit round:
+  - **A user exception that overrides `toString()` could not be caught.** An
+    in-flight exception is carried as TEXT, and its class is recovered by
+    parsing the header — which is `toString()`. An override renders something
+    that is not a class name at all, so the exception was renamed out of every
+    `catch` clause and escaped the program. The thrown OBJECT knows what it
+    is, and is asked now when the text does not name a throwable. The same
+    shape as the reflective exceptions that were uncatchable before it: an
+    exception's IDENTITY must never be recovered from its display.
+  - **`Throwable.toString()` reads the message virtually.** Its body is
+    `getLocalizedMessage()`, whose body is `getMessage()`, so a subclass that
+    COMPUTES its message names it even when nothing was passed to
+    `super(...)` — `new Quiet()` is `Quiet: quiet`, not a bare class name —
+    and an override BEATS a stored message. caturra read the stored field, in
+    the printed form, in the stack-trace header and in a `Caused by:` line.
+  - Pinned by `diff_throwable_message_is_virtual` and
+    `diff_custom_tostring_exception_is_catchable`.
+  - Known divergence, unmatchable: a `HashMap` keyed by ENUMS iterates in a
+    JVM-specific order, because `Enum.hashCode()` is the identity hash. The
+    same class of thing as `Set.of`'s salted order — no engine can reproduce
+    it, so caturra does not pretend to.
 - **A refusal refuses in EVERY position** (2026-08-06, round 9) — the
   round's cross-cutting root cause, made an invariant rather than a fourth
   patch. `JType::Error` only ever arises from a problem, and every problem is
