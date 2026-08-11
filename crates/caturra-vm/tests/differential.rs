@@ -23177,3 +23177,70 @@ public class PeekAndChars {
 }
 "#
 );
+
+// `getStackTrace()` hands back the recorded trace as real
+// `StackTraceElement`s, and a user throwable's other inherited members type
+// the same way they emit — naming only `getMessage` and `toString` by hand
+// left `getCause`, `getSuppressed` and `getStackTrace` typed as an error in
+// any position that looked at their type, such as a comparison.
+differential_test!(
+    diff_stack_trace_elements,
+    "TraceFrames",
+    r#"
+public class TraceFrames {
+    static class E extends RuntimeException {
+        E(String m) {
+            super(m);
+        }
+    }
+
+    static class WithCause extends RuntimeException {
+        WithCause(String m, Throwable c) {
+            super(m, c);
+        }
+    }
+
+    static void deep() {
+        throw new E("boom");
+    }
+
+    static void mid() {
+        deep();
+    }
+
+    public static void main(String[] args) {
+        try {
+            mid();
+        } catch (E e) {
+            StackTraceElement[] t = e.getStackTrace();
+            System.out.println(t.length);
+            for (StackTraceElement f : t) {
+                System.out.println(
+                    f.getClassName() + "|" + f.getMethodName() + "|" + f.getFileName() + "|" + f.getLineNumber());
+            }
+            System.out.println(t[0]);
+            System.out.println(java.util.Arrays.toString(new StackTraceElement[] {t[0]}));
+        }
+
+        try {
+            throw new IllegalStateException("lib");
+        } catch (RuntimeException e) {
+            System.out.println(e.getStackTrace()[0].getMethodName() + " " + e.getStackTrace().length);
+        }
+
+        try {
+            int[] x = new int[1];
+            System.out.println(x[2]);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            System.out.println(e.getStackTrace()[0].getMethodName());
+        }
+
+        WithCause w = new WithCause("f", new IllegalStateException("c"));
+        System.out.println(w.getStackTrace().length > 0);
+        System.out.println(w.getSuppressed().length == 0);
+        System.out.println(w.getCause().getMessage().length() > 0);
+        System.out.println(w.getLocalizedMessage().toUpperCase());
+    }
+}
+"#
+);

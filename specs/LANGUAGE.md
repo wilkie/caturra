@@ -923,6 +923,24 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   and `mapToInt` all keep their types; only a pipeline that ends in an
   `Optional` loses it. The same shape refuses a `Supplier<List<String>>`'s
   `get().size()`. Rejects-valid, which is the safe direction.
+- **`getStackTrace()` and `StackTraceElement`** (2026-08-11,
+  `java.lang.Throwable`) — the trace was recorded and rendered but could not
+  be READ: `e.getStackTrace()` was "cannot find symbol", which is what a probe
+  hit three separate times. A trace is stored as the lines `printStackTrace`
+  prints (`Cls.method(File.java:12)`); those are now taken apart into real
+  frame objects answering `getClassName`, `getMethodName`, `getFileName`,
+  `getLineNumber` and `toString` — including `(Unknown Source)` for a frame
+  with no file, the JDK's wording. `StackTraceElement` is a nameable type, its
+  array widens to `Object[]` for `Arrays.toString`, and a frame renders as its
+  own text wherever a value is printed. Modelled as one `JType`/`ElemType`
+  pair, the shape `Class`, `Field`, `Method` and `Constructor` already use.
+  - Found alongside it: `type_of` named only `getMessage` and `toString` as
+    the inherited Throwable members, where EMISSION resolves the whole
+    exception table. Every other one — `getCause`, `getSuppressed`,
+    `getStackTrace` — typed as an error in any position that consulted its
+    type, so `e.getStackTrace().length > 0` was "bad operand types" for a
+    comparison that emitted perfectly well. Both paths use the one table now.
+  - Pinned by `diff_stack_trace_elements`.
 - **A sort's comparison SEQUENCE** (2026-08-09, `java.util.TimSort`) — the
   route, not just the destination. WHICH comparisons a sort performs is
   observable whenever the comparator is not a pure function of its arguments:

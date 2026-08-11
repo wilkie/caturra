@@ -535,6 +535,16 @@ pub enum HeapObject {
     /// `Field.getGenericType()`: the raw type and its type arguments (empty
     /// for a non-parameterized type).
     ReflectType { raw: String, args: Vec<String> },
+    /// One `java.lang.StackTraceElement` from `Throwable.getStackTrace()`.
+    /// The trace is recorded as rendered lines (`Cls.m(File.java:12)`), which
+    /// is what `printStackTrace` prints; these are those lines taken apart so
+    /// a program can read the pieces.
+    StackFrame {
+        declaring: String,
+        method: String,
+        file: Option<String>,
+        line: i32,
+    },
     /// A `java.lang.reflect.Constructor` from `getDeclaredConstructors()`.
     Constructor {
         declaring: String,

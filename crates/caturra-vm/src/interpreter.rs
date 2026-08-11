@@ -494,6 +494,54 @@ impl<'run> Interpreter<'run> {
         }
     }
 
+    /// `Throwable.getStackTrace()` — the recorded trace, taken apart.
+    ///
+    /// A trace is kept as the LINES `printStackTrace` prints
+    /// (`Cls.method(File.java:12)`), which is all the rendering needs. A
+    /// program that reads the frames wants the pieces, so they are parsed
+    /// back out here: everything before the last `(` splits at its final `.`
+    /// into the declaring class and the method, and what is inside the
+    /// parentheses is the file and, after a `:`, the line. A frame with no
+    /// file (a synthesized one) reports a null file and line -1, as the JDK
+    /// does for an unknown source.
+    fn stack_trace_array(&mut self, reference: HeapRef) -> JValue {
+        let lines = self
+            .exception_traces
+            .get(&reference)
+            .cloned()
+            .unwrap_or_default();
+        let frames: Vec<JValue> = lines
+            .iter()
+            .map(|line| {
+                let (head, tail) = match line.rsplit_once('(') {
+                    Some((head, tail)) => (head, tail.trim_end_matches(')')),
+                    None => (line.as_str(), ""),
+                };
+                let (declaring, method) = match head.rsplit_once('.') {
+                    Some((declaring, method)) => (declaring.to_owned(), method.to_owned()),
+                    None => (String::new(), head.to_owned()),
+                };
+                let (file, number) = match tail.rsplit_once(':') {
+                    Some((file, number)) => (Some(file.to_owned()), number.parse().unwrap_or(-1)),
+                    None if tail.is_empty() => (None, -1),
+                    None => (Some(tail.to_owned()), -1),
+                };
+                let frame = self.heap.alloc(crate::value::HeapObject::StackFrame {
+                    declaring,
+                    method,
+                    file,
+                    line: number,
+                });
+                JValue::Ref(Some(frame))
+            })
+            .collect();
+        let array = self.heap.alloc(crate::value::HeapObject::RefArray(
+            String::from("[Ljava/lang/StackTraceElement;"),
+            frames,
+        ));
+        JValue::Ref(Some(array))
+    }
+
     /// The JDK's `printStackTrace` rendering, without the leading
     /// "Exception in thread" banner: the header, one `\tat` line per frame,
     /// then every `Suppressed:` block and the `Caused by:` chain, with the
@@ -9465,6 +9513,13 @@ impl<'run> Interpreter<'run> {
                     .unwrap_or(JValue::NULL);
                 return Ok(UserDispatch::Value(Some(cause)));
             }
+            if self.instance_is_throwable(instance_class)
+                && method_name == "getStackTrace"
+                && descriptor == "()[Ljava/lang/StackTraceElement;"
+            {
+                let array = self.stack_trace_array(receiver);
+                return Ok(UserDispatch::Value(Some(array)));
+            }
             // `getSuppressed()` — an empty `Throwable[]` (none are modelled).
             if self.instance_is_throwable(instance_class)
                 && method_name == "getSuppressed"
@@ -10750,6 +10805,55 @@ impl<'run> Interpreter<'run> {
             // the wrapper.
             primitive => Some(self.box_primitive_value(primitive)),
         };
+        // `getStackTrace()` — answered here, for the same reason
+        // `printStackTrace` is: the trace lives on the interpreter, not in
+        // the heap object. A LIBRARY throwable reaches only this path; a user
+        // one is intercepted in `user_virtual_dispatch`, where an override
+        // still gets to win.
+        if method_name == "getStackTrace"
+            && descriptor == "()[Ljava/lang/StackTraceElement;"
+            && let Some(exception) = receiver
+            && matches!(
+                self.heap.get(exception),
+                Some(crate::value::HeapObject::Exception { .. })
+            )
+        {
+            let array = self.stack_trace_array(exception);
+            frame.stack.push(array);
+            self.vec_pool.push(args);
+            return Ok(None);
+        }
+        // The pieces of one frame.
+        if let Some(frame_ref) = receiver
+            && let Some(crate::value::HeapObject::StackFrame {
+                declaring,
+                method,
+                file,
+                line,
+            }) = self.heap.get(frame_ref)
+        {
+            let (declaring, method, file, line) =
+                (declaring.clone(), method.clone(), file.clone(), *line);
+            let answer = match method_name {
+                "getClassName" => Some(JValue::Ref(Some(self.heap.alloc_string(&declaring)))),
+                "getMethodName" => Some(JValue::Ref(Some(self.heap.alloc_string(&method)))),
+                "getFileName" => Some(match &file {
+                    Some(file) => JValue::Ref(Some(self.heap.alloc_string(file))),
+                    None => JValue::NULL,
+                }),
+                "getLineNumber" => Some(JValue::Int(line)),
+                "toString" => {
+                    let text = stack_frame_text(&declaring, &method, file.as_deref(), line);
+                    Some(JValue::Ref(Some(self.heap.alloc_string(&text))))
+                }
+                _ => None,
+            };
+            if let Some(answer) = answer {
+                frame.stack.push(answer);
+                self.vec_pool.push(args);
+                return Ok(None);
+            }
+        }
         // `printStackTrace()` / `printStackTrace(PrintStream)` — answered at
         // this level (not the heap-only intrinsics) because the full JDK
         // rendering needs the construction-time traces and the
@@ -14386,6 +14490,26 @@ fn descriptor_class_name(descriptor: &str) -> String {
                 .unwrap_or(other),
         )
         .to_owned(),
+    }
+}
+
+/// A `StackTraceElement`'s own text: `Cls.method(File.java:12)`, or
+/// `(Unknown Source)` when no file was recorded — the JDK's wording.
+pub(crate) fn stack_frame_text(
+    declaring: &str,
+    method: &str,
+    file: Option<&str>,
+    line: i32,
+) -> String {
+    let where_ = match (file, line) {
+        (Some(file), line) if line >= 0 => format!("{file}:{line}"),
+        (Some(file), _) => file.to_owned(),
+        (None, _) => String::from("Unknown Source"),
+    };
+    if declaring.is_empty() {
+        format!("{method}({where_})")
+    } else {
+        format!("{declaring}.{method}({where_})")
     }
 }
 

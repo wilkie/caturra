@@ -2609,6 +2609,7 @@ impl MethodTable {
                     "OptionalInt" if !self.has_class(simple) => Some(JType::OptionalInt),
                     "OptionalDouble" if !self.has_class(simple) => Some(JType::OptionalDouble),
                     "Class" => Some(JType::Class),
+                    "StackTraceElement" if !self.has_class(simple) => Some(JType::StackFrame),
                     "Field" => Some(JType::Field),
                     "Method" => Some(JType::Method),
                     "Type" | "ParameterizedType" => Some(JType::Type),
@@ -2821,6 +2822,7 @@ impl MethodTable {
                     JType::Method => ElemType::Method,
                     JType::Constructor => ElemType::Constructor,
                     JType::Class => ElemType::Class,
+                    JType::StackFrame => ElemType::StackFrame,
                     // A wrapper array (`Integer[]`) is a REFERENCE array of
                     // boxed elements, distinct from the primitive `int[]`.
                     JType::Boxed(elem) => match Prim::of(elem) {
@@ -3438,6 +3440,7 @@ fn wrapper_internal(elem: ElemType) -> &'static str {
         ElemType::Boolean => "java/lang/Boolean",
         // A wrapper element defers to its own primitive.
         ElemType::Wrapper(prim) => wrapper_internal(prim.elem()),
+        ElemType::StackFrame => "java/lang/StackTraceElement",
         // A type variable erases to `Object`, like every other reference here.
         ElemType::TypeVar(_)
         | ElemType::Str
@@ -3567,6 +3570,7 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
 
 fn wrapper_name(elem: ElemType, table: &MethodTable) -> String {
     match elem {
+        ElemType::StackFrame => String::from("StackTraceElement"),
         ElemType::TypeVar(_) => String::from("Object"),
         ElemType::Builder => String::from("StringBuilder"),
         ElemType::Wrapper(prim) => wrapper_name(prim.elem(), table),
@@ -3884,6 +3888,7 @@ fn elem_type_of(ty: JType) -> Option<ElemType> {
         JType::StringBuilder => Some(ElemType::Builder),
         JType::Object(id) => Some(ElemType::Object(id)),
         JType::Class => Some(ElemType::Class),
+        JType::StackFrame => Some(ElemType::StackFrame),
         JType::Exception(id) => Some(ElemType::Throwable(id)),
         // A wrapper array element is a boxed REFERENCE (`Integer[]`).
         JType::Boxed(elem) => Prim::of(elem).map(ElemType::Wrapper),
@@ -4269,6 +4274,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     elem: ElemType::Str
                         | ElemType::Builder
                         | ElemType::Field
+                        | ElemType::StackFrame
                         | ElemType::Constructor,
                     dims: d1,
                 },
@@ -4375,6 +4381,8 @@ enum ElemType {
     Field,
     /// `java.lang.reflect.Method` (element of `getDeclaredMethods()`).
     Method,
+    /// `java.lang.StackTraceElement` (element of `getStackTrace()`).
+    StackFrame,
     /// `java.lang.reflect.Constructor` (element of `getDeclaredConstructors()`).
     Constructor,
     /// `java.lang.Class` (element of a `Class[]`, e.g. `getConstructor` args).
@@ -4502,6 +4510,7 @@ impl ElemType {
             ElemType::Method => String::from("Ljava/lang/reflect/Method;"),
             ElemType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             ElemType::Class => String::from("Ljava/lang/Class;"),
+            ElemType::StackFrame => String::from("Ljava/lang/StackTraceElement;"),
             ElemType::Throwable(id) => format!("L{};", exception_internal(id)),
             // A wildcard or nested element erases to its `read` class (Object,
             // unless a wildcard's modelled bound narrows it).
@@ -4530,6 +4539,7 @@ impl ElemType {
             ElemType::Method => JType::Method,
             ElemType::Constructor => JType::Constructor,
             ElemType::Class => JType::Class,
+            ElemType::StackFrame => JType::StackFrame,
             ElemType::Throwable(id) => JType::Exception(id),
             // A wildcard or nested element erases (table-free) to its `read`
             // class; the nesting-aware `elem_value_type` recovers the true
@@ -4576,6 +4586,8 @@ enum JType {
     Class,
     /// `java.lang.reflect.Field` (reflection intrinsic).
     Field,
+    /// `java.lang.StackTraceElement` — one frame of a throwable's trace.
+    StackFrame,
     /// `java.lang.reflect.Method` (reflection intrinsic).
     Method,
     /// `java.lang.reflect.Type` / `ParameterizedType` (from
@@ -4854,6 +4866,7 @@ impl JType {
             JType::Class => String::from("Class"),
             JType::Field => String::from("Field"),
             JType::Method => String::from("Method"),
+            JType::StackFrame => String::from("StackTraceElement"),
             JType::Type => String::from("Type"),
             JType::Constructor => String::from("Constructor"),
             JType::Exception(id) => exception_internal(id)
@@ -4925,6 +4938,7 @@ impl JType {
                 | JType::Class
                 | JType::Field
                 | JType::Method
+                | JType::StackFrame
                 | JType::Type
                 | JType::StringBuilder
                 | JType::Constructor
@@ -5013,6 +5027,7 @@ impl JType {
             JType::Class => String::from("Ljava/lang/Class;"),
             JType::Field => String::from("Ljava/lang/reflect/Field;"),
             JType::Method => String::from("Ljava/lang/reflect/Method;"),
+            JType::StackFrame => String::from("Ljava/lang/StackTraceElement;"),
             JType::Type => String::from("Ljava/lang/reflect/Type;"),
             JType::Constructor => String::from("Ljava/lang/reflect/Constructor;"),
             JType::Exception(id) => format!("L{};", exception_internal(id)),
@@ -5641,6 +5656,7 @@ fn type_from_ref(ty: &TypeRef) -> Option<JType> {
         TypeRef::Byte => Some(JType::Byte),
         TypeRef::Named(name) if name == "String" => Some(JType::Str),
         TypeRef::Named(name) if name == "Class" => Some(JType::Class),
+        TypeRef::Named(name) if name == "StackTraceElement" => Some(JType::StackFrame),
         TypeRef::Named(name) if name == "Field" => Some(JType::Field),
         TypeRef::Named(name) if name == "Method" => Some(JType::Method),
         TypeRef::Named(name) if name == "Type" || name == "ParameterizedType" => Some(JType::Type),
@@ -6436,6 +6452,8 @@ enum BRet {
     Entry,
     /// `Stream<Map.Entry<K, V>>` — what `entrySet().stream()` yields.
     EntryStream,
+    /// `StackTraceElement[]` — `Throwable.getStackTrace()`.
+    StackFrameArray,
     /// `IntSummaryStatistics` — `IntStream.summaryStatistics()`.
     IntSummaryStats,
     /// `DoubleStream` / `LongStream` — primitive pipelines that share the
@@ -8492,6 +8510,12 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
 
 const EXCEPTION_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm(
+        "getStackTrace",
+        &[],
+        BRet::StackFrameArray,
+        "()[Ljava/lang/StackTraceElement;",
+    ),
     // `e.getClass()` — every object has it, and a validator reporting which
     // exception it caught needs it.
     BuiltinMethod {
@@ -9462,6 +9486,16 @@ const TYPE_METHODS: &[BuiltinMethod] = &[
 ];
 
 /// `java.lang.reflect.Method` methods.
+/// `java.lang.StackTraceElement` — one frame of a throwable's trace.
+const STACK_FRAME_METHODS: &[BuiltinMethod] = &[
+    bm("getClassName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getMethodName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getFileName", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getLineNumber", &[], BRet::Int, "()I"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+];
+
 const METHOD_METHODS: &[BuiltinMethod] = &[
     bm("getName", &[], BRet::Str, "()Ljava/lang/String;"),
     bm("getModifiers", &[], BRet::Int, "()I"),
@@ -10393,6 +10427,7 @@ fn builtin_instance_table(ty: JType) -> Option<(&'static str, &'static [BuiltinM
         JType::Class => Some(("java/lang/Class", CLASS_METHODS)),
         JType::Field => Some(("java/lang/reflect/Field", FIELD_METHODS)),
         JType::Method => Some(("java/lang/reflect/Method", METHOD_METHODS)),
+        JType::StackFrame => Some(("java/lang/StackTraceElement", STACK_FRAME_METHODS)),
         JType::Type => Some(("java/lang/reflect/Type", TYPE_METHODS)),
         JType::Constructor => Some(("java/lang/reflect/Constructor", CONSTRUCTOR_METHODS)),
         JType::Scanner => Some(("java/util/Scanner", SCANNER_METHODS)),
@@ -11133,6 +11168,10 @@ fn bret_type(ret: BRet, args: TypeArgs, table: &MethodTable) -> Option<JType> {
         }),
         BRet::ObjectArray => Some(JType::Array {
             elem: ElemType::Object(table.object_id),
+            dims: 1,
+        }),
+        BRet::StackFrameArray => Some(JType::Array {
+            elem: ElemType::StackFrame,
             dims: 1,
         }),
         BRet::IntSummaryStats => Some(JType::IntSummaryStats),
@@ -16561,7 +16600,10 @@ impl BodyGen<'_> {
                 self.error_bail(span, "call receiver");
                 return None;
             }
-            JType::Str
+            // A stack frame answers its own small table, like the reflection
+            // objects beside it.
+            JType::StackFrame
+            | JType::Str
             | JType::CharSequence
             | JType::StringBuilder
             | JType::Scanner
@@ -20686,6 +20728,7 @@ impl BodyGen<'_> {
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
             | JType::Class
+            | JType::StackFrame
             | JType::Field
             | JType::Method
             | JType::Type
@@ -21344,14 +21387,27 @@ impl BodyGen<'_> {
                         inferred_return(sig, &arg_types).unwrap_or(JType::Error)
                     }
                     _ => {
-                        // Inherited Throwable members (mirrors emission).
-                        if (method == "getMessage" || method == "toString")
-                            && args.is_empty()
-                            && table
-                                .class_id(&class)
-                                .is_some_and(|id| table.is_throwable(id))
+                        // Inherited Throwable members, resolved against the
+                        // SAME table emission uses. Naming two of them by hand
+                        // left every other one — `getCause`, `getStackTrace`,
+                        // `getSuppressed`, `initCause` — typed as `Error`
+                        // here while it emitted fine, so
+                        // `e.getStackTrace().length > 0` was "bad operand
+                        // types" for a comparison the emit path had no trouble
+                        // with.
+                        if table
+                            .class_id(&class)
+                            .is_some_and(|id| table.is_throwable(id))
+                            && let Some(chosen) = pick_builtin(
+                                EXCEPTION_METHODS,
+                                method,
+                                &arg_types,
+                                TypeArgs::default(),
+                                table,
+                            )
+                            && let Some(ret) = bret_type(chosen.ret, TypeArgs::default(), table)
                         {
-                            JType::Str
+                            ret
                         } else {
                             JType::Error
                         }
@@ -22230,6 +22286,11 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
                 self.code.drop_stack(1);
             }
+            ElemType::StackFrame => {
+                let class = intern_class(self.pool, "java/lang/StackTraceElement");
+                self.code.push_op_u16(op::ANEWARRAY, class, 1);
+                self.code.drop_stack(1);
+            }
             ElemType::Builder => {
                 let class = intern_class(self.pool, "java/lang/StringBuilder");
                 self.code.push_op_u16(op::ANEWARRAY, class, 1);
@@ -22275,7 +22336,8 @@ impl BodyGen<'_> {
                     | ElemType::Wildcard { .. }
                     | ElemType::Nested { .. }
                     | ElemType::TypeVar(_)
-                    | ElemType::Wrapper(_) => unreachable!(),
+                    | ElemType::StackFrame
+                    | ElemType::Wrapper(_) => unreachable!("reference elements are ANEWARRAY"),
                 };
                 self.code.push_op(op::NEWARRAY, 1);
                 self.code.bytes.push(atype);
@@ -24244,6 +24306,7 @@ impl BodyGen<'_> {
             | JType::EntrySet { .. }
             | JType::MapEntry { .. }
             | JType::Class
+            | JType::StackFrame
             | JType::Field
             | JType::Method
             | JType::Type
@@ -24495,6 +24558,7 @@ impl BodyGen<'_> {
             | ElemType::Method
             | ElemType::Constructor
             | ElemType::Class
+            | ElemType::StackFrame
             | ElemType::Throwable(_)
             | ElemType::Wildcard { .. }
             | ElemType::Nested { .. }
@@ -24873,7 +24937,11 @@ impl BodyGen<'_> {
             (
                 JType::Array {
                     elem:
-                        ElemType::Str | ElemType::Builder | ElemType::Field | ElemType::Constructor,
+                        ElemType::Str
+                        | ElemType::Builder
+                        | ElemType::Field
+                        | ElemType::StackFrame
+                        | ElemType::Constructor,
                     dims: d1,
                 },
                 JType::Array {

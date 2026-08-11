@@ -6901,6 +6901,12 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                     format!("{dotted}<{}>", args.join(", "))
                 }
             }
+            Some(HeapObject::StackFrame {
+                declaring,
+                method,
+                file,
+                line,
+            }) => crate::interpreter::stack_frame_text(declaring, method, file.as_deref(), *line),
             Some(HeapObject::Instance { class_name, .. }) => format!("{class_name}@{reference:x}"),
             _ => format!("object@{reference:x}"),
         },
