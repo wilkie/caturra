@@ -402,10 +402,12 @@ fn cast(ty: &TypeRef, value: &ConstValue) -> Option<ConstValue> {
         "double" => ConstValue::Double(value.numeric()?),
         "float" => ConstValue::Float(value.numeric()? as f32),
         "long" => ConstValue::Long(to_long(value)?),
-        "int" => ConstValue::Int(to_long(value)? as i32),
-        "short" => ConstValue::Int(i32::from(to_long(value)? as i16)),
-        "byte" => ConstValue::Int(i32::from(to_long(value)? as i8)),
-        _ => ConstValue::Char(to_long(value)? as u16),
+        "int" => ConstValue::Int(to_int(value)?),
+        // byte/short/char narrow from the INT the value converts to first
+        // (JLS §5.1.3), so `(byte) 1e10` is `(byte) Integer.MAX_VALUE`.
+        "short" => ConstValue::Int(i32::from(to_int(value)? as i16)),
+        "byte" => ConstValue::Int(i32::from(to_int(value)? as i8)),
+        _ => ConstValue::Char(to_int(value)? as u16),
     })
 }
 
@@ -417,5 +419,18 @@ fn to_long(value: &ConstValue) -> Option<i64> {
         ConstValue::Float(v) => Some(*v as i64),
         ConstValue::Double(v) => Some(*v as i64),
         other => other.integral(),
+    }
+}
+
+/// The `int` a value converts to. A FLOATING source saturates straight into
+/// int range (§5.1.3) — it does not pass through `long` first, which is what
+/// made `(int) (1.0 / 0.0)` fold to -1 (`long`'s saturated maximum, truncated)
+/// where Java, and caturra's own runtime, answer `Integer.MAX_VALUE`.
+#[allow(clippy::cast_possible_truncation)]
+fn to_int(value: &ConstValue) -> Option<i32> {
+    match value {
+        ConstValue::Float(v) => Some(*v as i32),
+        ConstValue::Double(v) => Some(*v as i32),
+        other => Some(other.integral()? as i32),
     }
 }

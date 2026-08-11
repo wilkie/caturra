@@ -23313,3 +23313,51 @@ public class VarInference {
 }
 "#
 );
+
+// A constant expression must FOLD to what evaluating it would produce — the
+// folder decides case labels, array dimensions and inlined reads, so a
+// disagreement is a silent wrong answer. A floating value saturates straight
+// into `int` range (JLS 5.1.3) rather than passing through `long`, which is
+// what made `(int) (1.0 / 0.0)` fold to -1.
+differential_test!(
+    diff_constant_folding_matches_evaluation,
+    "FoldSaturate",
+    r#"
+public class FoldSaturate {
+    static final int A = (int) (1.0 / 0.0);
+    static final int B = (int) (-1.0 / 0.0);
+    static final int C = (int) (0.0 / 0.0);
+    static final int D = (byte) (int) 1e10;
+    static final int E = (short) (int) -1e10;
+    static final int F = (char) (int) 1e10 + 0;
+    static final long G = (long) 1e20;
+    static final int H = Integer.MIN_VALUE / -1;
+    static final long I = -Long.MIN_VALUE;
+    static final double J = 1.0 / -0.0;
+    static final int K = (int) 2147483647.9;
+    static final int L = (int) (float) 1e20;
+
+    public static void main(String[] args) {
+        System.out.println(A + " " + B + " " + C + " " + D + " " + E + " " + F);
+        System.out.println(G + " " + H + " " + I + " " + J + " " + K + " " + L);
+
+        // The same expressions evaluated at run time must agree.
+        int a = (int) (1.0 / 0.0);
+        int b = (int) (-1.0 / 0.0);
+        int d = (byte) (int) 1e10;
+        long g = (long) 1e20;
+        System.out.println(a + " " + b + " " + d + " " + g);
+
+        int[] sized = new int[(int) 3.9];
+        System.out.println(sized.length);
+        switch (2) {
+            case (int) 2.4:
+                System.out.println("hit");
+                break;
+            default:
+                System.out.println("miss");
+        }
+    }
+}
+"#
+);

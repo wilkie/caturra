@@ -960,6 +960,20 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   - A `StackTraceElement` receiver had no `type_of` arm.
   Pinned by `diff_var_infers_what_the_emitter_builds`. Both catalogues now
   report zero divergences.
+- **A constant must FOLD to what it evaluates to** (2026-08-11, JLS §5.1.3) —
+  the third self-checking invariant, and the same technique as the `var`
+  sweep: the folder and the interpreter are two implementations of one
+  language, so `static final int C = EXPR;` and `int v = EXPR;` must print the
+  same thing, with no external oracle needed. 109 expressions found one:
+  `(int) (1.0 / 0.0)` folded to -1 where evaluating it gives
+  `Integer.MAX_VALUE`. A floating value saturates STRAIGHT into `int` range;
+  it does not pass through `long` first, and the folder's long-then-truncate
+  route turned `long`'s saturated maximum into -1. `byte`/`short`/`char`
+  narrow from that `int`, so `(byte) 1e10` is `(byte) Integer.MAX_VALUE`.
+  This one is worth the invariant: the folder decides case labels, array
+  dimensions and inlined reads, so a disagreement is a SILENT wrong answer in
+  whichever of the two paths a program happens to take.
+  Pinned by `diff_constant_folding_matches_evaluation`.
 - **A sort's comparison SEQUENCE** (2026-08-09, `java.util.TimSort`) — the
   route, not just the destination. WHICH comparisons a sort performs is
   observable whenever the comparator is not a pure function of its arguments:
