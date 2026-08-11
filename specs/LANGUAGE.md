@@ -941,6 +941,25 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     type, so `e.getStackTrace().length > 0` was "bad operand types" for a
     comparison that emitted perfectly well. Both paths use the one table now.
   - Pinned by `diff_stack_trace_elements`.
+- **`type_of` must answer what the emitter builds** (2026-08-11) — the
+  divergence swept for as a CLASS, after it turned out to be the real defect
+  three separate times. `var x = EXPR;` needs the initializer's type where
+  `println(EXPR)` needs only its code, so "cannot infer type for 'var'" on an
+  expression that prints fine is exactly the signature. A sweep of 78
+  expressions over every receiver kind found seven:
+  - `arr.clone()` typed as an error though the comment above the arm said it
+    must mirror `array_object_call` — `int[].clone()` is an `int[]`.
+  - `Arrays.stream(array)` had no `type_of` rule at all.
+  - `new TreeMap<>(m)` / `new HashMap<>(m)` — a COPYING diamond takes its
+    arguments from the source, as javac does and as the emitted code already
+    did; `var` fell to the `Object` form and then refused the very value being
+    assigned. A diamond with no source still takes `Object`.
+  - `List.of` / `Set.of` / `Map.of` / `Collections.emptyList()` are typed by
+    their context everywhere else, and `var` IS the context: settled from the
+    arguments, or `Object` when there are none.
+  - A `StackTraceElement` receiver had no `type_of` arm.
+  Pinned by `diff_var_infers_what_the_emitter_builds`. Both catalogues now
+  report zero divergences.
 - **A sort's comparison SEQUENCE** (2026-08-09, `java.util.TimSort`) — the
   route, not just the destination. WHICH comparisons a sort performs is
   observable whenever the comparator is not a pure function of its arguments:

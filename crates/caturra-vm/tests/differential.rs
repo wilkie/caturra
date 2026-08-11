@@ -23244,3 +23244,72 @@ public class TraceFrames {
 }
 "#
 );
+
+// `var` needs the INITIALIZER's type, so it is the sharpest test that
+// `type_of` agrees with what the emitter builds: a divergence shows up as
+// "cannot infer" for an expression that prints perfectly well. These are the
+// ones a sweep of 78 expressions turned up.
+differential_test!(
+    diff_var_infers_what_the_emitter_builds,
+    "VarInference",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+public class VarInference {
+    public static void main(String[] args) {
+        int[] arr = {3, 1, 2};
+        var copy = arr.clone();
+        copy[0] = 9;
+        System.out.println(Arrays.toString(arr) + Arrays.toString(copy) + copy.length);
+        String[] words = {"b", "a"};
+        var wcopy = words.clone();
+        System.out.println(wcopy.length + wcopy[0]);
+        System.out.println(arr.clone().length);
+
+        var ints = Arrays.stream(arr).sum();
+        var strs = Arrays.stream(words).count();
+        System.out.println(ints + " " + strs);
+
+        Map<String, Integer> m = new HashMap<>();
+        m.put("k", 1);
+        var tree = new TreeMap<>(m);
+        System.out.println(tree + " " + (tree.get("k") + 1));
+        var hash = new HashMap<>(m);
+        System.out.println(hash.get("k") + 2);
+        List<String> l = new ArrayList<>(Arrays.asList("b", "a"));
+        var listCopy = new ArrayList<>(l);
+        System.out.println(listCopy.get(0).toUpperCase());
+        var setCopy = new HashSet<>(l);
+        System.out.println(setCopy.size());
+
+        // A diamond with NO source still takes the Object form, as javac does.
+        var raw = new HashMap<>();
+        raw.put("x", 1);
+        System.out.println(raw);
+
+        var of = List.of(1, 2);
+        System.out.println(of + " " + (of.get(0) + 1));
+        var setOf = Set.of("a");
+        System.out.println(setOf.contains("a"));
+        var mapOf = Map.of("k", 5);
+        System.out.println(mapOf.get("k") + 1);
+        var empty = Collections.emptyList();
+        System.out.println(empty.size());
+
+        RuntimeException e = new IllegalStateException("x");
+        StackTraceElement f = e.getStackTrace()[0];
+        var name = f.getMethodName();
+        System.out.println(name + f.getLineNumber());
+        System.out.println(e.getStackTrace().length > 0);
+    }
+}
+"#
+);

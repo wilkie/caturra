@@ -12939,12 +12939,38 @@ impl BodyGen<'_> {
             // and so does this, through the same raw-type resolution.
             if inferred == JType::Null
                 && let Expr::NewObject {
-                    class, type_args, ..
+                    class,
+                    type_args,
+                    args,
+                    ..
                 } = init
                 && type_args.is_empty()
             {
+                // …unless the diamond COPIES something: `var t = new
+                // TreeMap<>(m)` is a map of `m`'s own key and value types,
+                // which is what javac infers and what the emitted code
+                // actually builds. Falling to the `Object` form declared the
+                // variable as `TreeMap<Object, Object>` and then refused the
+                // very value being assigned to it.
+                if let [source] = args.as_slice() {
+                    let copied = match self.type_of(source) {
+                        JType::Map { key, value } | JType::TreeMap { key, value } => {
+                            match crate::imports::canonical_library_class(class).unwrap_or(class) {
+                                "TreeMap" => Some(JType::TreeMap { key, value }),
+                                "HashMap" | "Map" => Some(JType::Map { key, value }),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(copied) = copied {
+                        inferred = copied;
+                    }
+                }
                 let simple = crate::imports::canonical_library_class(class).unwrap_or(class);
-                if let Some(arity) = raw_generic_arity(simple) {
+                if inferred == JType::Null
+                    && let Some(arity) = raw_generic_arity(simple)
+                {
                     let object_args = vec![TypeRef::Named(String::from("Object")); arity];
                     inferred = self
                         .table
@@ -12954,6 +12980,50 @@ impl BodyGen<'_> {
                         })
                         .unwrap_or(JType::Null);
                 }
+            }
+            // A FACTORY whose type normally comes from the context —
+            // `List.of(...)`, `Collections.emptyList()` — has `var` for its
+            // context, so it is settled here the way javac settles it: from
+            // the arguments, or `Object` when there are none.
+            // `Error` counts here too: these factories are typed by their
+            // context everywhere else, and reach this point unresolved.
+            if matches!(inferred, JType::Null | JType::Error)
+                && let Expr::Call {
+                    receiver: Some(owner),
+                    method,
+                    args,
+                    ..
+                } = init
+                && let Expr::Name { path, .. } = owner.as_ref()
+                && path.len() == 1
+                // `Collections` IS a bundled class, so `has_class` cannot be
+                // the guard here; these three names are the library's own and
+                // a program that declares one of them shadows only the two
+                // interfaces, which are checked by the arm itself.
+                && (path[0] == "Collections" || !self.table.has_class(&path[0]))
+            {
+                let object = ElemType::Object(self.table.object_id);
+                let element = |this: &mut Self, at: usize| {
+                    args.get(at)
+                        .map(|a| this.type_of(a))
+                        .and_then(collection_elem_of)
+                        .unwrap_or(object)
+                };
+                inferred = match (path[0].as_str(), method.as_str()) {
+                    ("List", "of" | "copyOf") => JType::List(element(self, 0)),
+                    ("Set", "of" | "copyOf") => JType::Set(element(self, 0)),
+                    ("Map", "of" | "copyOf" | "ofEntries") => JType::Map {
+                        key: element(self, 0),
+                        value: element(self, 1),
+                    },
+                    ("Collections", "emptyList") => JType::List(object),
+                    ("Collections", "emptySet") => JType::Set(object),
+                    ("Collections", "emptyMap") => JType::Map {
+                        key: object,
+                        value: object,
+                    },
+                    _ => JType::Null,
+                };
             }
             if matches!(inferred, JType::Null | JType::Error) {
                 self.error(
@@ -21158,6 +21228,7 @@ impl BodyGen<'_> {
                         | JType::Class
                         | JType::Field
                         | JType::Method
+                        | JType::StackFrame
                         | JType::Type
                         | JType::Constructor) => {
                             let elem = TypeArgs::of(receiver_ty);
@@ -21195,12 +21266,17 @@ impl BodyGen<'_> {
                         // `Object` methods on an array receiver. Mirror
                         // `array_object_call`, or `type_of` and the emitter
                         // disagree and the bytecode fails to verify.
-                        JType::Array { .. } => {
+                        array @ JType::Array { .. } => {
                             return match (method.as_str(), args.len()) {
                                 ("equals", 1) => JType::Boolean,
                                 ("hashCode", 0) => JType::Int,
                                 ("toString", 0) => JType::Str,
                                 ("getClass", 0) => JType::Class,
+                                // `int[].clone()` is an `int[]`. Left out
+                                // here, it typed as an error while it emitted
+                                // fine, so `var c = arr.clone()` could not
+                                // infer and `arr.clone().length` had no type.
+                                ("clone", 0) => array,
                                 _ => JType::Error,
                             };
                         }
@@ -21258,6 +21334,16 @@ impl BodyGen<'_> {
                         _ => {}
                     }
                 }
+                // `List.of(...)`, `Set.of(...)`, `Map.of(...)` — typed the way
+                // `Collections.emptyList()` is: a `Null` that adopts the
+                // context. Absent here, `var xs = List.of(1, 2)` could not
+                // infer while `println(List.of(1, 2))` printed fine.
+                if matches!(class.as_str(), "List" | "Set" | "Map")
+                    && matches!(method.as_str(), "of" | "copyOf" | "ofEntries")
+                    && !self.table.has_class(&class)
+                {
+                    return JType::Null;
+                }
                 if class == "Optional" {
                     match method.as_str() {
                         "of" | "ofNullable" => {
@@ -21282,6 +21368,19 @@ impl BodyGen<'_> {
                         "binarySearch" => return JType::Int,
                         // `fill` is void, which `type_of` spells `Error`.
                         "fill" => return JType::Error,
+                        // `Arrays.stream(array)` — the element decides which
+                        // pipeline, exactly as the emit path decides it.
+                        "stream" => {
+                            return match args.first().map(|a| self.type_of(a)) {
+                                Some(JType::Array { elem, dims: 1 }) => match elem {
+                                    ElemType::Double => JType::DoubleStream,
+                                    ElemType::Long => JType::LongStream,
+                                    elem if !elem.base_type().is_reference() => JType::IntStream,
+                                    elem => JType::Stream(elem),
+                                },
+                                _ => JType::Error,
+                            };
+                        }
                         // `asList` mirrors `emit_arrays_as_list`: a list of the
                         // arguments' element type (the lone-array form is the
                         // varargs array itself). Missing here, an INLINE
