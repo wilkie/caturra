@@ -23361,3 +23361,93 @@ public class FoldSaturate {
 }
 "#
 );
+
+// Contracts a program can check on ITSELF: every collection is an `Iterable`,
+// a view's size agrees with its map's, a copy equals its source, a sort is a
+// permutation that comes out ordered. Any failure here is a caturra bug, and
+// the JDK confirms the contracts are the right ones.
+differential_test!(
+    diff_collection_contracts_hold,
+    "Contracts",
+    r#"
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+public class Contracts {
+    static int fails = 0;
+
+    static void ck(boolean b, String what) {
+        if (!b) {
+            System.out.println("FAIL " + what);
+            fails++;
+        }
+    }
+
+    static <T> int count(Iterable<T> it) {
+        int n = 0;
+        for (T x : it) {
+            n++;
+        }
+        return n;
+    }
+
+    public static void main(String[] args) {
+        String[] items = {"d", "a", "c", "a", "b"};
+        List<String> l = new ArrayList<>(Arrays.asList(items));
+        ck(l.size() == count(l), "list size == iterated");
+        for (String s : items) {
+            ck(l.contains(s) == (l.indexOf(s) >= 0), "contains iff indexOf " + s);
+        }
+        List<String> copy = new ArrayList<>(l);
+        ck(copy.equals(l) && copy.hashCode() == l.hashCode(), "copy equals+hash");
+        Collections.sort(copy);
+        ck(copy.size() == l.size(), "sort preserves size");
+        for (int i = 1; i < copy.size(); i++) {
+            ck(copy.get(i - 1).compareTo(copy.get(i)) <= 0, "sorted at " + i);
+        }
+
+        Set<String> set = new HashSet<>(l);
+        ck(set.size() == count(set), "set size == iterated");
+        ck(!set.add("a"), "re-add returns false");
+
+        Map<String, Integer> m = new HashMap<>();
+        for (int i = 0; i < items.length; i++) {
+            m.put(items[i], i);
+        }
+        ck(m.size() == count(m.keySet()), "keySet iterated");
+        ck(m.size() == count(m.values()), "values iterated");
+        ck(m.size() == count(m.entrySet()), "entrySet iterated");
+        ck(m.equals(new HashMap<>(m)), "map copy equals");
+        ck(m.hashCode() == new HashMap<>(m).hashCode(), "map copy hash");
+        ck(new HashMap<>(m).size() == m.size(), "copy size");
+
+        TreeMap<String, Integer> t = new TreeMap<>(m);
+        ck(t.size() == m.size(), "treemap size");
+        ck(t.firstKey().equals(Collections.min(new ArrayList<>(m.keySet()))), "firstKey == min");
+
+        Deque<String> dq = new ArrayDeque<>();
+        for (String s : items) {
+            dq.addLast(s);
+        }
+        ck(dq.size() == count(dq), "deque iterated");
+
+        int[] arr = {5, 2, 9, 2};
+        int[] sorted = arr.clone();
+        Arrays.sort(sorted);
+        ck(Arrays.stream(arr).sum() == Arrays.stream(sorted).sum(), "sort preserves sum");
+        ck(Arrays.binarySearch(sorted, 9) >= 0, "binarySearch finds");
+
+        System.out.println(fails == 0 ? "ALL OK" : fails + " FAILURES");
+    }
+}
+"#
+);

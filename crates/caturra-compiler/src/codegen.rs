@@ -4184,6 +4184,25 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Map { key: k2, value: v2 },
             ) if k1 == k2 && v1 == v2
         )
+        // EVERY collection is an `Iterable` — that is what a for-each over one
+        // means. `Iterable` is a synthesized interface here, registered for
+        // inheritance, and no builtin collection declared it, so a generic
+        // `<T> int count(Iterable<T>)` refused every list and set handed to it.
+        // The element is erased, as it is for any use of the synthesized form.
+        || matches!(
+            (from, to),
+            (
+                JType::List(_)
+                    | JType::Collection(_)
+                    | JType::Set(_)
+                    | JType::TreeSet(_)
+                    | JType::Stack(_)
+                    | JType::LinkedList { .. }
+                    | JType::EntrySet { .. }
+                    | JType::Array { .. },
+                JType::Object(id),
+            ) if table.class_id("Iterable") == Some(id) && !matches!(from, JType::Array { .. })
+        )
         // Wildcard variance: a collection argument matches a wildcard-typed
         // parameter of a compatible family when its element satisfies the
         // bound. `List<Integer>` for `List<? extends Number>`; any list/set for
@@ -14684,6 +14703,20 @@ impl BodyGen<'_> {
     /// and an enclosing call taking it as an argument silently failed to
     /// resolve and was never emitted at all. `q(new HashSet<>(src).size())`
     /// compiled to its argument and no call.
+    /// The key/value of a single MAP argument — `new TreeMap<>(m)` is a map of
+    /// `m`'s own key and value types, as javac infers and as the emitted code
+    /// already builds. Without it a call straight on the copy
+    /// (`new HashMap<>(m).size()`) had no receiver type at all.
+    fn copy_source_entry(&mut self, args: &[Expr]) -> Option<(ElemType, ElemType)> {
+        let [source] = args else {
+            return None;
+        };
+        match self.type_of(source) {
+            JType::Map { key, value } | JType::TreeMap { key, value } => Some((key, value)),
+            _ => None,
+        }
+    }
+
     fn copy_source_element(&mut self, args: &[Expr]) -> Option<ElemType> {
         let [source] = args else {
             return None;
@@ -14767,7 +14800,9 @@ impl BodyGen<'_> {
                     (Some(key), Some(value)) => JType::Map { key, value },
                     _ => JType::Null,
                 },
-                _ => JType::Null,
+                _ => self
+                    .copy_source_entry(args)
+                    .map_or(JType::Null, |(key, value)| JType::Map { key, value }),
             },
             "HashSet" | "Set" => match type_args {
                 // A diamond `new HashSet<>(...)` gets its element from context —
@@ -14833,7 +14868,9 @@ impl BodyGen<'_> {
                     (Some(key), Some(value)) => JType::TreeMap { key, value },
                     _ => JType::Null,
                 },
-                _ => JType::Null,
+                _ => self
+                    .copy_source_entry(args)
+                    .map_or(JType::Null, |(key, value)| JType::TreeMap { key, value }),
             },
             _ => JType::Error,
         }
@@ -25012,6 +25049,10 @@ impl BodyGen<'_> {
                 | JType::Set(_)
                 | JType::Stack(_)
                 | JType::Map { .. }
+                // A map's VIEWS are collections too, and are the ones a
+                // for-each usually walks: they widen wherever a list does.
+                | JType::Collection(_)
+                | JType::EntrySet { .. }
                 | JType::Exception(_),
                 _,
             ) if widens(from, to, self.table) => {}

@@ -974,6 +974,24 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   dimensions and inlined reads, so a disagreement is a SILENT wrong answer in
   whichever of the two paths a program happens to take.
   Pinned by `diff_constant_folding_matches_evaluation`.
+- **Every collection is an `Iterable`** (2026-08-11, JLS §14.14.2) — the
+  fourth self-check, and a different shape from the other three: a Java
+  program that asserts its OWN contracts (a view's size agrees with its map's,
+  a copy equals its source, a sort is an ordered permutation), so any failure
+  is a caturra bug and the JDK only has to confirm the contracts are right.
+  Writing it found two:
+  - **A generic `<T> int count(Iterable<T> it)` refused every collection.**
+    `Iterable` is a synthesized interface here, registered for inheritance,
+    and no builtin collection declared it — so the one signature that means
+    "anything a for-each can walk" accepted nothing at all. Lists, sets,
+    queues, stacks and a map's three views widen to it now, erased as any use
+    of the synthesized form is. The map VIEWS also needed adding to the
+    reference-conversion arm that lists already had.
+  - **A call straight on a copying map diamond** — `new HashMap<>(m).size()` —
+    had no receiver type, because the map constructors did not infer from
+    their source the way the collection ones do. `new ArrayList<>(l).size()`
+    always worked; the map form is now the same.
+  Pinned by `diff_collection_contracts_hold`.
 - **A sort's comparison SEQUENCE** (2026-08-09, `java.util.TimSort`) — the
   route, not just the destination. WHICH comparisons a sort performs is
   observable whenever the comparator is not a pure function of its arguments:
