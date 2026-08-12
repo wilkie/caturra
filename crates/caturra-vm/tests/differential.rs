@@ -23694,3 +23694,122 @@ public class Obscured {
 }
 "
 );
+
+// `Iterable<T>` is a TYPE a program holds, casts to, and iterates — not only
+// a parameter position. It was fixed as a parameter (`<T> int f(Iterable<T>)`)
+// and stayed broken everywhere else: a declared `Iterable<String> it = list;`
+// was "incompatible types", a cast to one was refused outright, and neither
+// carried the element, so `for (String s : it)` saw `Object`.
+//
+// Three separate gaps behind that: a cast never consulted the widening rule
+// (JLS §5.5 — every widening reference conversion is a casting conversion), a
+// cast returned its target ERASED so the argument was lost, and `Iterable`'s
+// synthesized `iterator()` declared `Iterator<Object>` where it needed a type
+// VARIABLE for the receiver's argument to substitute into.
+differential_test!(
+    diff_iterable_is_a_type_not_just_a_parameter,
+    "IterableType",
+    r#"
+import java.util.*;
+
+class Bag<T> implements Iterable<T> {
+    private final List<T> items = new ArrayList<>();
+    void add(T item) { items.add(item); }
+    public Iterator<T> iterator() { return items.iterator(); }
+}
+
+public class IterableType {
+    static <T> int count(Iterable<T> things) {
+        int n = 0;
+        for (T thing : things) {
+            n++;
+        }
+        return n;
+    }
+
+    public static void main(String[] args) {
+        List<String> list = new ArrayList<>(Arrays.asList("b", "a"));
+        Set<String> set = new TreeSet<>(list);
+
+        // Held by the interface, and the element survives.
+        Iterable<String> held = list;
+        for (String s : held) {
+            System.out.print(s);
+        }
+        System.out.println();
+        String first = held.iterator().next();
+        System.out.println(first.toUpperCase());
+
+        // Cast to it, raw and parameterized.
+        for (String s : (Iterable<String>) list) {
+            System.out.print(s);
+        }
+        System.out.println();
+        Iterable raw = list;
+        System.out.println(count(raw) + " " + count(list) + " " + count(set));
+
+        // A user class that implements it, in every position.
+        Bag<String> bag = new Bag<>();
+        bag.add("q");
+        Iterable<String> asIterable = bag;
+        for (String s : asIterable) {
+            System.out.println(s);
+        }
+        Object erased = bag;
+        System.out.println(((Bag<String>) erased).iterator().next());
+        for (String s : (Bag<String>) erased) {
+            System.out.println(s);
+        }
+        System.out.println(count(bag));
+
+        // The reference is unchanged by any of it.
+        System.out.println(held == list);
+    }
+}
+"#
+);
+
+// Two DIFFERENT parameterizations of one class erase alike, and are not
+// assignable to each other. Both gates — `widens` and the assignment matrix —
+// keyed on the ERASURE alone, so `Bag<String> b = bagOfIntegers;` compiled and
+// the program ran with the wrong static type throughout. The accepts-invalid
+// direction, and the builtin collections were checked all along; only a user
+// generic class fell through.
+differential_reject!(
+    a_parameterization_is_not_assignable_to_another,
+    "WrongArg",
+    r"
+class Bag<T> { }
+
+public class WrongArg {
+    public static void main(String[] args) {
+        Bag<Integer> numbers = new Bag<>();
+        Bag<String> words = numbers;
+        System.out.println(words);
+    }
+}
+"
+);
+
+// Assigning THROUGH a raw type is how Java launders that, and stays legal
+// (unchecked, which javac warns about and allows) — so the check above must
+// not be a blanket refusal of every same-erasure assignment.
+differential_test!(
+    diff_a_raw_type_launders_a_parameterization,
+    "RawLaunder",
+    r"
+class Bag<T> {
+    T item;
+}
+
+public class RawLaunder {
+    public static void main(String[] args) {
+        Bag<Integer> numbers = new Bag<>();
+        numbers.item = 7;
+        Bag raw = numbers;
+        Bag<Integer> back = raw;
+        System.out.println(back.item + 1);
+    }
+}
+"
+);

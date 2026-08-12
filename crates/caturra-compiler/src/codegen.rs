@@ -868,7 +868,13 @@ impl MethodTable {
                 vec![MethodSig {
                     name: String::from("iterator"),
                     params: Vec::new(),
-                    ret: Some(JType::Iterator(ElemType::Object(object_id))),
+                    // `Iterator<T>`, not `Iterator<Object>`: an `Iterable<String>`
+                    // really does answer an `Iterator<String>`, and substitution
+                    // needs a type VARIABLE in the declared return to put the
+                    // receiver's own argument back. With `Object` there, a
+                    // `for (String s : it)` over a declared `Iterable<String>`
+                    // saw an `Object` element and would not compile.
+                    ret: Some(JType::Iterator(ElemType::TypeVar(0))),
                     is_static: false,
                     is_private: false,
                     is_final: false,
@@ -4077,6 +4083,43 @@ fn widens_strictly(from: JType, to: JType, table: &MethodTable) -> bool {
     widens(from, to, table)
 }
 
+/// EVERY collection is an `Iterable` — that is what a for-each over one means.
+/// `Iterable` is a synthesized interface here, registered for inheritance, and
+/// no builtin collection declared it, so a generic `<T> int count(Iterable<T>)`
+/// refused every list and set handed to it.
+///
+/// Written out with a type argument it is the same conversion, but only the
+/// RAW target was matched, so `Iterable<String> it = list;` — the ordinary way
+/// to hold a collection by its most general interface — stayed refused after
+/// the parameter position was fixed. The argument is checked rather than
+/// erased: `Iterable<String> it = listOfIntegers;` is not legal Java, and
+/// accepting it is the direction that hurts.
+fn widens_to_iterable(from: JType, to: JType, table: &MethodTable) -> bool {
+    let (target_id, argument) = match to {
+        JType::Object(id) => (id, None),
+        JType::Generic { class, arg, .. } => (class, Some(arg)),
+        _ => return false,
+    };
+    if table.class_id("Iterable") != Some(target_id) {
+        return false;
+    }
+    let element = match from {
+        JType::List(elem)
+        | JType::Collection(elem)
+        | JType::Set(elem)
+        | JType::TreeSet(elem)
+        | JType::Stack(elem)
+        | JType::LinkedList { elem, .. } => elem,
+        JType::EntrySet { .. } => return argument.is_none(),
+        _ => return false,
+    };
+    // A type variable or a wildcard accepts any element; a written one has to
+    // match, since `Iterable`'s own erasure cannot carry it.
+    argument.is_none_or(|arg| {
+        matches!(arg, ElemType::TypeVar(_) | ElemType::Wildcard { .. }) || arg == element
+    })
+}
+
 #[allow(clippy::too_many_lines)] // one arm per conversion the JLS allows
 fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
     from == to
@@ -4116,6 +4159,39 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     && table
                         .generic_supertype_arg(sub, sup)
                         .is_none_or(|written| written == arg)
+        )
+        // A parameterized type widens to a RAW supertype: `Iterable it = bag`,
+        // `Object o = bag` — legal Java (unchecked, which javac warns about
+        // and allows). Nothing covered a `JType::Generic` on the left at all,
+        // so a user generic class could not be held by any supertype.
+        || matches!(
+            (from, to),
+            (JType::Generic { class: sub, .. }, JType::Object(sup))
+                if table.is_subtype(sub, sup)
+        )
+        // The same for a subclass that is itself PARAMETERIZED:
+        // `Iterable<String> it = bag` where `class Bag<T> implements
+        // Iterable<T>`. The arm above covers a subclass that WROTE its
+        // supertype's argument; here the subclass passes its OWN through, so
+        // the receiver's argument is the one that has to match.
+        || matches!(
+            (from, to),
+            (
+                JType::Generic {
+                    class: sub,
+                    arg: from_arg,
+                    ..
+                },
+                JType::Generic {
+                    class: sup,
+                    arg: to_arg,
+                    ..
+                },
+            ) if table.is_subtype(sub, sup)
+                && match table.generic_supertype_arg(sub, sup) {
+                    Some(ElemType::TypeVar(_)) | None => from_arg == to_arg,
+                    Some(written) => written == to_arg,
+                }
         )
         || matches!(
             (from, to),
@@ -4204,20 +4280,7 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
         // inheritance, and no builtin collection declared it, so a generic
         // `<T> int count(Iterable<T>)` refused every list and set handed to it.
         // The element is erased, as it is for any use of the synthesized form.
-        || matches!(
-            (from, to),
-            (
-                JType::List(_)
-                    | JType::Collection(_)
-                    | JType::Set(_)
-                    | JType::TreeSet(_)
-                    | JType::Stack(_)
-                    | JType::LinkedList { .. }
-                    | JType::EntrySet { .. }
-                    | JType::Array { .. },
-                JType::Object(id),
-            ) if table.class_id("Iterable") == Some(id) && !matches!(from, JType::Array { .. })
-        )
+        || widens_to_iterable(from, to, table)
         // Wildcard variance: a collection argument matches a wildcard-typed
         // parameter of a compatible family when its element satisfies the
         // bound. `List<Integer>` for `List<? extends Number>`; any list/set for
@@ -4278,9 +4341,29 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::TreeMap { key: k2, value: v2 },
             ) if elem_matches(k1, k2, table) && elem_matches(v1, v2, table)
         )
-        // A parameterized type and its raw class erase alike, so they
-        // are mutually assignable (`Box<String> b = new Box<>()`).
-        || matches!((from.erased_class(), to.erased_class()), (Some(a), Some(b)) if a == b)
+        // A parameterized type and its raw class erase alike, so they are
+        // mutually assignable (`Box<String> b = new Box<>()`) — but two
+        // DIFFERENT parameterizations of one class also erase alike and are
+        // not assignable at all. `Bag<String> b = bagOfIntegers;` is an error
+        // javac reports, and this accepted it: the program then ran with the
+        // wrong static type throughout. The builtin collections compare their
+        // elements a few arms above; only a user generic class reached here.
+        || (matches!((from.erased_class(), to.erased_class()), (Some(a), Some(b)) if a == b)
+            && !matches!(
+                (from, to),
+                (
+                    JType::Generic {
+                        arg: from_arg,
+                        rest: from_rest,
+                        ..
+                    },
+                    JType::Generic {
+                        arg: to_arg,
+                        rest: to_rest,
+                        ..
+                    },
+                ) if from_arg != to_arg || from_rest != to_rest
+            ))
         // Any reference (including another type var) stores into a T — and a
         // primitive boxes on the way (`new Box<Integer>(42)`, JLS §5.3: boxing
         // then a widening reference conversion). Without the boxing half, a
@@ -23247,14 +23330,32 @@ impl BodyGen<'_> {
         // Reference casts between class/interface types. A PARAMETERIZED
         // target (`(Gen<String>) o`) casts by its erasure — the type argument
         // is unchecked at run time, which is exactly what javac warns about
-        // and then allows.
+        // and then allows. The cast EXPRESSION still has the written type
+        // though: erasing the result too dropped the argument, so
+        // `for (String s : (Iterable<String>) list)` saw an `Object` element.
+        let written = target;
         let target = match target {
             JType::Generic { class, .. } if source.is_reference() => JType::Object(class),
             other => other,
         };
         if let JType::Object(target_id) = target {
+            // A cast is allowed wherever the assignment is (JLS §5.5: every
+            // widening reference conversion is a casting conversion). The arms
+            // below only knew about `JType::Object` sources, so a redundant
+            // upcast that ASSIGNS fine — `(Iterable<String>) list`, the way a
+            // program picks the general interface — was refused as an
+            // incompatible type.
+            // Only a REFERENCE source: a widening that needs CODE — boxing a
+            // primitive for `(Object) 7` — must fall through to the arm that
+            // emits it, or the cast leaves an int where a reference belongs.
+            if source.is_reference()
+                && !matches!(source, JType::Object(_))
+                && widens(source, written, self.table)
+            {
+                return written;
+            }
             match source {
-                JType::Null => return target,
+                JType::Null => return written,
                 JType::Object(source_id) => {
                     let upcast = self.table.is_subtype(source_id, target_id);
                     let downcast = self.table.is_subtype(target_id, source_id);
@@ -23267,13 +23368,13 @@ impl BodyGen<'_> {
                         .info_by_id(target_id)
                         .is_some_and(|i| i.is_interface);
                     if upcast {
-                        return target; // always safe, no check needed
+                        return written; // always safe, no check needed
                     }
                     if downcast || source_is_interface || target_is_interface {
                         let class_name = self.table.class_name(target_id).to_owned();
                         let class_index = intern_class(self.pool, &class_name);
                         self.code.push_op_u16(op::CHECKCAST, class_index, 0);
-                        return target;
+                        return written;
                     }
                     self.error(
                         span,
@@ -25066,6 +25167,14 @@ impl BodyGen<'_> {
             // A user class that implements `Iterator` assigned to an
             // `Iterator<E>` variable — the same shape, and the same trap.
             (JType::Object(_), JType::Iterator(_)) if widens(from, to, self.table) => {}
+            // A PARAMETERIZED value assigned to a supertype, raw or
+            // parameterized: `Iterable<String> it = bag` for a
+            // `class Bag<T> implements Iterable<T>`. Nothing here matched a
+            // `JType::Generic` on the LEFT, so a user generic class could be
+            // held only by its own type or by `Object` — the same trap again,
+            // and the reason `widens` alone did not fix it.
+            (JType::Generic { .. }, JType::Object(_) | JType::Generic { .. })
+                if widens(from, to, self.table) => {}
             // A String or a wrapper assigned to a `Comparable` variable, raw
             // or parameterized.
             (JType::Str | JType::Boxed(_), JType::Object(_) | JType::Generic { .. })
@@ -25081,8 +25190,35 @@ impl BodyGen<'_> {
             // as every other widening (`widens` allows it; this matrix must
             // agree or the assignment is rejected anyway).
             (JType::Str | JType::StringBuilder, JType::CharSequence) => {}
-            // A parameterized type and its raw class erase alike.
-            (a, b) if a.erased_class().is_some() && a.erased_class() == b.erased_class() => {}
+            // A parameterized type and its raw class erase alike, so the
+            // assignment needs no code — `Bag<String> b = rawBag` and back is
+            // an unchecked assignment, which javac warns about and allows.
+            //
+            // Two DIFFERENT parameterizations of one class erase alike too,
+            // and are not assignable at all: `Bag<String> b = bagOfIntegers`
+            // is an error javac reports. Gating on the erasure alone accepted
+            // it, and the program then ran with the wrong static type
+            // throughout — the accepts-invalid direction. The builtin
+            // collections were always checked; only a USER generic class fell
+            // through here.
+            (a, b)
+                if a.erased_class().is_some()
+                    && a.erased_class() == b.erased_class()
+                    && !matches!(
+                        (a, b),
+                        (
+                            JType::Generic {
+                                arg: from_arg,
+                                rest: from_rest,
+                                ..
+                            },
+                            JType::Generic {
+                                arg: to_arg,
+                                rest: to_rest,
+                                ..
+                            },
+                        ) if from_arg != to_arg || from_rest != to_rest
+                    ) => {}
             // A USER exception subclass (typed `Object(id)`) widening to its
             // bundled throwable superclass: `Exception e = new MyException()`.
             // `widens` allows it (via `library_throwable_ancestor`); this

@@ -3569,6 +3569,41 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### `Iterable` as a type, and parameterization checks (2026-08-12)
+
+`Iterable<T>` was fixed in the PARAMETER position (`<T> int f(Iterable<T>)`)
+and stayed broken in every other one: a declared `Iterable<String> it = list;`
+was "incompatible types", a cast to it was refused outright, and neither
+carried the element, so `for (String s : it)` saw an `Object`. Three separate
+gaps sat behind that one symptom:
+
+- **A cast never consulted the widening rule.** JLS §5.5: every widening
+  reference conversion is a casting conversion. The cast arms only understood
+  a `JType::Object` source, so a redundant upcast that ASSIGNS fine was
+  refused.
+- **A cast returned its target erased.** `(Bag<String>) o` had type raw `Bag`,
+  so every later use lost the argument. The cast expression has the written
+  type; only the run-time check uses the erasure.
+- **The synthesized `Iterable.iterator()` declared `Iterator<Object>`**, so
+  there was no type VARIABLE for the receiver's argument to substitute into.
+
+Widening a user generic class was missing outright: nothing matched a
+`JType::Generic` on the LEFT, so a `Bag<String>` could be held only by its own
+type or by `Object` — not by `Iterable<String>`, not even by a raw `Bag`.
+
+The opposite direction was open too, and it is the one that hurts. Two
+different parameterizations of one class erase alike, and **both** gates —
+`widens` and the assignment matrix — keyed on the erasure alone, so
+`Bag<String> b = bagOfIntegers;` compiled and the program ran with the wrong
+static type throughout. javac rejects it. The builtin collections compared
+their elements all along; only a user generic class fell through. Assigning
+THROUGH a raw type still launders it, which is javac's rule too.
+
+**Two gates, one rule.** An assignment is checked by `widens` AND by the
+conversion matrix in `convert_for_assignment_const`, and a rule added to one
+does nothing in the other. The matrix already carried a comment warning about
+this; it caught the fix mid-flight again here.
+
 ### Fully qualified names (2026-08-12)
 
 A fully qualified name needs no import — that is the whole point of writing
