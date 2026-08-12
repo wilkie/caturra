@@ -21438,8 +21438,23 @@ impl BodyGen<'_> {
                         "asList" => {
                             let object_elem = ElemType::Object(self.table.object_id);
                             let elem = match args.as_slice() {
+                                // Only a REFERENCE array is the varargs array
+                                // itself; a PRIMITIVE one cannot be, since `T`
+                                // is never `int`, so `Arrays.asList(int[])` is
+                                // a ONE-element `List<int[]>`. `type_of` spread
+                                // it anyway and answered `List<Integer>`, which
+                                // is neither what emission builds nor what
+                                // javac says.
                                 [single] => match self.type_of(single) {
-                                    JType::Array { elem, dims: 1 } => elem,
+                                    JType::Array { elem, dims: 1 }
+                                        if elem.base_type().is_reference() =>
+                                    {
+                                        elem
+                                    }
+                                    array @ JType::Array { dims: 1, .. } => ElemType::Nested {
+                                        inner: self.table.intern_nested(array),
+                                        read: self.table.object_id,
+                                    },
                                     other => collection_elem_of(other).unwrap_or(object_elem),
                                 },
                                 _ => args

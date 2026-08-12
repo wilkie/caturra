@@ -23530,3 +23530,33 @@ public class StreamContracts {
 }
 "#
 );
+
+// `Arrays.asList` spreads only a REFERENCE array: `T` is never `int`, so a
+// primitive one is a single element. Emission had that right and `type_of`
+// spread it anyway, so the two disagreed about the same call.
+differential_test!(
+    diff_as_list_primitive_array_is_one_element,
+    "AsListPrimitive",
+    r#"
+import java.util.Arrays;
+import java.util.List;
+
+public class AsListPrimitive {
+    public static void main(String[] args) {
+        int[] arr = {3, 1, 2};
+        String[] words = {"x", "y"};
+
+        List<int[]> one = Arrays.asList(arr);
+        System.out.println(one.size() + " " + one.get(0).length);
+        var inferred = Arrays.asList(arr);
+        System.out.println(inferred.size() + " " + inferred.get(0).length);
+        System.out.println(Arrays.asList(arr).size() == 1);
+
+        List<String> many = Arrays.asList(words);
+        System.out.println(many.size() + many.get(0));
+        var manyInferred = Arrays.asList(words);
+        System.out.println(manyInferred.size() + manyInferred.get(0));
+    }
+}
+"#
+);

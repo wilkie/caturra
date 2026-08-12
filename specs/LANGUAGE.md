@@ -992,6 +992,16 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     their source the way the collection ones do. `new ArrayList<>(l).size()`
     always worked; the map form is now the same.
   Pinned by `diff_collection_contracts_hold`.
+- **`Arrays.asList` spreads only a REFERENCE array** (2026-08-11, JLS
+  §15.12.4.2) — the same call typed two ways. `T` is never `int`, so a
+  primitive array cannot BE the varargs array and `Arrays.asList(int[])` is a
+  one-element `List<int[]>`. Emission had that right; `type_of` spread it and
+  answered `List<Integer>`, so the two disagreed about one expression — which
+  is what the widened `var` catalogue surfaced. Pinned by
+  `diff_as_list_primitive_array_is_one_element`.
+  The catalogue now stands at 130 expressions with ONE known divergence left:
+  `map`/`mapToObj` erases the element, so a collect after one adopts its
+  assignment context and cannot be inferred from.
 - **A `collect(...)` is typed by its collector, everywhere** (2026-08-11) —
   found by extending the contract self-check to streams and text. Emission
   reads the result type from the COLLECTOR (`joining()` is a String,
