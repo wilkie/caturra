@@ -6636,7 +6636,8 @@ impl<'run> Interpreter<'run> {
             ("computeIfAbsent", [key, JValue::Ref(Some(mapping))]) => {
                 match self.map_find(receiver, *key)? {
                     Some(at) if self.map_value_at(receiver, at) != JValue::NULL => {
-                        self.map_value_at(receiver, at)
+                        let existing = self.map_value_at(receiver, at);
+                        self.as_reference(existing)
                     }
                     // A mapping that returns null leaves the map alone (JDK) —
                     // it does not store a null.
@@ -6645,7 +6646,7 @@ impl<'run> Interpreter<'run> {
                         if computed != JValue::NULL {
                             self.map_put_compute(receiver, *key, computed)?;
                         }
-                        computed
+                        self.as_reference(computed)
                     }
                 }
             }
@@ -7485,6 +7486,21 @@ impl<'run> Interpreter<'run> {
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(len).unwrap_or(i32::MAX)),
             ("isEmpty", []) => JValue::Int(i32::from(len == 0)),
+            // A PriorityQueue's iterator walks the HEAP ARRAY, in no
+            // particular order — the JDK says exactly that, and caturra keeps
+            // the array in the JDK's own sift order, so a for-each over one
+            // visits the same elements in the same sequence.
+            ("iterator", []) => {
+                let cursor = self.heap.alloc(crate::value::HeapObject::Iterator {
+                    source: receiver,
+                    index: 0,
+                    last: None,
+                    expected_len: len,
+                    writes: IteratorWrites::All,
+                    list: false,
+                });
+                JValue::Ref(Some(cursor))
+            }
             ("clear", []) => {
                 self.set_pq_heap(receiver, Vec::new());
                 return Ok(Answered::Void);
@@ -8178,7 +8194,20 @@ impl<'run> Interpreter<'run> {
         } else {
             self.map_put_compute(map, key, value)?;
         }
-        Ok(value)
+        Ok(self.as_reference(value))
+    }
+
+    /// A value about to be RETURNED where the descriptor promises an object.
+    /// The compute family hands back whatever its lambda produced, and a
+    /// lambda computing `x + y` produces an unboxed `int`; returning that
+    /// where `Ljava/lang/Object;` is declared put a primitive on the stack,
+    /// so `Object r = m.merge(...)` died with a `VerifyError`. The map stores
+    /// boxed at rest either way — only the returned copy needed this.
+    fn as_reference(&mut self, value: JValue) -> JValue {
+        match value {
+            JValue::Ref(_) => value,
+            primitive => JValue::Ref(Some(self.box_primitive_value(primitive))),
+        }
     }
 
     /// `put` for the compute family (`computeIfAbsent`/`compute`/`merge`):
@@ -8325,6 +8354,22 @@ impl<'run> Interpreter<'run> {
         // is evaluated until a terminal pulls. `sorted` is the exception — it
         // is a barrier, so it materializes and re-sources.
         match (method, args) {
+            // `toString`/`hashCode` are Object's, not pipeline operations —
+            // they must NOT consume the stream, and answering them here keeps
+            // printing one from being an internal error.
+            ("toString", []) => {
+                let text = intrinsics::object_display(&self.heap, JValue::Ref(Some(receiver)));
+                self.spent_streams.remove(&receiver);
+                return Ok(Answered::Value(JValue::Ref(Some(
+                    self.heap.alloc_string(&text),
+                ))));
+            }
+            ("hashCode", []) => {
+                self.spent_streams.remove(&receiver);
+                return Ok(Answered::Value(JValue::Int(
+                    i32::try_from(receiver).unwrap_or(i32::MAX),
+                )));
+            }
             ("filter", [JValue::Ref(Some(pred))]) => {
                 return Ok(Answered::Value(
                     self.stream_with_op(receiver, StreamOp::Filter(*pred)),

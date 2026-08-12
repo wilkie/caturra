@@ -1002,6 +1002,27 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
   The catalogue now stands at 130 expressions with ONE known divergence left:
   `map`/`mapToObj` erases the element, so a collect after one adopts its
   assignment context and cannot be inferred from.
+- **A VM-internal error is always a bug** (2026-08-12) — the fifth
+  self-check, and the sharpest: if the compiler ACCEPTED a program, the VM may
+  never answer "unknown native member", "malformed class" or a `VerifyError`.
+  Those say the two halves disagree about what was emitted, which is never the
+  program's fault. Sweeping 164 library calls that way found five:
+  - **The map compute family returned an UNBOXED value.** `merge`, `compute`,
+    `computeIfAbsent` and `computeIfPresent` hand back whatever their lambda
+    produced, and a lambda computing `x + y` produces an `int` — returned
+    where `Ljava/lang/Object;` is declared, so `Object r = m.merge(...)` died
+    with a `VerifyError`. The map stored boxed at rest either way, which is
+    why every form that ignored the result worked.
+  - **`PriorityQueue.iterator()`** was missing, so a for-each over one was an
+    internal error. It walks the HEAP ARRAY, in no particular order — the
+    JDK's own words, and caturra keeps that array in the JDK's sift order.
+  - **A throwable had no `hashCode`**, so it could not go in a `HashSet`; and
+    a LIBRARY throwable could not be a collection element at all
+    (`List<RuntimeException>` was "unknown type 'List'").
+  - **`stream.toString()`** was an internal error rather than an object's
+    text. `toString`/`hashCode` are Object's and do NOT consume the pipeline.
+  Pinned by `diff_no_internal_errors_on_accepted_programs`. The sweep now
+  reports zero internal errors; the eight remaining refusals are honest ones.
 - **A `collect(...)` is typed by its collector, everywhere** (2026-08-11) —
   found by extending the contract self-check to streams and text. Emission
   reads the result type from the COLLECTOR (`joining()` is a String,

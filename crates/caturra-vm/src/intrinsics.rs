@@ -797,6 +797,10 @@ pub fn invoke_virtual(
         }
         // `getCause()` — the chained cause, or null.
         (HeapObject::Exception { cause, .. }, "getCause") => Ok(Some(JValue::Ref(*cause))),
+        // Every object has an identity hash; a throwable does not override it.
+        (HeapObject::Exception { .. }, "hashCode") => Ok(Some(JValue::Int(
+            i32::try_from(receiver).unwrap_or(i32::MAX),
+        ))),
         // `initCause(Throwable)` sets the cause ONCE and returns `this`. A
         // second call is an error, not an overwrite: the JDK refuses so that a
         // cause set at construction cannot be silently replaced.
@@ -3479,6 +3483,9 @@ fn iterated_len(heap: &Heap, source: HeapRef) -> usize {
         Some(HeapObject::HashSet(entries) | HeapObject::HashMap(entries)) => entries.len(),
         Some(HeapObject::TreeSet { values, .. }) => values.len(),
         Some(HeapObject::TreeMap { entries, .. }) => entries.len(),
+        // A PriorityQueue iterates its HEAP ARRAY, in no particular order —
+        // the JDK says so explicitly, and caturra models the array exactly.
+        Some(HeapObject::PriorityQueue { heap: items, .. }) => items.len(),
         _ => 0,
     }
 }
@@ -3522,6 +3529,9 @@ fn iterated_get(heap: &Heap, source: HeapRef, index: usize) -> JValue {
         Some(HeapObject::HashSet(entries)) => entries.key_at(index),
         Some(HeapObject::TreeSet { values, .. }) => {
             values.get(index).copied().unwrap_or(JValue::NULL)
+        }
+        Some(HeapObject::PriorityQueue { heap: items, .. }) => {
+            items.get(index).copied().unwrap_or(JValue::NULL)
         }
         _ => JValue::NULL,
     }
@@ -6908,6 +6918,12 @@ pub(crate) fn object_display(heap: &Heap, value: JValue) -> String {
                 line,
             }) => crate::interpreter::stack_frame_text(declaring, method, file.as_deref(), *line),
             Some(HeapObject::Instance { class_name, .. }) => format!("{class_name}@{reference:x}"),
+            // A stream is an ordinary object for display purposes: the JDK
+            // prints its pipeline class and identity hash, and printing one is
+            // usually a mistake — but it must not be an internal error.
+            Some(HeapObject::Stream { .. }) => {
+                format!("java.util.stream.ReferencePipeline${reference:x}")
+            }
             _ => format!("object@{reference:x}"),
         },
         other => format!("{other:?}"),

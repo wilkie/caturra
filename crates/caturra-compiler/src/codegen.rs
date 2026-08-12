@@ -3679,7 +3679,13 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
                 // with the false message "unknown type 'List'".
                 "StringBuilder" => Some(ElemType::Builder),
                 "Object" => Some(ElemType::Object(table.object_id)),
-                other => table.class_id(other).map(ElemType::Object),
+                // A LIBRARY throwable as an element (`List<RuntimeException>`)
+                // — the same element kind `getSuppressed()`'s array uses.
+                other => table.class_id(other).map(ElemType::Object).or_else(|| {
+                    caturra_classfile::exceptions::internal_name_of(other)
+                        .and_then(exception_id)
+                        .map(ElemType::Throwable)
+                }),
             }
         }
         // A nested parameterized type argument (`List<List<Integer>>`): resolve
@@ -7854,6 +7860,10 @@ const LINKEDLIST_METHODS: &[BuiltinMethod] = &[
 /// a `null`-typed result that adopts the assignment context, like a diamond.
 const STREAM_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // A stream is an object: `toString`/`hashCode` are Object's and do NOT
+    // consume the pipeline.
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
     bm(
         "filter",
         &[BParam::Predicate],
@@ -7994,6 +8004,8 @@ const STREAM_METHODS: &[BuiltinMethod] = &[
 /// `average`/`min`/`max` return `Optional…`, which caturra does not model.
 const INTSTREAM_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    bm("toString", &[], BRet::Str, "()Ljava/lang/String;"),
+    bm("hashCode", &[], BRet::Int, "()I"),
     bm(
         "filter",
         &[BParam::Predicate],
@@ -8529,6 +8541,8 @@ const WRITER_METHODS: &[BuiltinMethod] = &[
 
 const EXCEPTION_METHODS: &[BuiltinMethod] = &[
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
+    // Every object has one; a throwable's is `Object`'s identity hash.
+    bm("hashCode", &[], BRet::Int, "()I"),
     bm(
         "getStackTrace",
         &[],

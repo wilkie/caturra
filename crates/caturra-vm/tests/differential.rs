@@ -23560,3 +23560,71 @@ public class AsListPrimitive {
 }
 "#
 );
+
+// A VM-INTERNAL error is always a caturra bug: if the compiler accepted the
+// program, the VM must never answer "unknown native member" or a VerifyError.
+// Sweeping 164 library calls that way found these five.
+differential_test!(
+    diff_no_internal_errors_on_accepted_programs,
+    "NoInternal",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.PriorityQueue;
+import java.util.Set;
+
+public class NoInternal {
+    public static void main(String[] args) {
+        // The compute family RETURNS its value, which must be a reference.
+        Map<String, Integer> m = new HashMap<>();
+        m.put("k", 1);
+        Object r1 = m.merge("k", 1, (x, y) -> x + y);
+        Object r2 = m.computeIfAbsent("z", k -> 9);
+        Object r3 = m.computeIfPresent("k", (k, v) -> v * 10);
+        Object r4 = m.compute("q", (k, v) -> v == null ? 1 : v + 1);
+        Object r5 = m.computeIfAbsent("z", k -> 99);
+        System.out.println(r1 + " " + r2 + " " + r3 + " " + r4 + " " + r5);
+        System.out.println(m.get("k") + " " + m.get("z") + " " + m.get("q"));
+
+        // A PriorityQueue iterates its heap array.
+        PriorityQueue<String> pq = new PriorityQueue<>(Arrays.asList("pear", "fig", "apple"));
+        Iterator<String> it = pq.iterator();
+        int n = 0;
+        while (it.hasNext()) {
+            it.next();
+            n++;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String s : pq) {
+            sb.append(s).append(",");
+        }
+        System.out.println(n + " " + sb + " " + pq);
+
+        // A throwable has an identity hash, and can be an element.
+        RuntimeException e = new IllegalStateException("x");
+        System.out.println(e.hashCode() == e.hashCode());
+        System.out.println(Objects.hashCode(e) == e.hashCode());
+        Set<RuntimeException> seen = new HashSet<>();
+        seen.add(e);
+        seen.add(e);
+        System.out.println(seen.size() + " " + seen.contains(e));
+        List<RuntimeException> errors = new ArrayList<>();
+        errors.add(e);
+        System.out.println(errors.size() + " " + errors.get(0).getMessage());
+
+        // A stream is an object: toString/hashCode do not consume it.
+        List<String> l = Arrays.asList("a", "b");
+        System.out.println(l.stream().toString().startsWith("java.util.stream"));
+        var s = l.stream();
+        System.out.println(s.hashCode() == s.hashCode());
+        System.out.println(s.count());
+    }
+}
+"#
+);
