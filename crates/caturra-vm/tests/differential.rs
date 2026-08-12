@@ -23451,3 +23451,82 @@ public class Contracts {
 }
 "#
 );
+
+// Stream, text and iterator contracts a program checks on itself. The one
+// that mattered: a `collect(...)` result is typed by its COLLECTOR, and
+// `type_of` did not know that — so the value had no type in any position that
+// needed one, and `xs.stream().collect(toList()).size() == n` was "bad operand
+// types" for an expression that printed perfectly well.
+differential_test!(
+    diff_stream_and_text_contracts,
+    "StreamContracts",
+    r#"
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+public class StreamContracts {
+    static int fails = 0;
+
+    static void ck(boolean b, String w) {
+        if (!b) {
+            System.out.println("FAIL " + w);
+            fails++;
+        }
+    }
+
+    public static void main(String[] args) {
+        List<String> l = new ArrayList<>(Arrays.asList("pear", "fig", "apple", "fig"));
+
+        ck(l.stream().count() == l.size(), "count == size");
+        ck(l.stream().filter(s -> true).count() == l.size(), "filter true keeps all");
+        ck(l.stream().filter(s -> false).count() == 0, "filter false drops all");
+        ck(l.stream().collect(Collectors.toList()).equals(l), "collect round-trip");
+        ck(l.stream().collect(Collectors.toList()).size() == l.size(), "collect size");
+        ck(l.stream().distinct().count() <= l.size(), "distinct shrinks");
+        ck(l.stream().sorted().collect(Collectors.toList()).size() == l.size(), "sorted size");
+        ck(l.stream().anyMatch(s -> s.equals("fig")) == l.contains("fig"), "anyMatch == contains");
+        ck(l.stream().findFirst().get().equals(l.get(0)), "findFirst == get(0)");
+        ck(l.stream().skip(1).count() == l.size() - 1, "skip 1");
+        ck(l.stream().limit(2).count() == 2, "limit 2");
+        ck(l.stream().mapToInt(String::length).count() == l.size(), "mapToInt count");
+        ck(l.stream().collect(Collectors.joining(",")).split(",").length == l.size(), "joining round-trip");
+        ck(l.stream().collect(Collectors.toSet()).size() == new HashSet<>(l).size(), "toSet == HashSet");
+        ck(IntStream.range(0, 5).sum() == 0 + 1 + 2 + 3 + 4, "range sum");
+        ck(IntStream.rangeClosed(1, 3).sum() == 6, "rangeClosed sum");
+
+        for (String s : l) {
+            ck(String.format("%s", s).equals(s), "format %s");
+            ck(String.format("%10s", s).length() == Math.max(10, s.length()), "format width");
+            ck(s.repeat(2).equals(s + s), "repeat 2");
+            ck(s.indexOf(s) == 0 && s.lastIndexOf(s) == 0, "self index");
+        }
+        for (int i : new int[] {0, 1, -1, 42, 1000000}) {
+            ck(String.format("%d", i).equals(Integer.toString(i)), "format %d " + i);
+            ck(String.valueOf(i).equals("" + i), "valueOf == concat " + i);
+        }
+
+        Iterator<String> it = l.iterator();
+        int seen = 0;
+        while (it.hasNext()) {
+            it.next();
+            seen++;
+        }
+        ck(seen == l.size(), "iterator visits all");
+        ck(!it.hasNext(), "iterator exhausted");
+        ListIterator<String> li = l.listIterator();
+        while (li.hasNext()) {
+            int i = li.nextIndex();
+            ck(li.next().equals(l.get(i)), "listIterator index");
+        }
+
+        System.out.println(fails == 0 ? "ALL OK" : fails + " FAILURES");
+    }
+}
+"#
+);

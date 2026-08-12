@@ -21192,6 +21192,16 @@ impl BodyGen<'_> {
                     }
                     Some(other) => match self.type_of(other) {
                         JType::Object(id) => self.table.class_name(id).to_owned(),
+                        // `stream.collect(collector)` — the result comes from
+                        // the COLLECTOR, exactly as `instance_call` reads it
+                        // when it emits. Falling through to the stream method
+                        // table gave `Error`, so a `collect` used as a
+                        // RECEIVER or an operand typed as nothing:
+                        // `xs.stream().collect(toList()).size() == n` was "bad
+                        // operand types" for something that printed fine.
+                        JType::Stream(elem) if method == "collect" && args.len() == 1 => {
+                            return self.collector_result_type(&args[0], elem);
+                        }
                         // A method on a PARAMETERIZED receiver (`box.get()` on a
                         // `Box<String>`): resolve against the class, then put the
                         // tracked type argument back in place of the type

@@ -992,6 +992,21 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     their source the way the collection ones do. `new ArrayList<>(l).size()`
     always worked; the map form is now the same.
   Pinned by `diff_collection_contracts_hold`.
+- **A `collect(...)` is typed by its collector, everywhere** (2026-08-11) —
+  found by extending the contract self-check to streams and text. Emission
+  reads the result type from the COLLECTOR (`joining()` is a String,
+  `toList()` a List of the element); `type_of` did not, and fell through to
+  the stream table for an `Error`. So a collect used as a RECEIVER or an
+  operand had no type at all —
+  `xs.stream().collect(toList()).size() == n` was "bad operand types" for an
+  expression that printed perfectly well, and the same for `toSet().size()`
+  and `joining(",").split(",").length`. Both paths read the collector now.
+  The `var` sweep would have caught this had its catalogue included stream
+  terminals; the technique was right and the list was short.
+  Known limit, unchanged: after `map` the element is erased, so
+  `xs.stream().map(f).collect(toList())` still adopts its ASSIGNMENT context —
+  the common form — and cannot be used directly as a receiver.
+  Pinned by `diff_stream_and_text_contracts`.
 - **A sort's comparison SEQUENCE** (2026-08-09, `java.util.TimSort`) — the
   route, not just the destination. WHICH comparisons a sort performs is
   observable whenever the comparator is not a pure function of its arguments:
