@@ -343,6 +343,59 @@ fn imports_package(units: &[(String, ast::CompilationUnit)], package: &[&str]) -
     })
 }
 
+/// Every `a.b.c` chain of identifiers in a token stream. Bundled library
+/// sources are injected only when a program reaches for the package — and a
+/// FULLY QUALIFIED name reaches for it without an import, which is the whole
+/// point of writing one. Read off the tokens rather than the source text so a
+/// package named in a comment or a string literal does not pull a library in.
+fn qualified_chains(tokens: &[lexer::Token]) -> Vec<Vec<String>> {
+    let mut chains = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let lexer::TokenKind::Identifier(first) = &tokens[index].kind else {
+            index += 1;
+            continue;
+        };
+        let mut chain = vec![first.clone()];
+        index += 1;
+        while index + 1 < tokens.len()
+            && tokens[index].kind == lexer::TokenKind::Symbol(".")
+            && let lexer::TokenKind::Identifier(next) = &tokens[index + 1].kind
+        {
+            chain.push(next.clone());
+            index += 2;
+        }
+        if chain.len() > 1 {
+            chains.push(chain);
+        }
+    }
+    chains
+}
+
+/// Whether a program reaches for `package` at all: by importing it, or by
+/// naming one of its classes in full. A fully qualified name needs no import
+/// in Java, so gating the bundled sources on the import alone refused
+/// `org.code.neighborhood.Painter p = new org.code.neighborhood.Painter()`
+/// with the false claim that Painter is not supported.
+fn reaches_package(
+    units: &[(String, ast::CompilationUnit)],
+    chains: &[Vec<String>],
+    package: &[&str],
+) -> bool {
+    imports_package(units, package) || uses_package_qualified(chains, package)
+}
+
+/// Whether any source names a class in `package` by its qualified name.
+fn uses_package_qualified(chains: &[Vec<String>], package: &[&str]) -> bool {
+    chains.iter().any(|chain| {
+        chain.len() > package.len()
+            && chain
+                .iter()
+                .zip(package)
+                .all(|(segment, expected)| segment == expected)
+    })
+}
+
 /// Compile a set of Java source files. All files are parsed first so
 /// classes can call each other's static methods regardless of file
 /// The name prefix of a class synthesized for a LAMBDA. Several passes key
@@ -368,10 +421,12 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     let mut compilation = Compilation::default();
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut units = Vec::new();
+    let mut chains = Vec::new();
 
     for source in sources {
         let (tokens, mut lex_errors) = lexer::lex(&source.path, &source.text);
         compilation.diagnostics.append(&mut lex_errors);
+        chains.append(&mut qualified_chains(&tokens));
 
         let (unit, mut parse_errors) = parser::parse(&source.path, tokens);
         compilation.diagnostics.append(&mut parse_errors);
@@ -433,7 +488,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // Auto-inject bundled library sources when their package is
     // imported (e.g. the Code.org neighborhood Painter). Parsed like
     // any other unit so its classes participate in resolution.
-    if imports_package(&units, &["org", "code", "neighborhood"]) {
+    if reaches_package(&units, &chains, &["org", "code", "neighborhood"]) {
         let (tokens, _) = lexer::lex("<neighborhood>", NEIGHBORHOOD_LIB);
         let (unit, mut errs) = parser::parse("<neighborhood>", tokens);
         compilation.diagnostics.append(&mut errs);
@@ -441,14 +496,14 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     }
     // org.code.validation (neighborhood test harness): runs the student's main
     // and reports the recorded action log. Depends on __NbhdWorld above.
-    if imports_package(&units, &["org", "code", "validation"]) {
+    if reaches_package(&units, &chains, &["org", "code", "validation"]) {
         let (tokens, _) = lexer::lex("<validation-lib>", VALIDATION_LIB);
         let (unit, mut errs) = parser::parse("<validation-lib>", tokens);
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<validation-lib>"), unit));
         // The neighborhood harness depends on __NbhdWorld; only inject it when
         // the neighborhood library is present too.
-        if imports_package(&units, &["org", "code", "neighborhood"]) {
+        if reaches_package(&units, &chains, &["org", "code", "neighborhood"]) {
             let (tokens, _) = lexer::lex("<validation-nbhd>", VALIDATION_NEIGHBORHOOD_LIB);
             let (unit, mut errs) = parser::parse("<validation-nbhd>", tokens);
             compilation.diagnostics.append(&mut errs);
@@ -462,8 +517,8 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         compilation.diagnostics.append(&mut errs);
         units.push((String::from("<validation-classes>"), unit));
     }
-    if imports_package(&units, &["org", "code", "theater"])
-        || imports_package(&units, &["org", "code", "media"])
+    if reaches_package(&units, &chains, &["org", "code", "theater"])
+        || reaches_package(&units, &chains, &["org", "code", "media"])
     {
         let (tokens, _) = lexer::lex("<theater>", THEATER_LIB);
         let (unit, mut errs) = parser::parse("<theater>", tokens);
@@ -472,13 +527,13 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     }
     // javax.swing / java.awt (accessible DOM Swing): the component tree
     // serializes to `swing.json` on `setVisible(true)`.
-    if imports_package(&units, &["javax", "swing"])
-        || imports_package(&units, &["javax", "swing", "event"])
-        || imports_package(&units, &["javax", "swing", "border"])
-        || imports_package(&units, &["javax", "swing", "text"])
-        || imports_package(&units, &["javax", "accessibility"])
-        || imports_package(&units, &["java", "awt"])
-        || imports_package(&units, &["java", "awt", "event"])
+    if reaches_package(&units, &chains, &["javax", "swing"])
+        || reaches_package(&units, &chains, &["javax", "swing", "event"])
+        || reaches_package(&units, &chains, &["javax", "swing", "border"])
+        || reaches_package(&units, &chains, &["javax", "swing", "text"])
+        || reaches_package(&units, &chains, &["javax", "accessibility"])
+        || reaches_package(&units, &chains, &["java", "awt"])
+        || reaches_package(&units, &chains, &["java", "awt", "event"])
     {
         let (tokens, _) = lexer::lex("<swing>", SWING_LIB);
         let (unit, mut errs) = parser::parse("<swing>", tokens);

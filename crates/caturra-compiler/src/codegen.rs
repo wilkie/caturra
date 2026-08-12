@@ -3557,6 +3557,15 @@ fn unresolved_type_message(ty: &TypeRef, table: &MethodTable) -> String {
         return reason;
     }
     if let Some(name) = unknown_name_in(ty, table) {
+        // A class caturra models only as a namespace for its statics — `Math`,
+        // `Collectors` — cannot name a variable. Written out in full it said
+        // so; written simply it read as a typo, "unknown type 'Math'", about a
+        // class every program has used. Asked here rather than of every name
+        // in the type, because only the name that failed to resolve is at
+        // fault: `List<Integer>` must not blame `Integer`.
+        if let Some(reason) = crate::imports::unusable_library_type_reason(&name) {
+            return reason;
+        }
         return format!("unknown type '{name}'");
     }
     match ty {
@@ -11473,17 +11482,27 @@ impl BodyGen<'_> {
     /// `["java","lang","Math","abs"]` → `["Math","abs"]`: collapse a
     /// fully qualified library prefix in a dotted name, unless a local
     /// variable named `java` shadows the package (Java's obscuring
-    /// rules: variables win).
+    /// rules: variables win). Every modeled package, not only `java.*` —
+    /// `org.code.neighborhood.Painter.move()` is a name a student writes.
     fn strip_package_prefix(&mut self, path: &[String]) -> Option<Vec<String>> {
-        if path.len() < 3 || path[0] != "java" || self.lookup("java").is_some() {
+        if path.len() < 3 || self.lookup(&path[0]).is_some() {
             return None;
         }
-        let dotted = format!("java.{}.{}", path[1], path[2]);
-        let simple = crate::imports::canonical_library_class(&dotted)?;
-        let mut short = Vec::with_capacity(path.len() - 2);
-        short.push(simple.to_owned());
-        short.extend_from_slice(&path[3..]);
-        Some(short)
+        // Longest prefix first. This used to assume a two-segment package, so
+        // `java.util.stream.Stream.of(1)` was read as a class `stream` in
+        // `java.util` — while the same name in a TYPE position resolved.
+        // Four segments covers both a class in a three-segment package
+        // (`java.util.stream.Stream`) and a nested one (`java.util.Map.Entry`).
+        for taken in (3..=path.len().min(4)).rev() {
+            let dotted = path[..taken].join(".");
+            if let Some(simple) = crate::imports::canonical_library_class(&dotted) {
+                let mut short = Vec::with_capacity(path.len() - taken + 1);
+                short.push(simple.to_owned());
+                short.extend_from_slice(&path[taken..]);
+                return Some(short);
+            }
+        }
+        None
     }
 
     /// The classes that lexically enclose this one, innermost first: the class

@@ -260,24 +260,52 @@ const REQUIRES_IMPORT: &[&str] = &[
     "FileNotFoundException",
 ];
 
+/// The nested library types the compiler models, as (enclosing simple name,
+/// nested name, the two-part name the compiler uses). `Map.Entry` is the only
+/// one — but a qualified `java.util.Map.Entry` has to reach it.
+const NESTED_LIBRARY_CLASSES: &[(&str, &str, &str)] = &[("Map", "Entry", "Map.Entry")];
+
 /// Resolve a fully qualified library name (`java.util.Scanner`) to the
 /// simple name the compiler models. Fully qualified uses never need an
 /// import — that is their purpose in Java.
 ///
-/// The modeled classes are exactly `package_classes`', for the three
-/// packages that hold them. This used to keep a second, hand-maintained
-/// list, which drifted: `java.util.Arrays.fill(...)` did not resolve
-/// though `java.lang.Math.abs(...)` did. Only `java.*` is collapsed —
-/// the bundled `org.code.*` classes resolve like user classes, so a
-/// qualified use of one is not a library name to shorten.
+/// The modeled classes are exactly `package_classes`'. This kept a second,
+/// hand-maintained list of the packages that hold them, and it drifted
+/// twice: first `java.util.Arrays.fill(...)` did not resolve though
+/// `java.lang.Math.abs(...)` did, then `java.util.stream.Stream<String> s`
+/// was refused as unsupported though `import java.util.stream.*` worked.
+/// Asking `package_classes` directly is what stops it drifting a third time.
 pub(crate) fn canonical_library_class(dotted: &str) -> Option<&'static str> {
     let (package, class) = dotted.rsplit_once('.')?;
-    let known = match package {
-        "java.util" | "java.io" | "java.lang" | "java.util.function" | "java.util.regex"
-        | "java.nio.file" => package_classes(package)?,
-        _ => return None,
-    };
-    known.iter().find(|name| **name == class).copied()
+    if let Some(known) = package_classes(package) {
+        return known.iter().find(|name| **name == class).copied();
+    }
+    // `java.util.Map.Entry` — a qualified use of a nested library type. What
+    // precedes the last dot is the enclosing class rather than a package.
+    let outer = canonical_library_class(package)?;
+    NESTED_LIBRARY_CLASSES
+        .iter()
+        .find(|(enclosing, nested, _)| *enclosing == outer && *nested == class)
+        .map(|(_, _, canonical)| *canonical)
+}
+
+/// The honest reason a class caturra models only as a namespace for static
+/// members cannot name a variable: `Math m;`. javac accepts that declaration
+/// — `Math` is an ordinary class type — so caturra is stricter here, and has
+/// to say why rather than call a class everyone has used an unknown type.
+///
+/// Only the packages whose classes caturra models natively: a bundled
+/// `Painter` is compiled as an ordinary class and names a variable fine.
+///
+/// Only sound once the name has failed to resolve as a type, which is the one
+/// place it is asked — a user class named `Math` shadows the library one, and
+/// would have resolved.
+pub(crate) fn unusable_library_type_reason(simple: &str) -> Option<String> {
+    PACKAGES
+        .iter()
+        .filter(|(package, _)| package.starts_with("java."))
+        .find(|(_, classes)| classes.contains(&simple))
+        .map(|(package, _)| not_supported(&format!("{package}.{simple}")))
 }
 
 /// The honest reason a real Java 11 class caturra does not model cannot
@@ -316,30 +344,39 @@ pub(crate) fn unknown_qualified_message(dotted: &str) -> String {
     format!("package {package} does not exist")
 }
 
+/// Every package the compiler models, and the classes in it. One table, read
+/// by `package_classes` and by every reverse lookup: a second, hand-maintained
+/// list beside this one has drifted twice already.
+///
+/// The `org.code.*`, `javax.swing.*` and `java.awt.*` entries are the bundled
+/// clean-room library (auto-injected in `compile`); those classes resolve like
+/// user classes, and the import just validates.
+static PACKAGES: &[(&str, &[&str])] = &[
+    ("java.util", JAVA_UTIL),
+    ("java.util.stream", JAVA_UTIL_STREAM),
+    ("java.util.regex", JAVA_UTIL_REGEX),
+    ("java.util.function", JAVA_UTIL_FUNCTION),
+    ("java.io", JAVA_IO),
+    ("java.nio.file", JAVA_NIO_FILE),
+    ("java.lang", JAVA_LANG),
+    ("org.code.neighborhood", ORG_CODE_NEIGHBORHOOD),
+    ("org.code.validation", ORG_CODE_VALIDATION),
+    ("org.code.theater", ORG_CODE_THEATER),
+    ("org.code.media", ORG_CODE_MEDIA),
+    ("javax.swing", JAVAX_SWING),
+    ("javax.swing.event", JAVAX_SWING_EVENT),
+    ("javax.swing.border", JAVAX_SWING_BORDER),
+    ("javax.swing.text", JAVAX_SWING_TEXT),
+    ("javax.accessibility", JAVAX_ACCESSIBILITY),
+    ("java.awt", JAVA_AWT),
+    ("java.awt.event", JAVA_AWT_EVENT),
+];
+
 fn package_classes(package: &str) -> Option<&'static [&'static str]> {
-    match package {
-        "java.util" => Some(JAVA_UTIL),
-        "java.util.stream" => Some(JAVA_UTIL_STREAM),
-        "java.util.regex" => Some(JAVA_UTIL_REGEX),
-        "java.util.function" => Some(JAVA_UTIL_FUNCTION),
-        "java.io" => Some(JAVA_IO),
-        "java.nio.file" => Some(JAVA_NIO_FILE),
-        "java.lang" => Some(JAVA_LANG),
-        // Bundled clean-room library (auto-injected in `compile`); the
-        // classes resolve like user classes, the import just validates.
-        "org.code.neighborhood" => Some(ORG_CODE_NEIGHBORHOOD),
-        "org.code.validation" => Some(ORG_CODE_VALIDATION),
-        "org.code.theater" => Some(ORG_CODE_THEATER),
-        "org.code.media" => Some(ORG_CODE_MEDIA),
-        "javax.swing" => Some(JAVAX_SWING),
-        "javax.swing.event" => Some(JAVAX_SWING_EVENT),
-        "javax.swing.border" => Some(JAVAX_SWING_BORDER),
-        "javax.swing.text" => Some(JAVAX_SWING_TEXT),
-        "javax.accessibility" => Some(JAVAX_ACCESSIBILITY),
-        "java.awt" => Some(JAVA_AWT),
-        "java.awt.event" => Some(JAVA_AWT_EVENT),
-        _ => None,
-    }
+    PACKAGES
+        .iter()
+        .find(|(name, _)| *name == package)
+        .map(|(_, classes)| *classes)
 }
 
 /// The public class of the bundled neighborhood library.

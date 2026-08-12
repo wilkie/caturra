@@ -3569,6 +3569,43 @@ file full of future-Java still reports one clear message per construct.
 Value-position `++`/`--` (e.g. `y = x++`) is parsed and rejected with a
 friendly message for now.
 
+### Fully qualified names (2026-08-12)
+
+A fully qualified name needs no import — that is the whole point of writing
+one. Caturra resolved the qualified spelling on a *different* path from the
+simple one, and the two disagreed in four places:
+
+- **A drifted package list.** `canonical_library_class` kept its own list of
+  the packages holding modeled classes, beside the real one in
+  `package_classes`. It had already drifted once (`java.util.Arrays.fill`
+  did not resolve though `java.lang.Math.abs` did) and had drifted again:
+  `java.util.stream` was missing, so `java.util.stream.Stream<String> s` was
+  refused as unsupported while `import java.util.stream.*` compiled. Both
+  lists are now one table.
+- **A two-segment assumption.** The expression path collapsed exactly
+  `java.X.Y`, so `java.util.stream.Stream.of(1)` read as a class `stream` in
+  package `java.util`. It now tries the longest prefix first.
+- **Qualified nested types.** `java.util.Map.Entry<K, V>` split into a
+  package `java.util.Map`, which does not exist. What precedes the last dot
+  may be an enclosing class.
+- **Import-gated bundled libraries.** The clean-room `org.code.*`,
+  `javax.swing.*` and `java.awt.*` sources are injected when a program
+  reaches for their package, and reaching was read as *importing*. So
+  `new org.code.neighborhood.Painter()` was refused with the false claim
+  that Painter is not supported by caturra. A program now reaches for a
+  package by naming it in full too — detected on the TOKEN stream, so a
+  package named in a comment or a string literal still pulls nothing in.
+
+The invariant is now checked exhaustively rather than case by case: every
+modeled class in every modeled package, written both ways, in a type position
+and in a static-member position. 456 probes, and the only remaining
+disagreement is `org.code.validation.NeighborhoodTestRunner`, which is
+injected only alongside `org.code.neighborhood` and refuses in both spellings
+once that is present.
+
+One divergence was found rather than fixed, and is listed below: a class
+caturra models only as a namespace for its statics cannot name a variable.
+
 ## Divergences from javac
 
 The one-directional rule: **anything that compiles in caturra must also
@@ -3597,6 +3634,12 @@ program, which would mean it is a shared rule rather than a strictness:
 - `LinkedList<Integer> l;`, `HashSet`, `TreeMap`, `TreeSet` and the rest of
   the unmodeled library — a scope limit, reported by name wherever written
   rather than as a missing symbol.
+- `Math m;`, `Collectors c;`, `Arrays a;` — a class caturra models only as a
+  namespace for its static members cannot name a variable, though javac
+  accepts the declaration (they are ordinary class types). Nobody writes one,
+  but the refusal has to say so: written in full it gave the honest reason,
+  written simply it read as a typo — "unknown type 'Math'", about a class
+  every program has used.
 
 **More permissive than javac** (caturra accepts; javac rejects). **This
 list is empty**, and the `looser_than_javac!` macro exists to keep it

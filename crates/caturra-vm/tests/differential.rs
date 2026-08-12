@@ -23628,3 +23628,69 @@ public class NoInternal {
 }
 "#
 );
+
+// A fully qualified library name must work exactly where its simple name
+// does — that is the whole point of writing one, and Java needs no import
+// for it. Three separate paths disagreed: the type position rejected
+// `java.util.stream.Stream` (a hand-written package list beside the real
+// one had drifted), the expression position read
+// `java.util.stream.Stream.of` as a class `stream` in `java.util` (it
+// assumed a two-segment package), and a qualified NESTED type
+// (`java.util.Map.Entry`) resolved as a class in a package called
+// `java.util.Map`.
+differential_test!(
+    qualified_library_names_resolve_like_simple_ones,
+    "QualNames",
+    r#"
+public class QualNames {
+    public static void main(String[] args) {
+        // A three-segment package, in a type position and as a static call.
+        java.util.stream.Stream<String> s = java.util.List.of("b", "a").stream();
+        System.out.println(s.sorted().collect(java.util.stream.Collectors.toList()));
+        System.out.println(java.util.stream.Stream.of(1, 2, 3).count());
+
+        java.util.stream.IntStream i = java.util.stream.IntStream.range(0, 4);
+        System.out.println(i.sum());
+        System.out.println(java.util.stream.IntStream.range(0, 4).boxed()
+            .collect(java.util.stream.Collectors.toList()));
+
+        // A qualified NESTED type: what precedes the last dot is a class.
+        java.util.Map<String, Integer> m = new java.util.HashMap<>();
+        m.put("a", 1);
+        for (java.util.Map.Entry<String, Integer> e : m.entrySet()) {
+            System.out.println(e.getKey() + "=" + e.getValue());
+        }
+        java.util.Map.Entry<String, Integer> first = m.entrySet().iterator().next();
+        System.out.println(first.getKey());
+
+        // The two-segment packages that always worked, so the widening did
+        // not cost them.
+        System.out.println(java.lang.Math.abs(-2));
+        System.out.println(java.util.Arrays.toString(new int[] {1, 2}));
+        java.util.Scanner sc = new java.util.Scanner("7");
+        System.out.println(sc.nextInt());
+        java.util.Optional<String> o = java.util.Optional.of("x");
+        System.out.println(o.get());
+    }
+}
+"#
+);
+
+// A local variable OBSCURES a package name (JLS §6.4.2: variables win), so
+// `java.lang.Math` is not a qualified name when a `java` is in scope — it is
+// a field access on an `int`, which both compilers refuse. The prefix
+// stripping tested only for a variable literally named `java`; it now looks
+// up whichever package prefix it is about to collapse.
+differential_reject!(
+    a_variable_obscures_its_package_name,
+    "Obscured",
+    r"
+public class Obscured {
+    public static void main(String[] args) {
+        int java = 3;
+        System.out.println(java);
+        System.out.println(java.lang.Math.abs(-4));
+    }
+}
+"
+);

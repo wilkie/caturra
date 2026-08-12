@@ -6438,6 +6438,19 @@ fn stage6_compile_errors_match_javac_wording() {
             "class M { static void f() { java.util.Vector x = null; } }",
             "java.util.Vector is not supported by caturra",
         ),
+        // A class caturra models only as a namespace for its statics cannot
+        // name a variable. javac accepts `Math m;` — `Math` is an ordinary
+        // class — so this is a strictness, and it has to say so. Written in
+        // full it did; written simply it read as a typo, "unknown type
+        // 'Math'", about a class every program has used.
+        (
+            "class M { static void f() { Math m = null; } }",
+            "java.lang.Math is not supported by caturra",
+        ),
+        (
+            "import java.util.stream.*; class M { static void f() { Collectors c = null; } }",
+            "java.util.stream.Collectors is not supported by caturra",
+        ),
     ];
     for (source, expected) in cases {
         let result = caturra_compiler::compile(&[caturra_compiler::SourceFile {
@@ -12884,4 +12897,50 @@ fn a_validation_run_that_dies_still_accounts_for_every_test() {
         out.contains("__VTEST\tPASS\tfirst\t"),
         "the first test should have passed: {out}"
     );
+}
+
+#[test]
+fn a_bundled_class_can_be_named_in_full_without_an_import() {
+    // A fully qualified name needs no import — that is what it is for. The
+    // bundled clean-room libraries were injected only when their package was
+    // IMPORTED, so naming one in full was refused with the false claim that
+    // the class is not supported by caturra. The class is supported; only the
+    // injection could not see the program reaching for it.
+    let (result, console) = compile_and_run(
+        r#"
+        public class Main {
+            public static void main(String[] args) {
+                java.awt.Color red = java.awt.Color.RED;
+                System.out.println(red.getRed() + "," + red.getGreen() + "," + red.getBlue());
+                javax.swing.JLabel label = new javax.swing.JLabel("hi");
+                System.out.println(label.getText());
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(console.stdout_text(), "255,0,0\nhi\n");
+}
+
+#[test]
+fn a_package_named_only_in_a_comment_pulls_nothing_in() {
+    // The reach-for-a-package test reads the TOKEN stream, so a package named
+    // in a comment or a string literal is not a use of it. Reading the source
+    // text instead would inject a whole library here — and its classes would
+    // then collide with a program that happens to define one of those names.
+    let (result, console) = compile_and_run(
+        r#"
+        public class Main {
+            // mentions java.awt.Color and org.code.neighborhood.Painter
+            public static void main(String[] args) {
+                String named = "javax.swing.JLabel";
+                System.out.println(named);
+            }
+        }
+        "#,
+        "Main",
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(console.stdout_text(), "javax.swing.JLabel\n");
 }
