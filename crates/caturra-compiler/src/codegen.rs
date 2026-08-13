@@ -1306,8 +1306,31 @@ impl MethodTable {
             }
         }
         table.resolve_constant_chains(units);
+        table.type_functional_results();
         table.check_hierarchy(units, diagnostics);
         table
+    }
+
+    /// The bundled `__Supplier`/`__UnaryOperator`/`__BiFunction` are ordinary
+    /// Java sources, so their SAM is declared to return `Object` — there is no
+    /// way to write a type variable in them. Retyping the return as one here
+    /// is what lets a `Supplier<String>` receiver substitute its argument, so
+    /// `s.get()` is a String rather than an Object.
+    fn type_functional_results(&mut self) {
+        for (interface, method) in [
+            ("__Supplier", "get"),
+            ("__UnaryOperator", "apply"),
+            ("__BiFunction", "apply"),
+        ] {
+            if let Some(info) = self.classes.get_mut(interface)
+                && let Some(sig) = info
+                    .methods
+                    .iter_mut()
+                    .find(|m| m.name == method && m.ret == Some(JType::Object(self.object_id)))
+            {
+                sig.ret = Some(JType::TypeVar(0));
+            }
+        }
     }
 
     /// A constant variable may name ANOTHER one (`static final int B = A + 1;`).
@@ -2741,9 +2764,27 @@ impl MethodTable {
                     && !self.has_class(simple)
                     && let Some(id) = self.class_id(erased)
                 {
-                    // `Comparator<T>` / `Function<T, R>` / … erase to their bundled
-                    // `__`-interface, dropping the type arguments.
-                    Some(JType::Object(id))
+                    // `Comparator<T>` / `Function<T, R>` / … erase to their
+                    // bundled `__`-interface. The RESULT argument is kept
+                    // though: `Supplier<String>.get()` is a String, and
+                    // dropping it made every one of these calls answer
+                    // `Object`, so `s.get().toUpperCase()` was "cannot find
+                    // symbol" for a program the JDK runs. For all of them the
+                    // result is the LAST type argument — which is why one rule
+                    // covers `Supplier<R>`, `Function<T, R>` and
+                    // `BiFunction<A, B, R>` alike.
+                    match functional_result_arg(simple)
+                        .then(|| args.last())
+                        .flatten()
+                        .and_then(|last| elem_from_type_arg(last, self))
+                    {
+                        Some(arg) => Some(JType::Generic {
+                            class: id,
+                            arg,
+                            rest: NO_TYPE_ARGS,
+                        }),
+                        None => Some(JType::Object(id)),
+                    }
                 } else if !self.has_class(base)
                     && matches!(simple, "Class" | "Constructor" | "Field")
                 {
@@ -4037,6 +4078,17 @@ fn comparator_alias(name: &str, declared: bool) -> &str {
 ///
 /// `None` for anything that is not one of these — a user class of the same name
 /// shadows it, checked by the caller with `has_class`.
+/// Whether this functional interface's SAM returns its type ARGUMENT (rather
+/// than `void`, `boolean` or `int`). For every one that does, the result is the
+/// LAST type argument — `Supplier<R>`, `UnaryOperator<T>`, `Function<T, R>`,
+/// `BiFunction<A, B, R>`, `BinaryOperator<T>`.
+fn functional_result_arg(simple: &str) -> bool {
+    matches!(
+        simple,
+        "Supplier" | "UnaryOperator" | "Function" | "BiFunction" | "BinaryOperator"
+    )
+}
+
 fn functional_erased(name: &str) -> Option<&'static str> {
     let simple = name.rsplit('.').next().unwrap_or(name);
     Some(match simple {
@@ -11318,27 +11370,51 @@ fn bparam_matches(param: BParam, arg: JType, args: TypeArgs, table: &MethodTable
         BParam::Object => widens(arg, JType::Object(table.object_id), table),
         BParam::BiConsumer => matches!(
             (arg, table.class_id("__BiConsumer")),
-            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
+            // result argument now, so the raw form is no longer the only
+            // spelling that reaches here.
+            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                if table.is_subtype(id, target)
         ),
         BParam::Consumer => matches!(
             (arg, table.class_id("__Consumer")),
-            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
+            // result argument now, so the raw form is no longer the only
+            // spelling that reaches here.
+            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                if table.is_subtype(id, target)
         ),
         BParam::Predicate => matches!(
             (arg, table.class_id("__Predicate")),
-            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
+            // result argument now, so the raw form is no longer the only
+            // spelling that reaches here.
+            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                if table.is_subtype(id, target)
         ),
         BParam::UnaryOperator => matches!(
             (arg, table.class_id("__UnaryOperator")),
-            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
+            // result argument now, so the raw form is no longer the only
+            // spelling that reaches here.
+            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                if table.is_subtype(id, target)
         ),
         BParam::Supplier => matches!(
             (arg, table.class_id("__Supplier")),
-            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
+            // result argument now, so the raw form is no longer the only
+            // spelling that reaches here.
+            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                if table.is_subtype(id, target)
         ),
         BParam::BiFunction => matches!(
             (arg, table.class_id("__BiFunction")),
-            (JType::Object(id), Some(target)) if table.is_subtype(id, target)
+            // A PARAMETERIZED one counts too: `Supplier<String>` keeps its
+            // result argument now, so the raw form is no longer the only
+            // spelling that reaches here.
+            (JType::Object(id) | JType::Generic { class: id, .. }, Some(target))
+                if table.is_subtype(id, target)
         ),
         // `list.sort(null)` is legal and means natural ordering (JDK), so
         // `null` satisfies a `Comparator` parameter like any other reference.

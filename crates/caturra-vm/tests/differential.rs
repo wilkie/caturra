@@ -24988,3 +24988,130 @@ public class InterfaceOk {
 }
 "#
 );
+
+// An unbound instance reference needs the SAM to supply a receiver as its
+// first parameter. `S::getV` for a zero-parameter `Supplier` has none — and
+// building the call anyway indexed an empty parameter list and PANICKED the
+// compiler, which is the one failure mode worse than a wrong answer.
+differential_reject!(
+    an_unbound_reference_needs_a_receiver_parameter,
+    "NoReceiver",
+    r"
+import java.util.function.Supplier;
+
+public class NoReceiver {
+    int value = 3;
+
+    int getValue() { return value; }
+
+    public static void main(String[] args) {
+        Supplier<Integer> broken = NoReceiver::getValue;
+        System.out.println(broken.get());
+    }
+}
+"
+);
+
+// A constructor takes an access modifier and nothing else (JLS §8.8.3): it is
+// neither abstract (it has a body) nor static (it makes an instance). Both
+// were accepted and then ignored.
+differential_reject!(
+    a_constructor_takes_no_abstract_modifier,
+    "AbstractCtor",
+    r"
+public class AbstractCtor {
+    abstract AbstractCtor() { }
+
+    public static void main(String[] args) {
+        System.out.println(1);
+    }
+}
+"
+);
+
+// ...and the reference and constructor forms that stay legal.
+differential_test!(
+    diff_method_references_and_constructors,
+    "RefsAndCtors",
+    r#"
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+public class RefsAndCtors {
+    private final int value;
+
+    public RefsAndCtors() { this(3); }
+
+    private RefsAndCtors(int value) { this.value = value; }
+
+    int getValue() { return value; }
+
+    static int twice(int n) { return n * 2; }
+
+    public static void main(String[] args) {
+        RefsAndCtors instance = new RefsAndCtors();
+        Supplier<Integer> bound = instance::getValue;
+        Function<RefsAndCtors, Integer> unbound = RefsAndCtors::getValue;
+        Function<Integer, Integer> stat = RefsAndCtors::twice;
+        Supplier<RefsAndCtors> made = RefsAndCtors::new;
+        System.out.println(bound.get() + " " + unbound.apply(instance));
+        System.out.println(stat.apply(4) + " " + made.get().getValue());
+    }
+}
+"#
+);
+
+// Calling a `java.util.function` interface's SAM returned `Object` instead of
+// its declared type argument, so `supplier.get().toUpperCase()` was "cannot
+// find symbol" for a program the JDK runs. The interfaces worked as lambda
+// TARGETS all along; it was their RESULT that had no type.
+//
+// The result is the LAST type argument for every one of them, which is why a
+// single rule covers `Supplier<R>`, `Function<T, R>` and `BiFunction<A, B, R>`.
+differential_test!(
+    diff_functional_interface_results,
+    "FunctionalResults",
+    r#"
+import java.util.function.BiFunction;
+import java.util.function.BinaryOperator;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
+
+public class FunctionalResults {
+    public static void main(String[] args) {
+        Supplier<String> supplier = () -> "x";
+        System.out.println(supplier.get().toUpperCase());
+
+        Function<String, Integer> length = s -> s.length();
+        System.out.println(length.apply("abc") + 1);
+
+        Function<String, String> shout = s -> s + "!";
+        System.out.println(shout.apply("a").toUpperCase());
+
+        UnaryOperator<String> twice = s -> s + s;
+        System.out.println(twice.apply("ab").length());
+
+        BiFunction<Integer, Integer, String> join = (a, b) -> "" + (a + b);
+        System.out.println(join.apply(1, 2).length());
+
+        BinaryOperator<Integer> add = (a, b) -> a + b;
+        System.out.println(add.apply(2, 3) + 1);
+
+        // The ones whose SAM does not return a type argument are unchanged.
+        Predicate<String> empty = s -> s.isEmpty();
+        System.out.println(empty.test("") + " " + empty.test("a"));
+        Consumer<String> print = s -> System.out.println(s);
+        print.accept("consumed");
+
+        // A method reference, bound and unbound, through the same interfaces.
+        Supplier<String> bound = "hello"::toUpperCase;
+        System.out.println(bound.get().length());
+        Function<String, Integer> unbound = String::length;
+        System.out.println(unbound.apply("four") + 1);
+    }
+}
+"#
+);

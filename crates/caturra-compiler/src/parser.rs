@@ -1371,6 +1371,22 @@ impl Parser<'_> {
             && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
         {
             let (name, name_span) = self.expect_ident("for the constructor")?;
+            // A constructor takes an access modifier and nothing else (JLS
+            // §8.8.3): it is neither abstract (it has a body) nor static (it
+            // makes an instance). Both were accepted and then ignored.
+            for (present, keyword) in [
+                (modifiers.is_abstract, "abstract"),
+                (modifiers.is_static, "static"),
+                (modifiers.is_final, "final"),
+            ] {
+                if present {
+                    self.diagnostics.push(Diagnostic::error(
+                        self.path,
+                        format!("modifier {keyword} not allowed here"),
+                        name_span,
+                    ));
+                }
+            }
             let (params, throws, body) = self.method_rest(name_span, false)?;
             return Ok(Member::Method(MethodDecl {
                 name,

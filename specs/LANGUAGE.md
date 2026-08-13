@@ -3937,6 +3937,34 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### A functional interface's result has a type (2026-08-13)
+
+A fourth diagnostic catalogue found a **compiler panic** — the one failure mode
+worse than a wrong answer — and chasing it uncovered a much larger gap.
+
+- **`S::getV` for a zero-parameter `Supplier` panicked the compiler.** An
+  unbound instance reference needs the SAM to supply a receiver as its first
+  parameter; this SAM has none, and building the call anyway indexed an empty
+  parameter list. The diagnostic was already correct; the pass then carried on
+  and crashed.
+- **Calling a `java.util.function` SAM returned `Object`.**
+  `supplier.get().toUpperCase()` was "cannot find symbol" for a program the JDK
+  runs. These interfaces worked as lambda TARGETS all along — it was their
+  RESULT that had no type, because the source type erased to the bundled
+  `__`-interface and dropped its arguments. The result is the LAST type
+  argument for every one of them, so one rule covers `Supplier<R>`,
+  `Function<T, R>` and `BiFunction<A, B, R>`; the bundled SAMs are retyped to
+  return a type variable so the receiver's argument substitutes into it.
+- **A constructor takes an access modifier and nothing else** (JLS §8.8.3):
+  `abstract`, `static` and `final` were accepted and ignored.
+
+Keeping the result argument made a parameterized functional value stop matching
+the raw parameter the collection methods declare — the same both-spellings
+lesson as `Iterable`, and the existing suite caught it.
+
+Found but not fixed: `Predicate.negate()` and the other default combinators on
+the bundled functional interfaces are not modelled.
+
 ### An interface has no initializer block (2026-08-13)
 
 A third diagnostic catalogue (42 more programs, 136 in all) found one more

@@ -1566,6 +1566,19 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 args: param_names.iter().map(|n| name_expr(n)).collect(),
                 span,
             }
+        } else if param_names.is_empty() {
+            // An unbound instance reference needs the SAM to supply a receiver
+            // as its first parameter, and this SAM has none — `S::getV` for a
+            // `Supplier<Integer>`. `validate_method_ref` has already reported
+            // it ("unexpected instance method"); building the call anyway
+            // indexed an empty parameter list and PANICKED the compiler, which
+            // is the one failure mode worse than a wrong answer.
+            Expr::Call {
+                receiver: Some(qualifier.clone()),
+                method: method.clone(),
+                args: Vec::new(),
+                span,
+            }
         } else {
             // Unbound instance: `p0.method(p1, ...)`.
             receiver_param_type = Some(TypeRef::Named(class));
