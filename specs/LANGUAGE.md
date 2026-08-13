@@ -3937,6 +3937,43 @@ below 1e-315.** Both alternative constant choices were tried and are far worse
 constant to fit but JDK's per-value significant-bit count for subnormals. The
 entire normal range is exact.
 
+### An implementor owes the SUBSTITUTED signature (2026-08-13)
+
+JLS §8.4.8.1: `class Impl implements Box<String>` owes `unwrap(String)`, not
+merely something named `unwrap`. caturra compiled an `Impl` declaring
+`unwrap(Integer)` and ran it — the last accepts-invalid on the list, and the
+one that closes the "more permissive than javac" invariant.
+
+The cause is a rule that was right in the wrong place. `params_override` treats
+an abstract type-variable parameter as satisfied by ANY reference — that is the
+generic-interface bridge, and it is correct exactly while the type argument is
+unknown. Once the class WRITES the argument, the variable is no longer unknown
+and the bridge must not apply. The supertype's written arguments were already
+recorded (`supertype_args`, for the parameterized-supertype assignment); this
+threads them down the supertype walk and substitutes before matching.
+
+Every step is permissive when an argument will not resolve — and one that was
+not is what caught it. Filling an unresolved slot with a placeholder made the
+placeholder a concrete type as far as matching goes, so it demanded an exact
+match and refused `class C extends Mid<String>` where `Mid<T> implements B<T>`.
+One unresolvable argument now abandons the WHOLE substitution and falls back to
+erasure. A check of this shape fails by over-rejecting ordinary Java.
+
+The diagnostic had a second defect the sweep surfaced: it named no parameters
+at all (`compare()` where javac writes `compare(String,String)`), and a TEST
+had encoded that as correct — the second time this round a test asserted the
+bug. javac names the substituted parameters, which is how a reader tells "wrong
+signature" from "nothing at all".
+
+For a BUNDLED interface the substitution cannot help: `__Comparator` really
+declares `compare(Object, Object)`, so there is no type variable left to
+replace. When such an interface is given exactly ONE type argument, every
+erased `Object` parameter renders as that argument — true for `Comparator<T>`,
+`Comparable<T>`, `Consumer<T>` and `Predicate<T>`, while a two-argument
+`Function<T, R>` is left alone rather than guessed at. That shapes the MESSAGE
+only; matching still runs on the erased parameters, so the bridge that lets
+`compare(String,String)` implement `compare(Object,Object)` is untouched.
+
 ### An impossible cast is refused, not deferred (2026-08-13)
 
 JLS §5.5.1: casting a class to an interface is a **compile error** when the
@@ -3955,8 +3992,9 @@ The message needed the same treatment as the `String` cast: `describe` yields
 binary names, so the diagnostic read `X$F cannot be converted to X$I` where
 javac says `F cannot be converted to I`. Source spellings, both sides.
 
-With this, **"more permissive than javac" is empty again** — the invariant the
-spec documents, restored.
+That was one of the two accepts-invalid left open by the previous entry; the
+other is the one below. Only with BOTH fixed is **"more permissive than javac"
+empty again** — the invariant the spec documents.
 
 ### A type argument must satisfy its bound (2026-08-13)
 
@@ -3967,9 +4005,9 @@ argument was never checked against its parameter's bound** (JLS §4.5), so
 each parameter's COUNT but not its bound; it now records both, and the check
 sits beside the existing arity validation.
 
-Recorded, not fixed: a class implementing `I<String>` without the right method
-signature. The other one — a cast from a FINAL class to an interface it cannot
-implement — is fixed below.
+Both of the others are fixed below: a cast from a FINAL class to an interface
+it cannot implement, and a class implementing `I<String>` without the right
+method signature.
 
 ### A functional interface's result has a type (2026-08-13)
 

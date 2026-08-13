@@ -1902,12 +1902,16 @@ impl MethodTable {
                 // Concrete classes must implement all abstract methods.
                 if !class.is_abstract && !class.is_interface {
                     let unimplemented = self.missing_abstract_method(info.id);
-                    if let Some((method_name, owner)) = unimplemented {
+                    if let Some((method_name, params, owner)) = unimplemented {
+                        // javac names the PARAMETERS, and that is how a reader
+                        // tells "you wrote the wrong signature" apart from
+                        // "you wrote nothing at all".
+                        let written = self.rendered_abstract_params(info, &owner, &params);
                         diagnostics.push(Diagnostic::error(
                             path,
                             format!(
                                 "{} is not abstract and does not override abstract method \
-                                 {method_name}() in {}",
+                                 {method_name}({written}) in {}",
                                 class.name,
                                 source_interface_name(&owner)
                             ),
@@ -2248,12 +2252,21 @@ impl MethodTable {
         None
     }
 
-    fn missing_abstract_method(&self, class: ClassId) -> Option<(String, String)> {
-        // Collect every abstract signature visible to this class.
-        let mut required: Vec<(&MethodSig, ClassId)> = Vec::new();
-        let mut stack = vec![class];
+    fn missing_abstract_method(&self, class: ClassId) -> Option<(String, Vec<JType>, String)> {
+        // Collect every abstract signature visible to this class, carrying the
+        // type arguments the class WROTE on the supertype that declared it: a
+        // `class C implements Box<String>` owes `go(String)`, not merely
+        // something named `go` (JLS §8.4.8.1). Without the substitution every
+        // type-variable parameter matched any reference at all — that is the
+        // erasure bridge, and it is right only while the argument is unknown.
+        //
+        // Every step is permissive when it cannot resolve an argument: an
+        // empty substitution falls back to the erasure rule. A check of this
+        // shape fails by over-rejecting ordinary Java, not by missing a case.
+        let mut required: Vec<(String, Vec<JType>, ClassId)> = Vec::new();
+        let mut stack: Vec<(ClassId, Vec<JType>)> = vec![(class, Vec::new())];
         let mut steps = 0usize;
-        while let Some(id) = stack.pop() {
+        while let Some((id, subst)) = stack.pop() {
             steps += 1;
             if steps > self.class_names.len() * 4 {
                 break;
@@ -2261,17 +2274,26 @@ impl MethodTable {
             if let Some(info) = self.info_by_id(id) {
                 for m in &info.methods {
                     if m.is_abstract {
-                        required.push((m, id));
+                        let params = m
+                            .params
+                            .iter()
+                            .map(|p| Self::substitute_type_var(*p, &subst))
+                            .collect();
+                        required.push((m.name.clone(), params, id));
                     }
                 }
-                if let Some(parent) = info.superclass {
-                    stack.push(parent);
+                for parent in info
+                    .superclass
+                    .into_iter()
+                    .chain(info.interfaces.iter().copied())
+                {
+                    let args = self.written_supertype_args(info, parent, &subst);
+                    stack.push((parent, args));
                 }
-                stack.extend(info.interfaces.iter().copied());
             }
         }
 
-        'outer: for (sig, owner) in required {
+        'outer: for (name, params, owner) in required {
             // Look for a concrete implementation along the class chain — and
             // through the interfaces, whose DEFAULT methods implement an
             // abstract one just as a superclass method does (JLS §8.4.8.1).
@@ -2287,9 +2309,7 @@ impl MethodTable {
                 }
                 if let Some(info) = self.info_by_id(id) {
                     if info.methods.iter().any(|m| {
-                        m.name == sig.name
-                            && !m.is_abstract
-                            && self.params_override(&m.params, &sig.params)
+                        m.name == name && !m.is_abstract && self.params_override(&m.params, &params)
                     }) {
                         continue 'outer;
                     }
@@ -2299,9 +2319,88 @@ impl MethodTable {
                     stack.extend(info.interfaces.iter().copied());
                 }
             }
-            return Some((sig.name.clone(), self.class_name(owner).to_owned()));
+            return Some((name, params, self.class_name(owner).to_owned()));
         }
         None
+    }
+
+    /// The parameter list for the "does not override abstract method"
+    /// diagnostic, as javac spells it.
+    ///
+    /// A BUNDLED interface carries erased signatures — `__Comparator` really
+    /// declares `compare(Object, Object)` — so a class writing
+    /// `implements Comparator<String>` cannot recover `compare(String,String)`
+    /// by substitution the way a user interface can. When such an interface
+    /// was given exactly ONE type argument, every erased `Object` parameter is
+    /// that argument: it holds for `Comparator<T>`, `Comparable<T>`,
+    /// `Consumer<T>` and `Predicate<T>`, and a two-argument interface like
+    /// `Function<T, R>` is left alone rather than guessed at.
+    ///
+    /// This shapes the MESSAGE only. Matching still runs on the erased
+    /// parameters, so the bridge that lets `compare(String,String)` implement
+    /// an erased `compare(Object,Object)` is untouched.
+    fn rendered_abstract_params(&self, info: &ClassInfo, owner: &str, params: &[JType]) -> String {
+        // Only a BUNDLED owner needs the stand-in. A user interface's
+        // parameters were already substituted, and an `Object` parameter
+        // there is a genuine `Object` that must not be renamed.
+        let stand_in = owner.starts_with("__").then(|| {
+            info.supertype_args
+                .iter()
+                .find(|(name, args)| {
+                    args.len() == 1 && source_interface_name(name) == source_interface_name(owner)
+                })
+                .and_then(|(_, args)| type_arg_source_name(&args[0]))
+        });
+        let stand_in = stand_in.flatten();
+        params
+            .iter()
+            .map(|p| match (&stand_in, p) {
+                (Some(name), JType::Object(id)) if *id == self.object_id => name.clone(),
+                _ => source_interface_name(&p.describe(self)).to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// A type argument written on `parent` by `info`, resolved and itself run
+    /// through `subst` — so `class C extends Mid<String>` where
+    /// `Mid<T> implements B<T>` reaches `B`'s methods with `T` as `String`.
+    fn written_supertype_args(
+        &self,
+        info: &ClassInfo,
+        parent: ClassId,
+        subst: &[JType],
+    ) -> Vec<JType> {
+        let parent_name = self.class_name(parent).to_owned();
+        for (name, args) in &info.supertype_args {
+            if *name != parent_name && self.class_id(name) != Some(parent) {
+                continue;
+            }
+            let mut resolved = Vec::with_capacity(args.len());
+            for arg in args {
+                // One unresolvable argument abandons the WHOLE substitution.
+                // A partial one is worse than none: an unresolved slot filled
+                // with a placeholder is a concrete type as far as matching is
+                // concerned, so it demands an exact match and refuses
+                // ordinary Java — `class C extends Mid<String>` where
+                // `Mid<T> implements B<T>` resolves `T` to nothing, and that
+                // program has to keep compiling.
+                let Some(ty) = self.resolve_type(arg) else {
+                    return Vec::new();
+                };
+                resolved.push(Self::substitute_type_var(ty, subst));
+            }
+            return resolved;
+        }
+        Vec::new()
+    }
+
+    /// `T` replaced by the argument standing in for it, when there is one.
+    fn substitute_type_var(ty: JType, subst: &[JType]) -> JType {
+        match ty {
+            JType::TypeVar(index) => subst.get(usize::from(index)).copied().unwrap_or(ty),
+            other => other,
+        }
     }
 
     /// Whether a concrete method's parameters override an abstract
@@ -3787,6 +3886,17 @@ fn generic_field_signature(ty: &TypeRef, table: &MethodTable) -> Option<String> 
 
 /// The [`ElemType`] a generic type argument denotes, per CSA usage
 /// (wrapper classes, String, or a user class).
+/// The SOURCE spelling of a written type argument (`Box<String>` → `String`),
+/// for a diagnostic. `None` for anything that is not a plain named type.
+fn type_arg_source_name(arg: &TypeRef) -> Option<String> {
+    match arg {
+        TypeRef::Named(name) if !name.contains('<') => {
+            Some(source_interface_name(name).to_string())
+        }
+        _ => None,
+    }
+}
+
 fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
     match arg {
         TypeRef::Named(name) => {

@@ -25312,3 +25312,84 @@ public class PossibleCasts {
 }
 "#
 );
+
+// JLS §8.4.8.1: a class implementing a PARAMETERIZED interface owes the
+// SUBSTITUTED signature — `implements Box<String>` owes `unwrap(String)`, not
+// merely something named `unwrap`. Every type-variable parameter used to match
+// any reference at all; that is the erasure bridge, and it is right only while
+// the type argument is unknown.
+differential_reject!(
+    an_implementor_owes_the_substituted_signature,
+    "WrongSignature",
+    r"
+public class WrongSignature {
+    interface Box<T> {
+        T unwrap(T value);
+    }
+
+    static class Impl implements Box<String> {
+        public Integer unwrap(Integer value) {
+            return value;
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Impl().unwrap(3));
+    }
+}
+"
+);
+
+// ...and the four shapes that stay legal, because a check like this one fails
+// by over-rejecting: the matching signature, a RAW implementor (no argument to
+// substitute, so the erased one is owed), two type parameters substituted
+// position by position, and an argument supplied by an intermediate class.
+differential_test!(
+    diff_parameterized_implementors_that_compile,
+    "RightSignatures",
+    r#"
+public class RightSignatures {
+    interface Box<T> {
+        T unwrap(T value);
+    }
+
+    interface Pair<K, V> {
+        V lookup(K key);
+    }
+
+    static class Exact implements Box<String> {
+        public String unwrap(String value) {
+            return value + "!";
+        }
+    }
+
+    static class Raw implements Box {
+        public Object unwrap(Object value) {
+            return value;
+        }
+    }
+
+    static class Two implements Pair<String, Integer> {
+        public Integer lookup(String key) {
+            return key.length();
+        }
+    }
+
+    abstract static class Middle<T> implements Box<T> {
+    }
+
+    static class Inherited extends Middle<String> {
+        public String unwrap(String value) {
+            return value + "?";
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(new Exact().unwrap("a"));
+        System.out.println(new Raw().unwrap("b"));
+        System.out.println(new Two().lookup("abc"));
+        System.out.println(new Inherited().unwrap("c"));
+    }
+}
+"#
+);

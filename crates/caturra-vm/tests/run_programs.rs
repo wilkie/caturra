@@ -6458,7 +6458,11 @@ fn stage6_compile_errors_match_javac_wording() {
         // the program's. javac names the interface the source wrote.
         (
             "import java.util.*; class D implements Comparator<String> { } class M { }",
-            "does not override abstract method compare() in Comparator",
+            // javac names the SUBSTITUTED parameters, not the erased ones:
+            // `compare(String,String)`, never `compare()` (which this asserted
+            // while the diagnostic dropped parameters) and never
+            // `compare(Object,Object)`.
+            "does not override abstract method compare(String,String) in Comparator",
         ),
         // `Thread` is still refused — a program here runs on one thread, in
         // one WASM instance — though the `Runnable` beside it is supported now.
